@@ -134,7 +134,7 @@ fn the_sbom_lists_every_package_source_and_the_runtime_with_their_digests() {
     let prov: Value = serde_json::from_slice(&read(&d.path().join("out.prov.json"))).unwrap();
     assert_eq!(bom["bomFormat"], "CycloneDX");
     assert_eq!(bom["specVersion"], "1.5");
-    let exe = blake3::hash(&read(&d.path().join("out")))
+    let exe = blake3::hash(&read(&d.path().join(crate::common::exe_name("out"))))
         .to_hex()
         .to_string();
     assert_eq!(bom["metadata"]["component"]["hashes"][0]["alg"], "BLAKE3");
@@ -255,10 +255,10 @@ fn a_signed_statement_verifies_for_its_signer_and_its_artefacts_only() {
     // Another identity than the one the key is allowed for.
     assert!(!verify("someone@example").status.success());
     // The artefact changed after signing.
-    let exe = read(&p.join("p"));
+    let exe = read(&p.join(crate::common::exe_name("p")));
     let mut changed = exe.clone();
     changed.push(0);
-    std::fs::write(p.join("p"), &changed).unwrap();
+    std::fs::write(p.join(crate::common::exe_name("p")), &changed).unwrap();
     let after = verify("builder@example");
     assert!(!after.status.success());
     assert!(
@@ -266,7 +266,7 @@ fn a_signed_statement_verifies_for_its_signer_and_its_artefacts_only() {
         "{}",
         err(&after)
     );
-    std::fs::write(p.join("p"), &exe).unwrap();
+    std::fs::write(p.join(crate::common::exe_name("p")), &exe).unwrap();
     // The statement changed after signing.
     let text = String::from_utf8(read(&p.join("p.prov.json.intoto.json"))).unwrap();
     std::fs::write(

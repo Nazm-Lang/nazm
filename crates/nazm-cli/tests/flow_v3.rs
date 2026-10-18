@@ -412,7 +412,9 @@ fn nothing_that_runs_changes() {
         &["build", "--backend", "cranelift", "p.nz", "-o", "p"],
     );
     assert!(o.status.success(), "{}", text(&o));
-    let native = Command::new(d.path().join("p")).output().unwrap();
+    let native = Command::new(d.path().join(crate::common::exe_name("p")))
+        .output()
+        .unwrap();
     assert_eq!(run.stdout, native.stdout);
     assert_eq!(String::from_utf8_lossy(&run.stdout), "out1\n");
 }

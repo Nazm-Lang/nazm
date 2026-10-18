@@ -39,7 +39,9 @@ pub(crate) fn runs_in(src: &str, setup: &dyn Fn(&Path)) -> Vec<(String, Ran)> {
         ("llvm -O2", "llvm", "2"),
         ("cranelift", "cranelift", "0"),
     ] {
-        let exe = build.path().join(label.replace([' ', '-'], ""));
+        let exe = build
+            .path()
+            .join(crate::common::exe_name(label.replace([' ', '-'], "")));
         let b = differential::nazm(
             build.path(),
             &[

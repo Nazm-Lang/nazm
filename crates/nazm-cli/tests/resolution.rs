@@ -48,7 +48,7 @@ fn both_ways(files: &[(&str, &str)]) -> String {
         String::from_utf8_lossy(&interpreted.stderr)
     );
 
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let built = Command::new(NAZM)
         .args(["build", root.to_str().unwrap(), "-o", exe.to_str().unwrap()])
         .output()

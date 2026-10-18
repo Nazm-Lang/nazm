@@ -358,6 +358,7 @@ fn build(dir: &Path) -> std::path::PathBuf {
         ("aarch64", "macos") => SwitchTarget::Aarch64Darwin,
         ("aarch64", _) => SwitchTarget::Aarch64Linux,
         ("x86_64", "macos") => SwitchTarget::X86_64Darwin,
+        ("x86_64", "windows") => SwitchTarget::X86_64Windows,
         _ => SwitchTarget::X86_64Linux,
     };
     std::fs::write(dir.join("switch.ll"), emit_switch(host)).unwrap();
@@ -368,7 +369,7 @@ fn build(dir: &Path) -> std::path::PathBuf {
     // And its task stacks, stack budget and clocks (Gate 3).
     std::fs::write(dir.join("stack.ll"), emit_stack(host)).unwrap();
     std::fs::write(dir.join("harness.c"), HARNESS).unwrap();
-    let exe = dir.join("harness");
+    let exe = dir.join(crate::common::exe_name("harness"));
     let o = Command::new("clang")
         .args(["-O1", "-Wno-override-module", "-pthread"])
         .arg(dir.join("runtime.ll"))
@@ -427,7 +428,7 @@ fn run(src: &str, backend: &str, args: &[&str], report: bool) -> Ran {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("prog.nz");
     std::fs::write(&path, src).unwrap();
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let b = Command::new(NAZM)
         .args(["build", "--no-cache", "--backend", backend])
         .arg(&path)

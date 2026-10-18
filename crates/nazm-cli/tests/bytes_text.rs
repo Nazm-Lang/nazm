@@ -46,7 +46,9 @@ fn everywhere(src: &str) -> Vec<(String, Ran)> {
         ("llvm -O2", "llvm", "2"),
         ("cranelift", "cranelift", "0"),
     ] {
-        let exe = d.path().join(label.replace([' ', '-'], ""));
+        let exe = d
+            .path()
+            .join(crate::common::exe_name(label.replace([' ', '-'], "")));
         let b = nazm(
             d.path(),
             &[
@@ -417,7 +419,7 @@ fn main() -> Int {
     );
     assert!(r.stderr.contains(report), "interpreter: {}", r.stderr);
     for backend in ["llvm", "cranelift"] {
-        let exe = d.path().join(backend);
+        let exe = d.path().join(crate::common::exe_name(backend));
         let b = nazm(
             d.path(),
             &[
@@ -470,7 +472,7 @@ fn bytes_and_text_cross_a_public_signature_cold_and_cached() {
     let r = nazm(d.path(), &["run", "--interpret", "main.nz"]);
     assert_eq!(r.stdout, "hi añ\n9\n", "{}", r.stderr);
     for backend in ["llvm", "cranelift"] {
-        let exe = d.path().join(backend);
+        let exe = d.path().join(crate::common::exe_name(backend));
         let b = nazm(
             d.path(),
             &[
@@ -581,7 +583,9 @@ fn main(io: IoCap) -> Int ! {{ io }} {{
             ),
         )];
         for backend in ["llvm", "cranelift"] {
-            let exe = d.path().join(format!("{name}-{backend}"));
+            let exe = d
+                .path()
+                .join(crate::common::exe_name(format!("{name}-{backend}")));
             let b = nazm(
                 d.path(),
                 &[

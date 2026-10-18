@@ -31,7 +31,7 @@ const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
 fn engine(dir: &Path) -> PathBuf {
     let src =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/apps/pagestore/pagestore.nz");
-    let out = dir.join("pagestore");
+    let out = dir.join(crate::common::exe_name("pagestore"));
     let r = run_bounded(
         Command::new(NAZM)
             .arg("build")

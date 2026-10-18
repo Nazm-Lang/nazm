@@ -46,7 +46,7 @@ fn both_ways(files: &[(&str, &str)]) -> String {
         String::from_utf8_lossy(&interpreted.stderr)
     );
 
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let built = Command::new(NAZM)
         .args(["build", root.to_str().unwrap(), "-o", exe.to_str().unwrap()])
         .output()
@@ -356,7 +356,7 @@ fn a_module_cycle_may_also_be_a_call_cycle_when_it_is_interpreted() {
     );
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "3");
 
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let built = Command::new(NAZM)
         .args(["build", root.to_str().unwrap(), "-o", exe.to_str().unwrap()])
         .output()

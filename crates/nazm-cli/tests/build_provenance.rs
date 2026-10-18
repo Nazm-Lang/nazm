@@ -73,7 +73,10 @@ fn the_record_names_what_reached_the_output_with_digests_anyone_can_recompute() 
         .unwrap()
         .starts_with("blake3:"));
     assert_eq!(v["output"]["kind"], "executable");
-    assert_eq!(v["output"]["files"][0]["digest"], b3(&d.path().join("p")));
+    assert_eq!(
+        v["output"]["files"][0]["digest"],
+        b3(&d.path().join(crate::common::exe_name("p")))
+    );
     assert_eq!(v["backend"]["name"], "llvm");
     assert_eq!(v["backend"]["opt_level"], 2);
     assert_eq!(v["profiles"], serde_json::json!(["general"]));
@@ -115,7 +118,10 @@ fn the_backend_that_built_it_is_the_one_recorded() {
     let d = tempfile::tempdir().unwrap();
     let v = build(d.path(), PROGRAM, &["--backend", "cranelift"]);
     assert_eq!(v["backend"]["name"], "cranelift");
-    assert_eq!(v["output"]["files"][0]["digest"], b3(&d.path().join("p")));
+    assert_eq!(
+        v["output"]["files"][0]["digest"],
+        b3(&d.path().join(crate::common::exe_name("p")))
+    );
     // Only Nazm's own code generator is named by its digest, and only when it built the program.
     assert!(v["backend"].get("nzcg").is_none(), "{v}");
 }
@@ -133,7 +139,10 @@ fn a_program_nazms_own_generator_built_names_it_by_its_digest() {
     );
     assert_eq!(v["backend"]["name"], "nazm");
     assert_eq!(v["backend"]["nzcg"], b3(crate::differential::nzcg()), "{v}");
-    assert_eq!(v["output"]["files"][0]["digest"], b3(&d.path().join("p")));
+    assert_eq!(
+        v["output"]["files"][0]["digest"],
+        b3(&d.path().join(crate::common::exe_name("p")))
+    );
     let sbom: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(d.path().join("p.cdx.json")).unwrap())
             .unwrap();

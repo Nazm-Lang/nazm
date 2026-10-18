@@ -215,7 +215,7 @@ fn a_build_summary_is_the_builds_outcome_and_absence_of_diagnostics_is_not_succe
     assert_eq!(s["command"], "build");
     assert_eq!(s["status"], "success");
     assert_eq!(s["artifact"], serde_json::json!({"path": "prog"}));
-    assert!(dir.path().join("prog").exists());
+    assert!(dir.path().join(crate::common::exe_name("prog")).exists());
     assert_eq!(plain.stdout.trim(), "plain");
 
     // Rejected by the checker, and by the backend: diagnostics, and nothing written.
@@ -740,7 +740,7 @@ fn a_build_whose_toolchain_fails_is_toolchain_failed_with_no_diagnostic() {
         &["build", "--summary-json", "main.nz", "-o", "prog"],
         &vars,
     );
-    assert!(!dir.path().join("prog").exists());
+    assert!(!dir.path().join(crate::common::exe_name("prog")).exists());
 
     // A `clang` that compiles and will not link.
     let linkless = dir.path().join("linkless");
@@ -758,7 +758,7 @@ fn a_build_whose_toolchain_fails_is_toolchain_failed_with_no_diagnostic() {
         &["build", "--summary-json", "main.nz", "-o", "prog"],
         &vars,
     );
-    assert!(!dir.path().join("prog").exists());
+    assert!(!dir.path().join(crate::common::exe_name("prog")).exists());
 
     // No `clang` at all.
     let empty = dir.path().join("empty");
@@ -772,7 +772,7 @@ fn a_build_whose_toolchain_fails_is_toolchain_failed_with_no_diagnostic() {
         &["build", "--summary-json", "main.nz", "-o", "prog"],
         &vars,
     );
-    assert!(!dir.path().join("prog").exists());
+    assert!(!dir.path().join(crate::common::exe_name("prog")).exists());
 }
 
 #[test]

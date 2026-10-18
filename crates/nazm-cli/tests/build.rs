@@ -64,7 +64,7 @@ fn write_program(body: &str) -> (tempfile::TempDir, PathBuf) {
 
 fn build_at(body: &str, opt: u8) -> Result<Built, Ran> {
     let (dir, src) = write_program(body);
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let out = run_bounded(
         Command::new(NAZM)
             .args(["build", src.to_str().unwrap()])
@@ -405,7 +405,7 @@ fn constructs_outside_the_subset_are_refused_and_nothing_is_emitted() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("prog.nz");
         std::fs::write(&path, src).expect("write");
-        let exe = dir.path().join("prog");
+        let exe = dir.path().join(crate::common::exe_name("prog"));
 
         let out = Command::new(NAZM)
             .args(["build", path.to_str().unwrap()])
@@ -454,7 +454,7 @@ fn a_program_that_does_not_check_is_a_check_failure_not_a_subset_failure() {
     let out = Command::new(NAZM)
         .args(["build", src.to_str().unwrap()])
         .arg("-o")
-        .arg(dir.path().join("prog"))
+        .arg(dir.path().join(crate::common::exe_name("prog")))
         .output()
         .expect("run");
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -474,7 +474,7 @@ fn build_diagnostics_are_available_as_json() {
     let out = Command::new(NAZM)
         .args(["build", src.to_str().unwrap(), "--json"])
         .arg("-o")
-        .arg(dir.path().join("prog"))
+        .arg(dir.path().join(crate::common::exe_name("prog")))
         .output()
         .expect("run");
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -493,7 +493,7 @@ fn a_missing_clang_is_reported_as_a_toolchain_problem_not_a_program_problem() {
     let out = Command::new(NAZM)
         .args(["build", src.to_str().unwrap()])
         .arg("-o")
-        .arg(dir.path().join("prog"))
+        .arg(dir.path().join(crate::common::exe_name("prog")))
         // Nothing on PATH, so `clang` cannot be found.
         .env("PATH", "")
         .output()
@@ -527,7 +527,7 @@ fn a_failing_clang_is_reported_with_its_own_output() {
     let out = Command::new(NAZM)
         .args(["build", src.to_str().unwrap()])
         .arg("-o")
-        .arg(dir.path().join("prog"))
+        .arg(dir.path().join(crate::common::exe_name("prog")))
         .env("PATH", &bin)
         .output()
         .expect("run");
@@ -549,7 +549,7 @@ fn an_existing_executable_survives_a_failed_build() {
     // The failure that costs someone a working artefact: deleting the output, then
     // failing. Everything is built under a temporary name and moved into place last.
     let (dir, src) = write_program("fn main() -> Int {\n    1 + 1\n}\n");
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     std::fs::write(&exe, "an earlier, working build").expect("seed");
 
     let out = Command::new(NAZM)
@@ -592,7 +592,7 @@ fn the_output_may_not_overwrite_the_input() {
 #[test]
 fn the_generated_ir_can_be_kept_for_inspection() {
     let (dir, src) = write_program("fn main() -> Int {\n    1 + 1\n}\n");
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let out = Command::new(NAZM)
         .args(["build", src.to_str().unwrap(), "--emit-ir"])
         .arg("-o")
@@ -922,7 +922,7 @@ fn front_end_type_errors_are_not_reported_as_backend_limits() {
         let out = Command::new(NAZM)
             .args(["build", path.to_str().unwrap()])
             .arg("-o")
-            .arg(dir.path().join("prog"))
+            .arg(dir.path().join(crate::common::exe_name("prog")))
             .output()
             .expect("run");
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -976,7 +976,7 @@ fn the_emitted_ir_for_a_conditional_is_well_formed() {
     // used, which a successful compile alone does not say.
     let (dir, src) =
         write_program("fn main() -> Int {\n    let a = 6;\n    if a > 5 { a * 7 } else { 0 }\n}\n");
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let out = Command::new(NAZM)
         .args(["build", src.to_str().unwrap(), "--emit-ir"])
         .arg("-o")
@@ -1045,7 +1045,7 @@ fn deep_syntax_produces_exactly_the_expected_outcome() {
     let checked = nazm(&["check", src.to_str().unwrap()], &dir);
     assert_ok(&checked, "`nazm check` on a 511-term chain");
 
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let built = nazm(
         &["build", src.to_str().unwrap(), "-o", exe.to_str().unwrap()],
         &dir,
@@ -1060,7 +1060,7 @@ fn deep_syntax_produces_exactly_the_expected_outcome() {
     // Over the limit: refused, with the nesting diagnostic and nothing else.
     for cmd in ["check", "build"] {
         let (dir, src) = write_program(&chain(600));
-        let exe = dir.path().join("prog");
+        let exe = dir.path().join(crate::common::exe_name("prog"));
         let args: Vec<&str> = if cmd == "build" {
             vec![cmd, src.to_str().unwrap(), "-o", exe.to_str().unwrap()]
         } else {
@@ -1097,7 +1097,7 @@ fn deeply_nested_blocks_check_and_compile() {
 
     // And the backend compiles it. Until N12.1 it refused a block used as an expression, so
     // this nesting was a backend limitation; now each level is one more `Expr::Block`.
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let built = nazm(
         &["build", src.to_str().unwrap(), "-o", exe.to_str().unwrap()],
         &dir,
@@ -1534,7 +1534,7 @@ fn call_errors_belong_to_the_checker_not_the_backend() {
         let out = Command::new(NAZM)
             .args(["build", path.to_str().unwrap()])
             .arg("-o")
-            .arg(dir.path().join("prog"))
+            .arg(dir.path().join(crate::common::exe_name("prog")))
             .output()
             .expect("run");
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -1553,7 +1553,7 @@ fn unsupported_signatures_and_bodies_are_refused_by_name() {
     // compiles. What is left is `main`'s shape.
     let expected = "a `main` that does not return `Int`";
     let (dir, path) = write_program("fn main() -> Bool {\n    true\n}\n");
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let out = Command::new(NAZM)
         .args(["build", path.to_str().unwrap()])
         .arg("-o")
@@ -1576,7 +1576,7 @@ fn the_emitted_ir_for_a_multi_function_program_is_well_formed() {
         "fn helper(n: Int, flag: Bool) -> Int { if flag { n * 2 } else { n } }\n\
          fn main() -> Int { helper(21, true) }\n",
     );
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let out = Command::new(NAZM)
         .args(["build", src.to_str().unwrap(), "--emit-ir"])
         .arg("-o")
@@ -1959,7 +1959,7 @@ fn assignment_and_loop_condition_errors_belong_to_the_checker() {
         ),
     ] {
         let (dir, path) = write_program(src);
-        let exe = dir.path().join("prog");
+        let exe = dir.path().join(crate::common::exe_name("prog"));
         let out = Command::new(NAZM)
             .args(["build", path.to_str().unwrap()])
             .arg("-o")
@@ -2003,7 +2003,7 @@ fn a_working_loop_executable_survives_a_later_refused_build() {
     // the failure mode that costs someone a working artefact at the worst moment.
     let dir = tempfile::tempdir().expect("tempdir");
     let src = dir.path().join("prog.nz");
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
 
     std::fs::write(
         &src,
@@ -2087,7 +2087,7 @@ fn many_iterations_with_body_locals_allocate_once_in_the_entry_block() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("prog.nz");
     std::fs::write(&path, src).expect("write");
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let out = Command::new(NAZM)
         .args(["build", path.to_str().unwrap(), "--emit-ir"])
         .arg("-o")
@@ -2574,7 +2574,7 @@ fn misplaced_transfers_and_unreachable_code_belong_to_the_checker() {
         ),
     ] {
         let (dir, path) = write_program(src);
-        let exe = dir.path().join("prog");
+        let exe = dir.path().join(crate::common::exe_name("prog"));
         let out = Command::new(NAZM)
             .args(["build", path.to_str().unwrap()])
             .arg("-o")
@@ -2715,7 +2715,7 @@ fn the_emitted_ir_for_nested_control_flow_is_well_formed() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("prog.nz");
     std::fs::write(&path, src).expect("write");
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let out = Command::new(NAZM)
         .args(["build", path.to_str().unwrap(), "--emit-ir"])
         .arg("-o")
@@ -3027,7 +3027,7 @@ fn the_emitted_ir_for_a_return_heavy_function_is_well_formed() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("prog.nz");
     std::fs::write(&path, src).expect("write");
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let out = Command::new(NAZM)
         .args(["build", path.to_str().unwrap(), "--emit-ir"])
         .arg("-o")
@@ -3098,7 +3098,7 @@ fn a_wrongly_typed_return_belongs_to_the_checker() {
         ),
     ] {
         let (dir, path) = write_program(src);
-        let exe = dir.path().join("prog");
+        let exe = dir.path().join(crate::common::exe_name("prog"));
         let out = Command::new(NAZM)
             .args(["build", path.to_str().unwrap()])
             .arg("-o")
@@ -3440,7 +3440,7 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
         let out = Command::new(NAZM)
             .args(["build", path.to_str().unwrap()])
             .arg("-o")
-            .arg(dir.path().join("prog"))
+            .arg(dir.path().join(crate::common::exe_name("prog")))
             .output()
             .expect("run");
         if out.status.success() {
@@ -3519,7 +3519,7 @@ fn the_emitted_ir_for_strings_is_well_formed() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("prog.nz");
     std::fs::write(&path, src).expect("write");
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let out = Command::new(NAZM)
         .args(["build", path.to_str().unwrap(), "--emit-ir"])
         .arg("-o")
@@ -3712,7 +3712,7 @@ fn a_program_without_sequences_carries_none_of_their_runtime() {
     let out = Command::new(NAZM)
         .args(["build", path.to_str().unwrap(), "--emit-ir"])
         .arg("-o")
-        .arg(dir.path().join("prog"))
+        .arg(dir.path().join(crate::common::exe_name("prog")))
         .output()
         .expect("run");
     assert!(
@@ -3789,7 +3789,9 @@ fn expect_same_run(src: &str, args: &[&str], stdout: &str, stderr: &str, code: i
     );
 
     for opt in [0u8, 2] {
-        let exe = dir.path().join(format!("prog{opt}"));
+        let exe = dir
+            .path()
+            .join(crate::common::exe_name(format!("prog{opt}")));
         let built = Command::new(NAZM)
             .args(["build", path.to_str().unwrap()])
             .arg("-o")
@@ -3859,7 +3861,7 @@ fn an_argument_past_the_end_fails_at_its_own_position() {
         interp.stderr
     );
 
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     assert!(Command::new(NAZM)
         .args(["build", path.to_str().unwrap()])
         .arg("-o")
@@ -3972,7 +3974,7 @@ fn a_program_without_io_carries_none_of_its_runtime() {
     assert!(Command::new(NAZM)
         .args(["build", path.to_str().unwrap(), "--emit-ir"])
         .arg("-o")
-        .arg(dir.path().join("prog"))
+        .arg(dir.path().join(crate::common::exe_name("prog")))
         .output()
         .expect("run")
         .status
@@ -4015,7 +4017,7 @@ fn run_root(root: &Path) -> Ran {
 }
 
 fn build_root(dir: &Path, root: &Path) -> Result<PathBuf, Ran> {
-    let exe = dir.join("prog");
+    let exe = dir.join(crate::common::exe_name("prog"));
     let out = run_bounded(
         Command::new(NAZM)
             .args(["build", root.to_str().unwrap()])

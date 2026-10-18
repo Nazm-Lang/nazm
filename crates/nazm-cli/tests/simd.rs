@@ -44,7 +44,9 @@ fn everywhere(src: &str) -> Vec<(String, String, Option<i32>)> {
         ("cranelift", "0"),
         ("cranelift", "2"),
     ] {
-        let exe = d.path().join(format!("p-{backend}-{opt}"));
+        let exe = d
+            .path()
+            .join(crate::common::exe_name(format!("p-{backend}-{opt}")));
         let b = nazm(
             d.path(),
             &[
@@ -158,7 +160,9 @@ fn a_running_sum_that_overflows_fails_where_the_loop_would_even_if_the_total_fit
             &["build", "--opt-level", "2", "prog.nz", "-o", "p"],
         );
         assert!(b.status.success());
-        let o = Command::new(d.path().join("p")).output().unwrap();
+        let o = Command::new(d.path().join(crate::common::exe_name("p")))
+            .output()
+            .unwrap();
         let native = String::from_utf8_lossy(&o.stderr).into_owned();
         assert!(
             native.contains("error[N0400]: this addition overflows `Int` at prog.nz:7:5"),
@@ -233,7 +237,9 @@ fn a_native_build_replaces_the_summation_loop_and_reports_its_failure_at_the_add
             ],
         );
         assert!(b.status.success(), "{}", String::from_utf8_lossy(&b.stderr));
-        let o = Command::new(d.path().join("p")).output().unwrap();
+        let o = Command::new(d.path().join(crate::common::exe_name("p")))
+            .output()
+            .unwrap();
         // The loop's own addition: the same place the interpreter names.
         let native = String::from_utf8_lossy(&o.stderr).into_owned();
         assert!(

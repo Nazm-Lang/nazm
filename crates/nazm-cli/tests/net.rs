@@ -322,7 +322,7 @@ fn a_task_waiting_on_a_socket_does_not_hold_its_worker() {
     assert_eq!(r.code, Some(0), "{}", r.stderr);
     assert_eq!(r.stdout.trim_end(), "299995 80");
     for backend in ["llvm", "cranelift"] {
-        let exe = d.path().join(backend);
+        let exe = d.path().join(crate::common::exe_name(backend));
         let b = nazm(
             d.path(),
             &[

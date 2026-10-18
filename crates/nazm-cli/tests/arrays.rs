@@ -44,7 +44,9 @@ fn everywhere(src: &str) -> Vec<(String, Ran)> {
         ("llvm -O2", "llvm", "2"),
         ("cranelift", "cranelift", "0"),
     ] {
-        let exe = d.path().join(label.replace([' ', '-'], ""));
+        let exe = d
+            .path()
+            .join(crate::common::exe_name(label.replace([' ', '-'], "")));
         let b = nazm(
             d.path(),
             &[
@@ -365,7 +367,7 @@ fn an_array_in_a_public_signature_crosses_modules() {
     // And again, against the interface the first check persisted.
     let r = nazm(d.path(), &["run", "--interpret", "main.nz"]);
     assert_eq!(r.stdout.trim(), "14", "{}", r.stderr);
-    let exe = d.path().join("prog");
+    let exe = d.path().join(crate::common::exe_name("prog"));
     let b = nazm(d.path(), &["build", "main.nz", "-o", exe.to_str().unwrap()]);
     assert_eq!(b.code, Some(0), "{}", b.stderr);
     let o = std::process::Command::new(&exe).output().unwrap();

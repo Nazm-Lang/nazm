@@ -275,7 +275,9 @@ fn every_shape_in_the_tables_runs_the_same_on_both_backends() {
             "{backend}: {}",
             String::from_utf8_lossy(&o.stderr)
         );
-        let native = Command::new(d.path().join(backend)).output().unwrap();
+        let native = Command::new(d.path().join(crate::common::exe_name(backend)))
+            .output()
+            .unwrap();
         assert_eq!(native.stdout, run.stdout, "{backend}");
     }
 }

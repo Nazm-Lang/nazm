@@ -324,7 +324,7 @@ fn long_program() -> (String, String) {
 fn native_runs(dir: &Path, which: &[(&str, &str, &str)]) -> Vec<(String, Ran)> {
     let mut runs = Vec::new();
     for (label, backend, opt) in which {
-        let exe = dir.join(label.replace([' ', '-'], ""));
+        let exe = dir.join(crate::common::exe_name(label.replace([' ', '-'], "")));
         let b = nazm(
             dir,
             &[

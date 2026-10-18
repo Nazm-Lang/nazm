@@ -201,7 +201,9 @@ fn every_run_case_prints_what_it_says_interpreted_and_compiled_by_both_backends(
         assert_eq!(text(&out.stdout), expected, "run {name}");
 
         for backend in ["llvm", "cranelift"] {
-            let exe = scratch.path().join(format!("{name}.{backend}"));
+            let exe = scratch
+                .path()
+                .join(crate::common::exe_name(format!("{name}.{backend}")));
             let out = nazm(
                 &[
                     "build",
@@ -257,7 +259,9 @@ fn every_trap_case_traps_with_its_code_interpreted_and_compiled_by_both_backends
         );
 
         for backend in ["llvm", "cranelift"] {
-            let exe = scratch.path().join(format!("{name}.{backend}"));
+            let exe = scratch
+                .path()
+                .join(crate::common::exe_name(format!("{name}.{backend}")));
             let out = nazm(
                 &[
                     "build",
@@ -344,7 +348,7 @@ fn every_refusal_case_is_refused_with_its_code_and_not_built() {
             .unwrap_or_else(|| panic!("{name}: no error reported: {out:?}"));
         assert_eq!(first["code"], code.as_str(), "{name}: {first}");
 
-        let exe = scratch.path().join(&name);
+        let exe = scratch.path().join(crate::common::exe_name(&name));
         let out = nazm(&["build", arg, "-o", exe.to_str().unwrap()], cwd);
         assert_eq!(out.status.code(), Some(1), "build {name}: {out:?}");
         assert!(!exe.exists(), "{name}: a refused program was built");

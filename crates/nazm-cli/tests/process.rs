@@ -38,7 +38,7 @@ fn everywhere_with(
         .args(["run", "--interpret", "prog.nz"]);
     runs.push(("interpreter".to_owned(), interp));
     for backend in ["llvm", "cranelift"] {
-        let exe = d.path().join(backend);
+        let exe = d.path().join(crate::common::exe_name(backend));
         let b = nazm(
             d.path(),
             &[
@@ -183,7 +183,7 @@ fn a_task_reading_a_childs_pipe_does_not_hold_its_worker() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("prog.nz"), POOL).unwrap();
     for backend in ["llvm", "cranelift"] {
-        let exe = d.path().join(backend);
+        let exe = d.path().join(crate::common::exe_name(backend));
         let b = nazm(
             d.path(),
             &[

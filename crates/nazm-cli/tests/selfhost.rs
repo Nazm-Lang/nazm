@@ -40,7 +40,7 @@ fn build_lexer(dir: &Path) -> PathBuf {
     common::require_containment("lexer.nz");
     let source = repo_root().join("compiler/lexer.nz");
     assert!(source.exists(), "{} is missing", source.display());
-    let exe = dir.join("nzlex");
+    let exe = dir.join(crate::common::exe_name("nzlex"));
     let out = Command::new(NAZM)
         .args(["build", source.to_str().unwrap()])
         .arg("-o")
@@ -905,7 +905,7 @@ fn build_parser(dir: &Path) -> PathBuf {
     common::require_containment("parser.nz");
     let source = repo_root().join("compiler/parser.nz");
     assert!(source.exists(), "{} is missing", source.display());
-    let exe = dir.join("nzparse");
+    let exe = dir.join(crate::common::exe_name("nzparse"));
     let out = Command::new(NAZM)
         .args(["build", source.to_str().unwrap()])
         .arg("-o")
@@ -1191,7 +1191,7 @@ fn build_checker(dir: &Path) -> PathBuf {
     common::require_containment("check.nz");
     let source = repo_root().join("compiler/check.nz");
     assert!(source.exists(), "{} is missing", source.display());
-    let exe = dir.join("nzcheck");
+    let exe = dir.join(crate::common::exe_name("nzcheck"));
     let out = Command::new(NAZM)
         .args(["build", source.to_str().unwrap()])
         .arg("-o")
@@ -1480,7 +1480,9 @@ fn the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value() {
             // must discard — and give back — rather than leave for a later node to take.
             let ll = dir.path().join(format!("{name}.ll"));
             std::fs::write(&ll, &ir).expect("write IR");
-            let exe = dir.path().join(format!("{name}-selfhost"));
+            let exe = dir
+                .path()
+                .join(crate::common::exe_name(format!("{name}-selfhost")));
             let assembled = Command::new("clang")
                 .args(["-Wno-override-module", "-lpthread", "-o"])
                 .arg(&exe)
@@ -2472,7 +2474,7 @@ fn the_nazm_written_compiler_compiles_the_n102_features_with_the_same_memory_sem
         assert_eq!(rc, Some(0), "{source}: {err}");
         let ll = dir.path().join("fail.ll");
         std::fs::write(&ll, &ir).expect("write IR");
-        let exe = dir.path().join("fail-self");
+        let exe = dir.path().join(crate::common::exe_name("fail-self"));
         let built = Command::new("clang")
             .args(["-Wno-override-module", "-lpthread", "-o"])
             .arg(&exe)
@@ -2645,7 +2647,7 @@ fn build_layout_harness(dir: &Path) -> PathBuf {
          print(str_concat(str_join(out, \",\"), nl));\n    0\n}\n",
     )
     .expect("write harness");
-    let exe = dir.join("layout");
+    let exe = dir.join(crate::common::exe_name("layout"));
     let out = Command::new(NAZM)
         .args(["build", dir.join("layout.nz").to_str().unwrap(), "-o"])
         .arg(&exe)
@@ -2770,7 +2772,7 @@ fn a_project_file_cannot_take_the_prelude_s_key() {
     assert_eq!(status, Some(0), "the compiler: {stderr}");
     let ll = dir.path().join("imp.ll");
     std::fs::write(&ll, &ir).expect("write IR");
-    let exe = dir.path().join("imp");
+    let exe = dir.path().join(crate::common::exe_name("imp"));
     let built = Command::new("clang")
         .args(["-Wno-override-module", "-lpthread", "-o"])
         .arg(&exe)
@@ -3323,7 +3325,7 @@ fn build_emitter(dir: &Path) -> PathBuf {
     common::require_containment("emit.nz");
     let source = repo_root().join("compiler/emit.nz");
     assert!(source.exists(), "{} is missing", source.display());
-    let exe = dir.join("nzemit");
+    let exe = dir.join(crate::common::exe_name("nzemit"));
     let out = Command::new(NAZM)
         .args(["build", source.to_str().unwrap()])
         .arg("-o")
@@ -3410,7 +3412,7 @@ fn a_compiler_written_in_nazm_produces_native_executables_that_agree_with_the_in
         let ll = dir.path().join("case.ll");
         std::fs::write(&ll, &ir).expect("write IR");
 
-        let exe = dir.path().join("case");
+        let exe = dir.path().join(crate::common::exe_name("case"));
         let built = Command::new("clang")
             .args(["-Wno-override-module", "-o"])
             .arg(&exe)
@@ -3468,7 +3470,7 @@ fn the_nazm_written_compiler_holds_exit_with_to_0_to_255() {
         );
         let ll = dir.path().join("exit.ll");
         std::fs::write(&ll, &ir).expect("write IR");
-        let exe = dir.path().join("exit");
+        let exe = dir.path().join(crate::common::exe_name("exit"));
         let built = Command::new("clang")
             .args(["-Wno-override-module", "-o"])
             .arg(&exe)
@@ -4049,7 +4051,7 @@ fn the_nazm_compiler_handles_several_functions_and_calls() {
 
         let ll = dir.path().join("case.ll");
         std::fs::write(&ll, &ir).expect("write");
-        let exe = dir.path().join("case");
+        let exe = dir.path().join(crate::common::exe_name("case"));
         let built = Command::new("clang")
             .args(["-Wno-override-module", "-o"])
             .arg(&exe)
@@ -4136,7 +4138,7 @@ fn the_nazm_compiler_keeps_the_specified_failure_behaviour() {
         assert_eq!(rc, Some(0), "{expr:?}");
         let ll = dir.path().join("case.ll");
         std::fs::write(&ll, &ir).expect("write");
-        let exe = dir.path().join("case");
+        let exe = dir.path().join(crate::common::exe_name("case"));
         assert!(Command::new("clang")
             .args(["-Wno-override-module", "-o"])
             .arg(&exe)
@@ -4333,7 +4335,7 @@ fn the_nazm_written_compiler_resolves_its_own_imports() {
     let ll = root.join("prog.ll");
     std::fs::write(&ll, &ir).expect("write IR");
 
-    let exe = root.join("prog");
+    let exe = root.join(crate::common::exe_name("prog"));
     let built = Command::new("clang")
         .args(["-Wno-override-module", "-o"])
         .arg(&exe)
@@ -4446,7 +4448,7 @@ fn the_nazm_written_compiler_resolves_std_and_refuses_package_imports_by_name() 
     assert_eq!(rc, Some(0), "{err}");
     let ll = dir.path().join("good.ll");
     std::fs::write(&ll, &ir).expect("write IR");
-    let exe = dir.path().join("good");
+    let exe = dir.path().join(crate::common::exe_name("good"));
     let built = Command::new("clang")
         .args(["-Wno-override-module", "-o"])
         .arg(&exe)
@@ -4504,7 +4506,7 @@ fn the_nazm_written_compiler_compiles_concurrency() {
         );
         let ll = dir.path().join("case.ll");
         std::fs::write(&ll, &ir).expect("write IR");
-        let exe = dir.path().join("case");
+        let exe = dir.path().join(crate::common::exe_name("case"));
         let built = Command::new("clang")
             .args(["-Wno-override-module", "-pthread", "-o"])
             .arg(&exe)
@@ -4614,7 +4616,7 @@ fn a_program_from_the_nazm_compiler_joins_its_scope_before_reporting() {
         assert_eq!(emitted, Some(0), "{what}: {ir_err}");
         let ll = dir.path().join("fail.ll");
         std::fs::write(&ll, &ir).expect("write IR");
-        let exe = dir.path().join("fail");
+        let exe = dir.path().join(crate::common::exe_name("fail"));
         let built = Command::new("clang")
             .args(["-Wno-override-module", "-pthread", "-o"])
             .arg(&exe)
@@ -4679,7 +4681,7 @@ fn the_nazm_written_compiler_refuses_what_monomorphisation_cannot_do() {
         assert_eq!(rc, Some(1), "the Nazm compiler accepted:\n{source}");
         let out = Command::new(NAZM)
             .args(["build", file.to_str().unwrap(), "-o"])
-            .arg(dir.path().join("prog"))
+            .arg(dir.path().join(crate::common::exe_name("prog")))
             .output()
             .expect("run nazm build");
         let reference = String::from_utf8_lossy(&out.stderr);
@@ -4813,7 +4815,7 @@ fn the_nazm_written_compiler_compiles_recursion_as_the_reference_does() {
         );
         let ll = dir.path().join("cycle.ll");
         std::fs::write(&ll, &ir).expect("write IR");
-        let exe = dir.path().join("cycle-self");
+        let exe = dir.path().join(crate::common::exe_name("cycle-self"));
         let built = Command::new("clang")
             .args(["-Wno-override-module", "-o"])
             .arg(&exe)
@@ -5090,7 +5092,7 @@ fn the_two_compilers_agree_on_every_module_and_visibility_rule() {
                 // Both accepted. They must also agree on what it means.
                 let ll = work.join("out.ll");
                 std::fs::write(&ll, &ir).expect("write IR");
-                let exe = work.join("out");
+                let exe = work.join(crate::common::exe_name("out"));
                 let built = Command::new("clang")
                     .args(["-Wno-override-module", "-o"])
                     .arg(&exe)
@@ -5238,7 +5240,9 @@ fn the_parity_record_is_what_both_compilers_do_with_each_feature() {
         let (verdict, detail) = if rc == Some(0) {
             let ll = dir.path().join(format!("{name}.ll"));
             std::fs::write(&ll, &ir).unwrap();
-            let exe = dir.path().join(format!("{name}.self"));
+            let exe = dir
+                .path()
+                .join(crate::common::exe_name(format!("{name}.self")));
             let linked = Command::new("clang")
                 .args(["-Wno-override-module", "-o"])
                 .arg(&exe)

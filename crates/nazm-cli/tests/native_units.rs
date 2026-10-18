@@ -68,7 +68,7 @@ fn build_and_run(dir: &Path, files: &[(&str, &str)]) -> Ran {
         "build failed: {}",
         String::from_utf8_lossy(&built.stderr)
     );
-    ran(&Command::new(dir.join("prog"))
+    ran(&Command::new(dir.join(crate::common::exe_name("prog")))
         .current_dir(dir)
         .output()
         .expect("execute"))
@@ -381,7 +381,9 @@ fn a_call_cycle_across_modules_compiles_and_its_runaway_is_n0408() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let ran = Command::new(dir.path().join("prog")).output().expect("run");
+    let ran = Command::new(dir.path().join(crate::common::exe_name("prog")))
+        .output()
+        .expect("run");
     assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "5");
 
     write(
@@ -400,7 +402,7 @@ fn a_call_cycle_across_modules_compiles_and_its_runaway_is_n0408() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let ran = common::bounded_exe(&dir.path().join("runaway"))
+    let ran = common::bounded_exe(&dir.path().join(crate::common::exe_name("runaway")))
         .output()
         .expect("run");
     let err = String::from_utf8_lossy(&ran.stderr);
@@ -669,7 +671,7 @@ fn a_backend_refusal_inside_an_imported_module_names_that_module() {
     assert!(text.contains("--> lib.nz:1:100"), "{text}");
     assert!(text.contains("N0357"), "{text}");
     assert!(
-        !dir.path().join("prog").exists(),
+        !dir.path().join(crate::common::exe_name("prog")).exists(),
         "nothing should be written"
     );
 
@@ -786,7 +788,7 @@ fn a_runtime_failure_from_an_absolute_build_names_the_logical_module() {
         write(dir.path(), name, text);
     }
     write(dir.path(), "nazm.root", "");
-    let out = dir.path().join("prog");
+    let out = dir.path().join(crate::common::exe_name("prog"));
     let built = Command::new(NAZM)
         .args(["build"])
         .arg(dir.path().join("app.nz"))

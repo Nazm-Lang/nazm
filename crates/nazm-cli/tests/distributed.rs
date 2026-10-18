@@ -43,7 +43,7 @@ fn in_one_process_a_lost_answer_times_out_and_a_retry_is_applied_once() {
     let r = nazm(d.path(), &["run", "--interpret", src.to_str().unwrap()]);
     assert_eq!(r.code, Some(0), "{}", r.stderr);
     assert_eq!(r.stdout, format!("{want}0\n"));
-    let exe = d.path().join("local");
+    let exe = d.path().join(crate::common::exe_name("local"));
     let r = nazm(
         d.path(),
         &["build", src.to_str().unwrap(), "-o", exe.to_str().unwrap()],
@@ -82,7 +82,7 @@ fn wait(child: &mut std::process::Child, limit: Duration) -> Option<i32> {
 #[test]
 fn a_client_retries_through_a_server_restart_and_every_credit_is_applied_once() {
     let d = tempfile::tempdir().unwrap();
-    let exe = d.path().join("ledger");
+    let exe = d.path().join(crate::common::exe_name("ledger"));
     let src = manifest("../../examples/apps/ledger/ledger.nz");
     let r = nazm(
         d.path(),

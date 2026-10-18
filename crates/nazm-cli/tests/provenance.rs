@@ -29,7 +29,7 @@ fn repo_root() -> PathBuf {
 fn run_native(dir: &Path) -> (Option<i32>, String) {
     const LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
     let out_path = dir.join("prog.out");
-    let mut child = Command::new(dir.join("prog"))
+    let mut child = Command::new(dir.join(crate::common::exe_name("prog")))
         .current_dir(dir)
         .stdout(std::fs::File::create(&out_path).expect("stdout file"))
         .spawn()
@@ -134,7 +134,7 @@ fn a_restricted_flow_is_refused_before_anything_is_built() {
         .expect("build");
     assert!(!built.status.success());
     assert!(String::from_utf8_lossy(&built.stderr).contains("N0372"));
-    assert!(!dir.path().join("prog").exists());
+    assert!(!dir.path().join(crate::common::exe_name("prog")).exists());
 }
 
 /// Q1-D-19: a file's contents carried through Gate 2's `Bytes` and `Text` — made from, sliced,

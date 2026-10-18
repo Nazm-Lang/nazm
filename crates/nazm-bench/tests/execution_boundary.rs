@@ -22,8 +22,6 @@
     clippy::indexing_slicing
 )]
 
-use std::process::Command;
-
 use nazm_bench::acceptance::{AcceptanceSuite, CheckResult, Verdict};
 use nazm_bench::workspace::{Workspace, WritersStopped};
 
@@ -254,13 +252,17 @@ fn every_symlink_is_refused_including_the_ones_that_look_contained() {
     // A function rather than a closure, so the boxed cases below borrow nothing and can
     // be `'static`.
     fn link(ws: &Workspace, target: &std::path::Path, name: &str) {
-        let status = Command::new("ln")
-            .arg("-s")
-            .arg(target)
-            .arg(ws.path().join(name))
-            .status()
-            .unwrap();
-        assert!(status.success(), "could not create the {name} fixture");
+        // The standard library's link, not `ln -s`: on a Windows runner `ln` is MSYS's, which
+        // copies the file instead of linking it, and the freeze then rightly has nothing to refuse.
+        let at = ws.path().join(name);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, &at).unwrap();
+        #[cfg(windows)]
+        if target == std::path::Path::new(".") {
+            std::os::windows::fs::symlink_dir(target, &at).unwrap();
+        } else {
+            std::os::windows::fs::symlink_file(target, &at).unwrap();
+        }
     }
 
     // Each case is (name, how to build it). All must be refused.

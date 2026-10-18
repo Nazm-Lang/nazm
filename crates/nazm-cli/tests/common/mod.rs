@@ -250,3 +250,11 @@ pub(crate) fn skip_without(present: bool, what: &str) -> bool {
     eprintln!("SKIP: {what}");
     true
 }
+
+/// The name `nazm build -o NAME` publishes on this platform: `NAME` plus the platform's
+/// executable suffix (`.exe` on Windows, where the build adds it to a name with no extension;
+/// nothing elsewhere). Every test that starts, reads or looks for a program it built names it
+/// through this.
+pub(crate) fn exe_name(name: impl AsRef<str>) -> String {
+    format!("{}{}", name.as_ref(), std::env::consts::EXE_SUFFIX)
+}

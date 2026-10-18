@@ -90,7 +90,9 @@ fn every_tour_program_checks_formats_runs_and_builds_alike_under_both_backends()
         );
 
         for backend in ["llvm", "cranelift"] {
-            let exe = scratch.path().join(format!("{file}.{backend}"));
+            let exe = scratch
+                .path()
+                .join(crate::common::exe_name(format!("{file}.{backend}")));
             let exe_s = exe.to_str().unwrap();
             let out = nazm(&["build", src, "-o", exe_s, "--backend", backend], &dir);
             assert_eq!(

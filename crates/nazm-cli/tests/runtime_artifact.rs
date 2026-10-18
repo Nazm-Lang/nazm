@@ -75,7 +75,7 @@ fn built_and_run(dir: &Path, out: &str, extra: &[&str]) -> (String, Option<i32>)
     args.extend_from_slice(extra);
     let o = nazm(dir, &args);
     assert!(o.status.success(), "{extra:?}: {}", text(&o));
-    let r = Command::new(dir.join(out))
+    let r = Command::new(dir.join(crate::common::exe_name(out)))
         .current_dir(dir)
         .env("NAZM_MEMORY_REPORT", "1")
         .output()

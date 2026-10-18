@@ -53,10 +53,28 @@ impl Credentials {
 }
 
 fn random_hex() -> std::io::Result<String> {
-    use std::io::Read;
     let mut buf = [0u8; 16];
-    std::fs::File::open("/dev/urandom")?.read_exact(&mut buf)?;
+    fill_random(&mut buf)?;
     Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+#[cfg(unix)]
+fn fill_random(buf: &mut [u8]) -> std::io::Result<()> {
+    use std::io::Read;
+    std::fs::File::open("/dev/urandom")?.read_exact(buf)
+}
+
+/// Windows has no `/dev/urandom`. The standard library seeds every `RandomState` from the
+/// operating system's generator, so hashing a counter through fresh ones gives bytes nobody
+/// chose; as above, a password that differs per attempt is all that is asked.
+#[cfg(not(unix))]
+fn fill_random(buf: &mut [u8]) -> std::io::Result<()> {
+    use std::hash::BuildHasher as _;
+    for (i, chunk) in buf.chunks_mut(8).enumerate() {
+        let word = std::collections::hash_map::RandomState::new().hash_one(i);
+        chunk.copy_from_slice(&word.to_le_bytes()[..chunk.len()]);
+    }
+    Ok(())
 }
 
 /// Write the init script the image runs during bootstrap.

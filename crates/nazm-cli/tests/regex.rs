@@ -388,7 +388,7 @@ fn pathological_patterns_take_linear_time() {
         PATHOLOGICAL.replace("let n = 40;", "let n = 200000;"),
     )
     .unwrap();
-    let exe = d.path().join("long");
+    let exe = d.path().join(crate::common::exe_name("long"));
     let b = nazm(
         d.path(),
         &[
@@ -507,7 +507,9 @@ fn a_tokeniser_split_agrees_everywhere() {
         ("llvm -O2", "llvm", "2"),
         ("cranelift", "cranelift", "0"),
     ] {
-        let exe = d.path().join(label.replace([' ', '-'], ""));
+        let exe = d
+            .path()
+            .join(crate::common::exe_name(label.replace([' ', '-'], "")));
         let b = nazm(
             d.path(),
             &[

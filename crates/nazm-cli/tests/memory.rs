@@ -105,7 +105,7 @@ fn both(source: &str) -> Ran {
         "building failed: {}",
         String::from_utf8_lossy(&built.stderr)
     );
-    let native = Command::new(dir.path().join("prog"))
+    let native = Command::new(dir.path().join(crate::common::exe_name("prog")))
         .env(MEMORY_VARIABLE, "1")
         .current_dir(dir.path())
         .output_within_deadline();
@@ -149,7 +149,7 @@ fn both_with_args(source: &str, args: &[&str]) -> Ran {
         .output()
         .expect("build");
     assert!(built.status.success(), "{:?}", built);
-    let native = Command::new(dir.path().join("prog"))
+    let native = Command::new(dir.path().join(crate::common::exe_name("prog")))
         .args(args)
         .env(MEMORY_VARIABLE, "1")
         .current_dir(dir.path())
@@ -184,7 +184,7 @@ fn both_failing(source: &str) -> (Ran, String) {
         .output()
         .expect("build");
     assert!(built.status.success(), "{:?}", built);
-    let native = Command::new(dir.path().join("prog"))
+    let native = Command::new(dir.path().join(crate::common::exe_name("prog")))
         .env(MEMORY_VARIABLE, "1")
         .current_dir(dir.path())
         .output_within_deadline();
@@ -849,7 +849,7 @@ fn the_report_is_silent_unless_it_is_asked_for() {
             "{command:?} reported without being asked"
         );
     }
-    let quiet = Command::new(dir.path().join("prog"))
+    let quiet = Command::new(dir.path().join(crate::common::exe_name("prog")))
         .current_dir(dir.path())
         .output_within_deadline();
     assert!(!String::from_utf8_lossy(&quiet.stderr).contains("nazm-memory:"));
@@ -880,7 +880,7 @@ fn a_program_that_calls_exit_with_reclaims_nothing_and_says_nothing() {
         .output()
         .expect("build");
     assert!(built.status.success(), "{:?}", built);
-    let native = Command::new(dir.path().join("prog"))
+    let native = Command::new(dir.path().join(crate::common::exe_name("prog")))
         .env(MEMORY_VARIABLE, "1")
         .current_dir(dir.path())
         .output_within_deadline();

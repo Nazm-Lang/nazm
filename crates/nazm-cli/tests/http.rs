@@ -232,6 +232,10 @@ const REQUESTS: &[(&str, &str)] = &[
     ("", "400 an incomplete head"),
 ];
 
+#[cfg_attr(
+    windows,
+    ignore = "N0830: a Windows build reaching TLS is refused until the SChannel binding has passed on a Windows host"
+)]
 #[test]
 fn a_request_corpus_is_parsed_or_refused_alike_everywhere() {
     let mut calls = String::new();
@@ -271,6 +275,10 @@ fn a_request_corpus_is_parsed_or_refused_alike_everywhere() {
     agrees(&src, &expected);
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "N0830: a Windows build reaching TLS is refused until the SChannel binding has passed on a Windows host"
+)]
 #[test]
 fn damaged_requests_are_refused_and_never_trap() {
     // Seeded damage — a byte replaced by one the grammar cares about, removed or doubled — to
@@ -321,6 +329,10 @@ fn damaged_requests_are_refused_and_never_trap() {
     agrees(&src, "1500 0\nboth\n0");
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "N0830: a Windows build reaching TLS is refused until the SChannel binding has passed on a Windows host"
+)]
 #[test]
 fn responses_are_read_as_a_client_reads_them() {
     let src = prog(
@@ -356,6 +368,10 @@ fn responses_are_read_as_a_client_reads_them() {
     );
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "N0830: a Windows build reaching TLS is refused until the SChannel binding has passed on a Windows host"
+)]
 #[test]
 fn messages_are_written_with_the_framing_the_writer_owns() {
     let src = prog(
@@ -394,6 +410,10 @@ fn messages_are_written_with_the_framing_the_writer_owns() {
     );
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "N0830: a Windows build reaching TLS is refused until the SChannel binding has passed on a Windows host"
+)]
 #[test]
 fn headers_queries_and_urls_behave_at_their_edges() {
     let src = prog(
@@ -440,6 +460,10 @@ fn headers_queries_and_urls_behave_at_their_edges() {
     );
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "N0830: a Windows build reaching TLS is refused until the SChannel binding has passed on a Windows host"
+)]
 #[test]
 fn a_router_matches_parameters_wildcards_and_methods() {
     let src = prog(
@@ -504,6 +528,10 @@ const SERVICE: &str = "fn hello(r: Request) -> Response ! {} {\n\
          ServeOptions(max_head: d.max_head, max_headers: d.max_headers, max_target: d.max_target, max_body: d.max_body, head_timeout_ms: 300, idle_timeout_ms: 2000, body_timeout_ms: 300, write_timeout_ms: 2000, max_requests: d.max_requests, max_connections: d.max_connections)\n\
      }\n";
 
+#[cfg_attr(
+    windows,
+    ignore = "N0830: a Windows build reaching TLS is refused until the SChannel binding has passed on a Windows host"
+)]
 #[test]
 fn a_server_and_a_client_talk_over_loopback_alike_everywhere() {
     let src = prog(&format!(
@@ -560,6 +588,10 @@ fn a_server_and_a_client_talk_over_loopback_alike_everywhere() {
     );
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "N0830: a Windows build reaching TLS is refused until the SChannel binding has passed on a Windows host"
+)]
 #[test]
 fn malformed_requests_are_answered_on_the_wire_and_the_server_keeps_serving() {
     // Raw clients: what each request is answered with, the status line and how the connection
@@ -661,6 +693,10 @@ fn malformed_requests_are_answered_on_the_wire_and_the_server_keeps_serving() {
     );
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "N0830: a Windows build reaching TLS is refused until the SChannel binding has passed on a Windows host"
+)]
 #[test]
 fn connections_served_in_tasks_of_their_own_answer_concurrent_clients() {
     // The parallel form: the program's own accept loop spawns a task per connection, and each

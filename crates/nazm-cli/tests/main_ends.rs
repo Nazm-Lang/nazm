@@ -47,7 +47,9 @@ fn as_users_run(files: &[(&str, &str)]) -> Vec<(String, Ran)> {
         ("llvm -O2", "llvm", "2"),
         ("cranelift", "cranelift", "0"),
     ] {
-        let exe = d.path().join(label.replace([' ', '-'], ""));
+        let exe = d
+            .path()
+            .join(crate::common::exe_name(label.replace([' ', '-'], "")));
         let b = build(d.path(), backend, opt, main, &exe);
         assert_eq!(b.code, Some(0), "{label}: {b:?}");
         let mut c = common::bounded_exe(&exe);
@@ -243,7 +245,7 @@ fn build_and_inspect_say_what_the_program_may_touch() {
     ] {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("prog.nz"), src).unwrap();
-        let exe = d.path().join("prog");
+        let exe = d.path().join(crate::common::exe_name("prog"));
         let b = build(d.path(), "llvm", "0", "prog.nz", &exe);
         assert_eq!(b.code, Some(0), "{b:?}");
         assert!(b.stderr.lines().any(|l| l == line), "{b:?}");

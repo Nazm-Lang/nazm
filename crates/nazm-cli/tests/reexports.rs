@@ -95,7 +95,9 @@ fn a_reexport_offers_the_same_definition_under_its_names() {
         for backend in ["llvm", "cranelift"] {
             let b = nazm(d.path(), &["build", "--backend", backend, file, "-o", "p"]);
             assert!(b.status.success(), "{}", String::from_utf8_lossy(&b.stderr));
-            let o = Command::new(d.path().join("p")).output().unwrap();
+            let o = Command::new(d.path().join(crate::common::exe_name("p")))
+                .output()
+                .unwrap();
             assert_eq!(stdout(&o), want, "{file} under {backend}");
         }
     }
@@ -484,7 +486,9 @@ fn a_warm_build_reuses_what_a_reexport_did_not_change() {
     .unwrap();
     let (compiled, reused) = build(d.path(), "main.nz");
     assert_eq!(compiled, 1, "{compiled} compiled, {reused} reused");
-    let o = Command::new(d.path().join("prog")).output().unwrap();
+    let o = Command::new(d.path().join(crate::common::exe_name("prog")))
+        .output()
+        .unwrap();
     assert_eq!(stdout(&o), "17\n");
     // The re-exported definition's own body: rebuilt, and the importer sees the new answer
     // through the alias.
@@ -494,7 +498,9 @@ fn a_warm_build_reuses_what_a_reexport_did_not_change() {
     )
     .unwrap();
     build(d.path(), "main.nz");
-    let o = Command::new(d.path().join("prog")).output().unwrap();
+    let o = Command::new(d.path().join(crate::common::exe_name("prog")))
+        .output()
+        .unwrap();
     assert_eq!(stdout(&o), "21\n");
 }
 

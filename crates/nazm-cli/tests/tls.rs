@@ -253,7 +253,7 @@ fn compiled_agree(dir: &Path, src: &str, expected: &str) {
         backends.push(("nazm", "nazm", "0"));
     }
     for (label, backend, opt) in backends {
-        let exe = dir.join(label.replace([' ', '-'], ""));
+        let exe = dir.join(crate::common::exe_name(label.replace([' ', '-'], "")));
         let mut build = Command::new(NAZM);
         build.current_dir(dir).args([
             "build",
@@ -367,6 +367,10 @@ fn main(io: IoCap, net: NetCap, tasks: SpawnCap, out: OutCap) -> Int ! { io, spa
 }
 "#;
 
+#[cfg_attr(
+    windows,
+    ignore = "N0830: a Windows build reaching TLS is refused until the SChannel binding has passed on a Windows host"
+)]
 #[test]
 fn a_server_and_a_client_agree_and_echo_over_loopback_on_every_backend() {
     let Some(d) = with_certificates() else {
@@ -465,6 +469,10 @@ fn main(io: IoCap, net: NetCap, tasks: SpawnCap, out: OutCap) -> Int ! { io, spa
 }
 "#;
 
+#[cfg_attr(
+    windows,
+    ignore = "N0830: a Windows build reaching TLS is refused until the SChannel binding has passed on a Windows host"
+)]
 #[test]
 fn a_client_refuses_every_certificate_it_cannot_verify_and_says_why() {
     let Some(d) = with_certificates() else {
@@ -562,6 +570,10 @@ fn main(io: IoCap, net: NetCap, t: SpawnCap, out: OutCap) -> Int ! { io, spawn }
 }
 "#;
 
+#[cfg_attr(
+    windows,
+    ignore = "N0830: a Windows build reaching TLS is refused until the SChannel binding has passed on a Windows host"
+)]
 #[test]
 fn http_is_served_and_fetched_over_tls() {
     let Some(d) = with_certificates() else {

@@ -26,7 +26,7 @@ pub(crate) fn nzcg() -> &'static Path {
         let dir =
             Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("nzcg-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let exe = dir.join("nzcg");
+        let exe = dir.join(crate::common::exe_name("nzcg"));
         let main = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../toolchain/codegen/main.nz");
         let r = nazm(
             &dir,
@@ -87,7 +87,9 @@ pub(crate) fn everywhere_with_env(
         backends.push(("nazm", "nazm", "0"));
     }
     for (label, backend, opt) in backends {
-        let exe = d.path().join(label.replace([' ', '-'], ""));
+        let exe = d
+            .path()
+            .join(crate::common::exe_name(label.replace([' ', '-'], "")));
         let mut build = Command::new(NAZM);
         build.current_dir(d.path()).args([
             "build",

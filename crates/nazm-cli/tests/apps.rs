@@ -81,7 +81,7 @@ fn every_way(
         ("llvm-O2", "llvm", "2"),
         ("cranelift", "cranelift", "0"),
     ] {
-        let exe = dir.join(format!("exe-{label}"));
+        let exe = dir.join(crate::common::exe_name(format!("exe-{label}")));
         let b = nazm(
             dir,
             &[

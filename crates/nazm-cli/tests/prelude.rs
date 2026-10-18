@@ -217,7 +217,9 @@ fn a_dependency_s_result_propagates_in_its_importer() {
     let interpreted = nazm(dir.path(), &["run", "--interpret", "a.nz"]);
     assert_eq!(String::from_utf8_lossy(&interpreted.stdout).trim(), "420");
     build(dir.path(), "a.nz");
-    let native = Command::new(dir.path().join("prog")).output().expect("run");
+    let native = Command::new(dir.path().join(crate::common::exe_name("prog")))
+        .output()
+        .expect("run");
     assert_eq!(String::from_utf8_lossy(&native.stdout).trim(), "420");
 }
 
@@ -468,7 +470,9 @@ fn writing_a_match_as_a_question_mark_moves_no_interface() {
     let (compiled, reused, _, _) = build(dir.path(), "a.nz");
     assert_eq!(compiled, 1, "only B's unit should be recompiled");
     assert!(reused >= 1, "A's object should be reused");
-    let native = Command::new(dir.path().join("prog")).output().expect("run");
+    let native = Command::new(dir.path().join(crate::common::exe_name("prog")))
+        .output()
+        .expect("run");
     assert_eq!(String::from_utf8_lossy(&native.stdout).trim(), "420");
 }
 

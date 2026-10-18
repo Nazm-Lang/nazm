@@ -275,7 +275,7 @@ fn main(io: IoCap, tasks: SpawnCap) {\n\
     std::fs::write(d.path().join("tasks.nz"), src).unwrap();
     let mut want: Option<String> = None;
     for backend in ["llvm", "cranelift", "nazm"] {
-        let exe = format!("t-{backend}");
+        let exe = crate::common::exe_name(format!("t-{backend}"));
         let b = nazm_with(
             d.path(),
             nzcg,
@@ -323,7 +323,7 @@ fn a_long_loop_from_nazms_own_code_generator_yields_its_worker() {
         &["build", "--backend", "nazm", "starve.nz", "-o", "starve"],
     );
     assert_eq!(b.code, Some(0), "{}{}", b.stdout, b.stderr);
-    let mut c = Command::new(d.path().join("starve"));
+    let mut c = Command::new(d.path().join(crate::common::exe_name("starve")));
     c.current_dir(d.path())
         .env_remove("NAZM_SCHEDULER")
         .env("NAZM_WORKERS", "2");
@@ -875,7 +875,10 @@ fn the_generator_is_told_the_target_and_whether_the_program_has_one_thread() {
             "{name}: one thread is {}: {args}",
             !threads
         );
-        let p = run_bounded(&mut common::bounded_exe(&d.path().join("p")), "p");
+        let p = run_bounded(
+            &mut common::bounded_exe(&d.path().join(crate::common::exe_name("p"))),
+            "p",
+        );
         // `main`'s result is printed after what it printed.
         assert_eq!((p.code, p.stdout.as_str()), (Some(0), "7\n0\n"), "{name}");
     }
@@ -902,7 +905,10 @@ fn a_debug_build_hands_the_generator_its_positions_and_their_files() {
         let lir = std::fs::read_to_string(d.path().join("unit.lir")).unwrap();
         assert_eq!(lir.contains("\n; file "), debug, "{lir}");
         assert_eq!(lir.contains("  loc "), debug, "{lir}");
-        let p = run_bounded(&mut common::bounded_exe(&d.path().join("p")), "p");
+        let p = run_bounded(
+            &mut common::bounded_exe(&d.path().join(crate::common::exe_name("p"))),
+            "p",
+        );
         assert_eq!((p.code, p.stdout.as_str()), (Some(0), "3\n"));
     }
 }
@@ -944,7 +950,7 @@ fn a_refused_construct_is_n0101_by_name_and_nothing_is_written_or_fallen_back_to
     );
     assert!(!r.stderr.contains("N0900"), "{}", r.stderr);
     assert!(
-        !d.path().join("p").exists(),
+        !d.path().join(crate::common::exe_name("p")).exists(),
         "no fallback: nothing is built"
     );
 }
@@ -976,7 +982,7 @@ fn any_other_failure_of_the_generator_is_a_compiler_defect_with_its_words() {
         r.stderr
     );
     assert!(!r.stderr.contains("N0101"), "{}", r.stderr);
-    assert!(!d.path().join("p").exists());
+    assert!(!d.path().join(crate::common::exe_name("p")).exists());
 }
 
 #[test]
@@ -1123,10 +1129,10 @@ fn the_packaged_toolchain_finds_its_generator_beside_nazm_without_the_variable()
             "nazm build --backend nazm",
         )
     };
-    let r = build(&work.join("p"));
+    let r = build(&work.join(crate::common::exe_name("p")));
     assert_eq!(r.code, Some(0), "{r:?}");
     let r = run_bounded(
-        Command::new(work.join("p")).env_remove(nazm_lir::RESULT_VARIABLE),
+        Command::new(work.join(crate::common::exe_name("p"))).env_remove(nazm_lir::RESULT_VARIABLE),
         "the program",
     );
     assert_eq!(
@@ -1137,8 +1143,8 @@ fn the_packaged_toolchain_finds_its_generator_beside_nazm_without_the_variable()
 
     // Moved away, it is not found anywhere else: the refusal names the installed path.
     std::fs::rename(&nzcg, top.join("nzcg-moved")).unwrap();
-    let r = build(&work.join("q"));
+    let r = build(&work.join(crate::common::exe_name("q")));
     assert_eq!(r.code, Some(4), "{r:?}");
     assert!(r.stderr.contains("libexec/nazm/nzcg"), "{}", r.stderr);
-    assert!(!work.join("q").exists());
+    assert!(!work.join(crate::common::exe_name("q")).exists());
 }

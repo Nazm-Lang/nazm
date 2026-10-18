@@ -154,7 +154,7 @@ fn a_second_project_reuses_the_runtime_and_the_standard_library_from_the_user_ca
             shared,
             "{backend}: nothing of the second project's own reached the user cache"
         );
-        assert!(run(&b.path().join("prog")).starts_with(OUTPUT));
+        assert!(run(&b.path().join(crate::common::exe_name("prog"))).starts_with(OUTPUT));
     }
 }
 
@@ -165,12 +165,14 @@ fn a_build_from_a_warm_user_cache_is_the_same_executable_as_an_uncached_one() {
     build(a.path(), user.path(), &[]);
     let warm = build(b.path(), user.path(), &[]);
     assert!(warm.reused > 0, "{warm:?}");
-    let cached = std::fs::read(b.path().join("prog")).expect("cached build");
+    let cached =
+        std::fs::read(b.path().join(crate::common::exe_name("prog"))).expect("cached build");
 
     // The same output name, so the linker writes the same name into the executable (N46).
-    std::fs::remove_file(b.path().join("prog")).expect("remove");
+    std::fs::remove_file(b.path().join(crate::common::exe_name("prog"))).expect("remove");
     build(b.path(), user.path(), &["--no-cache"]);
-    let uncached = std::fs::read(b.path().join("prog")).expect("uncached build");
+    let uncached =
+        std::fs::read(b.path().join(crate::common::exe_name("prog"))).expect("uncached build");
     assert!(
         cached == uncached,
         "a build from the user cache is not the executable an uncached build makes"
@@ -192,7 +194,10 @@ fn another_optimisation_level_heap_limit_or_target_reuses_nothing_shared() {
             did.reused, 0,
             "{what} reused another configuration's object: {did:?}"
         );
-        assert!(run(&p.path().join("prog")).starts_with(OUTPUT), "{what}");
+        assert!(
+            run(&p.path().join(crate::common::exe_name("prog"))).starts_with(OUTPUT),
+            "{what}"
+        );
         // And each keeps its own: a second project with the same configuration reuses them.
         let again = build(project().path(), user.path(), &extra);
         assert!(again.reused > 0, "{what}: {again:?}");
@@ -228,7 +233,9 @@ fn a_heap_limit_is_never_reused_from_another_limit() {
         let p = project();
         std::fs::write(p.path().join("main.nz"), BIG).expect("program");
         let did = build(p.path(), user.path(), &["--heap-limit", limit]);
-        let out = Command::new(p.path().join("prog")).output().expect("run");
+        let out = Command::new(p.path().join(crate::common::exe_name("prog")))
+            .output()
+            .expect("run");
         (did, out.status.code())
     };
     let (_, roomy) = ends("1G");
@@ -252,8 +259,8 @@ fn deleting_the_user_cache_changes_nothing() {
     let user = tempfile::tempdir().expect("user cache");
     let p = project();
     build(p.path(), user.path(), &[]);
-    let before = std::fs::read(p.path().join("prog")).expect("built");
-    let out = run(&p.path().join("prog"));
+    let before = std::fs::read(p.path().join(crate::common::exe_name("prog"))).expect("built");
+    let out = run(&p.path().join(crate::common::exe_name("prog")));
 
     std::fs::remove_dir_all(user.path().join("native")).expect("delete the user cache");
     std::fs::remove_dir_all(p.path().join(".nazm")).expect("delete the project store");
@@ -262,8 +269,10 @@ fn deleting_the_user_cache_changes_nothing() {
         again.compiled, again.units,
         "something survived the deletion"
     );
-    assert!(std::fs::read(p.path().join("prog")).expect("rebuilt") == before);
-    assert_eq!(run(&p.path().join("prog")), out);
+    assert!(
+        std::fs::read(p.path().join(crate::common::exe_name("prog"))).expect("rebuilt") == before
+    );
+    assert_eq!(run(&p.path().join(crate::common::exe_name("prog"))), out);
 }
 
 #[test]

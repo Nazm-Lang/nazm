@@ -379,7 +379,7 @@ fn both(example: &str) -> ((Option<i32>, String), (Option<i32>, String)) {
         .current_dir(dir.path())
         .output()
         .expect("nazm run");
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let built = Command::new(NAZM)
         .args(["build", "--no-cache"])
         .arg(&src)

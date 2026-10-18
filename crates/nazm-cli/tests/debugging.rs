@@ -65,10 +65,10 @@ fn a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_in
         ],
     );
     assert!(debug.status.success(), "{}", err(&debug));
-    let a = common::bounded_exe(&d.path().join("plain"))
+    let a = common::bounded_exe(&d.path().join(crate::common::exe_name("plain")))
         .output()
         .unwrap();
-    let b = common::bounded_exe(&d.path().join("debug"))
+    let b = common::bounded_exe(&d.path().join(crate::common::exe_name("debug")))
         .output()
         .unwrap();
     assert_eq!((a.status.code(), out(&a)), (b.status.code(), out(&b)));
@@ -153,7 +153,9 @@ fn a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_in
         ],
     );
     assert!(c.status.success(), "{}", err(&c));
-    let r = common::bounded_exe(&d.path().join("c")).output().unwrap();
+    let r = common::bounded_exe(&d.path().join(crate::common::exe_name("c")))
+        .output()
+        .unwrap();
     assert_eq!((r.status.code(), out(&r)), (a.status.code(), out(&a)));
     if cfg!(target_os = "macos") {
         assert!(

@@ -238,6 +238,6 @@ fn blocks_freed_on_another_thread_go_back_to_c_past_the_bound() {
         ],
     );
     assert_eq!(b.code, Some(0), "{}", b.stderr);
-    let rss = peak(&d.path().join("prog"));
+    let rss = peak(&d.path().join(crate::common::exe_name("prog")));
     assert!(rss < 16.0 * 1024.0 * 1024.0, "peak {rss} bytes");
 }

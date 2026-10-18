@@ -125,6 +125,26 @@ jobs:
           for cfg in "$(brew --prefix)"/etc/clang/*.cfg; do echo "-isysroot $sdk" > "$cfg"; done
           xcrun --show-sdk-version; ld -v 2>&1 | head -1; sw_vers -productVersion
 
+      # Nazm on Windows is MinGW-w64's (`nazm doctor`: a clang whose target ends in
+      # `-windows-gnu`, with its linker and C runtime). The runner's own clang is LLVM's, which
+      # targets MSVC and, with the environment `nazm` hands its driver, finds no Visual Studio:
+      # every `nazm build` failed to link ("unable to find a Visual Studio installation", "program
+      # not executable", 2026-10-18). MSYS2's MinGW-w64 clang and gcc, first on PATH, are the
+      # toolchain a Windows developer has.
+      - name: MinGW-w64's clang and gcc (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed mingw-w64-x86_64-gcc mingw-w64-x86_64-clang
+          "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: the tools found (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          clang --version
+          clang -dumpmachine
+
       - name: build
         run: cargo build --workspace --locked
 
