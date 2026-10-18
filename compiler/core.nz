@@ -113,10 +113,16 @@ pub fn cr_core_units(f: Facts, dir: Str, keys: Strs, io: IoCap) -> Str {
     let have = ints_new();
     let ids = strs_new();
     let lines = strs_new();
-    let owner = ints_new();
+    // Each module's lines are `ids[first[m]..upto[m]]`, read in a run; `next[m]` is where the
+    // search for its next function starts.
+    let first = ints_new();
+    let upto = ints_new();
+    let next = ints_new();
     let mut m = 0;
     let mut reused = 0;
     while m < fx_modules(f) {
+        ints_push(first, strs_len(ids));
+        ints_push(next, strs_len(ids));
         let key = strs_get(keys, m);
         let file = str_concat(str_concat(str_concat(dir, "/"), key), ".unit");
         if key != "-" && file_exists(file) {
@@ -128,12 +134,12 @@ pub fn cr_core_units(f: Facts, dir: Str, keys: Strs, io: IoCap) -> Str {
                 let line = strs_get(ls, k);
                 strs_push(ids, str_slice(line, 0, co_tab(line)));
                 strs_push(lines, line);
-                ints_push(owner, m);
                 k = k + 1;
             }
         } else {
             ints_push(have, 0);
         }
+        ints_push(upto, strs_len(ids));
         m = m + 1;
     }
     // Every function in the checker's order, from its module's unit or lowered.
@@ -146,9 +152,28 @@ pub fn cr_core_units(f: Facts, dir: Str, keys: Strs, io: IoCap) -> Str {
         let id = fx_fn_identity(f, i);
         let mut line = "";
         if ints_get(have, mm) == 1 {
-            let mut k = 0;
-            while k < strs_len(ids) && line == "" {
-                if ints_get(owner, k) == mm && strs_get(ids, k) == id { line = strs_get(lines, k); }
+            // Only the module's own run, from after its last function found: a unit lists its
+            // functions in the checker's order, so each is found where the search starts, and
+            // the run before it is searched only if not. A function's identity is unique, so
+            // this is the line the whole list's first match was; it was functions times lines
+            // (performance leadership 7.3).
+            let lo = ints_get(first, mm);
+            let hi = ints_get(upto, mm);
+            let from = ints_get(next, mm);
+            let mut k = from;
+            while k < hi && line == "" {
+                if strs_get(ids, k) == id {
+                    line = strs_get(lines, k);
+                    ints_set(next, mm, k + 1);
+                }
+                k = k + 1;
+            }
+            k = lo;
+            while k < from && line == "" {
+                if strs_get(ids, k) == id {
+                    line = strs_get(lines, k);
+                    ints_set(next, mm, k + 1);
+                }
                 k = k + 1;
             }
         }
