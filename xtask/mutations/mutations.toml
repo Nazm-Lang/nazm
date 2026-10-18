@@ -6876,15 +6876,17 @@ replace = """            let code = report_clang(other, work, cleanup);
                     Status::Success,"""
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "summary::a_build_whose_toolchain_fails_is_toolchain_failed_with_no_diagnostic" }]
 
+# Repointed by the compiler-speed round: clang's outcomes are read in link order after the jobs
+# ran side by side, each job carrying its `.ll`.
 [[mutation]]
 name = "n31-a-refused-compile-is-a-rejection"
 why = "a build whose clang refused the IR is summarized as the program rejected, as if a diagnostic said why"
 file = "crates/nazm-cli/src/build/objects.rs"
-find = """                let code = report_clang(other, &ll, cleanup);
+find = """                let code = report_clang(other, &job.ll, cleanup);
                 if summary {
                     return Err(summarized(
                         Status::ToolchainFailed,"""
-replace = """                let code = report_clang(other, &ll, cleanup);
+replace = """                let code = report_clang(other, &job.ll, cleanup);
                 if summary {
                     return Err(summarized(
                         Status::Rejected,"""
@@ -21099,6 +21101,14 @@ file = "crates/nazm-service/src/prelude_table.rs"
 find = '''            "Map",'''
 replace = ''''''
 killers = [{ package = "nazm-service", lib = true, name = "prelude_table::tests::the_prelude_table_is_read_from_the_prelude_sources" }]
+
+[[mutation]]
+name = "speed-units-generated-in-parallel-are-given-to-the-wrong-unit"
+why = "the units generated side by side are taken in another order than the plan's, so a unit's object holds another unit's code"
+file = "crates/nazm-cli/src/build/lower.rs"
+find = '''    let mut generated = generate_all(backend, native, names, &wanted).into_iter();'''
+replace = '''    let mut generated = generate_all(backend, native, names, &wanted).into_iter().rev();'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "native_cache::an_unchanged_rebuild_reuses_its_executable_byte_for_byte" }]
 
 [[mutation]]
 name = "speed-a-stale-link-is-reused"
