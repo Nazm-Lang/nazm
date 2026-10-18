@@ -394,7 +394,7 @@ impl Backend for NazmCodegen {
         names: &SourceNames<'_>,
         unit: usize,
     ) -> Result<Generated, Vec<Diagnostic>> {
-        let Some((_, u, _)) = units(native).into_iter().nth(unit) else {
+        let Some((_, u, _)) = nazm_lir::backend::unit(native, unit) else {
             return Err(vec![defect(format!("there is no unit {unit}"))]);
         };
         if !carries(&self.target) {

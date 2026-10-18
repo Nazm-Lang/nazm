@@ -231,7 +231,7 @@ impl Backend for Cranelift {
         names: &SourceNames<'_>,
         unit: usize,
     ) -> Result<Generated, Vec<Diagnostic>> {
-        let Some((name, u, _)) = units(native).into_iter().nth(unit) else {
+        let Some((name, u, _)) = nazm_lir::backend::unit(native, unit) else {
             return Err(vec![refusal(format!("there is no unit {unit}"))]);
         };
         let m = self.lir(native, u, names)?;

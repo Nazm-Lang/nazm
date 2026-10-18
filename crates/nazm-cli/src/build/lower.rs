@@ -308,6 +308,57 @@ struct Freestanding<'a> {
     board: nazm_lir::runtime::board::Board,
 }
 
+/// `backend.generate` of each of `wanted`'s units, in that order, as many at once as the
+/// machine has threads — each on a stack of the size the build's own passes run on.
+fn generate_all(
+    backend: &(dyn nazm_lir::backend::Backend + Sync),
+    native: &nazm_lir::Native,
+    names: &nazm_lir::SourceNames<'_>,
+    wanted: &[usize],
+) -> Vec<Result<nazm_lir::backend::Generated, Vec<nazm_diag::Diagnostic>>> {
+    type Made = Result<nazm_lir::backend::Generated, Vec<nazm_diag::Diagnostic>>;
+    let workers = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(wanted.len());
+    if workers <= 1 {
+        return wanted
+            .iter()
+            .map(|i| backend.generate(native, names, *i))
+            .collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let done: std::sync::Mutex<Vec<Option<Made>>> =
+        std::sync::Mutex::new((0..wanted.len()).map(|_| None).collect());
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let worker = || loop {
+                let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(i) = wanted.get(k) else {
+                    break;
+                };
+                let made = backend.generate(native, names, *i);
+                if let Ok(mut d) = done.lock() {
+                    if let Some(slot) = d.get_mut(k) {
+                        *slot = Some(made);
+                    }
+                }
+            };
+            // A worker that could not start leaves its units to the others, or to the line
+            // below.
+            let _ = std::thread::Builder::new()
+                .stack_size(nazm_core::__syntax::PARSE_STACK_BYTES)
+                .spawn_scoped(scope, worker);
+        }
+    });
+    // A unit no worker reached (no thread could start) is generated here.
+    done.into_inner()
+        .unwrap_or_default()
+        .into_iter()
+        .zip(wanted)
+        .map(|(m, i)| m.unwrap_or_else(|| backend.generate(native, names, *i)))
+        .collect()
+}
+
 /// One generated native unit, ready to be written down.
 pub(super) struct Artefact {
     /// The file name to use, without an extension.
@@ -366,7 +417,7 @@ fn for_run(d: nazm_diag::Diagnostic) -> nazm_diag::Diagnostic {
 fn emit_artefacts(
     native: &nazm_lir::Native,
     names: &nazm_lir::SourceNames<'_>,
-    backend: &dyn nazm_lir::backend::Backend,
+    backend: &(dyn nazm_lir::backend::Backend + Sync),
     cached: &dyn Fn(&str, bool) -> Option<Vec<u8>>,
     shared_units: &[bool],
     library: bool,
@@ -384,9 +435,24 @@ fn emit_artefacts(
     // caller's: the object cache then reuses each by its own identity, one instance
     // requested by two modules is one object, and a module's object does not change when
     // another module starts instantiating something. `docs/architecture.md` §7.12.
-    for (i, plan) in backend.plan(native, names).into_iter().enumerate() {
+    //
+    // The units the object store does not have are generated side by side: each is generated
+    // from the program alone (performance leadership, a cold build generated them one after
+    // another). Gathered in the plan's order, so what is made, and every diagnostic, is in the
+    // order it was.
+    let plans = backend.plan(native, names);
+    let mut reused: Vec<Option<Vec<u8>>> = Vec::with_capacity(plans.len());
+    for (i, plan) in plans.iter().enumerate() {
         let shared = shared_units.get(i).copied().unwrap_or(false);
-        if let Some(bytes) = plan.key.as_deref().and_then(|k| cached(k, shared)) {
+        reused.push(plan.key.as_deref().and_then(|k| cached(k, shared)));
+    }
+    let wanted: Vec<usize> = (0..plans.len())
+        .filter(|i| reused.get(*i).is_some_and(Option::is_none))
+        .collect();
+    let mut generated = generate_all(backend, native, names, &wanted).into_iter();
+    for ((i, plan), bytes) in plans.into_iter().enumerate().zip(reused) {
+        let shared = shared_units.get(i).copied().unwrap_or(false);
+        if let Some(bytes) = bytes {
             out.push(Artefact {
                 name: plan.name,
                 code: nazm_lir::backend::Code::Object(bytes),
@@ -397,8 +463,8 @@ fn emit_artefacts(
             });
             continue;
         }
-        match backend.generate(native, names, i) {
-            Ok(g) => {
+        match generated.next() {
+            Some(Ok(g)) => {
                 needs = needs.union(g.needs);
                 out.push(Artefact {
                     name: plan.name,
@@ -409,7 +475,8 @@ fn emit_artefacts(
                     shared,
                 });
             }
-            Err(mut e) => errors.append(&mut e),
+            Some(Err(mut e)) => errors.append(&mut e),
+            None => {}
         }
     }
     if !errors.is_empty() {

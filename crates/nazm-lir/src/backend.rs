@@ -356,6 +356,19 @@ pub fn units(native: &Native) -> Vec<(String, &crate::ir::Unit, bool)> {
         .collect()
 }
 
+/// The `unit`th of [`units`], without making the others: a backend generating each unit asked
+/// for the whole list once per unit, a list of every unit's name each time.
+#[must_use]
+pub fn unit(native: &Native, unit: usize) -> Option<(String, &crate::ir::Unit, bool)> {
+    match native.units.get(unit) {
+        Some(u) => Some((format!("m{unit}"), u, false)),
+        None => {
+            let i = unit.checked_sub(native.units.len())?;
+            native.instances.get(i).map(|u| (format!("g{i}"), u, true))
+        }
+    }
+}
+
 /// Whether the program declares a foreign function anywhere (N42). A program that calls C keeps
 /// C's allocator (R1.5 3.1): C may free what the program allocated, or hand it memory to free.
 #[must_use]
@@ -466,7 +479,7 @@ impl Backend for LlvmText {
         names: &SourceNames<'_>,
         unit: usize,
     ) -> Result<Generated, Vec<Diagnostic>> {
-        let Some((_, u, _)) = units(native).into_iter().nth(unit) else {
+        let Some((_, u, _)) = self::unit(native, unit) else {
             return Ok(Generated {
                 code: Code::Llvm(String::new()),
                 needs: Needs::default(),
