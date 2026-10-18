@@ -1,0 +1,39 @@
+# `nazm test`'s command lines, run in the fixture of run.sh (`fixture test`).
+--help
+-h
+--bogus .
+--summary-json --json .
+--interpret-only
+--fuzz x .
+--fuzz -1 .
+--fuzz 4294967296 .
+--fuzz +7 --interpret-only units.nz
+--fuzz= .
+--filter
+--interpret-only ok.nz
+--interpret-only --json ok.nz m.nz
+--interpret-only --summary-json ok.nz m.nz lone.nz
+--interpret-only lone.nz
+--interpret-only absent.nz
+--interpret-only note.txt
+--interpret-only empty
+--interpret-only sub
+--interpret-only .nz
+--interpret-only odd.name.nz
+--interpret-only binary.nz
+--interpret-only bad.nz
+--interpret-only units.nz
+--interpret-only --json --filter units::p units.nz
+--interpret-only --fuzz 5 --json --filter short units.nz
+--interpret-only --filter ::errs units.nz
+--interpret-only --filter nothing units.nz
+--interpret-only --summary-json --filter nothing units.nz
+--interpret-only --summary-json absent.nz
+--interpret-only -- ok.nz
+--interpret-only ok.nz --filter ok
+--interpret-only .
+--interpret-only --json .
+--interpret-only --summary-json .
+ok.nz
+units.nz
+--summary-json ok.nz m.nz

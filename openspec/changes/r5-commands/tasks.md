@@ -58,7 +58,12 @@
       outside the root module's directory or for a package's module, a directory as `fix`'s root)
 
 ## 6. `test`
-- [ ] 6.1 The corpus runner, interpreted and compiled (after R3, R4 and R9 are integrated)
+- [x] 6.1 The corpus runner, interpreted and compiled (design D17, 2026-10-19):
+      `toolchain/commands/test.nz`, the two legs run by the `nazm` `NAZM_TEST_DRIVER` names (the port
+      has no `run` or `build`; without it the command refuses). 123 recorded cases of the repository
+      (text and `--json`): 123 agree, 0 differ, 0 refused; 11 whole runs (the conformance corpus, a
+      fixture, compiled legs, `--summary-json`, `--filter`, `--fuzz`): 11 agree; `tests/args/test.txt`
+      38 command lines agree
 
 ## 7. `fix`
 - [x] 7.1 `nazm fix`: `check`'s fixes reported and, with `--apply`, applied (design D14):

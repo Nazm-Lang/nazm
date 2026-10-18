@@ -1,0 +1,510 @@
+// `nazm test`, written in Nazm (R5, `openspec/changes/r5-commands/`, task 6.1, design D17).
+//
+// `nazm test [--json | --summary-json] [--interpret-only] [--filter TEXT] [--fuzz N] PATH...`, run
+// by the dispatcher (`nazm.nz`).
+//
+// A port of `crates/nazm-cli/src/test.rs`: the cases are gathered as it gathers them (a directory's
+// `.nz` files sorted, `NAME.nz` beside `NAME.expected`, every `@test` and `@fuzz` function the
+// file marks, in source order, among the declarations the host builds), each runs as `nazm run
+// --interpret` and as a `nazm build` executable, and the report, the `--json` objects and the
+// `nazm.test-summary/1` line are the reference's, byte for byte.
+//
+// The two legs are another `nazm`'s to run — the port carries neither `run` nor `build` — so the
+// command starts the one `NAZM_TEST_DRIVER` names (the reference's own seam, `test.rs`, `DRIVER`);
+// without it the command says so and exits 6 (design D5).
+
+use "@std/file"
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/configure.nz"
+use "cli.nz"
+use "util.nz"
+use "front.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+// The command line, as `crates/nazm-cli/src/cli.rs` declares `nazm test`.
+pub fn test_cli() -> Cli {
+    let c = cli_command("test", "Run a corpus of programs against their recorded outputs",
+            "Run a corpus of programs against their recorded outputs." + nl() + nl()
+            + "A case is `NAME.nz` beside `NAME.expected`, the convention `compiler/bootstrap.sh` has used since the bootstrap "
+            + "existed. Each case runs interpreted **and** compiled, and both must produce the recorded output.")
+    cli_positional(c, "PATHS", true, true, true, "Files or directories. A directory is scanned for `.nz` files, and any without a "
+            + "`.expected` beside them are reported rather than ignored", "")
+    let json = cli_flag(c, "", "json", "One JSON object per case, on stdout. See `docs/diagnostics.md`", "")
+    cli_flag(c, "", "interpret-only", "Skip the native leg. For a machine with no `clang`", "")
+    let summary = cli_flag(c, "", "summary-json", "One `nazm.test-summary/1` object on stdout, and nothing else on either stream: "
+            + "counts, and every case that did not pass — no passed names, no output. The exit status is unchanged. `--json` still "
+            + "gives every case in full", "")
+    cli_conflicts(c, summary, json)
+    cli_option(c, "", "filter", "TEXT", false, "", false, "Run only the cases whose name contains this: `STEM` for a recorded output, "
+            + "`STEM::FUNCTION` for a `@test` or `@fuzz` function (Gate 2, §18)", "")
+    let fuzz = cli_option(c, "", "fuzz", "N", false, "100", true, "How many generated inputs each `@fuzz` function is given, the same "
+            + "ones every run", "")
+    cli_numeric(c, fuzz)
+    c
+}
+
+fn refuse(io: IoCap, why: Str) -> Int {
+    eprint("test: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+// --- the cases ------------------------------------------------------------------------------------
+
+// What a case must do: 0 print its `.expected`, 1 end 0 (`Passes`), 2 end 2 (`Fails`).
+struct Plan {
+    name: Strs,
+    file: Strs,
+    expect: Ints,
+    want: Strs,
+    // "" for a recorded output, else the `--harness` spec.
+    harness: Strs,
+    // 0 golden, 1 test, 2 fuzz.
+    kind: Ints,
+    // Files that held no case.
+    without: Strs,
+    // Why the gathering stopped, "" if it did not.
+    error: Strs,
+}
+
+// Every top-level function the file marks `@test`, `@fuzz` or `@bench`, in source order, among the
+// declarations the host builds (`harness::marked`): name, attribute, whether `@test(fails)`.
+fn marked(io: IoCap, text: Str, names: Strs, attrs: Strs, fails: Ints) -> Int {
+    let t = sx_tree()
+    let d = dg_new()
+    let program = sx_parse_source(text, t, d)
+    let ps = ints_new()
+    ints_push(ps, program)
+    let bs = ints_new()
+    ints_push(bs, 0)
+    cf_configure(t, ps, bs, dg_new(), cf_host(fe_host_os(), fe_host_arch()))
+    let fs = sx_items(t, sx_field(t, program, "functions"))
+    for i in 0..ints_len(fs) {
+        let f = ints_get(fs, i)
+        if sx_is_some(t, sx_field(t, f, "method_of")) { continue }
+        let attrs_of = sx_items(t, sx_field(t, f, "attrs"))
+        for k in 0..ints_len(attrs_of) {
+            let a = ints_get(attrs_of, k)
+            let n = sx_name(t, a, "name")
+            if n != "test" && n != "fuzz" && n != "bench" { continue }
+            strs_push(names, sx_name(t, f, "name"))
+            strs_push(attrs, n)
+            let args = sx_field(t, a, "args")
+            ints_push(fails, if n == "test" && sx_is_some(t, args) && sx_count(t, sx_unwrap(t, args)) > 0 { 1 } else { 0 })
+        }
+    }
+    0
+}
+
+// `gather`: the cases of a file or a directory. Returns false (with `p.error` set) where it stops.
+fn gather(io: IoCap, path: Str, fuzz: Int, p: Plan) -> Bool {
+    let kind = ut_kind(io, path)
+    if kind == 1 {
+        let h = os_dir_open(path)
+        if os_status(h) < 0 {
+            strs_push(p.error, path + ": " + ut_os_error(os_status(h)))
+            return false
+        }
+        let found = strs_new()
+        let buf = bytes_new(1024)
+        let mut n = os_dir_next(h, buf)
+        while n > 0 {
+            let name = bytes_to_str(bytes_slice(buf, 0, n))
+            if name != "." && name != ".." && ut_extension(name) == "nz" { strs_push(found, name) }
+            n = os_dir_next(h, buf)
+        }
+        os_close(h)
+        if n < 0 {
+            strs_push(p.error, path + ": " + ut_os_error(n))
+            return false
+        }
+        let sorted = fe_sort_paths(found)
+        for i in 0..strs_len(sorted) {
+            if !gather(io, ut_join(path, strs_get(sorted, i)), fuzz, p) { return false }
+        }
+        return true
+    }
+    if kind != 0 {
+        strs_push(p.error, path + " is not a file or a directory")
+        return false
+    }
+    let name = if ut_file_name(path) == "" { "?" } else { ut_stem(path) }
+    let before = strs_len(p.name)
+    let ok = ints_new()
+    ints_push(ok, 1)
+    let expected = ut_read_text(io, ut_with_extension(path, "expected"), ok)
+    if ints_get(ok, 0) == 1 {
+        strs_push(p.name, name)
+        strs_push(p.file, path)
+        ints_push(p.expect, 0)
+        strs_push(p.want, expected)
+        strs_push(p.harness, "")
+        ints_push(p.kind, 0)
+    }
+    ints_set(ok, 0, 1)
+    let text = ut_read_text(io, path, ok)
+    if ints_get(ok, 0) == 1 {
+        // `@cfg` on a feature, a package or a profile asks the manifest, which the port does not read.
+        if ut_contains(text, "@cfg") && (ut_contains(text, "feature") || ut_contains(text, "package") || ut_contains(text, "profile")) {
+            refuse(io, "an `@cfg` of a feature, package or profile in " + path)
+        }
+        let names = strs_new()
+        let attrs = strs_new()
+        let fails = ints_new()
+        marked(io, text, names, attrs, fails)
+        for i in 0..strs_len(names) {
+            let a = strs_get(attrs, i)
+            if a == "bench" { continue }
+            strs_push(p.name, name + "::" + strs_get(names, i))
+            strs_push(p.file, path)
+            ints_push(p.expect, if ints_get(fails, i) == 1 { 2 } else { 1 })
+            strs_push(p.want, "")
+            strs_push(p.harness, if a == "test" { "test:" + strs_get(names, i) } else { "fuzz:" + strs_get(names, i) + ":" + int_to_str(fuzz) })
+            ints_push(p.kind, if a == "test" { 1 } else { 2 })
+        }
+    }
+    if strs_len(p.name) == before { strs_push(p.without, path) }
+    true
+}
+
+// --- running a leg --------------------------------------------------------------------------------
+
+// A program run to its end: whether it started, its status (the code, or 256 and the signal),
+// what it wrote to its output and its errors, and why it did not start.
+struct Ran {
+    started: Bool,
+    status: Int,
+    out: Str,
+    err: Str,
+    why: Str,
+}
+
+fn collect(from: OsHandle, into: Chan[Str]) -> Int ! { io } {
+    let all = match file_read_rest(File(handle: from)) {
+        Result.Ok(value: b) => bytes_to_str(b),
+        Result.Err(error: e) => "",
+    }
+    chan_send_of(into, all)
+    0
+}
+
+// `Command::output`: standard input empty, output and errors collected, the environment the
+// parent's with `NAZM_RESULT_REPORT=1` added.
+fn run_program(io: IoCap, proc: ProcessCap, sp: SpawnCap, program: Str, args: Strs, report: Bool) -> Ran ! { io, spawn } {
+    let env = strs_new()
+    for i in 0..os_env_count() {
+        let e = os_env_at(i)
+        if !fe_starts(e, "NAZM_RESULT_REPORT=") { strs_push(env, e) }
+    }
+    if report { strs_push(env, "NAZM_RESULT_REPORT=1") }
+    let h = os_spawn_with(program, args, "", env, 2)
+    if os_status(h) < 0 { return Ran(started: false, status: 0, out: "", err: "", why: ut_os_error(os_status(h))) }
+    let errors = chan_new_of[Str](1)
+    let out = os_child_pipe(h, 1)
+    let err = os_child_pipe(h, 2)
+    let got = vec_new[Str]()
+    let mut stdout = ""
+    scope {
+        spawn collect(err, errors)
+        stdout = match file_read_rest(File(handle: out)) {
+            Result.Ok(value: b) => bytes_to_str(b),
+            Result.Err(error: e) => "",
+        }
+        chan_recv_of(errors, got);
+    }
+    os_close(out)
+    os_close(err)
+    let status = os_wait(h)
+    os_close(h)
+    Ran(started: true, status: status, out: stdout, err: if vec_len(got) > 0 { vec_get(got, 0) } else { "" }, why: "")
+}
+
+// `output_of`: both streams, lossy, trimmed; or `could not run: …`.
+fn output_of(r: Ran) -> Str {
+    if !r.started { return "could not run: " + r.why }
+    ut_trim(ut_lossy(r.out) + ut_lossy(r.err))
+}
+
+// `met`.
+fn met(expect: Int, want: Str, got: Str, status: Int, started: Bool) -> Bool {
+    if expect == 0 { return got == ut_trim(want) }
+    if !started { return false }
+    if expect == 1 { status == 0 } else { status == 2 }
+}
+
+// A leg's ending, as `Leg` serialises it.
+fn leg_name(k: Int) -> Str {
+    if k == 0 { "matched" }
+    else if k == 1 { "mismatched" }
+    else if k == 2 { "not_run" }
+    else if k == 3 { "build_failed" }
+    else if k == 4 { "could_not_build" }
+    else { "could_not_run" }
+}
+
+// What each case came to.
+struct Results {
+    interp_out: Strs,
+    interp_ok: Ints,
+    // 0 not run, 1 run.
+    native_run: Ints,
+    native_out: Strs,
+    native_ok: Ints,
+    passed: Ints,
+    leg_i: Ints,
+    leg_n: Ints,
+}
+
+fn run_case(proc: ProcessCap, sp: SpawnCap, io: IoCap, driver: Str, dir: Str, index: Int, p: Plan, i: Int, interpret_only: Bool, r: Results) -> Int ! { io, spawn } {
+    let file = strs_get(p.file, i)
+    let spec = strs_get(p.harness, i)
+    let expect = ints_get(p.expect, i)
+    let want = strs_get(p.want, i)
+    let harness = strs_new()
+    if spec != "" {
+        strs_push(harness, "--harness")
+        strs_push(harness, spec)
+    }
+    let a = strs_new()
+    strs_push(a, "run")
+    strs_push(a, "--interpret")
+    for k in 0..strs_len(harness) { strs_push(a, strs_get(harness, k)) }
+    strs_push(a, file)
+    let ran = run_program(io, proc, sp, driver, a, true)
+    let got = output_of(ran)
+    let matched = met(expect, want, got, ran.status, ran.started)
+    strs_push(r.interp_out, got)
+    ints_push(r.interp_ok, if matched { 1 } else { 0 })
+    ints_push(r.leg_i, if !ran.started { 5 } else if matched { 0 } else { 1 })
+    let mut native_ok = true
+    if interpret_only {
+        ints_push(r.native_run, 0)
+        strs_push(r.native_out, "")
+        ints_push(r.native_ok, 0)
+        ints_push(r.leg_n, 2)
+    } else {
+        let exe = dir + "/case" + int_to_str(index)
+        let b = strs_new()
+        strs_push(b, "build")
+        for k in 0..strs_len(harness) { strs_push(b, strs_get(harness, k)) }
+        strs_push(b, file)
+        strs_push(b, "-o")
+        strs_push(b, exe)
+        let built = run_program(io, proc, sp, driver, b, false)
+        ints_push(r.native_run, 1)
+        if !built.started {
+            strs_push(r.native_out, "could not build: " + built.why)
+            ints_push(r.native_ok, 0)
+            ints_push(r.leg_n, 4)
+            native_ok = false
+        } else if built.status != 0 {
+            strs_push(r.native_out, "`nazm build` refused it: " + ut_trim(ut_lossy(built.err)))
+            ints_push(r.native_ok, 0)
+            ints_push(r.leg_n, 3)
+            native_ok = false
+        } else {
+            let ran2 = run_program(io, proc, sp, exe, strs_new(), true)
+            let got2 = output_of(ran2)
+            let m2 = met(expect, want, got2, ran2.status, ran2.started)
+            strs_push(r.native_out, got2)
+            ints_push(r.native_ok, if m2 { 1 } else { 0 })
+            ints_push(r.leg_n, if !ran2.started { 5 } else if m2 { 0 } else { 1 })
+            native_ok = m2
+        }
+    }
+    ints_push(r.passed, if matched && native_ok { 1 } else { 0 })
+    0
+}
+
+// --- the report -----------------------------------------------------------------------------------
+
+fn kind_name(k: Int) -> Str { if k == 0 { "golden" } else if k == 1 { "test" } else { "fuzz" } }
+
+fn want_text(p: Plan, i: Int) -> Str {
+    let e = ints_get(p.expect, i)
+    if e == 0 { ut_trim(strs_get(p.want, i)) } else if e == 1 { "passes" } else { "fails" }
+}
+
+fn outcome(out: Str, matched: Bool) -> Str {
+    "{\"output\":" + json_str(out) + ",\"matched\":" + ut_bool(matched) + "}"
+}
+
+fn summary_line(status: Str, code: Int, native: Bool, p: Plan, r: Results, without: Int) -> Str {
+    let mut passed = 0
+    for i in 0..ints_len(r.passed) { passed += ints_get(r.passed, i) }
+    let cases = ints_len(r.passed)
+    let out = strs_new()
+    strs_push(out, "{\"schema\":\"nazm.test-summary/1\",\"status\":" + json_str(status) + ",\"exit_code\":" + int_to_str(code))
+    strs_push(out, ",\"native\":" + ut_bool(native) + ",\"counts\":{\"cases\":" + int_to_str(cases) + ",\"passed\":" + int_to_str(passed))
+    strs_push(out, ",\"failed\":" + int_to_str(cases - passed) + ",\"without_expectation\":" + int_to_str(without) + "},\"failures\":[")
+    let mut first = true
+    for i in 0..cases {
+        if ints_get(r.passed, i) == 1 { continue }
+        if !first { strs_push(out, ",") }
+        first = false
+        strs_push(out, "{\"name\":" + json_str(strs_get(p.name, i)) + ",\"file\":" + json_str(strs_get(p.file, i)))
+        strs_push(out, ",\"interpreted\":" + json_str(leg_name(ints_get(r.leg_i, i))) + ",\"native\":" + json_str(leg_name(ints_get(r.leg_n, i))) + "}")
+    }
+    strs_push(out, "]}")
+    str_join(out, "")
+}
+
+fn summarized(io: IoCap, status: Str, code: Int, native: Bool, p: Plan, r: Results, without: Int) -> Int {
+    print(summary_line(status, code, native, p, r, without) + nl())
+    if code != 0 { exit_with(code) }
+    code
+}
+
+fn empty_results() -> Results {
+    Results(interp_out: strs_new(), interp_ok: ints_new(), native_run: ints_new(), native_out: strs_new(), native_ok: ints_new(),
+            passed: ints_new(), leg_i: ints_new(), leg_n: ints_new())
+}
+
+fn report(io: IoCap, p: Plan, r: Results, failed: Int, json: Bool) -> Int {
+    let out = strs_new()
+    let cases = ints_len(r.passed)
+    for i in 0..cases {
+        let name = strs_get(p.name, i)
+        let ok = ints_get(r.passed, i) == 1
+        if json {
+            strs_push(out, "{\"schema\":\"nazm.test/1\",\"name\":" + json_str(name) + ",\"file\":" + json_str(strs_get(p.file, i)))
+            strs_push(out, ",\"kind\":" + json_str(kind_name(ints_get(p.kind, i))) + ",\"expected\":" + json_str(want_text(p, i)))
+            strs_push(out, ",\"interpreted\":" + outcome(strs_get(r.interp_out, i), ints_get(r.interp_ok, i) == 1))
+            if ints_get(r.native_run, i) == 1 {
+                strs_push(out, ",\"native\":" + outcome(strs_get(r.native_out, i), ints_get(r.native_ok, i) == 1))
+            } else {
+                strs_push(out, ",\"native\":null")
+            }
+            strs_push(out, ",\"passed\":" + ut_bool(ok) + "}" + nl())
+            continue
+        }
+        if ok {
+            strs_push(out, "ok    " + name + nl())
+            continue
+        }
+        strs_push(out, "FAIL  " + name + "  (" + strs_get(p.file, i) + ")" + nl())
+        strs_push(out, "      expected: " + want_text(p, i) + nl())
+        if ints_get(r.interp_ok, i) == 0 { strs_push(out, "      nazm run: " + strs_get(r.interp_out, i) + nl()) }
+        if ints_get(r.native_run, i) == 1 && ints_get(r.native_ok, i) == 0 {
+            strs_push(out, "      native:   " + strs_get(r.native_out, i) + nl())
+        }
+    }
+    print(str_join(out, ""))
+    for i in 0..strs_len(p.without) {
+        eprint("nazm: " + strs_get(p.without, i) + " has no `.expected` beside it and is not a test case" + nl())
+    }
+    let n = strs_len(p.without)
+    eprint("nazm: " + int_to_str(cases - failed) + " of " + int_to_str(cases) + " passed"
+            + (if n == 0 { "" } else { ", " + int_to_str(n) + " file(s) skipped" }) + nl())
+    0
+}
+
+// `nazm test`, its arguments read into `c` (`test_cli`) from where `cli_from` says.
+pub fn test_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int ! { io, spawn } {
+    cli_parse(io, c)
+    let paths = cli_values(c, 0)
+    let json = cli_present(c, 1)
+    let interpret_only = cli_present(c, 2)
+    let summary = cli_present(c, 3)
+    let has_filter = cli_present(c, 4)
+    let filter = cli_value(c, 4)
+    let fuzz = to_int(cli_value(c, 5))
+    let driver = os_env_get("NAZM_TEST_DRIVER")
+    if driver == "" { refuse(io, "the legs run another `nazm` (set NAZM_TEST_DRIVER): `run` and `build` are not ported") }
+    let p = Plan(name: strs_new(), file: strs_new(), expect: ints_new(), want: strs_new(), harness: strs_new(), kind: ints_new(),
+            without: strs_new(), error: strs_new())
+    let r = empty_results()
+    for i in 0..strs_len(paths) {
+        if !gather(io, strs_get(paths, i), fuzz, p) {
+            if summary { return summarized(io, "unreadable", 3, !interpret_only, p, r, strs_len(p.without)) }
+            eprint("nazm: " + strs_get(p.error, 0) + nl())
+            exit_with(3)
+            return 3
+        }
+    }
+    if has_filter {
+        // `retain`: the cases whose name contains the text.
+        let keep = Plan(name: strs_new(), file: strs_new(), expect: ints_new(), want: strs_new(), harness: strs_new(), kind: ints_new(),
+                without: p.without, error: strs_new())
+        for i in 0..strs_len(p.name) {
+            if ut_contains(strs_get(p.name, i), filter) {
+                strs_push(keep.name, strs_get(p.name, i))
+                strs_push(keep.file, strs_get(p.file, i))
+                ints_push(keep.expect, ints_get(p.expect, i))
+                strs_push(keep.want, strs_get(p.want, i))
+                strs_push(keep.harness, strs_get(p.harness, i))
+                ints_push(keep.kind, ints_get(p.kind, i))
+            }
+        }
+        return run_cases(io, proc, sp, driver, keep, json, interpret_only, summary, has_filter, filter)
+    }
+    run_cases(io, proc, sp, driver, p, json, interpret_only, summary, has_filter, filter)
+}
+
+fn run_cases(io: IoCap, proc: ProcessCap, sp: SpawnCap, driver: Str, p: Plan, json: Bool, interpret_only: Bool, summary: Bool,
+        has_filter: Bool, filter: Str) -> Int ! { io, spawn } {
+    let r = empty_results()
+    if strs_len(p.name) == 0 {
+        if summary { return summarized(io, "no_cases", 3, !interpret_only, p, r, strs_len(p.without)) }
+        eprint("nazm: no test cases. A case is `NAME.nz` beside `NAME.expected`, or a `@test` or `@fuzz` function"
+                + (if has_filter { " whose name contains `" + filter + "`" } else { "" }) + "." + nl())
+        exit_with(3)
+        return 3
+    }
+    let dir = os_mkdtemp(ut_temp_dir(io))
+    if str_len(dir) == 0 {
+        if summary { return summarized(io, "toolchain_failed", 4, !interpret_only, p, r, strs_len(p.without)) }
+        eprint("nazm: a scratch directory: could not be made" + nl())
+        exit_with(4)
+        return 4
+    }
+    for i in 0..strs_len(p.name) { run_case(proc, sp, io, driver, dir, i, p, i, interpret_only, r) }
+    remove_tree(io, dir)
+    let mut failed = 0
+    for i in 0..ints_len(r.passed) { if ints_get(r.passed, i) == 0 { failed += 1 } }
+    if summary {
+        if failed == 0 { return summarized(io, "passed", 0, !interpret_only, p, r, strs_len(p.without)) }
+        return summarized(io, "failed", 1, !interpret_only, p, r, strs_len(p.without))
+    }
+    report(io, p, r, failed, json)
+    if failed == 0 { 0 } else {
+        exit_with(1)
+        1
+    }
+}
+
+// `std::env::temp_dir()`: `TMPDIR`, else `/tmp`.
+fn ut_temp_dir(io: IoCap) -> Str {
+    let t = os_env_get("TMPDIR")
+    if t == "" { "/tmp" } else { t }
+}
+
+// `remove_dir_all` of the executables' directory, each failure ignored.
+fn remove_tree(io: IoCap, dir: Str) -> Int {
+    let h = os_dir_open(dir)
+    if os_status(h) < 0 { return 0 }
+    let names = strs_new()
+    let buf = bytes_new(1024)
+    let mut n = os_dir_next(h, buf)
+    while n > 0 {
+        let name = bytes_to_str(bytes_slice(buf, 0, n))
+        if name != "." && name != ".." { strs_push(names, name) }
+        n = os_dir_next(h, buf)
+    }
+    os_close(h)
+    for i in 0..strs_len(names) { os_unlink(dir + "/" + strs_get(names, i)) }
+    os_rmdir(dir)
+    0
+}
+
+// A decimal the shared parser has already accepted.
+fn to_int(s: Str) -> Int {
+    let mut v = 0
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        if b >= 48 && b <= 57 { v = v * 10 + (b - 48) }
+    }
+    v
+}

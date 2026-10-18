@@ -2,7 +2,7 @@
 # R5's comparisons (`openspec/changes/r5-commands/design.md`): each command written in Nazm against
 # the Rust `nazm` built from this checkout, on every input.
 #
-#   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init, check, doc, fix, lsp (all by default)
+#   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init, check, doc, fix, lsp, test (all by default)
 #
 # The Nazm `nazm` (toolchain/commands/nazm.nz, which dispatches to CMD.nz) is built by the 0.10.0
 # release ($NAZM) and run as the reference is run, `nazm CMD ARGS`. The reference is
@@ -33,6 +33,12 @@
 #         disk and closed, and again with hover at a few positions (tests/lsp-session.py, which
 #         needs python3 to write the sessions).
 #
+#   test  Every recorded case of the repository (a tracked `NAME.nz` beside `NAME.expected`),
+#         `test --interpret-only` text and `--json` from the repository's root; then the
+#         conformance corpus and a fixture whole, compiled legs too, with `--summary-json`,
+#         `--filter` and `--fuzz`. Both sides start the reference as the legs' driver
+#         (NAZM_TEST_DRIVER; design D17).
+#
 # NAZM_PORT names a port already built from this checkout, instead of building one.
 #
 # Prints one summary line per part, after the names of the first differences. Exits 1 when
@@ -46,11 +52,11 @@ if [ "${1:-}" = "-j" ]; then jobs=$2; shift 2; fi
 parts=""
 while [ $# -gt 0 ]; do
   case $1 in
-    fmt|args|init|check|doc|fix|lsp) parts="$parts $1"; shift ;;
+    fmt|args|init|check|doc|fix|lsp|test) parts="$parts $1"; shift ;;
     *) break ;;
   esac
 done
-[ -n "$parts" ] || parts="fmt args init check doc fix lsp"
+[ -n "$parts" ] || parts="fmt args init check doc fix lsp test"
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 nazm=${NAZM:-"$HOME/.local/nazm-0.10.0/bin/nazm"}
@@ -69,6 +75,7 @@ else
   ref="$target/release/nazm"
 fi
 
+export NAZM_TEST_DRIVER="$ref"
 mkdir -p "$work/bin" "$work/cache"
 # The checker recurses with the program's nesting, as the reference's does on its 24 MiB stack.
 export NAZM_LIBRARY="$root/library" NAZM_CACHE_DIR="$work/cache"
@@ -242,6 +249,29 @@ fixture() {
       printf 'use "inner/b.nz";\npub fn twice(n: Int) -> Int { n * k() }\n' > "$dir/lib/src/a.nz"
       printf 'pub fn k() -> Int {\n    let s: Str = 2;\n    2\n}\n' > "$dir/lib/src/inner/b.nz"
       ;;
+    test)
+      # ok.nz passes; m.nz's output is not its expectation; units.nz holds test functions (an Ok, an
+      # Err, a trap, two `fails`, a fuzz target and a `@cfg` that does not hold); bad.nz does not check;
+      # lone.nz has no expectation; sub/ and empty/ are directories.
+      printf 'fn main() -> Int {\n    print("hi\\n");\n    0\n}\n' > "$dir/ok.nz"
+      printf 'hi\n0\n' > "$dir/ok.expected"
+      printf 'fn main() -> Int {\n    print("x\\n");\n    0\n}\n' > "$dir/m.nz"
+      printf 'y\n0\n' > "$dir/m.expected"
+      printf 'fn main() -> Int {\n    let x: Bool = 1;\n    0\n}\n' > "$dir/bad.nz"
+      printf '0\n' > "$dir/bad.expected"
+      printf 'fn main() -> Int { 3 }\n' > "$dir/lone.nz"
+      printf 'use "@std/test";\n\nfn main() -> Int { 0 }\n\n@test\nfn passes() -> Result[Int, Str] { assert_true("t", true) }\n\n@test\nfn errs() -> Result[Int, Str] { Result[Int, Str].Err(error: "boom") }\n\n@test\nfn traps() -> Result[Int, Str] {\n    let z = 0;\n    Result[Int, Str].Ok(value: 5 / z)\n}\n\n@test(fails)\nfn expected_err() -> Result[Int, Str] { Result[Int, Str].Err(error: "no") }\n\n@test(fails)\nfn wrongly_ok() -> Result[Int, Str] { Result[Int, Str].Ok(value: 0) }\n\n@fuzz\nfn short(input: Bytes) -> Result[Int, Str] {\n    if bytes_len(input) < 40 { Result[Int, Str].Ok(value: 0) } else { Result[Int, Str].Err(error: int_to_str(bytes_len(input))) }\n}\n\n@cfg(os = "nowhere")\n@test\nfn never() -> Result[Int, Str] { Result[Int, Str].Err(error: "ran") }\n\n@bench\nfn timed() -> Int { 1 }\n' > "$dir/units.nz"
+      printf 'units\n' > "$dir/units.expected"
+      printf '\377\376\n' > "$dir/binary.expected"
+      printf 'fn main() -> Int { 0 }\n' > "$dir/binary.nz"
+      printf 'fn main() -> Int { 0 }\n' > "$dir/.nz"
+      printf 'fn main() -> Int { 0 }\n' > "$dir/odd.name.nz"
+      printf '0\n' > "$dir/odd.name.expected"
+      printf 'x\n' > "$dir/note.txt"
+      mkdir -p "$dir/sub" "$dir/empty"
+      printf 'fn main() -> Int { 0 }\n' > "$dir/sub/inner.nz"
+      printf '0\n' > "$dir/sub/inner.expected"
+      ;;
     init)
       mkdir -p "$dir/empty" "$dir/full/sub"
       printf 'kept\n' > "$dir/full/keep.txt"
@@ -270,7 +300,7 @@ record() {
 
 part_args() {
   n=0 agree=0 differ=0 refused=0
-  for cmd in fmt init check doc fix lsp nazm; do
+  for cmd in fmt init check doc fix lsp test nazm; do
     file="$root/toolchain/commands/tests/args/$cmd.txt"
     [ -f "$file" ] || continue
     while IFS= read -r line; do
@@ -638,6 +668,91 @@ part_lsp() {
   [ "$differ" -eq 0 ] && [ "$timeout" -eq 0 ] || status=1
 }
 
+# --- test: every recorded case, the corpora, the fixture ----------------------------------------------
+
+part_test() {
+  list="$work/test-inputs.txt"
+  if [ $# -gt 0 ]; then
+    printf '%s\n' "$@" > "$list"
+  else
+    (cd "$root" && git ls-files '*.expected' | sed 's/\.expected$/.nz/' | while IFS= read -r f; do [ -f "$f" ] && echo "$f"; done | LC_ALL=C sort -u) > "$list"
+  fi
+  total=$(wc -l < "$list" | tr -d ' ')
+  mkdir -p "$work/tres"
+  export R5_ROOT="$root" R5_REF="$ref" R5_PORT="$port" R5_WORK="$work" R5_DEADLINE="${R5_DEADLINE:-300}"
+  # One input: `test --interpret-only FILE` and with `--json`, from the repository's root.
+  # shellcheck disable=SC2016
+  tr '\n' '\0' < "$list" | xargs -0 -n 1 -P "$jobs" sh -c '
+    f=$1
+    name=$(printf "%s" "$f" | tr "/" "_")
+    d="$R5_WORK/t-$name"
+    mkdir -p "$d"
+    run() {
+      out=$1; shift
+      (cd "$R5_ROOT" && { rc=0; "$@" > "$out.o" 2> "$out.e" || rc=$?; echo "exit $rc" > "$out"; cat "$out.o" "$out.e" >> "$out"; })
+    }
+    run "$d/ref.text" "$R5_REF" test --interpret-only "$f"
+    run "$d/ref.json" "$R5_REF" test --interpret-only --json "$f"
+    run "$d/got.text" timeout "$R5_DEADLINE" "$R5_PORT" test --interpret-only "$f"
+    run "$d/got.json" timeout "$R5_DEADLINE" "$R5_PORT" test --interpret-only --json "$f"
+    verdict=agree
+    why=""
+    for k in text json; do
+      if grep -q "^exit 6$" "$d/got.$k"; then verdict=refused; why=$(cat "$d/got.$k.e"); break; fi
+      if grep -q "^exit 124$" "$d/got.$k"; then verdict=timeout; break; fi
+      cmp -s "$d/ref.$k" "$d/got.$k" || verdict=differ
+    done
+    printf "%s\n%s\n" "$verdict" "$why" > "$R5_WORK/tres/$name"
+    if [ "$verdict" = differ ] || [ "$verdict" = timeout ]; then
+      if [ -n "${KEEP:-}" ]; then
+        mkdir -p "$KEEP/test-$name" && for k in text json; do cp "$d/ref.$k" "$KEEP/test-$name/want.$k"; cp "$d/got.$k" "$KEEP/test-$name/got.$k"; done
+      fi
+    fi
+    rm -rf "$d"
+  ' sh
+
+  agree=$(grep -l '^agree$' "$work/tres/"* 2>/dev/null | wc -l | tr -d ' ')
+  differ=$(grep -l '^differ$' "$work/tres/"* 2>/dev/null | wc -l | tr -d ' ')
+  refused=$(grep -l '^refused$' "$work/tres/"* 2>/dev/null | wc -l | tr -d ' ')
+  timeout=$(grep -l '^timeout$' "$work/tres/"* 2>/dev/null | wc -l | tr -d ' ')
+  for r in $(grep -l -E '^(differ|timeout)$' "$work/tres/"* 2>/dev/null | head -20); do
+    echo "  $(head -1 "$r"): $(basename "$r")"
+  done
+  for r in "$work/tres/"*; do [ "$(head -1 "$r")" = refused ] && sed -n 2p "$r"; done \
+    | sed 's/^test: not carried: //' | cut -c1-90 | sort | uniq -c | sort -rn | head -12 | sed 's/^/  refused:/'
+  echo "test: $agree agree, $differ differ, $refused refused, $timeout timed out (of $total recorded cases)"
+  [ "$differ" -eq 0 ] && [ "$timeout" -eq 0 ] || status=1
+
+  # The corpora whole and the fixture, compiled legs included, and the other forms of the command.
+  n=0 agree=0 differ=0 refused=0
+  for spec in "compiler/conformance|" "compiler/conformance|--summary-json" "compiler/conformance|--json" "FIXTURE|" "FIXTURE|--json" \
+      "FIXTURE|--summary-json" "FIXTURE|--interpret-only --filter units::" "FIXTURE|--interpret-only --summary-json --fuzz 7" \
+      "FIXTURE|--filter ok" "FIXTURE|--interpret-only --filter zzz" "FIXTURE|--interpret-only --json --fuzz 3"; do
+    n=$((n + 1))
+    target=${spec%%|*} opts=${spec#*|}
+    d="$work/tw/$n"
+    (fixture test "$d/ref"); (fixture test "$d/got")
+    if [ "$target" = FIXTURE ]; then at_ref="$d/ref" at_got="$d/got" arg=.; else at_ref=$root at_got=$root arg=$target; fi
+    # shellcheck disable=SC2086
+    (cd "$at_ref" && { rc=0; "$ref" test $opts $arg > "$d/ref.o" 2> "$d/ref.e" || rc=$?; echo "exit $rc" > "$d/ref.r"; })
+    # shellcheck disable=SC2086
+    (cd "$at_got" && { rc=0; "$port" test $opts $arg > "$d/got.o" 2> "$d/got.e" || rc=$?; echo "exit $rc" > "$d/got.r"; })
+    if grep -q '^exit 6$' "$d/got.r"; then
+      refused=$((refused + 1)); echo "  refused: test $opts $target"
+    elif cmp -s "$d/ref.o" "$d/got.o" && cmp -s "$d/ref.e" "$d/got.e" && cmp -s "$d/ref.r" "$d/got.r"; then
+      agree=$((agree + 1))
+    else
+      differ=$((differ + 1)); echo "  differ: test $opts $target"
+      if [ -n "${KEEP:-}" ]; then
+        mkdir -p "$KEEP/testwhole-$n" && cat "$d/ref.o" "$d/ref.e" "$d/ref.r" > "$KEEP/testwhole-$n/want" && cat "$d/got.o" "$d/got.e" "$d/got.r" > "$KEEP/testwhole-$n/got"
+      fi
+    fi
+    rm -rf "$d"
+  done
+  echo "test corpora: $agree agree, $differ differ, $refused refused (of $n runs)"
+  [ "$differ" -eq 0 ] && [ "$refused" -eq 0 ] || status=1
+}
+
 for p in $parts; do
   case $p in
     fix) part_fix "$@" ;;
@@ -647,6 +762,7 @@ for p in $parts; do
     check) part_check "$@" ;;
     doc) part_doc "$@" ;;
     lsp) part_lsp "$@" ;;
+    test) part_test "$@" ;;
   esac
 done
 exit $status
