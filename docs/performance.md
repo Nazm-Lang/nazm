@@ -4236,3 +4236,78 @@ Peak memory is unchanged throughout (the largest difference, `fib`, 0.9%, is the
 9.7–10.2% on `words`) the interrupt removes the whole cost: the 1–2% the design allows is met, with room.
 Not measured here: the latency of a preemption itself (how long a task computing without waiting holds
 its worker before another runs).
+
+## Concurrency against every installed language with a concurrency model, measured (quiet window, 2026-10-19)
+
+Nazm's tasks, after 6.2's growable stacks, 6.3's preemption by interrupt and 6.4's channels, beside
+eight other languages on the same six workloads (the baseline above compared Go alone). The programs
+are `bench/compare/<lang>/{spawn,pingpong,fanin,idle,httpd}` with each language's existing `primes`
+for the parallel job; Go's and Nazm's are the baseline's pair; the rest are new, written in the idiom
+of the language's concurrency model: **Rust** `std::thread` and `sync_channel`; **C** pthreads with a
+mutex-and-condvar channel (`c/chan.h`); **C++** `std::thread` with the same channel (`cpp/chan.h`);
+**Java** virtual threads with `ArrayBlockingQueue` and `com.sun.net.httpserver`; **C#** `Task.Run`,
+`System.Threading.Channels` and `HttpListener`; **Node** async functions on the one event loop with a
+promise channel (`javascript/chan.js`) and `node:http`; **Python** `asyncio` tasks and queues and
+`ThreadingHTTPServer` (threads for `primes`, which the interpreter lock serialises).
+`bench/compare/concurrency_all.sh NAZM OUT --wait` builds them all, checks every pair of answers
+against the others' (`spawn` 1000000, `pingpong` N(N+1)/2, `fanin` 499999500000, `idle` N, `primes`
+216816), waits before each measurement until the 1-minute load is below 2 with no cargo, rustc or
+nextest running, and records that load beside the number.
+
+**Host and builds.** Apple M1 Pro (8 performance and 2 efficiency cores), 32 GiB, macOS 27.2; Nazm
+release from `0a52becf`, `--opt-level 2`; Go 1.27.2; rustc 1.98.1 `-O`; Apple clang 21.0.0 `-O2`
+(C++20); OpenJDK 27; .NET 10.0.402 (`dotnet build -c Release`, workstation GC); Node 24.13.0; Python
+3.15.0. `hyperfine -N --warmup 1`, 5 runs for `spawn`, 10 for the rest. **Load:** every number
+began below load 2 (1.28–1.99) except where marked; the 1-minute average carries the previous
+measurement's own threads, and a macOS background daemon (`knowledgeconstructiond`) held about 0.8 of
+a processor throughout. Five rows began above 2 (C, C++, Java and C# `spawn` at 2.55, 2.22, 3.56 and 2.53,
+and C#'s third HTTP round at 2.60) and were run again alone below 2; the table gives the re-runs and
+the third C# round is left out. Two complete runs agree to within their spreads wherever a row
+was measured twice.
+
+**Skipped, with the reason:** Erlang, Elixir, Kotlin and Haskell (not installed); Rust's `tokio` (no
+offline crate cache); HTTP for C, C++ and Rust (no HTTP in their standard libraries: a hand-written parser
+would measure the parser).
+Thread-per-task languages cannot hold a million live threads: C, C++ and Rust `spawn` 1,000,000
+threads, 1,000 at a time, each joined (so it measures thread creation), and their `idle` is 4,000
+threads against 1,000, not 100,000.
+
+| workload | Nazm | Go | best | Nazm's rank | against the baseline |
+| --- | ---: | ---: | --- | --- | --- |
+| spawn 1,000,000 tasks, wall | 1,501 ± 31 ms | 271 ± 11 ms | Node 183 ms | **5 of 9** (Node 183, Go 271, C# 493, Java 590, **Nazm 1,501**, Python 4,880, C 13,361, C++ 13,622, Rust 16,640) | 3,645 → 1,501 ms (2.4× faster); 13–14× Go → 5.5× |
+| ping-pong, 100,000 round trips | 60.0 ± 23.0 ms (0.60 µs a trip; fastest run 40.8 ms) | 31.4 ± 0.2 ms | Go | **2 of 9** (Go 31, **Nazm 60**, Node 93, C# 294, Rust 329, C++ 390, C 407, Java 469, Python 3,017) | 437 → 60 ms (7.3× faster); 13.9× Go → 1.9× |
+| fan-in, 1,000,000 values, 8 producers | 845 ± 213 ms (fastest run 639) | 67.3 ± 0.7 ms | Go | **8 of 9** (Go 67, Rust 146, Java 167, Node 277, C 366, C++ 463, Python 825, **Nazm 845**, C# 934) | 445 → 845 ms: **slower**, and bimodal (below) |
+| memory per blocked task | 1,215 B | 2,744 B | C# 331 B | **3 of 9** (C# 331, Node 944, **Nazm 1,215**, Python 1,459, Java 2,012, Go 2,744, C 16,198, C++ 16,515, Rust 19,300) | 17.4 KiB → 1.2 KiB (14×); 6.5× Go → 0.44× |
+| HTTP/1.1 requests/s, 64 connections, 10 s | 81,778; 82,164; 82,407 | 91,523; 91,602; 91,595 | Java 93,799; 93,590; 95,338 | **3 of 6** (Java ~94 k, Go ~91.6 k, **Nazm ~82.1 k**, C# 73.4–76.1 k, Node ~51.5 k, Python ~17.2 k) | 0.84–0.86× Go → 0.90× |
+| HTTP server RSS under that load | 9.6 MiB | 22 MiB | Nazm | **1 of 6** (Nazm 9.6, Go 22, Python 23, Node 79, C# 83, Java 233) | 11.1 → 9.6 MiB |
+| primes, W = 1 | 173.4 ± 0.3 ms | 144.3 ± 0.2 ms | Go | **2 of 8** (Go 144, **Nazm 173**, C 176, C++ 177, Rust 190, Java 208, C# 213, Python 6,488) | 171.6 → 173.4 ms; 1.19× → 1.20× Go |
+| primes, W = 10 | 29.7 ± 3.0 ms | 27.8 ± 1.6 ms | Go | **3 of 8**, tied with Rust (Go 27.8, C 28.0, **Nazm 29.7**, Rust 29.7, C++ 30.2, C# 71, Java 73, Python 6,521) | 29.5 → 29.7 ms; 1.12× → 1.07× Go |
+
+**What the numbers say.**
+- **Task start-up is 2.4× faster than the baseline and still the largest gap to the lightweight
+  models.** 1.5 µs a task; Go 0.27 µs, Node 0.18 µs, C# 0.49 µs, Java 0.59 µs. The OS-thread
+  languages (C, C++, Rust) pay 13–17 µs a task and Nazm is ten times ahead of them; only Python's
+  asyncio is behind among the task models.
+- **A channel hand-off is 7× faster and within 1.9× of Go's, second of nine.** 0.6 µs a round trip
+  against Go's 0.31 µs; every OS-thread implementation is 5–7× slower than Nazm, Java's virtual
+  threads 8×, Python's asyncio 50×.
+- **Fan-in is the one regression and the one place Nazm is near the bottom.** 845 ms against a
+  baseline 445 ms and Go's 67 ms (12.5×). It is not noise in the host: with the same program built by
+  the baseline's `a4ac8e9f` and by `a6f0fff2` (before this track) and run in the same window below load 2,
+  the older compilers gave 490 ± 138 ms and 482 ± 7 ms, `0a52becf` 660 ± 85 and 750 ± 230 ms
+  (rows run alone, begun at load 1.93–1.99), and the new runs are bimodal — 231 ms in the
+  best, 800 ms and more in the worst. Eight producers on one capacity-1,024 channel after the lock-free
+  hand-off of 6.4 is the first thing to look at.
+- **Memory per blocked task is 1.2 KiB, third of nine** behind only the stackless models (C# async
+  state machines, Node's promises), and under Go's 2.7 KiB; Java's virtual threads 2.0 KiB.
+  The three OS-thread languages hold 16–19 KiB a thread, as Nazm did before 6.2.
+- **HTTP is within 10% of Go's requests per second at 0.44× its memory** (a loopback load
+  generator that shares the ten processors with the server, as before); Java's `httpserver` on virtual
+  threads is ahead of both and 24× Nazm's memory.
+- **The parallel CPU job is unchanged and as close to Go's as before** (the 20% on one worker is the
+  checked overflow of the inner loop); with ten workers Nazm ties Rust and is within 7% of Go.
+
+Not claimed: any lead in concurrency over Go. What the table supports: second of nine on hand-off
+latency, third of nine on memory per task, first on HTTP server memory, ahead of every OS-thread
+language on spawn, hand-off and memory; behind on fan-in, and behind Go, Node, C# and Java on spawn.
+Python's `primes` rows serialise on the interpreter lock (W = 10 costs what W = 1 does).

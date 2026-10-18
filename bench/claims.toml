@@ -474,3 +474,8 @@ why = "hyperfine over a release nazm of e9d9fa40 on three programs, each measure
 heading = "Preemption by interrupt: the cost on hot loops, re-measured (quiet window, 2026-10-19)"
 status = "dated"
 why = "`bench/compare/preempt_cost.sh` over release builds of a4ac8e9f and 0a52becf on this Mac, begun at load 1.4–1.96 with no cargo, rustc or nextest running; a record of that date and machine — the script reproduces the method, not these numbers"
+
+[[claim]]
+heading = "Concurrency against every installed language with a concurrency model, measured (quiet window, 2026-10-19)"
+status = "dated"
+why = "`bench/compare/concurrency_all.sh` over a release nazm of 0a52becf, each measurement begun below load 2 (the exceptions re-run alone) with no cargo, rustc or nextest running; a record of that date, machine and toolchain versions — the script reproduces the method, not these numbers"
