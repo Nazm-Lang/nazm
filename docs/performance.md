@@ -4370,3 +4370,104 @@ warm 106.0 → 110.8 ms (+4.5%; recorded +5.7%). The step from v2 to v3 is the c
 (units generated and compiled side by side, no relink of an unchanged program, two quadratic loops
 removed): a warm `words` build is 47 ms, inside 7.2's 100 ms budget, where the *Build speed*
 section measured 125 ms.
+
+## The compilers' growth, phase by phase, re-measured (quiet window, 2026-10-19)
+
+The 7.1–7.2 audit run again on `0a52becf` (the tree after the compiler-speed track and the quadratic
+loops found by that audit), with the same programs and method: `bench/complexity/gen.py` shapes
+**lines** (n = 2,000, so 2,104 to 16,104 lines), **nest** (25 to 200 `if`s deep), **chain** (60 to 480
+terms) and **modules** (10 to 80), timed by `bench/complexity/measure.py`, the median of 5 runs after one
+warm-up, peak memory the largest `maximum resident set size` of `/usr/bin/time -l`, every measurement
+waiting for a 1-minute load below 2 with no cargo, rustc or nextest running: 360 measurements, begun at load
+1.29–2.16 (three above 2: 2.16, 2.01 and 2.08, none a point a finding rests on). Release `nazm`
+from `0a52becf`, the Nazm-written drivers `tokens`, `tree`, `diagnose`, `pipeline` and `nzcg` built by it
+as `toolchain/*/tests/run.sh` build them, `refdump` release. Apple M1 Pro, macOS 27.2. Exponent: log2(t(8n)/t(4n)),
+the empty program's time subtracted, **bold** above 1.25; "flat" is a range within 3 ms.
+
+| phase | lines 2,104 → 16,104 | exp. | nest 25 → 200 | exp. | chain 60 → 480 | exp. | modules 10 → 80 | exp. |
+| --- | --- | ---: | --- | ---: | --- | ---: | --- | ---: |
+| **Rust** `check --no-cache` | 12.1 → 42.3 ms, 13 → 54 MiB | 1.01 | flat (8.4 → 9.8 ms) | — | flat (8.3 → 9.1 ms) | — | 12.1 → 38.6 ms | 1.03 |
+| Rust `check`, cache warm | 11.7 → 38.4 ms | 1.01 | flat | — | flat | — | 11.5 → 35.4 ms | 1.06 |
+| Rust `core-ir` | 24.2 → 131.4 ms, 20 → 103 MiB | 1.01 | 8.9 → 18.7 ms | **1.54** | 9.1 → 16.4 ms | **1.61** | 17.6 → 82.3 ms | 0.99 |
+| Rust `mir` | 18.4 → 87.0 ms, 17 → 73 MiB | 1.00 | flat (8.5 → 10.9 ms) | — | flat (8.5 → 11.0 ms) | — | 15.5 → 61.3 ms | 1.04 |
+| Rust `lir` | 37.2 → 212.0 ms, 22 → 105 MiB | 0.97 | 9.3 → 13.7 ms | 1.06 | 10.5 → 21.4 ms | 0.98 | 23.3 → 121.9 ms | 1.02 |
+| Rust `build --no-cache` (LLVM, `-O0`) | 198 → 809 ms, 41 → 141 MiB | 0.97 | 97 → 110 ms | **1.51** | 100 → 132 ms | 1.09 | 154 → 535 ms | 1.04 |
+| Rust `build`, warm | 68 → 263 ms | 0.97 | flat (35.6 → 41.2 ms) | — | 36.4 → 46.5 ms | 0.85 | 50 → 132 ms | 1.07 |
+| Rust `build --opt-level 2 --no-cache` | 748 → 4,363 ms | 1.19 | 111 → 117 ms | 0.65 | 113 → 133 ms | **1.43** | 219 → 791 ms | 1.01 |
+| **Nazm** lexer (`tokens.nz`) | 16.5 → 83.2 ms, 10 → 50 MiB | 0.97 | 6.4 → 9.8 ms | **1.49** | flat (6.5 → 8.1 ms) | — | flat | — |
+| Nazm parser (`tree.nz`, with its dump) | 42.0 → 274.3 ms, 26 → 162 MiB | 0.97 | 7.6 → 23.6 ms, 4 → 24 MiB | **1.46** | 7.4 → 19.1 ms, 4 → 18 MiB | **1.40** | flat | — |
+| Nazm `diagnose --syntax` | 23.2 → 128.8 ms | 0.95 | 7.0 → 11.7 ms | 1.14 | flat | — | flat | — |
+| Nazm check (`diagnose`) | 84.3 → 592.7 ms, 15 → 83 MiB | 1.13 | 22.2 → 44.0 ms | **1.46** | 21.7 → 32.1 ms | 0.99 | 50.6 → 275.4 ms | 1.06 |
+| Nazm Core IR (`diagnose --core`) | 341 → 2,516 ms, **55 → 352 MiB** | 1.02 | 29.3 → 103.9 ms, 10 → 46 MiB | 1.24 | 30.1 → 95.6 ms, 13 → 64 MiB | 1.11 | 171 → 1,237 ms, 30 → 179 MiB | 1.03 |
+| Nazm MIR (`pipeline mir`) | 276 → 2,028 ms, 22 → 137 MiB | 1.00 | refused from 100 deep | — | refused at 480 terms | — | 131 → 1,005 ms | 1.02 |
+| Nazm LIR (`pipeline lir`) | 371 → 2,715 ms, 28 → 193 MiB | **1.00** | refused from 100 deep | — | refused at 480 terms | — | 175 → 1,364 ms | 1.03 |
+| Nazm code generator (`nzcg`) | 86.9 → 708.8 ms, 13 → 78 MiB | 1.22 | 8.0 → 16.6 ms | **1.02** | 10.4 → 36.6 ms | **0.99** | 43.6 → 301.6 ms | 1.02 |
+
+**What the 7.1 findings did.**
+1. *The Nazm pipeline's LIR was quadratic in a module's size* (1.69, 579 → 12,943 ms): **fixed**, 1.00, 371 →
+   2,715 ms (4.8× faster at 16,104 lines).
+2. *The Nazm code generator was quadratic in a function's blocks* (2.67 on `nest`, 1.70 on `chain`): **fixed**,
+   1.02 and 0.99: the 200-deep function 233.9 → 16.6 ms, the 480-term chain 159.1 → 36.6 ms.
+3. *The Rust MIR was quadratic in an expression chain's length* (1.78, 12.2 → 46.6 ms and 11 → 97 MiB):
+   **fixed**: 8.5 → 11.0 ms, memory flat; the warm build's 1.61 is 0.85 and the `-O0` build's 1.31 is 1.09.
+4. *The Nazm Core IR lowering's memory* (123 MiB for the 54-line chain, 126 MiB for the 200-deep function,
+   471 MiB at 16,104 lines): **halved, not gone** — 64, 46 and 352 MiB; the time exponents on `chain` and
+   `nest` fall from 1.34 and 1.49 to 1.11 and 1.24.
+5. *The Nazm checker and parser grow 1.4–1.5 with nesting*: **unchanged** (check 1.41 → 1.46, parser 1.50 → 1.46,
+   22 → 44 ms and 4 → 24 MiB at 200 deep); the lexer joins them at 1.49 on `nest` (6.4 → 9.8 ms, a 3.4 ms range).
+   Rust's `core-ir` still grows 1.54 and 1.61 on `nest` and `chain` (9 → 19 ms and 9 → 16 ms: small in
+   absolute terms; its memory 7 → 21 MiB at 200 deep), and the Rust `-O0` build 1.51 on `nest`
+   (97 → 110 ms).
+
+Cells above 1.25: eight, at 7.1 fourteen, among them four quadratic loops. All eight are ranges of 3–25 ms
+on the nesting and chain programs; none is a loop that costs on ordinary code. The two limits found stand: a sum
+of 512 terms is refused by the Rust parser, and the Nazm pipeline refuses Core IR nested deeper than 256 JSON
+levels (a 100-deep `if` nest, a 480-term chain).
+
+**Where the Rust build's time goes** (`--timings`, medians; lines 16,104 / modules 80), against 7.1's in
+parentheses: load 16.6 / 19.3 ms (37.3 / 26.5), front end 23.5 / 18.0 (43.4 / 28.9), MIR 11.5 / 6.4 (11.9 / 6.8), LIR
+0.7 / 0.5, IR generation 142.9 / 18.1 (144.8 / 68.5), native compile 530.5 / 388.8 uncached (646.5 / 2,778.5) and 37.6 /
+55.2 warm (37.9 / 53.6), link 57.2 / 64.2 (55.6 / 63.5). **Many modules cost 7× less to compile** (the 80-module
+program's native compile 2.78 s → 0.39 s: the units are compiled side by side now). On a program of a few lines:
+load 0.4 (3.3), front end 0.4 (0.5), native compile 35.2 uncached or 23.7 warm (116.8; 24.6), link 50.4 uncached and
+**0.8 warm** (49.5): **a warm build of a small program is 26.3 ms in `--timings`, from 78 ms** (an unchanged program
+is not linked again).
+
+**Constant factors, Nazm-written against Rust (lines, 16,104).** Lexing 5.2 against 2.8 µs a line (4.8 against 2.4 at
+7.1); the whole check 368 against 26 µs a function (14×, from 8×: Rust's check got 1.7× faster, Nazm's did not); Core
+IR 1.56 ms a function; MIR 1.26 ms a function in the pipeline; LIR 1.69 ms in the pipeline (reading the Core IR's
+JSON, as before); code generation by `nzcg` 440 µs a function (480).
+
+**7.2's latency budgets against today** (Rust `nazm`): `nazm check` of a small program 4.2 ms wall, from 10.5 (budget
+≤ 15 ms, met; target ≤ 1 ms in process); a warm `nazm build` of a small program 26.3 ms in `--timings` and 30.5 ms wall
+for `hello` (budget ≤ 100 ms, met; target ≤ 25 ms, nearly); front end per function 26 µs as `check` (≤ 40 µs, met);
+MIR per function 7.1 µs (≤ 10 µs, met); LIR per function 0.4 µs (≤ 1 µs, met); IR generation per function 89 µs (≤ 120,
+met); Nazm-written check per function 368 µs (≤ 450, met; target ≤ 2× the Rust compiler's: 14×, not met); growth: eight
+cells above 1.25 (budget: none).
+
+## Build speed re-measured: `nazm check` and `nazm build`, cold and warm (quiet window, 2026-10-19)
+
+`hyperfine -N` (10 runs; 5 for the cold `-O0` builds and for `compiler/diagnose.nz`; 3 for its cold `-O2`) of the
+release `nazm` of `0a52becf`, on the same three programs as *Build speed* above: `hello`, `words`
+(`bench/compare/nazm/`) and `compiler/diagnose.nz` with the `compiler/` modules it imports (`compiler/` now holds
+51,063 lines in 23 files, from 50,315). Cold is `--no-cache`; warm is the same build again with the user cache and
+the project store filled. Each measurement begun below load 2 (1.85–1.99) with no cargo, rustc or nextest running;
+caches in the run's own directory. Apple M1 Pro, macOS 27.2.
+
+| program | `check --no-cache` | `check`, warm | build cold `-O0` | build warm `-O0` | build cold `-O2` | build warm `-O2` | binary `-O0` / `-O2` | peak RSS, cold `-O0` / `-O2` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `hello` | 4.2 ± 0.1 ms (7.4) | 4.2 ± 0.1 ms (7.5) | 92.1 ± 1.4 ms (177.5) | 30.5 ± 0.3 ms (88.5) | 104.3 ± 1.6 ms (192.4) | 30.8 ± 0.2 ms (85.5) | 51,336 / 34,632 B | 37 / 56 MiB (56) |
+| `words` | 11.5 ± 0.1 ms (18.7) | 10.4 ± 0.1 ms (20.2) | 201.3 ± 1.2 ms (861.7) | 57.6 ± 0.5 ms (124.5) | 361.2 ± 4.6 ms (1,156) | 58.0 ± 0.4 ms (131.3) | 106,200 / 87,880 B | 38 / 78 MiB (78) |
+| `compiler/diagnose.nz` | 166.7 ± 1.1 ms (297.8) | 152.9 ± 0.7 ms (331.5) | 1.689 ± 0.002 s (4.135) | 0.593 ± 0.002 s (1.024) | **20.32 ± 0.05 s** (26.65) | 0.597 ± 0.002 s (1.114) | 5.43 / 5.04 MB | 339 / **736 MiB** (724) |
+
+The figure in parentheses is *Build speed*'s, 2026-10-17. Start-up of the `-O2` `hello`: 1.9 ± 0.0 ms.
+
+**What changed.** A warm build of an unchanged program is 1.7–2.9× faster (`hello` 88.5 → 30.5 ms, `words` 124.5 →
+57.6 ms, the front end 1.024 → 0.593 s): 7.2's 100 ms budget is met by `words` at 58 ms, and the ≤ 25 ms target is
+within 6 ms for `hello`. Cold builds are 1.8–4.3× faster on the small programs (`words` `-O0` 862 → 201 ms: the
+runtime's units and the program's compile side by side) and 1.3–2.4× on the large one (`-O0` 4.1 → 1.7 s; `-O2`
+26.7 → 20.3 s). `check` is 1.6–1.8× faster, and **with its cache warm is now faster than `--no-cache`** (10.4 against
+11.5 ms on `words`, 152.9 against 166.7 ms on the front end), where it was 8–11% slower. What did not change: a cold
+`-O2` build of the front end takes 20.3 s and 736 MiB (`-O0`: 1.7 s and 339 MiB): the memory is LLVM's, on one unit of
+51,000 lines. The comparison with the other compiled languages' build times is in the run below (*Eighteen
+languages, re-run*).
