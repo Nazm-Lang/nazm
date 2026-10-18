@@ -9,3 +9,5 @@
 --sorce-root x
 -- x
 x
+--source-root .
+--source-root nowhere

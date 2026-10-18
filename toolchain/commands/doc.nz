@@ -593,7 +593,6 @@ fn documented(f: Facts, m: Int) -> Bool { fx_module_own(f, m) && fx_module_key(f
 fn document(io: IoCap, path: Str, shown: Str, prefix: Str, base: Str, library: Str, items: Items) -> Int {
     let f = fx_check_module(path, library, fe_host_os(), fe_host_arch(), io)
     if !fx_carried(f) { refuse(io, fx_why(f)) }
-    if fe_pattern_let(f) { refuse(io, "a pattern `let` (the scope epoch 88 gives its names is not in R2's checker yet)") }
     if fx_refusal(f) != "" { fail(io, fx_refusal(f), 1) }
     let dg = fx_diags(f)
     fe_unprefix_diags(io, dg, prefix, path)

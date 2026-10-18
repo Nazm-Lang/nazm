@@ -1,7 +1,14 @@
-# Refused: a document whose text is not the file's on disk (the front end reads files, not the
-# editor's buffers).
+# A document whose text is not the file's on disk, and one that is no file at all: the text stands
+# for the file (the editor's unsaved buffer), changed again, then closed.
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
 {"jsonrpc":"2.0","method":"initialized","params":{}}
 {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/a.nz","languageId":"nazm","version":1,"text":"fn main() -> Int { 2 }\n"}}}
-{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file://@ROOT@/a.nz","version":2},"contentChanges":[{"range":{"start":{"line":0,"character":19},"end":{"line":0,"character":20}},"text":"\"two\""}]}}
+{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://@ROOT@/a.nz"},"position":{"line":0,"character":4}}}
+{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"file://@ROOT@/a.nz"}}}
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/new.nz","languageId":"nazm","version":1,"text":"use \"h2.nz\";\nfn main() -> Int {\n    let k: Bool = twice(4);\n    0\n}\n"}}}
+{"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://@ROOT@/new.nz"},"position":{"line":2,"character":20}}}
+{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"file://@ROOT@/new.nz"}}}
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/lib-only.nz","languageId":"nazm","version":1,"text":"pub fn helper() -> Int { 1 }\n"}}}
+{"jsonrpc":"2.0","id":4,"method":"shutdown"}
 {"jsonrpc":"2.0","method":"exit"}

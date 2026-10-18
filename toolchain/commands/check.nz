@@ -10,7 +10,7 @@
 // statuses.
 //
 // Where the reference would do something this port does not carry — the checker stops, a package,
-// a `nazm.root` marker, `--source-root`, `--profile`, `--profile-report`, `--cache-report`,
+// a `nazm.root` marker, `--profile`, `--profile-report`, `--cache-report`,
 // `--summary-json` — it says so on standard error and exits 6 before writing anything else. The
 // check cache (`.nazm/check/`) is derived data and is neither read nor written (design D11).
 //
@@ -257,7 +257,6 @@ fn check_library(io: IoCap, modules: Strs, library: Str, json: Bool) -> Int {
             exit_with(if missing { 3 } else { 1 })
         }
         if !fx_carried(f) { refuse(io, fx_why(f)) }
-        if fe_pattern_let(f) { refuse(io, "a pattern `let` (the scope epoch 88 gives its names is not in R2's checker yet)") }
         let bases = fe_bases(f)
         let fresh = ints_new()
         for i in 0..dg_len(d) {
@@ -374,16 +373,22 @@ pub fn check_command(io: IoCap, c: Cli) -> Int {
         if profile != "general" { refuse(io, "the profile `" + profile + "`") }
     }
     if cli_present(c, 9) { refuse(io, "`--profile-report`") }
-    if cli_present(c, 2) { refuse(io, "`--source-root` (the front end decides the root itself)") }
+    // `--source-root`: the root as given (`root::decide`'s `given`), absolute as the reference makes
+    // it, its refusal in the words the user wrote it in; not carried for a package's file, whose
+    // packages the reference resolves under another root than it loads from.
+    let given = cli_value(c, 2)
+    let given_prefix = if cli_present(c, 2) { fe_prefix(io, given) } else { "" }
+    if cli_present(c, 2) && packaged { refuse(io, "`--source-root` for a package's module") }
     if cli_present(c, 5) { refuse(io, "`--summary-json` (the language service's diagnostic identities)") }
     if report && !no_cache { refuse(io, "`--cache-report` with the check cache") }
     if !entry && exists(io, file) && !readable_text(io, file) { refuse(io, "a root module that is not a readable UTF-8 file") }
 
-    let f = fx_check(abs, library, fe_host_os(), fe_host_arch(), io)
-    // `root::decide`'s refusal: a manifest that is not one, a marker that is not empty.
+    let f = fx_check_in(abs, if cli_present(c, 2) { given_prefix + given } else { "" }, library, fe_host_os(), fe_host_arch(), io)
+    // `root::decide`'s refusal: a manifest that is not one, a marker that is not empty, a given root
+    // that is not a directory.
     if fx_refusal(f) != "" {
         // `root::decide`'s refusal, in its words: 3 for what cannot be read, else 1 (`root_status`).
-        let why = fx_refusal(f)
+        let why = fe_unprefix(fx_refusal(f), given_prefix)
         eprint("nazm: " + why + nl())
         let unreadable = fe_starts(why, "could not read")
                 || (str_len(why) >= 18 && str_slice(why, str_len(why) - 18, str_len(why)) == "is not a directory")
@@ -415,7 +420,6 @@ pub fn check_command(io: IoCap, c: Cli) -> Int {
         exit_with(5)
     }
     if !fx_carried(f) { refuse(io, fx_why(f)) }
-    if fe_pattern_let(f) { refuse(io, "a pattern `let` (the scope epoch 88 gives its names is not in R2's checker yet)") }
     // `--profile general` holds no rule, but `@cfg(profile = …)` sees it: not carried there.
     if cli_present(c, 7) {
         for m in 0..fx_modules(f) {
@@ -423,7 +427,7 @@ pub fn check_command(io: IoCap, c: Cli) -> Int {
         }
     }
     if report {
-        let how = if pk_root_how(root) == 1 { "package" } else { "derived" }
+        let how = if cli_present(c, 2) { "given" } else if pk_root_how(root) == 1 { "package" } else { "derived" }
         let n = int_to_str(fx_modules(f))
         print("{\"schema\":\"nazm.check-report/1\",\"root\":\"" + how + "\",\"modules\":" + n + ",\"checked\":" + n
                 + ",\"reused\":0,\"missed\":0,\"rejected\":0,\"declined\":0,\"stored\":0}" + nl())
