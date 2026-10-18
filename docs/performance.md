@@ -4209,3 +4209,30 @@ rebuild of an unchanged `words` (`nazm build`, 125–131 ms with the project sto
 fair figure against Go's 62 ms, and 7.2's budget (≤ 100 ms) is not met there. On `words` a cold
 Nazm build is ahead only of Ada and Zig; with the user cache warm it is also ahead of C++, Swift and
 Pascal.
+
+## Preemption by interrupt: the cost on hot loops, re-measured (quiet window, 2026-10-19)
+
+**No measurable cost: 0.0% on the tight loop, `fib` and `primes`, and `words` is 0.9% faster, where
+the poll at every back edge had cost 8–10%.** `bench/compare/preempt_cost.sh BASE NEW OUT --wait`:
+BASE a release `nazm` of `a4ac8e9f` (runtime ABI 42, no preemption; its own target directory), NEW one of
+`0a52becf` (preemption by interrupt, ABI 44: nothing in any loop, commit `442c9b2e`, and Cranelift's and
+nzcg's code too, `ef21fcc9`); `fib`, `words` and `primes` of `bench/compare/nazm/` and the script's
+tight arithmetic loop, each built `--opt-level 2`; `hyperfine -N --warmup 2 --runs 15`. Apple M1 Pro,
+10 processors, 32 GiB, macOS 27.2. Nothing else ran: no cargo, rustc or nextest (checked with
+`pgrep -x` before the script and after), no other agent; the 1-minute load is the figure at the start of
+each pair, the later ones still carrying the script's own loops.
+
+| program | BASE (no preemption) | NEW (interrupt) | cost | load before |
+| --- | ---: | ---: | ---: | ---: |
+| tight loop, no call (400,000,000 iterations) | 1.653 ± 0.001 s | 1.653 ± 0.002 s | 0.0% | 1.96 |
+| tight loop, run again, NEW first, then BASE first | 1.653 ± 0.001 s | 1.653 ± 0.001 s; 1.651 ± 0.002 s | 0.0%; −0.1% | 1.45; 1.45 |
+| `words` (the comparison's input) | 104.9 ± 0.5 ms | 103.9 ± 0.4 ms | −0.9% | 1.47 |
+| `fib(35)` | 44.4 ± 0.3 ms | 44.4 ± 0.3 ms | 0.0% | 1.47 |
+| `primes`, one worker | 173.5 ± 0.3 ms | 173.4 ± 0.4 ms | −0.1% | 1.43 |
+| `primes`, ten workers | 30.8 ± 3.9 ms | 29.3 ± 2.9 ms | within the spread | 1.40 |
+
+Peak memory is unchanged throughout (the largest difference, `fib`, 0.9%, is the process's own noise:
+1.7 MiB). Against the poll's measurement (*Preemption's cost on hot loops*, 8.9–9.1% on the tight loop and
+9.7–10.2% on `words`) the interrupt removes the whole cost: the 1–2% the design allows is met, with room.
+Not measured here: the latency of a preemption itself (how long a task computing without waiting holds
+its worker before another runs).
