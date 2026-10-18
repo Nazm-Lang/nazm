@@ -1341,8 +1341,8 @@ impl<'a> Lower<'a> {
 
     // --- values ------------------------------------------------------------------------
 
-    fn exprs(&mut self, es: &[AstExpr]) -> Lowered<Vec<Expr>> {
-        es.iter().map(|e| self.expr(e)).collect()
+    fn exprs<A: std::borrow::Borrow<AstExpr>>(&mut self, es: &[A]) -> Lowered<Vec<Expr>> {
+        es.iter().map(|e| self.expr(e.borrow())).collect()
     }
 
     /// A sequence where one is wanted (R1, 5b.16): `{ let made = vec_new(); vec_push(made, a);
@@ -1425,12 +1425,17 @@ impl<'a> Lower<'a> {
     /// [`Self::expr`], whose frame every level of a deep expression pays for.
     #[inline(never)]
     fn element_call(&mut self, base: &AstExpr, index: &AstExpr, bracket: Span) -> Lowered<Expr> {
-        let mut args = vec![base.clone(), index.clone()];
+        // Borrowed, not cloned: a clone of an operand copies the whole expression beneath it,
+        // at every level of a nest of them (performance leadership 7.3).
+        let mut args: Vec<std::borrow::Cow<'_, AstExpr>> = vec![
+            std::borrow::Cow::Borrowed(base),
+            std::borrow::Cow::Borrowed(index),
+        ];
         if let Some(v) = self.res.map_fallback(bracket) {
             let Some(zero) = crate::check::zero_of(v, bracket) else {
                 return defect(bracket, "a map's fallback with no zero");
             };
-            args.push(zero);
+            args.push(std::borrow::Cow::Owned(zero));
         }
         self.call(bracket, &args, bracket)
     }
@@ -1439,7 +1444,9 @@ impl<'a> Lower<'a> {
     /// [`Self::expr`], as [`Self::element_call`] is.
     #[inline(never)]
     fn joined(&mut self, lhs: &AstExpr, rhs: &AstExpr, op_span: Span, span: Span) -> Lowered<Expr> {
-        self.call(op_span, &[lhs.clone(), rhs.clone()], span)
+        // Borrowed: cloning the left operand copied the whole chain to its left at every link of
+        // `a + b + c + …` on strings, quadratic in its length (performance leadership 7.3).
+        self.call(op_span, &[lhs, rhs], span)
     }
 
     fn expr(&mut self, e: &AstExpr) -> Lowered<Expr> {
@@ -2041,7 +2048,12 @@ impl<'a> Lower<'a> {
 
     /// A call: to a built-in or to a function of this compilation, as the checker resolved it,
     /// with the result type the checker settled for this call.
-    fn call(&mut self, callee_at: Span, args: &[AstExpr], at: Span) -> Lowered<Expr> {
+    fn call<A: std::borrow::Borrow<AstExpr>>(
+        &mut self,
+        callee_at: Span,
+        args: &[A],
+        at: Span,
+    ) -> Lowered<Expr> {
         if let Some(NumericFact::Convert {
             to, mode, result, ..
         }) = self.res.numeric(callee_at)
@@ -2755,13 +2767,13 @@ impl<'a> Lower<'a> {
         to: Type,
         mode: ConvertMode,
         result: Type,
-        args: &[AstExpr],
+        args: &[impl std::borrow::Borrow<AstExpr>],
         at: Span,
     ) -> Lowered<Expr> {
         let Some(arg) = args.first() else {
             return defect(at, "a conversion with no argument");
         };
-        let operand = self.expr(arg)?;
+        let operand = self.expr(arg.borrow())?;
         // `Text(s)` checks; `try_convert[Text](s)` asks first (Gate 2).
         if to == Type::Text && mode != ConvertMode::Try {
             return Ok(self.internal(nazm_sema::Intrinsic::TextFromStr, operand, Type::Text));
@@ -3056,8 +3068,10 @@ impl<'a> Lower<'a> {
     ) -> Lowered<Expr> {
         // A method call by name (R1, 5b.15) is the ordinary call the checker read it as.
         if self.res.named_method(at) {
-            let mut all: Vec<AstExpr> = receiver.into_iter().cloned().collect();
-            all.extend(args.iter().cloned());
+            // Borrowed: a clone of the receiver copied the whole chain before it at every link
+            // of `a.m().m().m()…` (performance leadership 7.3).
+            let mut all: Vec<&AstExpr> = receiver.into_iter().collect();
+            all.extend(args.iter());
             return self.call(at, &all, span);
         }
         let mut lowered = Vec::with_capacity(args.len() + 1);
