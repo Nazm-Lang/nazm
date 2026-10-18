@@ -49,6 +49,14 @@
       `--source-root` (`fx_check` takes no root), `--summary-json` (N30's diagnostic ids and
       `state.source`), `nazm.root` markers (the loader stops there)
 
+- [x] 5.3 The pattern-`let` refusal lifted (R2's checker holds epoch 88 since `ff1dce6a`) from `check`, `doc`
+      and `fix`, and `check --source-root` carried (`fx_check_in`, design D15). 2026-10-19, 3,349
+      inputs of `check`: 3,348 agree, 0 differ, 1 refused (not UTF-8); `doc` 3,356: 3,354 agree, 0
+      differ, 2 refused; `fix` 3,339: 3,338 agree, 0 differ, 1 refused (not UTF-8; 17 applied);
+      `tests/args/` 357 command lines: 350 agree, 0 differ, 7 refused (`--cache-report` with the
+      cache, a profile other than `general`, `--profile-report`, `--summary-json`, `--source-root`
+      outside the root module's directory or for a package's module, a directory as `fix`'s root)
+
 ## 6. `test`
 - [ ] 6.1 The corpus runner, interpreted and compiled (after R3, R4 and R9 are integrated)
 
@@ -69,10 +77,16 @@
       with hover at seven positions: 3,151 inputs, 2,147 agree, 0 differ, 1,003 refused (hover of
       what the facts do not index, a compilation that does not load, pattern `let`s …), 1 not
       UTF-8; `tests/args/lsp.txt` 8 of 8 agree
-- [ ] 8.2 What 8.1 refuses: the editor's unsaved buffers (the loader reads only files), two open
-      documents, hover and definition of what the facts do not index (methods, generics, built-ins,
-      constants, types, fields), completion, references, signature help, rename, symbols, semantic
-      tokens, code actions, call hierarchy, `--source-root`
+- [ ] 8.2 What 8.1 refused, part done (2026-10-19, design D16): the editor's unsaved buffers
+      (`fx_check_over`), hover of any type (`fx_show`), definition of anything `fx_declaration_at`
+      indexes (types named in signatures too), `--source-root`. `tests/lsp/` 15 sessions: 14 agree,
+      0 differ, 1 refused (two open documents); every input opened, hover at seven positions: 3,340
+      inputs, 2,602 agree, 0 differ, 737 refused (375 hover of a name the facts publish no binding
+      for, 303 a compilation that does not load, 24 a position in a document that does not lex, 21
+      a source root the reference refuses, 10 hover of a method, closure, generic or foreign
+      function, 2 a warning beside a syntax error, 2 a call through a value or with effects the facts
+      do not know), 1 not UTF-8. Still refused: two open documents, completion, references,
+      signature help, rename, symbols, semantic tokens, code actions, call hierarchy
 
 ## 9. The agent commands and the MCP server
 - [ ] 9.1 `context`, `snapshot`, `delta`, `diagnostics`, `docs`, `repo`, `patch`, `resolve`,

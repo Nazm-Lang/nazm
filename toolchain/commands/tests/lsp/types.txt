@@ -1,0 +1,18 @@
+# Hover of locals of any type (a record, an enum, a list, an option, a function value), definition of
+# a record built, a function used as a value, and of a built-in called (null). A variant named in an
+# expression is not asked: the facts record no declaration for it, so the port refuses it, as
+# sigtype.txt shows for a type.
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+{"jsonrpc":"2.0","method":"initialized","params":{}}
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/t.nz","languageId":"nazm","version":1,"text":"struct P { x: Int, y: Int }\nenum Shape { Dot, Box(w: Int) }\nfn inc(n: Int) -> Int { n + 1 }\nfn main() -> Int {\n    let p = P(x: 1, y: 2);\n    let s = Shape.Dot;\n    let v = vec_new[Int]();\n    let o = Some(4);\n    let f = inc;\n    p.x + f(2)\n}\n"}}}
+{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://@ROOT@/t.nz"},"position":{"line":4,"character":8}}}
+{"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://@ROOT@/t.nz"},"position":{"line":5,"character":8}}}
+{"jsonrpc":"2.0","id":4,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://@ROOT@/t.nz"},"position":{"line":6,"character":8}}}
+{"jsonrpc":"2.0","id":5,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://@ROOT@/t.nz"},"position":{"line":7,"character":8}}}
+{"jsonrpc":"2.0","id":6,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://@ROOT@/t.nz"},"position":{"line":8,"character":8}}}
+{"jsonrpc":"2.0","id":7,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://@ROOT@/t.nz"},"position":{"line":4,"character":12}}}
+{"jsonrpc":"2.0","id":9,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://@ROOT@/t.nz"},"position":{"line":8,"character":13}}}
+{"jsonrpc":"2.0","id":10,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://@ROOT@/t.nz"},"position":{"line":6,"character":13}}}
+{"jsonrpc":"2.0","id":11,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://@ROOT@/t.nz"},"position":{"line":9,"character":11}}}
+{"jsonrpc":"2.0","id":13,"method":"shutdown"}
+{"jsonrpc":"2.0","method":"exit"}

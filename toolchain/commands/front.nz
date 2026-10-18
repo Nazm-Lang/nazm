@@ -6,7 +6,6 @@
 // made absolute by prefixing the working directory, and that prefix is taken off every module's
 // name — and off any path a diagnostic's words name — before anything is shown (R5 design D11).
 
-use "../../compiler/lex.nz"
 use "../../compiler/syntax.nz"
 use "../../compiler/diag.nz"
 use "../../compiler/sema.nz"
@@ -240,33 +239,4 @@ pub fn fe_str_less(a: Str, b: Str) -> Bool {
         i += 1
     }
     str_len(a) < str_len(b)
-}
-
-// Whether one of the program's own modules writes a pattern `let` — `let (a, b) = …`, `let P = e
-// else { … }`, anything but `let NAME =` or `let NAME:` — whose bindings the reference holds to the
-// scope the `let` is written in (epoch 88: a name that scope binds already is `N0202`) and R2's
-// checker does not yet: where one is, the front end's answer may not be the reference's.
-pub fn fe_pattern_let(f: Facts) -> Bool {
-    for m in 0..fx_modules(f) {
-        if fx_module_own(f, m) {
-            let kinds = ints_new()
-            let starts = ints_new()
-            let ends = ints_new()
-            let texts = strs_new()
-            let d = dg_new()
-            lex_all(fx_module_text(f, m), kinds, starts, ends, texts, d)
-            let n = ints_len(kinds)
-            for k in 0..n {
-                let before = if k > 0 { ints_get(kinds, k - 1) } else { 0 - 1 }
-                if ints_get(kinds, k) == k_let() && before != k_if() && before != k_while() {
-                    let mut j = k + 1
-                    if j < n && ints_get(kinds, j) == k_mut() { j += 1 }
-                    if j + 1 >= n || ints_get(kinds, j) != k_ident() { return true }
-                    let after = ints_get(kinds, j + 1)
-                    if after != k_eq() && after != k_colon() { return true }
-                }
-            }
-        }
-    }
-    false
 }

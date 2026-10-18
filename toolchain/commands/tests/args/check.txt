@@ -79,3 +79,10 @@ app/src/main.nz --locked
 --profile general app
 --json --profile general lib
 broken/
+--source-root sub a.nz
+--source-root nowhere a.nz
+--source-root a.nz a.nz
+--json --source-root . b.nz
+--source-root=. w.nz --no-cache --cache-report
+--source-root . m.nz
+--source-root . app/src/main.nz

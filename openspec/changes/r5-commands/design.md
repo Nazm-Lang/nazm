@@ -262,17 +262,22 @@ stored) and the root's kind, `derived` or `package`.
 Still refused, each with what blocks it: `--locked` where the lockfile exists (its digests —
 `nazm_package::digest`, BLAKE3 over the manifest and the source tree — are not ported), a profile
 other than `general` and `--profile-report` (the profile rules evaluate MIR facts, R3's),
-`--cache-report` with the cache (the port keeps no cache, so its tally would be invented),
-`--source-root` (`fx_check` decides the root itself and takes none: a parameter for R2 to add), and
+`--cache-report` with the cache (the port keeps no cache, so its tally would be invented), and
 `--summary-json` (its references carry the ids of `nazm diagnostics` — N30's per-module language
 service — and that service's `state.source` digest; neither is published by `compiler/facts.nz`).
 
+`--source-root` (2026-10-16, R2's `fx_check_in`): the root as given, made absolute as the reference
+makes it, decided by `pk_given` — a directory that is an ancestor of the root module as written; a
+path that is not a directory is `nazm: \`DIR\` is not a directory` in the words the user wrote it in
+(3); a root the module is not under as written, or reached through a link, is refused (R2's
+`pk_given` gives up rather than decide what the reference's `canonicalize` might accept), and so is
+`--source-root` for a package's module, whose packages the reference resolves under one root and
+loads under the other. `--cache-report` names the root `given`.
+
 Epoch 88 (main, 2026-10-16) holds a pattern `let`'s names to the scope the `let` is written in
-(`N0202` for a name that scope binds already); R2's checker does not yet, so on three of the
-harness's programs it accepted what the reference refuses. Until it does, `check`, `doc` and `fix`
-refuse a compilation whose own modules write a pattern `let` — any `let` but
-`let NAME =` and `let NAME:` (`front.nz`, `fe_pattern_let`, over the lexer's tokens) — a defect of
-`compiler/` handed back, not a guess at the rule.
+(`N0202` for a name that scope binds already). Until R2's checker held it too, `check`, `doc` and
+`fix` refused a compilation whose own modules wrote a pattern `let`; `compiler/sema.nz` holds it
+since `ff1dce6a`, and the refusal is gone.
 
 **D16 — `lsp` is `lsp.rs` over the same facts, and refuses wherever they do not answer
 (2026-10-16).** `toolchain/commands/lsp.nz` speaks the protocol as `lsp-server` does over
@@ -287,33 +292,35 @@ initialize: disconnected channel`, status 4), answered with the reference's capa
 `initialized`. `shutdown` is answered `null` and must be followed by `exit`; `exit` at any other
 time ends the reader, and the server with it, status 0, as does the end of input. A request the
 reference does not implement is `MethodNotFound` (−32601) in its words — `textDocument/formatting`
-among them: the reference offers no formatting.
+among them: the reference offers no formatting. `--source-root` is `check`'s (D15), given to every
+document's compilation.
 
 Documents: `didOpen`, `didChange` (each change a UTF-16 range of the text the changes before it
 left, `LineIndex::offset`, or the whole text), `didClose` (the others published again, then the
 closed one cleared, without a version). Each publication is `refresh`'s: the document's
-compilation checked as a module (`fx_check_module`, `Entry::Absent`), its own file's errors, then
-the checker's warnings — kept beside the errors in `Ck.w` and published even where there are errors,
-as the service chains `nazm_core::warnings` — positions in UTF-16 (`LineIndex::position`). The
-front end reads files, not the editor's buffers, so a document whose text is not the file's on disk
-is refused; so are two documents open at once (the reference publishes them in its `HashMap`'s
-order), a document named by another spelling of an open one's path, a compilation that does not
-load (the service analyses what loaded) or that the front end stops at, a warning beside a syntax
-error, and a pattern `let` (D15).
+compilation checked with its text standing for its file, saved or not and whether or not the file
+exists (`fx_check_over`), as a module — the program's `N0204` left out, as `Entry::Absent` leaves
+it — its own file's errors, then the checker's warnings — kept beside the errors in `Ck.w` and
+published even where there are errors, as the service chains `nazm_core::warnings` — positions in
+UTF-16 (`LineIndex::position`) of the text the compilation holds for the file. Refused: two
+documents open at once (the reference publishes them in its `HashMap`'s order), a document named by
+another spelling of an open one's path, a compilation that does not load (the service analyses
+what loaded) or that the front end stops at, and a warning beside a syntax error.
 
 Hover and definition are answered from `name_at` (the lexer's identifier holding the position, or
 ending there) and the checker's indexes: a local (`ck_binding_at`) is `NAME: T` (`mut ` first
-where it is) when `T` is a built-in type, whose name is its `show`, and its declaration's span; a
-call to a plain function (`ck_site_at`, `ck_site_fn`) is `fn NAME(p: T, …) -> R` then ` ! {…}`
-or, where none is declared, a line of `inferred effects: {…}` (`Signature::render`,
-`EffectSet`'s `Display`), and its name where it is declared — `null` in the standard library or
-the prelude, which have no file. `null` where the reference answers nothing: no name there, a
-function's name at its declaration, a field or variant after `.` that is not called. Anything else
-is refused: a method, closure, generic or foreign function, a built-in, a call through a value, a
-local of another type, and any other name a binding or function of the compilation is called by —
-a definition of a name with no binding (a constant, a type, a variant, a field) included, since the
-facts index no declaration for it. Completion, references, signature help, rename, symbols,
-semantic tokens, code actions and call hierarchy are refused, and so is `--source-root`.
+where it is), `T` as `fx_show` shows any type, and its declaration's span; a call to a plain
+function (`ck_site_at`, `ck_site_fn`) is `fn NAME(p: T, …) -> R` then ` ! {…}` or, where none is
+declared, a line of `inferred effects: {…}` (`Signature::render`, `EffectSet`'s `Display`).
+Definition of any other name is where `fx_declaration_at` says it is declared — a function called
+or used as a value, a record built — in its module's file, or `null` in the standard library or the
+prelude, which have no file. `null` where the reference answers nothing: no name there, a built-in
+called, a function's name at its declaration, a field or variant after `.` that is not called.
+Refused: hover of a method, closure, generic or foreign function or of a call through a value,
+hover of a name the checker publishes no binding for that a binding or function of the compilation
+is called by, and definition of what `fx_declaration_at` does not index (a constant, a field, an enum's
+variant in an expression). Completion, references,
+signature help, rename, symbols, semantic tokens, code actions and call hierarchy are refused.
 
 `run.sh lsp` runs the scripted sessions of `tests/lsp/` in a fixture, both sides, every byte of
 the output compared; then every input of `check`, opened as it is on disk (and closed), and again

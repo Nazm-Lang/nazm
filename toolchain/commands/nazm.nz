@@ -101,6 +101,8 @@ fn commands() -> Strs {
     strs_push(s, "Declare the supported subset of a C header as `extern \"C\"` functions (N74): prototypes of `int64_t` and `bool` (and `const char *` arguments). Everything else is refused with the reason, never widened. With `-o FILE`, the module is written there and one `nazm.bindgen/1` line is printed; exits 1 when anything was refused")
     strs_push(s, "init")
     strs_push(s, "Create a project from a template (N74): `cli`, `library`, `server`, `embedded`, `wasm` or `contract`. The directory is the package's name; it must not exist or must be empty. Its README.md names the commands that check, test, build and document it")
+    strs_push(s, "doctor")
+    strs_push(s, "Say whether this machine has what `nazm build` needs: `clang`, a linker that links a program, `ar` (and `dsymutil` on macOS), with their versions, and where to get what is missing. Exit 4 when a native build cannot be made here")
     strs_push(s, "capabilities")
     strs_push(s, "Report what this build of the compiler actually supports")
     strs_push(s, "build")

@@ -10,19 +10,22 @@
 // `exit`, the end of input, a method the reference does not implement (`MethodNotFound`, which is
 // `textDocument/formatting` too: the reference offers no formatting), the documents' lifecycle
 // (`didOpen`, `didChange` applied range by range in UTF-16 positions, `didClose`) with each
-// document's diagnostics published as the reference publishes them; `hover` of a local whose type
-// is a built-in one and of a call to a plain function (its signature and effects), `definition` of
-// a local and of such a call, and `null` where the reference answers nothing (no name, a function's
-// own name where it is declared, a field or variant after `.`).
+// document's diagnostics published as the reference publishes them, its text standing for its file
+// whether saved or not (`fx_check_over`); `hover` of a local of any type (`fx_show`) and of a call
+// to a plain function (its signature and effects); `definition` of a local and of what the checker
+// records a name refers to (`fx_declaration_at`: a function called or used as a value, a record
+// built, a variant named); `--source-root`; and `null` where the reference answers nothing (no
+// name, a built-in called, a function's own name where it is declared, a field or variant after
+// `.`, a declaration in the standard library).
 //
 // Not carried, refused with status 6 on standard error (design D5) before anything else is
-// written: what the facts do not answer — a document whose text is not the file's on disk (the
-// loader reads files, not the editor's buffers), more than one document open at once (the reference
-// publishes them in a hash map's order), a compilation that does not load or that the front end
-// stops at; hover and definition of anything else (a method, a generic function, a built-in, a
-// constant, a type, or a name the checker publishes no binding for); completion, references, signature help, rename, symbols, semantic tokens,
-// code actions and call hierarchy; `--source-root`; and any message the reference's parsers
-// would read differently from this port's.
+// written: more than one document open at once (the reference publishes them in a hash map's
+// order), a compilation that does not load or that the front end stops at; hover of a method, a
+// generic or foreign function or a call through a value, hover of a name the checker publishes no
+// binding for, definition of what the facts index no declaration for (a type named in a signature,
+// a constant, a field); completion, references, signature help, rename, symbols, semantic tokens,
+// code actions and call hierarchy; and any message the reference's parsers would read differently
+// from this port's.
 //
 // Standard output is the protocol: nothing else is ever written there.
 
@@ -329,6 +332,8 @@ struct Server {
     // The facts of the one open document's current analysis (`facts` holds 0 or 1).
     facts: Vec[Facts],
     library: Strs,
+    // `--source-root`, absolute, or "" to decide each document's root as `check` does.
+    root: Strs,
 }
 
 fn doc_index(s: Server, path: Str) -> Int {
@@ -642,12 +647,16 @@ fn refresh(io: IoCap, s: Server) -> Int {
     if strs_len(s.paths) == 0 { return 0 }
     let path = strs_get(s.paths, 0)
     let text = strs_get(s.texts, 0)
-    if fe_stat_kind(io, path) != 0 || read_file(path) != text { refuse(io, "a document whose text is not the file's on disk") }
-    let f = fx_check_module(path, strs_get(s.library, 0), fe_host_os(), fe_host_arch(), io)
+    // The document's text stands for its file, saved or not (`fx_check_over`); the compilation is
+    // checked as a module, so the program's missing `main` (`N0204`) is not among what is published.
+    let over_paths = strs_new()
+    let over_texts = strs_new()
+    strs_push(over_paths, path)
+    strs_push(over_texts, text)
+    let f = fx_check_over(path, strs_get(s.root, 0), over_paths, over_texts, strs_get(s.library, 0), fe_host_os(), fe_host_arch(), io)
     if fx_refusal(f) != "" { refuse(io, "a source root the reference refuses") }
     if fe_load_failed(f) { refuse(io, "a compilation that does not load") }
     if !fx_carried(f) { refuse(io, fx_why(f)) }
-    if fe_pattern_let(f) { refuse(io, "a pattern `let` (the scope epoch 88 gives its names is not in R2's checker yet)") }
     let d = fx_diags(f)
     let bases = fe_bases(f)
     // Positions are in the text the compilation holds for the file: the loader ends it with a line
@@ -656,7 +665,7 @@ fn refresh(io: IoCap, s: Server) -> Int {
     let starts = line_starts(held)
     let out = strs_new()
     for i in 0..dg_len(d) {
-        if dg_severity(d, i) == "error" && file_at(d, i, bases) == 0 { strs_push(out, diagnostic_json(d, i, held, starts)) }
+        if dg_severity(d, i) == "error" && dg_code(d, i) != "N0204" && file_at(d, i, bases) == 0 { strs_push(out, diagnostic_json(d, i, held, starts)) }
     }
     // The checker's warnings are kept beside its errors (`Ck.w`) and published with them, as the
     // service chains `nazm_core::warnings` after the errors; after a syntax error they are not
@@ -712,17 +721,6 @@ fn name_at(io: IoCap, text: Str, at: Int) -> Ints {
     ints_push(out, 0 - 1)
     ints_push(out, 0 - 1)
     out
-}
-
-// A built-in type's name as `Types::show` writes it, or "" for any other type.
-fn builtin_name(c: Ck, t: Int) -> Str {
-    let names = words("Int Bool Str Float64 Float32 Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Byte Char Text Bytes Ints Strs Unit")
-    for i in 0..strs_len(names) {
-        let n = strs_get(names, i)
-        let b = ck_t_named(c, n)
-        if b >= 0 && b == t { return n }
-    }
-    ""
 }
 
 // The located request: the open document, its text, and the identifier there; refused where the
@@ -816,11 +814,14 @@ fn hover(io: IoCap, s: Server, j: J) -> Str {
     let c = fx_checker(f)
     let name = str_slice(text, st, en)
     let site = ck_site_at(c, st, en)
-    if site >= 0 {
+    if site >= 0 && ck_site_fn(c, site) >= 0 {
         let shown = call_label(io, f, ck_site_fn(c, site))
         return "{\"contents\":{\"kind\":\"plaintext\",\"value\":" + json_str(shown) + "},\"range\":" + range(text, line_starts(text), st, en) + "}"
     }
     let b = ck_binding_at(c, st, en)
+    // A built-in called, where no local is named: the reference shows nothing.
+    if b < 0 && site >= 0 && ck_site_builtin(c, site) >= 0 { return "null" }
+    if b < 0 && site >= 0 { refuse(io, "hover of a call through a value") }
     if b < 0 {
         // After a `.` and not called, a name is a field or a variant: no local, no callee.
         let mut after = en
@@ -832,11 +833,12 @@ fn hover(io: IoCap, s: Server, j: J) -> Str {
         if might_mean(io, f, name, st, en) { refuse(io, "hover of what the facts publish no binding for") }
         return "null"
     }
-    let ty = builtin_name(c, ck_binding_ty(c, b))
-    if ty == "" { refuse(io, "hover of a local whose type is not a built-in one") }
+    let ty = fx_show(f, ck_binding_ty(c, b))
     let shown = (if ck_binding_mutable(c, b) { "mut " } else { "" }) + ck_binding_name(c, b) + ": " + ty
     "{\"contents\":{\"kind\":\"plaintext\",\"value\":" + json_str(shown) + "},\"range\":" + range(text, line_starts(text), st, en) + "}"
 }
+
+fn ident_byte(b: Int) -> Bool { (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 95 || b >= 128 }
 
 fn definition(io: IoCap, s: Server, j: J) -> Str {
     let span = locate(io, s, j)
@@ -847,25 +849,30 @@ fn definition(io: IoCap, s: Server, j: J) -> Str {
     let f = vec_get(s.facts, 0)
     let c = fx_checker(f)
     let name = str_slice(text, st, en)
-    let site = ck_site_at(c, st, en)
-    if site >= 0 {
-        // The function's name where it is declared: in its module's file, or none for the
-        // standard library's and the prelude's, which have no file to open.
-        let i = ck_site_fn(c, site)
-        call_label(io, f, i)
-        let m = ck_fn_module(c, i)
+    let b = ck_binding_at(c, st, en)
+    if b < 0 {
+        // What the checker recorded the name refers to: a function called or used as a value, a
+        // record built, a variant named — declared in its module's file, or in the standard
+        // library's or the prelude's, which have no file to open. Anything else (a type in a
+        // signature, a constant, a field) is not indexed by the facts.
+        // A built-in called has no declaration to go to.
+        let site = ck_site_at(c, st, en)
+        if site >= 0 && ck_site_builtin(c, site) >= 0 { return "null" }
+        let mut at = fx_declaration_at(f, 0, st, en)
+        // A variant is recorded at its whole path, `Enum.Variant`.
+        if ints_len(at) == 0 && st > 1 && str_byte(text, st - 1) == 46 {
+            let mut q = st - 1
+            while q > 0 && ident_byte(str_byte(text, q - 1)) { q -= 1 }
+            if q < st - 1 { at = fx_declaration_at(f, 0, q, en) }
+        }
+        if ints_len(at) == 0 { refuse(io, "definition of what the facts index no declaration for") }
+        let m = ints_get(at, 0)
         let mname = fx_module_name(f, m)
         if fe_starts(mname, "@") { return "null" }
         if !fe_starts(mname, "/") { refuse(io, "definition in a module this port does not name by its path") }
-        let t = fx_tree(f)
-        let span = sx_field(t, ck_fn_node(c, i), "name_span")
         let mtext = fx_module_text(f, m)
-        return "{\"range\":" + range(mtext, line_starts(mtext), fx_start(f, span), fx_end(f, span)) + ",\"uri\":" + json_str(uri_of(mname)) + "}"
+        return "{\"range\":" + range(mtext, line_starts(mtext), ints_get(at, 1), ints_get(at, 2)) + ",\"uri\":" + json_str(uri_of(mname)) + "}"
     }
-    let b = ck_binding_at(c, st, en)
-    // A name that is no local's may be any other entity's — a constant, a type, a field, a
-    // variant, a function's own declaration — whose declaration the facts do not index.
-    if b < 0 { refuse(io, "definition of what the facts publish no binding for") }
     let ds = ck_binding_start(c, b)
     let de = ck_binding_end(c, b)
     if ds < 0 || de > str_len(text) { refuse(io, "definition of a binding declared elsewhere") }
@@ -1016,7 +1023,8 @@ fn request(io: IoCap, s: Server, j: J, method: Str, id: Str) -> Int {
 // `nazm lsp`, its arguments read into `c` (`lsp_cli`) from where `cli_from` says.
 pub fn lsp_command(io: IoCap, c: Cli) -> Int {
     cli_parse(io, c)
-    if cli_present(c, 0) { refuse(io, "`--source-root`") }
+    let given = cli_value(c, 0)
+    let root = if cli_present(c, 0) { fe_prefix(io, given) + given } else { "" }
     let library = os_env_get("NAZM_LIBRARY")
     if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
     let h = os_stdin()
@@ -1038,7 +1046,9 @@ pub fn lsp_command(io: IoCap, c: Cli) -> Int {
     if j_get(j1, 0, "id") >= 0 || j_str(j1, j_get(j1, 0, "method")) != "initialized" { refuse(io, "a second message that is not `initialized`") }
     let libs = strs_new()
     strs_push(libs, library)
-    let s = Server(paths: strs_new(), versions: ints_new(), texts: strs_new(), facts: vec_new[Facts](), library: libs)
+    let roots = strs_new()
+    strs_push(roots, root)
+    let s = Server(paths: strs_new(), versions: ints_new(), texts: strs_new(), facts: vec_new[Facts](), library: libs, root: roots)
     while true {
         let body = read_message(io, h)
         if body == "" { return 0 }
