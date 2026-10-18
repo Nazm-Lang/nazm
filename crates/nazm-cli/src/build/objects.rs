@@ -57,7 +57,11 @@ pub(super) fn compiled(
         instances: artefacts.iter().filter(|a| a.instance).count(),
         ..Native::default()
     };
+    // Each artefact's object, in link order; the ones clang has still to make are jobs, run
+    // below side by side — they share nothing (performance leadership, a cold `-O2` build ran
+    // them one after another).
     let mut objects: Vec<PathBuf> = Vec::new();
+    let mut jobs: Vec<Job<'_>> = Vec::new();
     for artefact in artefacts {
         let ll = work.join(format!("{}.ll", artefact.name));
         let obj = work.join(format!("{}.o", artefact.name));
@@ -150,21 +154,31 @@ pub(super) fn compiled(
             }
             return Err(ExitCode::from(exit::TOOLCHAIN_FAILED));
         }
-        let compiled = if freestanding {
-            backend.compile_reporting_frames(&ll, &obj)
-        } else {
-            backend.compile(&ll, &obj)
-        };
+        jobs.push(Job {
+            at: objects.len(),
+            artefact,
+            ir,
+            ll,
+            key,
+        });
+        objects.push(obj);
+    }
+
+    let outcomes = run_jobs(&jobs, &objects, &backend, freestanding);
+    // In link order, as one at a time: the first failure is the one reported, and every object
+    // before it is filed.
+    for (job, compiled) in jobs.iter().zip(outcomes) {
+        let obj = objects.get(job.at).cloned().unwrap_or_default();
         match compiled {
             Outcome::Ran(o) if o.status.success() => {
                 crate::stack::frames(&String::from_utf8_lossy(&o.stderr), &mut frames);
                 tally.compiled += 1;
-                if artefact.instance {
+                if job.artefact.instance {
                     tally.instances_compiled += 1;
                 }
             }
             other => {
-                let code = report_clang(other, &ll, cleanup);
+                let code = report_clang(other, &job.ll, cleanup);
                 if summary {
                     return Err(summarized(
                         Status::ToolchainFailed,
@@ -183,13 +197,13 @@ pub(super) fn compiled(
         // to fail a build: the disk is full, or the tree is read-only, and the program is
         // fine either way.
         if let (Some(store), Some(key), Some(settled), Ok(bytes)) = (
-            stores.for_unit(artefact.shared),
-            key,
+            stores.for_unit(job.artefact.shared),
+            job.key,
             backend.settled(),
             std::fs::read(&obj),
         ) {
             let entry = ObjectArtifact::of(
-                LlvmInput::of(ir.as_bytes()),
+                LlvmInput::of(job.ir.as_bytes()),
                 settled.identity,
                 settled.config,
                 bytes,
@@ -198,7 +212,6 @@ pub(super) fn compiled(
                 tally.stored += 1;
             }
         }
-        objects.push(obj);
     }
     Ok(Compiled {
         backend,
@@ -206,6 +219,65 @@ pub(super) fn compiled(
         tally,
         frames,
     })
+}
+
+/// One unit for clang to compile: its artefact, its IR as written to `ll`, its object at
+/// `objects[at]`, and the key it is filed under.
+struct Job<'a> {
+    at: usize,
+    artefact: &'a Artefact,
+    ir: &'a str,
+    ll: PathBuf,
+    key: Option<ObjectKey>,
+}
+
+/// Run every job's clang, as many at once as the machine has threads, and give each job's
+/// outcome in the jobs' order. Each invocation reads its own `.ll` and writes its own object,
+/// so the order they run in changes nothing they produce.
+fn run_jobs(
+    jobs: &[Job<'_>],
+    objects: &[PathBuf],
+    backend: &Backend,
+    freestanding: bool,
+) -> Vec<Outcome> {
+    let run = |job: &Job<'_>| {
+        let obj = objects.get(job.at).cloned().unwrap_or_default();
+        if freestanding {
+            backend.compile_reporting_frames(&job.ll, &obj)
+        } else {
+            backend.compile(&job.ll, &obj)
+        }
+    };
+    let workers = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(jobs.len());
+    if workers <= 1 {
+        return jobs.iter().map(run).collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let done: std::sync::Mutex<Vec<Option<Outcome>>> =
+        std::sync::Mutex::new((0..jobs.len()).map(|_| None).collect());
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(job) = jobs.get(i) else {
+                    break;
+                };
+                let outcome = run(job);
+                if let Ok(mut d) = done.lock() {
+                    if let Some(slot) = d.get_mut(i) {
+                        *slot = Some(outcome);
+                    }
+                }
+            });
+        }
+    });
+    done.into_inner()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|o| o.unwrap_or(Outcome::Missing))
+        .collect()
 }
 
 /// What [`compiled`] made.
