@@ -1,0 +1,28 @@
+// R1.5 3.1's task case: four tasks each building a string 1,000,000 times (the lists of freed blocks
+// are thread-local), joined by a scope; prints the sum of their lengths.
+fn build(out: Chan) {
+    let mut total = 0
+    let mut i = 0
+    while i < 1000000 {
+        let s = f"item {i}"
+        total += s.len()
+        i += 1
+    }
+    chan_send(out, total)
+}
+
+fn main(io: IoCap, tasks: SpawnCap) {
+    let out = chan_new(4)
+    scope {
+        let mut w = 0
+        while w < 4 {
+            spawn build(out)
+            w += 1
+        }
+    }
+    chan_close(out)
+    let buf = ints_new()
+    let mut total = 0
+    while chan_recv(out, buf) { total += ints_pop(buf) }
+    println(total)
+}
