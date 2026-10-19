@@ -685,3 +685,50 @@ pub fn fx_module_at(f: Facts, at: Int) -> Int {
     }
     0 - 1
 }
+
+// --- the call graph (R5 hand-back; `FnDef::call_sites`, N25) ----------------------------------
+//
+// What the body of function `i` (`ck_fn_*`'s numbering) calls: `fx_call_count(f, i)` calls, `k` in
+// the order the checker recorded them, each with where its callee is written (over the whole
+// compilation's text) and what it reached (`fx_call_kind`): `function` (`fx_call_function`, a
+// function's number), `builtin` (`fx_call_builtin`, its name), `indirect` (a value of function
+// type) or `trait method` (a method through a bound on a type parameter: `fx_call_trait`, the
+// trait's number, and `fx_call_method`, the method's place in it). A `spawn` is a call
+// (`fx_call_spawned`). A generic callee's type arguments are shown as `Types::show` writes them.
+pub fn fx_call_count(f: Facts, i: Int) -> Int { ck_call_count(f.c, i) }
+pub fn fx_call_start(f: Facts, i: Int, k: Int) -> Int { ck_site_start(f.c, ck_call_site(f.c, i, k)) }
+pub fn fx_call_end(f: Facts, i: Int, k: Int) -> Int { ck_site_end(f.c, ck_call_site(f.c, i, k)) }
+pub fn fx_call_kind(f: Facts, i: Int, k: Int) -> Str {
+    let site = ck_call_site(f.c, i, k);
+    if ck_site_trait_method(f.c, site) >= 0 { return "trait method"; }
+    if ck_site_fn(f.c, site) >= 0 { return "function"; }
+    if ck_site_builtin(f.c, site) >= 0 { return "builtin"; }
+    "indirect"
+}
+pub fn fx_call_function(f: Facts, i: Int, k: Int) -> Int { ck_site_fn(f.c, ck_call_site(f.c, i, k)) }
+pub fn fx_call_builtin(f: Facts, i: Int, k: Int) -> Str {
+    let b = ck_site_builtin(f.c, ck_call_site(f.c, i, k));
+    if b < 0 { return ""; }
+    ck_builtin_name(f.c, b)
+}
+pub fn fx_call_trait(f: Facts, i: Int, k: Int) -> Int {
+    let tm = ck_site_trait_method(f.c, ck_call_site(f.c, i, k));
+    if tm < 0 { return 0 - 1; }
+    ck_method_trait(f.c, tm)
+}
+pub fn fx_call_method(f: Facts, i: Int, k: Int) -> Int {
+    let tm = ck_site_trait_method(f.c, ck_call_site(f.c, i, k));
+    if tm < 0 { return 0 - 1; }
+    tm - ck_trait_method_first(f.c, ck_method_trait(f.c, tm))
+}
+pub fn fx_call_spawned(f: Facts, i: Int, k: Int) -> Bool { ck_site_spawned(f.c, ck_call_site(f.c, i, k)) }
+pub fn fx_call_type_args(f: Facts, i: Int, k: Int) -> Strs {
+    let site = ck_call_site(f.c, i, k);
+    let out = strs_new();
+    let mut a = 0;
+    while a < ck_site_type_arg_count(f.c, site) {
+        strs_push(out, ck_show(f.c, ck_site_type_arg(f.c, site, a)));
+        a = a + 1;
+    }
+    out
+}
