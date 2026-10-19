@@ -1,0 +1,349 @@
+// A JSON reader as `serde_json` accepts text (R5, design D16): what `nazm lsp` reads its messages with
+// and `nazm patch apply` its plan. It must know exactly what it accepted, so a message it reads
+// differently from serde is the caller's to refuse. Nodes are indexed; `j_parse` marks a tree bad
+// where the text is not JSON.
+
+use "../../compiler/diag.nz"
+
+// A parsed message: per node its kind (0 null, 1 true, 2 false, 3 number, 4 string, 5 array,
+// 6 object), its text (a string's decoded bytes, a number's as written), its key in its object,
+// its first child and its next sibling.
+pub struct J {
+    kind: Ints,
+    text: Strs,
+    key: Strs,
+    first: Ints,
+    next: Ints,
+    src: Strs,
+    at: Ints,
+    bad: Ints,
+}
+
+pub fn j_node(j: J, kind: Int, text: Str) -> Int {
+    ints_push(j.kind, kind)
+    strs_push(j.text, text)
+    strs_push(j.key, "")
+    ints_push(j.first, 0 - 1)
+    ints_push(j.next, 0 - 1)
+    ints_len(j.kind) - 1
+}
+
+pub fn j_fail(j: J) -> Int {
+    ints_set(j.bad, 0, 1)
+    0 - 1
+}
+
+pub fn j_peek(j: J) -> Int {
+    let s = strs_get(j.src, 0)
+    let mut i = ints_get(j.at, 0)
+    while i < str_len(s) && (str_byte(s, i) == 32 || str_byte(s, i) == 9 || str_byte(s, i) == 10 || str_byte(s, i) == 13) { i += 1 }
+    ints_set(j.at, 0, i)
+    if i >= str_len(s) { return 0 - 1 }
+    str_byte(s, i)
+}
+
+pub fn j_hex_digit(b: Int) -> Int {
+    if b >= 48 && b <= 57 { return b - 48 }
+    if b >= 97 && b <= 102 { return b - 87 }
+    if b >= 65 && b <= 70 { return b - 55 }
+    0 - 1
+}
+
+pub fn j_utf8(cp: Int) -> Str {
+    if cp < 128 { return str_from_byte(cp) }
+    if cp < 2048 { return str_from_byte(192 + cp / 64) + str_from_byte(128 + cp % 64) }
+    if cp < 65536 { return str_from_byte(224 + cp / 4096) + str_from_byte(128 + (cp / 64) % 64) + str_from_byte(128 + cp % 64) }
+    str_from_byte(240 + cp / 262144) + str_from_byte(128 + (cp / 4096) % 64) + str_from_byte(128 + (cp / 64) % 64) + str_from_byte(128 + cp % 64)
+}
+
+pub fn j_hex4(j: J, s: Str, i: Int) -> Int {
+    if i + 4 > str_len(s) { return j_fail(j) }
+    let mut v = 0
+    for k in 0..4 {
+        let h = j_hex_digit(str_byte(s, i + k))
+        if h < 0 { return j_fail(j) }
+        v = v * 16 + h
+    }
+    v
+}
+
+// A string at the cursor, decoded; the cursor after it.
+pub fn j_string(j: J) -> Str {
+    let s = strs_get(j.src, 0)
+    let mut i = ints_get(j.at, 0) + 1
+    let out = strs_new()
+    let mut from = i
+    while i < str_len(s) && str_byte(s, i) != 34 {
+        let b = str_byte(s, i)
+        if b < 32 {
+            j_fail(j)
+            return ""
+        }
+        if b == 92 {
+            strs_push(out, str_slice(s, from, i))
+            if i + 1 >= str_len(s) {
+                j_fail(j)
+                return ""
+            }
+            let e = str_byte(s, i + 1)
+            i += 2
+            if e == 34 { strs_push(out, "\"") } else if e == 92 { strs_push(out, "\\") } else if e == 47 { strs_push(out, "/") }
+            else if e == 98 { strs_push(out, str_from_byte(8)) } else if e == 102 { strs_push(out, str_from_byte(12)) }
+            else if e == 110 { strs_push(out, str_from_byte(10)) } else if e == 114 { strs_push(out, str_from_byte(13)) }
+            else if e == 116 { strs_push(out, str_from_byte(9)) } else if e == 117 {
+                let mut cp = j_hex4(j, s, i)
+                if cp < 0 { return "" }
+                i += 4
+                if cp >= 55296 && cp <= 56319 {
+                    // A high surrogate: its low half must follow, as serde_json requires.
+                    if i + 6 > str_len(s) || str_byte(s, i) != 92 || str_byte(s, i + 1) != 117 {
+                        j_fail(j)
+                        return ""
+                    }
+                    let lo = j_hex4(j, s, i + 2)
+                    if lo < 56320 || lo > 57343 {
+                        j_fail(j)
+                        return ""
+                    }
+                    i += 6
+                    cp = 65536 + (cp - 55296) * 1024 + (lo - 56320)
+                } else if cp >= 56320 && cp <= 57343 {
+                    j_fail(j)
+                    return ""
+                }
+                strs_push(out, j_utf8(cp))
+            } else {
+                j_fail(j)
+                return ""
+            }
+            from = i
+        } else {
+            i += 1
+        }
+    }
+    if i >= str_len(s) {
+        j_fail(j)
+        return ""
+    }
+    strs_push(out, str_slice(s, from, i))
+    ints_set(j.at, 0, i + 1)
+    str_join(out, "")
+}
+
+pub fn j_value(j: J, depth: Int) -> Int {
+    if depth > 100 { return j_fail(j) }
+    let c = j_peek(j)
+    let s = strs_get(j.src, 0)
+    let i = ints_get(j.at, 0)
+    if c == 34 {
+        let text = j_string(j)
+        return j_node(j, 4, text)
+    }
+    if c == 123 || c == 91 {
+        let n = j_node(j, if c == 123 { 6 } else { 5 }, "")
+        ints_set(j.at, 0, i + 1)
+        let close = if c == 123 { 125 } else { 93 }
+        if j_peek(j) == close {
+            ints_set(j.at, 0, ints_get(j.at, 0) + 1)
+            return n
+        }
+        let mut last = 0 - 1
+        while true {
+            let mut key = ""
+            if c == 123 {
+                if j_peek(j) != 34 { return j_fail(j) }
+                key = j_string(j)
+                if j_peek(j) != 58 { return j_fail(j) }
+                ints_set(j.at, 0, ints_get(j.at, 0) + 1)
+            }
+            let v = j_value(j, depth + 1)
+            if v < 0 { return j_fail(j) }
+            strs_set(j.key, v, key)
+            if last < 0 { ints_set(j.first, n, v) } else { ints_set(j.next, last, v) }
+            last = v
+            let p = j_peek(j)
+            ints_set(j.at, 0, ints_get(j.at, 0) + 1)
+            if p == close { return n }
+            if p != 44 { return j_fail(j) }
+        }
+        return n
+    }
+    if c == 116 && i + 4 <= str_len(s) && str_slice(s, i, i + 4) == "true" {
+        ints_set(j.at, 0, i + 4)
+        return j_node(j, 1, "true")
+    }
+    if c == 102 && i + 5 <= str_len(s) && str_slice(s, i, i + 5) == "false" {
+        ints_set(j.at, 0, i + 5)
+        return j_node(j, 2, "false")
+    }
+    if c == 110 && i + 4 <= str_len(s) && str_slice(s, i, i + 4) == "null" {
+        ints_set(j.at, 0, i + 4)
+        return j_node(j, 0, "null")
+    }
+    if c == 45 || (c >= 48 && c <= 57) {
+        let mut e = i + 1
+        while e < str_len(s) && (j_hex_digit(str_byte(s, e)) >= 0 && str_byte(s, e) <= 57 || str_byte(s, e) == 46
+                || str_byte(s, e) == 101 || str_byte(s, e) == 69 || str_byte(s, e) == 43 || str_byte(s, e) == 45) { e += 1 }
+        ints_set(j.at, 0, e)
+        return j_node(j, 3, str_slice(s, i, e))
+    }
+    j_fail(j)
+}
+
+// The message's tree, or one marked bad (`j_ok` false).
+pub fn j_parse(text: Str) -> J {
+    let j = J(kind: ints_new(), text: strs_new(), key: strs_new(), first: ints_new(), next: ints_new(), src: strs_new(), at: ints_new(), bad: ints_new())
+    strs_push(j.src, text)
+    ints_push(j.at, 0)
+    ints_push(j.bad, 0)
+    let root = j_value(j, 0)
+    if root != 0 || j_peek(j) >= 0 { ints_set(j.bad, 0, 1) }
+    j
+}
+
+pub fn j_ok(j: J) -> Bool { ints_get(j.bad, 0) == 0 && ints_len(j.kind) > 0 }
+
+// The member `key` of object `n`, the last of that name; -1 for none (or `n` not an object).
+pub fn j_get(j: J, n: Int, key: Str) -> Int {
+    if n < 0 || ints_get(j.kind, n) != 6 { return 0 - 1 }
+    let mut found = 0 - 1
+    let mut c = ints_get(j.first, n)
+    while c >= 0 {
+        if strs_get(j.key, c) == key { found = c }
+        c = ints_get(j.next, c)
+    }
+    found
+}
+
+// Whether object `n` names `key` twice — serde refuses a duplicate field of a struct.
+pub fn j_twice(j: J, n: Int) -> Bool {
+    if n < 0 || ints_get(j.kind, n) != 6 { return false }
+    let seen = strs_new()
+    let mut c = ints_get(j.first, n)
+    while c >= 0 {
+        for i in 0..strs_len(seen) {
+            if strs_get(seen, i) == strs_get(j.key, c) { return true }
+        }
+        strs_push(seen, strs_get(j.key, c))
+        c = ints_get(j.next, c)
+    }
+    false
+}
+
+pub fn j_kind(j: J, n: Int) -> Int { if n < 0 { 0 - 1 } else { ints_get(j.kind, n) } }
+
+pub fn j_str(j: J, n: Int) -> Str { strs_get(j.text, n) }
+
+// A number that is an integer as written, within `lo..=hi`; else -1 is not a sentinel: `ok` says.
+pub fn j_int_in(j: J, n: Int, lo: Int, hi: Int) -> Bool {
+    if j_kind(j, n) != 3 { return false }
+    let t = j_str(j, n)
+    let mut i = 0
+    if str_len(t) > 0 && str_byte(t, 0) == 45 { i = 1 }
+    if i >= str_len(t) || str_len(t) - i > 10 { return false }
+    if str_len(t) - i > 1 && str_byte(t, i) == 48 { return false }
+    while i < str_len(t) {
+        if str_byte(t, i) < 48 || str_byte(t, i) > 57 { return false }
+        i += 1
+    }
+    let v = j_int(j, n)
+    v >= lo && v <= hi
+}
+
+pub fn j_int(j: J, n: Int) -> Int {
+    let t = j_str(j, n)
+    let mut i = 0
+    let mut neg = false
+    if str_byte(t, 0) == 45 {
+        neg = true
+        i = 1
+    }
+    let mut v = 0
+    while i < str_len(t) {
+        v = v * 10 + str_byte(t, i) - 48
+        i += 1
+    }
+    if neg { 0 - v } else { v }
+}
+
+
+// --- written back, as `serde_json::to_string_pretty` writes a `Value` ---------------------------------
+
+fn j_spaces(n: Int) -> Str {
+    let parts = strs_new()
+    for _ in 0..n { strs_push(parts, "  ") }
+    str_join(parts, "")
+}
+
+fn j_less(a: Str, b: Str) -> Bool {
+    let mut i = 0
+    while i < str_len(a) && i < str_len(b) {
+        if str_byte(a, i) != str_byte(b, i) { return str_byte(a, i) < str_byte(b, i) }
+        i += 1
+    }
+    str_len(a) < str_len(b)
+}
+
+fn j_pp(j: J, n: Int, depth: Int, out: Strs) -> Int {
+    let k = ints_get(j.kind, n)
+    if k == 4 {
+        strs_push(out, json_str(strs_get(j.text, n)))
+        return 0
+    }
+    if k != 5 && k != 6 {
+        strs_push(out, strs_get(j.text, n))
+        return 0
+    }
+    // An object's members by key, a repeated key once (the last); an array's elements in order.
+    let kids = ints_new()
+    let mut c = ints_get(j.first, n)
+    while c >= 0 {
+        ints_push(kids, c)
+        c = ints_get(j.next, c)
+    }
+    let order = ints_new()
+    if k == 6 {
+        for i in 0..ints_len(kids) {
+            let me = ints_get(kids, i)
+            let mut later = false
+            for t in i + 1..ints_len(kids) {
+                if strs_get(j.key, ints_get(kids, t)) == strs_get(j.key, me) { later = true }
+            }
+            if later { continue }
+            let mut at = ints_len(order)
+            while at > 0 && j_less(strs_get(j.key, me), strs_get(j.key, ints_get(order, at - 1))) { at -= 1 }
+            ints_push(order, 0)
+            let mut t = ints_len(order) - 1
+            while t > at {
+                ints_set(order, t, ints_get(order, t - 1))
+                t -= 1
+            }
+            ints_set(order, at, me)
+        }
+    } else {
+        for i in 0..ints_len(kids) { ints_push(order, ints_get(kids, i)) }
+    }
+    let open = if k == 6 { "{" } else { "[" }
+    let close = if k == 6 { "}" } else { "]" }
+    if ints_len(order) == 0 {
+        strs_push(out, open + close)
+        return 0
+    }
+    strs_push(out, open + str_from_byte(10))
+    for i in 0..ints_len(order) {
+        let child = ints_get(order, i)
+        strs_push(out, j_spaces(depth + 1))
+        if k == 6 { strs_push(out, json_str(strs_get(j.key, child)) + ": ") }
+        j_pp(j, child, depth + 1, out)
+        strs_push(out, if i + 1 < ints_len(order) { "," + str_from_byte(10) } else { str_from_byte(10) })
+    }
+    strs_push(out, j_spaces(depth) + close)
+    0
+}
+
+// `to_string_pretty` of the parsed value: keys sorted (a `BTreeMap`), two spaces, no trailing newline.
+pub fn j_pretty(j: J) -> Str {
+    let out = strs_new()
+    j_pp(j, 0, 0, out)
+    str_join(out, "")
+}
