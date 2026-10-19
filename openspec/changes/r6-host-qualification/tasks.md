@@ -9,7 +9,8 @@
       it builds run as the seed's builds do; the heap probe stops with `N0406`
 - [x] 1.6 Peak resident memory of every step recorded
 - [ ] 1.7 The interpreter and `nazm-check` in the self-build, once their tracks move from 0.10.0 to
-      the checkout's language (`design.md`, *Gaps*)
+      the checkout's language (`design.md`, *Gaps*). Moved and added to the self-build's programs
+      by `r8-cut-over` slice 1 (2026-10-20); closed when its contained run passes there (1.4)
 - [ ] 1.8 `callee_at` and a payload binding's `at` in `--coredoc-sources` (R2)
 
 ## 2. The containment rule (`rewrite-in-nazm` 7.2)

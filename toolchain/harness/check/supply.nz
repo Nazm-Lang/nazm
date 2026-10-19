@@ -65,7 +65,7 @@ pub fn check_lock(lock: Str) -> Strs ! {} {
     problems
 }
 
-fn check_packages(packages: List[Toml], problems: Strs) -> Int ! {} {
+fn check_packages(packages: Chain[Toml], problems: Strs) -> Int ! {} {
     for p in packages {
         let n = or_else(field(p, "name"), "<unnamed>");
         let ver = or_else(field(p, "version"), "<unversioned>");

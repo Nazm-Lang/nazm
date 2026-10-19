@@ -14,7 +14,8 @@
 # it must have no port (the list is revisited after the cut-over, R8).
 #
 # Environment:
-#   HARNESS_NAZM      the `nazm` that builds and runs the harness (default: the 0.10.0 release)
+#   HARNESS_NAZM      the `nazm` that builds and runs the harness (default: the 0.10.0 release),
+#                     but `nazm-check`, which `NAZM` builds (R8 slice 1: `Chain[T]`)
 #   CARGO_TARGET_DIR  where Cargo builds the Rust side (default: ~/.cache/nazm-target-track7)
 #   NAZM              the `nazm` under test (default: the tree's, `$CARGO_TARGET_DIR/debug/nazm`,
 #                     which is the binary the Rust tests run — so both sides test one binary)
@@ -158,7 +159,14 @@ compare_tests() {
 compare_checks() {
     [ -x "$here/check/main.nz" ] || [ -f "$here/check/main.nz" ] || return
     local exe="$log/nazm-check"
-    if ! "$HARNESS_NAZM" build "$here/check/main.nz" -o "$exe" >"$log/check-build.out" 2>&1; then
+    # `nazm-check` is written in the checkout's language (`Chain[T]`, R1.5 D7; R8 slice 1), which
+    # the 0.10.0 release does not read: the tree's `nazm` builds it, with the 2 GiB heap the
+    # runbook's R6 rule asks of a Nazm program run on a host.
+    if ! cargo build -q -p nazm-cli --bin nazm 2>"$log/build.err"; then
+        note_differ "nazm did not build: $(tail -1 "$log/build.err")"
+        return
+    fi
+    if ! "$NAZM" build --heap-limit 2G "$here/check/main.nz" -o "$exe" >"$log/check-build.out" 2>&1; then
         note_differ "check/main.nz did not build: $(grep -m1 error "$log/check-build.out")"
         return
     fi

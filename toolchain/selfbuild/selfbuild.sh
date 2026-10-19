@@ -87,12 +87,10 @@ heapb=$(heap_bytes "$heap")
 
 # The builder's programs, then every other program of the toolchain, as NAME SOURCE.
 builder="fe:compiler/diagnose.nz pl:toolchain/pipeline/main.nz cg:toolchain/codegen/main.nz"
-# Not yet: the interpreter (`toolchain/interp/main.nz`) and `nazm-check`
-# (`toolchain/harness/check/main.nz`) are written for 0.10.0, where `List[T]` was the immutable
-# sequence R1.5 D7 renamed `Chain[T]`; the reference refuses them too (N0359, N0637, N0300).
-# Their tracks build them with the 0.10.0 release; they join this list when they move to the
-# checkout's language (`openspec/changes/r6-host-qualification/design.md`, *Gaps*).
-others="nazm:toolchain/commands/nazm.nz mcp:toolchain/commands/mcp.nz mutate:toolchain/harness/mutate/main.nz jtool:toolchain/harness/tools/jtool.nz"
+# The interpreter (`toolchain/interp/main.nz`) and `nazm-check` (`toolchain/harness/check/main.nz`)
+# joined at R8 slice 1, moved from 0.10.0's `List[T]` to the checkout's `Chain[T]` (R1.5 D7;
+# `openspec/changes/r6-host-qualification/design.md`, *Gaps*; `openspec/changes/r8-cut-over/`).
+others="nazm:toolchain/commands/nazm.nz mcp:toolchain/commands/mcp.nz mutate:toolchain/harness/mutate/main.nz jtool:toolchain/harness/tools/jtool.nz interp:toolchain/interp/main.nz check:toolchain/harness/check/main.nz"
 
 rm -rf "$out"
 mkdir -p "$out"
@@ -278,6 +276,50 @@ for f in "$root"/compiler/conformance/*.nz "$root"/tests/compat/v1/run/*.nz "$ro
 done
 say "corpus: $agree programs built by stage $stages run as the seed's builds do, $disagree disagree, $unbuilt not built"
 
+# --- the self-built interpreter runs the corpus as the seed's does --------------------------------
+# The last stage's `interp` is given the seed's `nazm core-ir --json` of each corpus program (as
+# `toolchain/interp/tests/run.sh` gives it) and must print, fail and exit as the seed's `nazm run
+# --interpret` does. A program that does not check, or has no `main`, is not an input.
+iagree=0; idisagree=0
+if [ -x "$last/interp" ]; then
+    for f in "$root"/compiler/conformance/*.nz "$root"/tests/compat/v1/run/*.nz "$root"/toolchain/codegen/tests/programs/*.nz; do
+        [ -f "$f" ] || continue
+        rel=${f#"$root"/}
+        n=$(echo "$rel" | tr '/.' '__')
+        dir=$(dirname "$f"); file=$(basename "$f")
+        if ! (cd "$dir" && "$nazm" core-ir --json "$file" > "$corpus/$n.ir.json" 2> /dev/null) \
+            || grep -q '^{"schema":"nazm.core-ir/[23]","entry":null' "$corpus/$n.ir.json"; then
+            continue
+        fi
+        (cd "$dir" && timeout 60 "$nazm" run --interpret "$file" > "$corpus/$n.iref.stdout" 2> "$corpus/$n.iref.stderr" < /dev/null; echo $? > "$corpus/$n.iref.status")
+        (cd "$dir" && timeout 60 "$last/interp" --std "$root/library" "$corpus/$n.ir.json" "$file" > "$corpus/$n.i.stdout" 2> "$corpus/$n.i.stderr" < /dev/null; echo $? > "$corpus/$n.i.status")
+        if cmp -s "$corpus/$n.iref.stdout" "$corpus/$n.i.stdout" && cmp -s "$corpus/$n.iref.stderr" "$corpus/$n.i.stderr" \
+            && cmp -s "$corpus/$n.iref.status" "$corpus/$n.i.status"; then
+            iagree=$((iagree + 1))
+        else
+            idisagree=$((idisagree + 1))
+            say "  the self-built interpreter disagrees with the seed's: $rel (status $(cat "$corpus/$n.iref.status") vs $(cat "$corpus/$n.i.status"))"
+        fi
+    done
+    say "interp: $iagree programs run by stage $stages's interpreter as by the seed's \`run --interpret\`, $idisagree disagree"
+else
+    say "interp: stage $stages has no interpreter"; idisagree=1
+fi
+
+# --- the self-built nazm-check reports the tree as the seed's build of it does ---------------------
+cagree=0
+if [ -x "$last/check" ] && "$nazm" build --no-cache --heap-limit "$heap" "$root/toolchain/harness/check/main.nz" -o "$out/check.ref" > "$out/check.ref.build" 2>&1; then
+    (cd "$root" && timeout 600 "$out/check.ref" "$root" > "$out/check.ref.out" 2>&1 < /dev/null; echo $? >> "$out/check.ref.out")
+    (cd "$root" && timeout 600 "$last/check" "$root" > "$out/check.out" 2>&1 < /dev/null; echo $? >> "$out/check.out")
+    if cmp -s "$out/check.ref.out" "$out/check.out"; then
+        cagree=1; say "nazm-check: stage $stages's report of the tree is the seed's build's, byte for byte ($(grep -c '^ok ' "$out/check.out") gates ok)"
+    else
+        say "nazm-check: stage $stages's report differs from the seed's build's: $(diff "$out/check.ref.out" "$out/check.out" | head -6 | cut -c1-200)"
+    fi
+else
+    say "nazm-check: not compared: $( [ -x "$last/check" ] || echo "stage $stages has none"; head -c 300 "$out/check.ref.build" 2>/dev/null)"
+fi
+
 # --- the bounded heap holds in a self-built stage -----------------------------------------------
 # The last builder builds the front end again with a heap of 256 MiB, and it is run on the largest
 # toolchain program: it must stop with N0406 (status 2), its resident peak near the limit rather
@@ -309,4 +351,6 @@ awk '{ k = $NF; v = $(NF - 1); if (!($1 in m) || v > m[$1]) { m[$1] = v; w[$1] =
 [ "$fix" -eq 0 ] || fail "the stages are not a fixpoint"
 [ "$corediffer" -eq 0 ] || fail "the self-built front end and the reference disagree on Core IR"
 [ "$disagree" -eq 0 ] && [ "$unbuilt" -eq 0 ] || fail "the last stage's builds do not all run as the seed's do"
-say "selfbuild complete: stages 1 to $stages byte-identical; $agree programs agree with the seed's builds; the bounded heap holds"
+[ "$idisagree" -eq 0 ] || fail "the self-built interpreter does not run the corpus as the seed's does"
+[ "$cagree" -eq 1 ] || fail "the self-built nazm-check does not report the tree as the seed's build does"
+say "selfbuild complete: stages 1 to $stages byte-identical; $agree programs agree with the seed's builds; $iagree run by the self-built interpreter as by the seed's; nazm-check agrees; the bounded heap holds"
