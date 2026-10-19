@@ -61,6 +61,9 @@ struct Lo {
     ens: Ints,
     ensp: Ints,
     rres: Ints,
+    // Whether the document is written with the sources (`--with-sources`), which adds the positions
+    // only a debugger is told: a call's `callee_at` and a payload binding's `at`.
+    src: Bool,
 }
 
 fn co_nl() -> Str { str_from_byte(10) }
@@ -257,7 +260,7 @@ pub fn cr_document(f: Facts) -> Str { co_document_of(cr_core(f)) }
 // `cr_document` with each module's source text, file index and path (`print_with_sources`, what
 // `nazm core-ir --json --with-sources` prints): what the R3 pipeline needs to name a failure's
 // `file:line:column` (R6, the self-build).
-pub fn cr_document_with_sources(f: Facts) -> Str { co_document_of(cr_core_with(f, cr_functions(f), true)) }
+pub fn cr_document_with_sources(f: Facts) -> Str { co_document_of(cr_core_with(f, cr_functions_with(f, true), true)) }
 
 fn co_document_of(whole: Str) -> Str {
     let marker = str_concat(str_concat("%%document", co_nl()), "");
@@ -332,14 +335,16 @@ fn co_lines(s: Str) -> Strs {
     out
 }
 
-pub fn cr_functions(f: Facts) -> Str {
+pub fn cr_functions(f: Facts) -> Str { cr_functions_with(f, false) }
+
+fn cr_functions_with(f: Facts, src: Bool) -> Str {
     let c = fx_checker(f);
     let out = strs_new();
     let mut i = 0;
     while i < ck_fn_count(c) {
         strs_push(out, fx_fn_identity(f, i));
         strs_push(out, str_from_byte(9));
-        strs_push(out, cr_function(f, i));
+        strs_push(out, cr_function_with(f, i, src));
         strs_push(out, co_nl());
         i = i + 1;
     }
@@ -593,7 +598,10 @@ fn co_part(out: Strs, name: Str, value: Str) -> Int {
 }
 
 // Function `i`'s object, or `-` and why it is not carried.
-pub fn cr_function(f: Facts, i: Int) -> Str {
+pub fn cr_function(f: Facts, i: Int) -> Str { cr_function_with(f, i, false) }
+
+// `cr_function`, with the positions `--with-sources` adds where `src`.
+fn cr_function_with(f: Facts, i: Int, src: Bool) -> Str {
     let c = fx_checker(f);
     let idents = strs_new();
     let mut m = 0;
@@ -603,7 +611,7 @@ pub fn cr_function(f: Facts, i: Int) -> Str {
     }
     let lo = Lo(f: f, c: c, t: fx_tree(f), st: ints_new(), stop: strs_new(), lb: ints_new(), lname: strs_new(), lty: ints_new(), lorig: strs_new(),
             lat: strs_new(), lshr: ints_new(), ckey: strs_new(), cty: strs_new(), cval: strs_new(), cstatic: strs_new(), targets: ints_new(), ofirst: ints_new(), owned: ints_new(),
-            last: ints_new(), idents: idents, dbody: ints_new(), dloop: ints_new(), ens: ints_new(), ensp: ints_new(), rres: ints_new());
+            last: ints_new(), idents: idents, dbody: ints_new(), dloop: ints_new(), ens: ints_new(), ensp: ints_new(), rres: ints_new(), src: src);
     ints_push(lo.rres, 0 - 1);
     ints_push(lo.rres, 0 - 1);
     ints_push(lo.st, i);
@@ -830,6 +838,19 @@ fn co_foreign_fn(lo: Lo, i: Int) -> Str {
     co_object(whole)
 }
 
+// `members` of a call, with the position of its callee where the document carries the sources
+// (`source_at`, after the arguments).
+fn co_callee_at(lo: Lo, members: Str, cs: Int) -> Str {
+    if lo.src { return str_concat(members, co_field("callee_at", json_str(co_tree_span(lo, cs)))); }
+    members
+}
+
+// A payload binding's own position, where the document carries the sources.
+fn co_binding_at(lo: Lo, o: Strs, at: Int) -> Int {
+    if lo.src { strs_push(o, co_field("at", json_str(co_tree_span(lo, at)))); }
+    0
+}
+
 // A node of `op` whose place is the printed (quoted) `at`.
 fn co_node_at(lo: Lo, op: Str, members: Str, ty: Int, at: Str) -> Str {
     if co_halted(lo) { return ""; }
@@ -883,7 +904,7 @@ fn co_foreign_call(lo: Lo, callee: Int, args: Strs, cs: Int, span: Int) -> Str {
     strs_push(fields, co_field_first("callee", json_str(fx_fn_identity(lo.f, callee))));
     strs_push(fields, co_field("type_args", "[]"));
     strs_push(fields, co_field("args", co_list(raw)));
-    let call = co_node(lo, "call", str_join(fields, ""), raw_ty, span);
+    let call = co_node(lo, "call", co_callee_at(lo, str_join(fields, ""), cs), raw_ty, span);
     if out == "scalar" || out == "" { return call; }
     if out == "handle" { return co_handle(lo, ty, co_internal_at(lo, "foreign_nonnull", call, ck_t_int(), span), span); }
     if out == "cstring" {
@@ -1739,7 +1760,7 @@ fn co_split_call_of(lo: Lo, name: Str, s: Int, sep: Int, last: Str, at: Int) -> 
     strs_push(fields, co_field_first("callee", json_str(fx_fn_identity(lo.f, co_text_fn(lo, name)))));
     strs_push(fields, co_field("type_args", "[]"));
     strs_push(fields, co_field("args", co_list(args)));
-    co_node(lo, "call", str_join(fields, ""), ck_t_int(), at)
+    co_node(lo, "call", co_callee_at(lo, str_join(fields, ""), at), ck_t_int(), at)
 }
 
 // A local made by the lowering (`temp`): its name, type and where.
@@ -2175,6 +2196,7 @@ fn co_match(lo: Lo, e: Int, value: Bool) -> Str {
                 strs_push(o, co_field_first("field", int_to_str(fi)));
                 strs_push(o, co_field("name", json_str(ck_payload_name(c, et, vi, fi))));
                 strs_push(o, co_field("local", int_to_str(l)));
+                co_binding_at(lo, o, sx_field(t, pat, "span"));
                 strs_push(bindings, co_object(o));
             }
             k = k + 1;
@@ -2386,6 +2408,7 @@ fn co_propagate_arm(lo: Lo, et: Int, v: Int, local: Int, stmts: Strs, tail: Str,
         strs_push(b, co_field_first("field", "0"));
         strs_push(b, co_field("name", json_str(ck_payload_name(c, et, v, 0))));
         strs_push(b, co_field("local", int_to_str(local)));
+        co_binding_at(lo, b, at);
         strs_push(bindings, co_object(b));
         strs_push(owns, int_to_str(local));
     }
@@ -2712,7 +2735,7 @@ fn co_variant_test(lo: Lo, vp: Int, v: Str, vt: Int, at: Int) -> Str {
                     if fi < 0 { return co_stopped(lo, "a pattern field the checker did not resolve"); }
                     let fty = ck_payload_ty(c, vt, chosen, fi);
                     let local = co_temp(lo, "payload", fty, ns);
-                    strs_push(bindings, co_binding(lo, vt, chosen, fi, local));
+                    strs_push(bindings, co_binding(lo, vt, chosen, fi, local, ns));
                     strs_push(owns, int_to_str(local));
                     strs_push(parts, co_test(lo, fp, co_read(lo, local, ns), fty));
                 }
@@ -2734,11 +2757,12 @@ fn co_variant_test(lo: Lo, vp: Int, v: Str, vt: Int, at: Int) -> Str {
     co_match_node(lo, vt, v, arms, ck_t_bool(), at)
 }
 
-fn co_binding(lo: Lo, et: Int, v: Int, field: Int, local: Int) -> Str {
+fn co_binding(lo: Lo, et: Int, v: Int, field: Int, local: Int, at: Int) -> Str {
     let o = strs_new();
     strs_push(o, co_field_first("field", int_to_str(field)));
     strs_push(o, co_field("name", json_str(ck_payload_name(lo.c, et, v, field))));
     strs_push(o, co_field("local", int_to_str(local)));
+    co_binding_at(lo, o, at);
     co_object(o)
 }
 
@@ -2854,7 +2878,7 @@ fn co_extract(lo: Lo, p: Int, v: Str, vt: Int, name: Str, tyout: Ints) -> Str {
             if x == "" { return co_stopped(lo, "a binding its field's pattern lost"); }
             ty = ints_get(inner, 0);
             let bindings = strs_new();
-            strs_push(bindings, co_binding(lo, vt, chosen, fi, local));
+            strs_push(bindings, co_binding(lo, vt, chosen, fi, local, ns));
             let owns = co_list_one(int_to_str(local));
             strs_push(arms, co_arm_json(lo, vt, w, bindings, co_block_json(lo, false, owns, strs_new(), x, at), at));
         } else {
@@ -3150,7 +3174,7 @@ fn co_call_parts(lo: Lo, cs: Int, pre: Strs, list: Ints, span: Int) -> Str {
         strs_push(fields, co_field_first("callee", json_str(fx_fn_identity(lo.f, callee))));
         strs_push(fields, co_field("type_args", targs));
         strs_push(fields, co_field("args", co_list_of(args)));
-        return co_node(lo, "call", str_join(fields, ""), ret, span);
+        return co_node(lo, "call", co_callee_at(lo, str_join(fields, ""), cs), ret, span);
     }
     if b >= 0 {
         let name = ck_builtin_name(c, b);
@@ -3182,7 +3206,7 @@ fn co_call_parts(lo: Lo, cs: Int, pre: Strs, list: Ints, span: Int) -> Str {
     let fields = strs_new();
     strs_push(fields, co_field_first("callee", co_node(lo, "local", co_field_first("local", int_to_str(l)), ft, cs)));
     strs_push(fields, co_field("args", co_list_of(args)));
-    co_node(lo, "call_indirect", str_join(fields, ""), ck_fn_type_ret(c, ft), span)
+    co_node(lo, "call_indirect", co_callee_at(lo, str_join(fields, ""), cs), ck_fn_type_ret(c, ft), span)
 }
 
 // A constant's use (`const_value`): its value as a literal of its type, at the name; a static
@@ -3688,7 +3712,7 @@ fn co_method(lo: Lo, ms: Int, span: Int, recv: Int, rname: Str, rspan: Int, rest
     if ck_site_builtin(c, site) >= 0 || (target >= 0 && ck_fn_method(c, target) == false && default == false) { return co_call_parts(lo, ms, pre, rest, span); }
     let args = strs_new();
     co_push_all(args, pre);
-    if target < 0 { return co_trait_call(lo, site, args, rest, span); }
+    if target < 0 { return co_trait_call(lo, site, args, rest, ms, span); }
     let mut i = 0;
     let mut first_ty = 0 - 1;
     while i < ints_len(rest) {
@@ -3729,13 +3753,13 @@ fn co_method(lo: Lo, ms: Int, span: Int, recv: Int, rname: Str, rspan: Int, rest
     strs_push(fields, co_field_first("callee", json_str(fx_fn_identity(lo.f, target))));
     strs_push(fields, co_field("type_args", targs));
     strs_push(fields, co_field("args", co_list(args)));
-    co_node(lo, "call", str_join(fields, ""), ret, span)
+    co_node(lo, "call", co_callee_at(lo, str_join(fields, ""), ms), ret, span)
 }
 
 // A call through a trait's bound, or of a derived method (`CallTrait`): the trait's method, the
 // receiver's type as the calling body sees it, the arguments (`pre` lowered, then `rest`), and
 // the method's result at that type.
-fn co_trait_call(lo: Lo, site: Int, pre: Strs, rest: Ints, span: Int) -> Str {
+fn co_trait_call(lo: Lo, site: Int, pre: Strs, rest: Ints, ms: Int, span: Int) -> Str {
     let c = lo.c;
     let tm = ck_site_trait_method(c, site);
     let ft = ck_site_indirect(c, site);
@@ -3754,7 +3778,7 @@ fn co_trait_call(lo: Lo, site: Int, pre: Strs, rest: Ints, span: Int) -> Str {
     strs_push(fields, co_field_first("method", json_str(key)));
     strs_push(fields, co_field("self", json_str(co_durable(lo, ck_type_arg(c, ft, 0)))));
     strs_push(fields, co_field("args", co_list(args)));
-    co_node(lo, "call_trait", str_join(fields, ""), ck_type_arg(c, ft, ck_type_arg_count(c, ft) - 1), span)
+    co_node(lo, "call_trait", co_callee_at(lo, str_join(fields, ""), ms), ck_type_arg(c, ft, ck_type_arg_count(c, ft) - 1), span)
 }
 
 fn co_contains(s: Str, part: Str) -> Bool {

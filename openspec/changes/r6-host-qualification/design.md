@@ -53,8 +53,8 @@ unchanged; what is new is only that the ELF objects are now linked and run, insi
    built) equals stage 2 (built by one Nazm built), so the seed-built and the self-built builders
    agree as well as reproduce.
 2. **Core IR against the reference.** For each program, the last stage's document is the seed's
-   `nazm core-ir --with-sources`, byte for byte, less two members the Nazm front end does not
-   write yet (*Gaps*).
+   `nazm core-ir --with-sources`, byte for byte, whole (slice 3 of `r8-cut-over` wrote the two
+   members the front end lacked: a call's `callee_at`, a payload binding's `at`).
 3. **Behaviour against the reference.** The last builder builds 66 programs (the conformance
    corpus, `tests/compat/v1/run/`, the code generator's own test programs) and each runs as the
    seed's build of it does: standard output, standard error and exit status byte for byte —
@@ -165,13 +165,6 @@ The probe (front end built with 256 MiB, on `nazm.nz`): stopped with `N0406`, st
   `supply.nz:68`). Not changed here: their tracks build them with the 0.10.0 release, which has no
   `Chain`; they move when those tracks move to the checkout's language, and then join the
   self-build's list.
-- **Two `--with-sources` members are not written** by the Nazm front end: a call's `callee_at`
-  (`call`, `call_indirect`, `call_trait`; 3,317 in `toolchain/codegen/main.nz`) and a payload
-  binding's `at` (43 there). The pipeline puts a call's MIR statement and a binding's assignment at
-  them when present, so the self-built toolchain's MIR positions — debug line tables, not
-  behaviour — differ from the reference's there. `compiler/core.nz` has the callee's span at each
-  site (`co_call_parts`'s `cs`); the method-call and `for`-loop sites need the reference's choice
-  of span read from `crates/nazm-core/src/lower.rs`. R2 work.
 - **The runtime's units are LLVM IR text**, assembled by `clang -c`: R3 generates them as text and
   R9 does not compile LLVM IR. Nothing written in Rust is involved, but the platform's `clang` is.
 - **The self-build is Linux only.** A macOS self-build is a host run, which decision 3 (accepted

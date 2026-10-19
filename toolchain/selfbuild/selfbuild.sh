@@ -223,16 +223,8 @@ last="$out/stage$stages"
 for p in $builder $others; do
     name=${p%%:*}; src=${p#*:}
     [ -s "$last/$name.d/core.json" ] || continue
-    # Less the two members the Nazm front end does not write yet, which only `--with-sources` adds
-    # (`print.rs`, `source_at`): a call's `callee_at` and a payload binding's `at` — positions the
-    # pipeline gives a call's MIR statement and a binding's, which the corpus below does not reach
-    # (`openspec/changes/r6-host-qualification/design.md`, *Gaps*). Every other byte is compared.
-    "$nazm" core-ir --with-sources "$root/$src" 2> /dev/null \
-        | grep -v '^ *"callee_at": "[^"]*",$' \
-        | awk 'NR == 1 { prev = $0; next }
-               { if (prev ~ /^ *"local": [0-9]+,$/ && $0 ~ /^ *"at": "[^"]*"$/) { sub(/,$/, "", prev); next }
-                 print prev; prev = $0 }
-               END { if (NR > 0) print prev }' > "$last/$name.d/core.ref.json"
+    # Whole: every member, a call's `callee_at` and a payload binding's `at` included (R6 gap 2).
+    "$nazm" core-ir --with-sources "$root/$src" 2> /dev/null > "$last/$name.d/core.ref.json"
     if cmp -s "$last/$name.d/core.ref.json" "$last/$name.d/core.json"; then
         coreagree=$((coreagree + 1))
     else

@@ -5,13 +5,13 @@
 - [x] 1.2 The pipeline accepts the Linux triples (the container's), for the self-build only
 - [x] 1.3 `diagnose --coredoc-sources`: the modules' sources, so failures name their line and column
 - [x] 1.4 The fixpoint: stages 1, 2 and 3 identical, every file (`design.md`, *The evidence*)
-- [x] 1.5 The last stage's Core IR equal to the reference's (less *Gaps*' two members); 66 programs
+- [x] 1.5 The last stage's Core IR equal to the reference's (whole, since `r8-cut-over` slice 3); 66 programs
       it builds run as the seed's builds do; the heap probe stops with `N0406`
 - [x] 1.6 Peak resident memory of every step recorded
 - [ ] 1.7 The interpreter and `nazm-check` in the self-build, once their tracks move from 0.10.0 to
       the checkout's language (`design.md`, *Gaps*). Moved and added to the self-build's programs
       by `r8-cut-over` slice 1 (2026-10-20); closed when its contained run passes there (1.4)
-- [ ] 1.8 `callee_at` and a payload binding's `at` in `--coredoc-sources` (R2)
+- [x] 1.8 `callee_at` and a payload binding's `at` in `--coredoc-sources` (R2)
 
 ## 2. The containment rule (`rewrite-in-nazm` 7.2)
 - [x] 2.1 The proposal: `design.md` decision 3 and `runbook-draft.md`
