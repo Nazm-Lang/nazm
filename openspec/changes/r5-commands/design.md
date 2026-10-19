@@ -414,7 +414,8 @@ docs` runs `--index` in each form and every one of the corpus's sections by id (
 text of every tenth), then thirteen corpora each with one thing wrong; `tests/args/docs.txt` the
 command lines.
 
-**What 9.1 leaves, and why.** `context`, `snapshot`, `delta`, `diagnostics`, `resolve`, `references`,
+**What 9.1 leaves, and why.** (Since D24 and D25 `snapshot`, `delta`, `diagnostics`, `resolve`, `references` and the
+MCP server are carried; `context`, `inspect` and `repo` remain, for the facts D24 lists.) `context`, `snapshot`, `delta`, `diagnostics`, `resolve`, `references`,
 `inspect`, `repo` and the MCP server answer from `nazm-service`, whose packets are digests of the
 reference index (every occurrence of a definition), the call graph (callers, callees), provenance
 summaries, Core IR and MIR, and the language service's diagnostic ids and source state — none of
@@ -528,6 +529,60 @@ UTF-8); `lsp` 18 sessions: 17 agree, 0 differ, 1 refused (two open documents), a
 leave the index unlike the reference's, 53 the references of a trait's method, 36 a foreign function's label, 24 a
 document that does not lex, 21 a source root the reference refuses, 13 hover of a method, closure or generic, …), 1 not
 UTF-8; `tests/args/check.txt` and `lsp.txt` 133 command lines: 128 agree, 0 differ, 5 refused.
+
+**D24 — `snapshot`, `delta`, `diagnostics`, `resolve`, `references`, `patch rename`/`patch fix` and the records of
+`reload-check` (tasks 7.2, 9.1, 11.2; 2026-10-19, R5d).** What D18, D20 and D22 handed back is published now: the
+reference index (`fx_ref_*`), the call graph (`fx_call_*`), provenance (`fx_prov_*`), the check keys and diagnostic ids
+(`fx_check_keys`, `fx_diag_ids`, `fx_diag_order`) and the types of records' fields and enums' payloads. Each command is
+`nazm-service` over them, and each refuses (status 6, one line, counted and named) where they still do not answer.
+
+- `snap.nz` is `nazm_service::snapshot`: the root checked as a module (`fx_check_module_in`, what the service analyses),
+  its entities (`Ents`: per index entry its definition key, member and file), and per durable function, record and enum
+  one BLAKE3 per section — source, shape, dependencies, related types, references, callers, callees, diagnostics,
+  effects, provenance — taken over `<n>:<bytes>` fields under the schema and the section's name, and `nazm.snapshot/3`
+  written with its keys as the schema orders them (`--json` compact, else indented). Refused: a compilation after which
+  the index differs from the reference's (a parser stage reported, or `N0203`, `N0305`, `N0334`, `N0386`, `N0610`,
+  `N0101`: the facts' index and the service's part there), a function whose label the facts do not spell (a foreign
+  function, one with an effect parameter), an enum or record the facts do not publish.
+- `delta` reads a baseline as `nazm_service::semantic_delta` does (exactly `nazm.snapshot/3`: each field, each identity
+  and digest form) and compares by durable key; the baseline is checked before the root is opened, so a malformed one
+  is `baseline_malformed` whatever the root. `delta_compute` is the command without its printing, which the MCP server
+  asks (D25).
+- `diagnostics` writes the index (each diagnostic's id `CODE@FILE:START-END#N`, ordered as the service orders them,
+  its owner, fix counts) and, with `--detail ID --state DIGEST`, one diagnostic in full with the `nazm patch fix`
+  selector of each fix; the state is the BLAKE3 of the sources, `stale_state` where it is not the index's.
+- `resolved.nz` writes `nazm.resolved/1`, the unit the reference's check cache stores per module (`nazm resolve`,
+  `nazm references DEF FILE`): the imports the `use`s make with the interfaces they were made against, and every
+  definition and occurrence under its durable target. The reference reads them from the cache, so a module has one
+  only if it checked clean — no error, no warning — wrote no closure (a closure exists only while its maker is
+  checked), has a durable key, and so do its imports; `rs_units` leaves the others out as the reference does, and the
+  comparison runs with a cold check cache on each side (`NAZM_CACHE_DIR`), which is the only state in which the two
+  are the same by construction. Refused: a module imported by two `use`s (the graph keeps one edge for both), a module
+  that imports itself, and an entity named in a constant's initializer that the facts' index holds no declaration of
+  (4 inputs). An opaque handle's one field is `#pointer`, which the facts place at the record's name.
+- `patchplan.nz` plans `patch rename` and `patch fix` for the root file: the rename is `rename.nz`, the engine the
+  language server's rename uses (coverage, exported or private, the new name lexed as one identifier, the candidate
+  program checked again with the edits and its occurrences partitioned into entities as the program's own were), the
+  plan bound to the root's snapshot, the file's digest and each edit's expected bytes, validated as `reanalysed`.
+  Another loaded file is refused: its plan needs that file's own relative path under the source root.
+- `reload-check` compares a record's fields and an enum's variants by layout too (`fx_record_field_ty`,
+  `fx_payload_ty`; fields sorted, variants sorted); a generic record or enum is refused, because the reference lists it
+  once for every instance the program makes.
+
+`run.sh agent` runs, for every input of check, `snapshot` and `diagnostics` (both forms), `resolve`, `references` of the
+first three definitions, `delta` against the reference's snapshot and two baselines made wrong, `diagnostics --detail`
+of three ids and `patch rename` and `patch fix` at the positions `tests/patch-positions.py` finds; `run.sh reload`
+every pair of the programs of `tests/reload`; `tests/args/` the command lines. Measured 2026-10-19 (R5d), on a frozen
+copy of the tree with the port built from it: `agent` 3,399 inputs: 2,954 agree, 0 differ, 445 refused (304 a
+compilation that does not load, 101 whose errors leave the facts' index unlike the reference's, 23 a local declared in a
+closure or in no function, 5 a record and 1 an enum whose layout the facts do not publish, 4 a field in a constant's
+initializer, 4 a rename of an exported name in a declared workspace, 1 a variant's payload, 1 a module that imports
+itself, 1 a module imported by two `use`s); `reload` 1,369 pairs: 1,225 agree, 0 differ, 144 refused (a
+generic record or enum); `args` 981 command lines: 966 agree, 0 differ, 15 refused. Hand-backs to R2: the index after
+the errors above; a trait method's uses inside its default methods (the facts record them, the reference does not);
+the declaration of a field a constant's initializer names; effects (`required`, `published` and a reason for each, the
+first call that requires it) for `context`; Core IR and MIR for `inspect`, `obligations`, `explain-cost`, `trace`;
+provenance paths for `explain-flow`.
 
 ## Risks / Trade-offs
 

@@ -1,0 +1,21 @@
+# `nazm references`, run in the fixture of run.sh (`fixture references`): check's files and packages (each with a cold check cache).
+--help
+-h
+''
+'a.nz::fn main'
+'a.nz::fn main' a.nz
+'a.nz::fn nope' a.nz
+'nope' a.nz
+'a.nz::fn main' b.nz
+'b.nz::fn main' b.nz
+'w.nz::enum E' w.nz
+'w.nz::enum E.A' w.nz
+'w.nz::enum E.B' w.nz
+'w.nz::fn main' w.nz
+'a.nz::fn main' absent.nz
+'a.nz::fn main' m.nz
+'a.nz::fn main' s.nz
+'lib/src/a.nz::fn twice' lib/src/a.nz
+'lib/src/a.nz::fn twice' app/src/main.nz
+'a.nz::fn main' a.nz --source-root .
+'a.nz::fn main' a.nz --source-root nowhere
