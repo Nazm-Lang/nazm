@@ -54,10 +54,10 @@ pub fn equal(h: Heap, a: V, b: V) -> Int {
     }
 }
 
-fn arr_equal(h: Heap, xs: List[V], ys: List[V]) -> Int {
-    if list_len(xs) != list_len(ys) { return 0 - 1 }
-    for i in 0..list_len(xs) {
-        let e = equal(h, list_get(xs, i), list_get(ys, i))
+fn arr_equal(h: Heap, xs: Chain[V], ys: Chain[V]) -> Int {
+    if chain_len(xs) != chain_len(ys) { return 0 - 1 }
+    for i in 0..chain_len(xs) {
+        let e = equal(h, chain_get(xs, i), chain_get(ys, i))
         if e != 1 { return e }
     }
     1

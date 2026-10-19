@@ -16,18 +16,21 @@ if [ "$tree" = "$(cd "$here/../.." && pwd)" ]; then
     echo "refusing to seed defects into the working tree; give a scratch copy" >&2
     exit 2
 fi
-HARNESS_NAZM=${HARNESS_NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$HOME/.cache/nazm-target-R7-mut}
+# `nazm-check` and `nazm-mutate` are written in the checkout's language (`Chain[T]`, R1.5 D7; R8
+# slice 1), so the copy's own `nazm` builds them, with the 2 GiB heap the runbook's R6 rule asks of
+# a Nazm program run on a host; HARNESS_NAZM names another.
 seeds=$here/tests/seeds.toml
 
 log=$(mktemp -d "${TMPDIR:-/tmp}/r7-seeded.XXXXXX")
 trap 'rm -rf "$log"' EXIT
+(cd "$tree" && cargo build -q -j "${CARGO_JOBS:-4}" -p xtask -p nazm-cli) || exit 1
+xtask=$CARGO_TARGET_DIR/debug/xtask
+HARNESS_NAZM=${HARNESS_NAZM:-$CARGO_TARGET_DIR/debug/nazm}
 for prog in check mutate; do
-    "$HARNESS_NAZM" build "$here/$prog/main.nz" -o "$log/nazm-$prog" >"$log/$prog.build" 2>&1 || {
+    "$HARNESS_NAZM" build --heap-limit 2G "$here/$prog/main.nz" -o "$log/nazm-$prog" >"$log/$prog.build" 2>&1 || {
         cat "$log/$prog.build" >&2; exit 1; }
 done
-(cd "$tree" && cargo build -q -j "${CARGO_JOBS:-4}" -p xtask) || exit 1
-xtask=$CARGO_TARGET_DIR/debug/xtask
 
 agree=0
 differ=0

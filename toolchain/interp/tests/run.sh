@@ -7,15 +7,31 @@
 #
 #   toolchain/interp/tests/run.sh [-v] [FILE.nz ... | --rust-tests [PATTERN]]
 #
-# NAZM names the Rust toolchain compared with (default: the 0.10.0 release); NAZM_BUILD the one that
-# builds the interpreter, which is written in the 0.10.0 language (default: the 0.10.0 release).
+# NAZM names the Rust toolchain compared with, NAZM_BUILD the one that builds the interpreter; both
+# default to the checkout's (`$CARGO_TARGET_DIR/debug/nazm`): since R8 slice 1 the interpreter is
+# written in the checkout's language (`Chain[T]`, R1.5 D7), which the 0.10.0 release does not read.
 # Where NAZM has `run --interpret` (R1.5 D11), that is the oracle; before, plain `run` was.
 # -v shows each difference's diff.
+#
+# The interpreter is a program written in Nazm, run here once per input: under the runbook
+# (*Mandatory containment*, R6) that is contained work, so this script refuses to start outside the
+# contained runner, as `toolchain/selfbuild/selfbuild.sh` does:
+#
+#   cargo xtask contained run 'cargo build --locked -p nazm-cli && sh toolchain/interp/tests/run.sh'
+#
+# and the interpreter is built with a heap limit of its own (`R4_HEAP`, default 2G).
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../../.." && pwd)
-NAZM=${NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
-NAZM_BUILD=${NAZM_BUILD:-$HOME/.local/nazm-0.10.0/bin/nazm}
+NAZM=${NAZM:-"${CARGO_TARGET_DIR:-$repo/target}/debug/nazm"}
+NAZM_BUILD=${NAZM_BUILD:-$NAZM}
+if [ "${NAZM_CONTAINED:-}" != "1" ]; then
+    echo "interp: refusing to run the interpreter written in Nazm uncontained (see this script's header)" >&2
+    exit 2
+fi
+case $(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo none) in
+    ''|*[!0-9]*|0) echo "interp: NAZM_CONTAINED=1 is set, but no memory ceiling applies here" >&2; exit 2 ;;
+esac
 interpret=""
 if "$NAZM" run --help 2>/dev/null | grep -q -- '--interpret'; then interpret="--interpret"; fi
 verbose=0
@@ -33,7 +49,7 @@ tidy() {
 }
 trap tidy EXIT
 
-if ! "$NAZM_BUILD" build --opt-level 2 "$repo/toolchain/interp/main.nz" -o "$work/interp" >"$work/build.log" 2>&1; then
+if ! "$NAZM_BUILD" build --opt-level 2 --heap-limit "${R4_HEAP:-2G}" "$repo/toolchain/interp/main.nz" -o "$work/interp" >"$work/build.log" 2>&1; then
     grep -v '^warning' "$work/build.log" | grep -A8 '^error' | head -40
     echo "interp: the build failed"
     exit 1
