@@ -4168,7 +4168,9 @@ const CHANNEL_RUNTIME: &str = r"
 ; the close, so a send and a close are ordered by one compare-and-swap. The mutex is for parking
 ; alone: `waiting` counts the tasks parked or about to park, and an operation goes without the lock
 ; only while it is zero; a waiter counts itself before it looks once more, and an operation that went
-; without the lock looks at the count after, so one of the two always sees the other.
+; without the lock looks at the count after, so one of the two always sees the other. A waiter is
+; counted out by whoever takes its record off a list, under the mutex, not when it runs again: a woken
+; task may wait long for its worker, and while it is counted every operation would take the lock.
 define hidden ptr @nz.chq_new(i64 %cap, i64 %stride, ptr %release) {
 entry:
   %c = call ptr @malloc(i64 128)
@@ -4479,9 +4481,12 @@ woken:
   ret i64 %st
 }
 
-; The head of the list at `%qp` (its tail at `%qtp`), taken off it; the list is not empty.
-define hidden ptr @nz.chq_take(ptr %qp, ptr %qtp) noinline {
+; The head of the list at `%qp` (its tail at `%qtp`), taken off it and counted out of `waiting`;
+; the list is not empty.
+define hidden ptr @nz.chq_take(ptr %c, ptr %qp, ptr %qtp) noinline {
 entry:
+  %nwp = getelementptr i8, ptr %c, i64 24
+  %nw = atomicrmw sub ptr %nwp, i64 1 seq_cst
   %rec = load ptr, ptr %qp
   %next = load ptr, ptr %rec
   store ptr %next, ptr %qp
@@ -4529,7 +4534,7 @@ entry:
   %parked = icmp ne ptr %rq, null
   br i1 %parked, label %wake, label %old
 wake:
-  %rrec = call ptr @nz.chq_take(ptr %rqp, ptr %rqtp)
+  %rrec = call ptr @nz.chq_take(ptr %c, ptr %rqp, ptr %rqtp)
   call void @nz.chq_wake(ptr %rrec, i64 3)
   br label %old
 old:
@@ -4547,7 +4552,7 @@ entry:
   %parked = icmp ne ptr %sq, null
   br i1 %parked, label %move, label %old
 move:
-  %srec = call ptr @nz.chq_take(ptr %sqp, ptr %sqtp)
+  %srec = call ptr @nz.chq_take(ptr %c, ptr %sqp, ptr %sqtp)
   %sv = getelementptr i8, ptr %srec, i64 160
   %put = call i64 @nz.chq_enq(ptr %c, ptr %sv)
   %queued = icmp eq i64 %put, 0
@@ -4660,7 +4665,7 @@ emptyq:
   br i1 %empty, label %hand, label %put
 hand:
   ; A receiver parked on an empty ring: the value goes straight to the one parked longest.
-  %hrec = call ptr @nz.chq_take(ptr %rqp, ptr %rqtp)
+  %hrec = call ptr @nz.chq_take(ptr %c, ptr %rqp, ptr %rqtp)
   %hv = getelementptr i8, ptr %hrec, i64 160
   call void @llvm.memcpy.p0.p0.i64(ptr %hv, ptr %src, i64 %stride, i1 false)
   call void @nz.chq_wake(ptr %hrec, i64 1)
@@ -4698,8 +4703,8 @@ lateshut:
   call void @nz.chq_spare(ptr %c, ptr %rec)
   br label %refuse
 sleep:
+  ; Back with its record off the list and counted out by whoever took it.
   %st = call i64 @nz.chq_park(ptr %c, ptr %m, ptr %rec, ptr %sqp, ptr %sqtp)
-  %w3 = atomicrmw sub ptr %nwp, i64 1 seq_cst
   %sent = icmp eq i64 %st, 1
   br i1 %sent, label %moved, label %check
 moved:
@@ -4780,7 +4785,7 @@ empty:
   %sparked = icmp ne ptr %sq, null
   br i1 %sparked, label %direct, label %wait
 direct:
-  %drec = call ptr @nz.chq_take(ptr %sqp, ptr %sqtp)
+  %drec = call ptr @nz.chq_take(ptr %c, ptr %sqp, ptr %sqtp)
   %dv = getelementptr i8, ptr %drec, i64 160
   call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %dv, i64 %stride, i1 false)
   call void @nz.chq_wake(ptr %drec, i64 1)
@@ -4807,8 +4812,8 @@ lateend:
   call void @nz.chq_spare(ptr %c, ptr %rec)
   br label %drained
 sleep:
+  ; Back with its record off the list and counted out by whoever took it.
   %st = call i64 @nz.chq_park(ptr %c, ptr %m, ptr %rec, ptr %rqp, ptr %rqtp)
-  %w3 = atomicrmw sub ptr %nwp, i64 1 seq_cst
   %handed = icmp eq i64 %st, 1
   br i1 %handed, label %given, label %check
 given:
@@ -4879,7 +4884,7 @@ empty:
   %sparked = icmp ne ptr %sq, null
   br i1 %sparked, label %direct, label %none
 direct:
-  %drec = call ptr @nz.chq_take(ptr %sqp, ptr %sqtp)
+  %drec = call ptr @nz.chq_take(ptr %c, ptr %sqp, ptr %sqtp)
   %dv = getelementptr i8, ptr %drec, i64 160
   call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %dv, i64 %stride, i1 false)
   call void @nz.chq_wake(ptr %drec, i64 1)
@@ -4934,7 +4939,7 @@ emptyq:
   %empty = call i1 @nz.chq_empty(ptr %c)
   br i1 %empty, label %hand, label %put
 hand:
-  %hrec = call ptr @nz.chq_take(ptr %rqp, ptr %rqtp)
+  %hrec = call ptr @nz.chq_take(ptr %c, ptr %rqp, ptr %rqtp)
   %ohv = getelementptr i8, ptr %hrec, i64 160
   call void @llvm.memcpy.p0.p0.i64(ptr %ohv, ptr %src, i64 %stride, i1 false)
   call void @nz.chq_wake(ptr %hrec, i64 1)
@@ -4975,7 +4980,7 @@ receivers:
   %rnone = icmp eq ptr %rq, null
   br i1 %rnone, label %senders, label %rend
 rend:
-  %rrec = call ptr @nz.chq_take(ptr %rqp, ptr %rqtp)
+  %rrec = call ptr @nz.chq_take(ptr %c, ptr %rqp, ptr %rqtp)
   call void @nz.chq_wake(ptr %rrec, i64 3)
   br label %receivers
 senders:
@@ -4983,7 +4988,7 @@ senders:
   %snone = icmp eq ptr %sq, null
   br i1 %snone, label %rest, label %send
 send:
-  %srec = call ptr @nz.chq_take(ptr %sqp, ptr %sqtp)
+  %srec = call ptr @nz.chq_take(ptr %c, ptr %sqp, ptr %sqtp)
   call void @nz.chq_wake(ptr %srec, i64 3)
   br label %senders
 rest:
