@@ -1,0 +1,31 @@
+# `nazm delta`, run in the fixture of run.sh (`fixture delta`): base.json is the reference's snapshot of a.nz, and the others are it made wrong in a way each.
+--help
+-h
+--root
+--root a.nz
+--baseline base.json
+--root a.nz --baseline base.json
+--json --root a.nz --baseline base.json
+--root a.nz --baseline tweak.json
+--root a.nz --baseline renamed.json
+--root a.nz --baseline invalid_digest.json
+--root a.nz --baseline wrongschema.json
+--root a.nz --baseline unavail.json
+--root a.nz --baseline notjson.json
+--root a.nz --baseline empty.json
+--root a.nz --baseline other.json
+--root a.nz --baseline wrongcompiler.json
+--root a.nz --baseline extra.json
+--root a.nz --baseline kind.json
+--root a.nz --baseline badid.json
+--root a.nz --baseline absent.json
+--root a.nz --baseline sub
+--root absent.nz --baseline base.json
+--root b.nz --baseline base.json
+--root b.nz --baseline other.json
+--root m.nz --baseline base.json
+--root s.nz --baseline base.json
+--root mut.nz --baseline mutbase.json
+--root app/src/main.nz --baseline base.json
+--root a.nz --baseline base.json --source-root .
+--root a.nz --baseline notjson.json --source-root nowhere

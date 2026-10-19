@@ -1,0 +1,859 @@
+// The commands that answer from the language service's packets (R5, `openspec/changes/r5-commands/`, design D24):
+// `nazm snapshot`, `nazm delta`, `nazm diagnostics`, `nazm context`, over R2's published facts. Each opens its
+// root from disk as `LanguageService::open_from_disk` does and prints the packet as `crates/nazm-cli` prints it —
+// the compact object with `--json`, else the same object indented with its keys sorted (`to_string_pretty` of a
+// `Value`).
+//
+// Where the facts do not carry what the reference reads, the command says so on standard error and exits 6 before
+// writing anything (design D5).
+
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/package.nz"
+use "../../compiler/facts.nz"
+use "cli.nz"
+use "front.nz"
+use "jsonin.nz"
+use "../../compiler/builtins.nz"
+use "@std/blake3"
+use "patchplan.nz"
+use "resolved.nz"
+use "snap.nz"
+use "sym.nz"
+use "summary.nz"
+use "util.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+fn refuse(io: IoCap, name: Str, why: Str) -> Int {
+    eprint(name + ": not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+// `analysed`: the root opened from disk, or the reason it could not be (`nazm NAME: ROOT: REASON`, status 4).
+fn open_root(io: IoCap, name: Str, root: Str) -> Int {
+    let why = ut_read_error(io, root, true)
+    if why != "" {
+        eprint("nazm " + name + ": " + root + ": " + why + nl())
+        exit_with(4)
+    }
+    0
+}
+
+// The packet as `print` prints it: compact with `--json`, else indented.
+fn show(text: Str, json: Bool) -> Str {
+    if json { return text + nl() }
+    j_pretty(j_parse(text)) + nl()
+}
+
+// --- nazm snapshot ----------------------------------------------------------------------------------------------
+
+pub fn snapshot_cli() -> Cli {
+    let c = cli_command("snapshot", "Print the semantic snapshot of a root's compilation, `nazm.snapshot/3`",
+            "Print the semantic snapshot of a root's compilation, `nazm.snapshot/3`." + nl() + nl()
+            + "Every durable function, record and enum the compilation rooted at `--root` declares, each with one digest per "
+            + "semantic section the compiler records, from the disk as it is now. Keep it as the baseline of a later `nazm "
+            + "delta`. A digest is evidence the canonical data it was taken over is equal, not that behaviour is. "
+            + "`docs/architecture.md` §7.30.")
+    cli_required_option(c, "root", "ROOT", true, "The compilation's root module")
+    cli_flag(c, "", "json", "The one canonical compact serialisation. Without it, the same object indented", "")
+    cli_option(c, "", "source-root", "SOURCE_ROOT", true, "", false, "Measure every module's durable identity from this directory, as `nazm check "
+            + "--source-root` does", "")
+    c
+}
+
+// The facts of the root as the language service analyses it: checked as a module, from disk.
+fn root_facts(io: IoCap, root: Str, given: Str, given_set: Bool) -> Facts {
+    let library = os_env_get("NAZM_LIBRARY")
+    if library == "" { refuse(io, "snapshot", "the standard library's directory (set NAZM_LIBRARY)") }
+    let prefix = fe_prefix(io, root)
+    let given_prefix = if given_set { fe_prefix(io, given) } else { "" }
+    fx_check_module_in(prefix + root, if given_set { given_prefix + given } else { "" }, library, fe_host_os(), fe_host_arch(), io)
+}
+
+// The snapshot of the compilation `f`, or the service's reason there is none, as a `Snap`.
+fn snapshot_of(io: IoCap, name: Str, f: Facts) -> Snap {
+    // A root the service cannot decide (a manifest that is not one, a marker that is not empty, a given root
+    // that is not a directory) analyses as an empty compilation with a missing module: no snapshot.
+    let s = if fx_refusal(f) != "" { snap_incomplete() } else { snap_build(f) }
+    if snap_why(s) != "" { refuse(io, name, snap_why(s)) }
+    s
+}
+
+pub fn snapshot_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let root = cli_value(c, 0)
+    let json = cli_present(c, 1)
+    open_root(io, "snapshot", root)
+    let f = root_facts(io, root, cli_value(c, 2), cli_present(c, 2))
+    let s = snapshot_of(io, "snapshot", f)
+    print(show(snap_json(s), json))
+    if snap_reason(s) != "" { exit_with(1) }
+    0
+}
+
+// --- nazm delta ----------------------------------------------------------------------------------------------
+
+pub fn delta_cli() -> Cli {
+    let c = cli_command("delta", "Print what changed since a baseline snapshot, `nazm.delta/3`",
+            "Print what changed since a baseline snapshot, `nazm.delta/3`." + nl() + nl()
+            + "Compares `--baseline`, a `nazm.snapshot/3` file of the same root, with the compilation rooted at `--root` as it is on "
+            + "disk now: durable definitions added, removed, and changed — naming exactly which recorded sections changed. Matching "
+            + "is by durable key only, so a rename is a removal and an addition. A baseline that is not exactly a snapshot of this "
+            + "root, by this compiler, is refused.")
+    cli_required_option(c, "root", "ROOT", true, "The compilation's root module")
+    cli_required_option(c, "baseline", "BASELINE", true, "A `nazm.snapshot/3` file, as `nazm snapshot --json` wrote it")
+    cli_flag(c, "", "json", "The one canonical compact serialisation. Without it, the same object indented", "")
+    cli_option(c, "", "source-root", "SOURCE_ROOT", true, "", false, "Measure every module's durable identity from this directory, as `nazm check "
+            + "--source-root` does", "")
+    c
+}
+
+fn unavailable_delta(reason: Str) -> Str {
+    "{\"schema\":\"nazm.delta/3\",\"status\":\"unavailable\",\"reason\":" + json_str(reason) + "}"
+}
+
+fn is_hex64(s: Str) -> Bool {
+    if str_len(s) != 64 { return false }
+    for i in 0..64 {
+        let b = str_byte(s, i)
+        if !((b >= 48 && b <= 57) || (b >= 97 && b <= 102)) { return false }
+    }
+    true
+}
+
+// `ModuleKey::fold`: the path's components with `.` and empty ones dropped and `..` taken against the one before;
+// "" where it escapes the root or names nothing.
+fn fold_key(path: Str) -> Str {
+    let out = strs_new()
+    let mut from = 0
+    for i in 0..str_len(path) + 1 {
+        if i == str_len(path) || str_byte(path, i) == 47 || str_byte(path, i) == 92 {
+            let part = str_slice(path, from, i)
+            from = i + 1
+            if part == "" || part == "." { continue }
+            if part == ".." {
+                if strs_len(out) == 0 { return "" }
+                strs_pop(out)
+            } else {
+                strs_push(out, part)
+            }
+        }
+    }
+    if strs_len(out) == 0 { return "" }
+    str_join(out, "/")
+}
+
+fn has_at(s: Str) -> Bool {
+    for i in 0..str_len(s) {
+        if str_byte(s, i) == 64 { return true }
+    }
+    false
+}
+
+// `ModuleKey::relative`: the folded key, "" where there is none or its first component holds an `@`.
+fn relative_key(path: Str) -> Str {
+    let key = fold_key(path)
+    if key == "" { return "" }
+    let mut end = 0
+    while end < str_len(key) && str_byte(key, end) != 47 { end += 1 }
+    if has_at(str_slice(key, 0, end)) { return "" }
+    key
+}
+
+fn lower_name(s: Str, dash: Bool) -> Bool {
+    if str_len(s) == 0 { return false }
+    let first = str_byte(s, 0)
+    if first < 97 || first > 122 { return false }
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        if !((b >= 97 && b <= 122) || (b >= 48 && b <= 57) || (dash && b == 45)) { return false }
+    }
+    true
+}
+
+// `ModuleKey::parse`: whether `text` is a module key in exactly its canonical spelling.
+fn parse_key(text: Str) -> Bool {
+    if text == "@core/prelude" { return true }
+    if fe_starts(text, "@std/") { return lower_name(str_slice(text, 5, str_len(text)), false) }
+    let mut slash = 0 - 1
+    for i in 0..str_len(text) {
+        if slash < 0 && str_byte(text, i) == 47 { slash = i }
+    }
+    if slash >= 0 {
+        let prefix = str_slice(text, 0, slash)
+        let mut at = 0 - 1
+        for i in 0..str_len(prefix) {
+            if at < 0 && str_byte(prefix, i) == 64 { at = i }
+        }
+        if at >= 0 {
+            let name = str_slice(prefix, 0, at)
+            let version = str_slice(prefix, at + 1, str_len(prefix))
+            let rest = str_slice(text, slash + 1, str_len(text))
+            let inner = relative_key(rest)
+            if inner == "" { return false }
+            // `NAME@VERSION`: three runs of digits.
+            let parts = strs_new()
+            let mut from = 0
+            for i in 0..str_len(version) + 1 {
+                if i == str_len(version) || str_byte(version, i) == 46 {
+                    strs_push(parts, str_slice(version, from, i))
+                    from = i + 1
+                }
+            }
+            let mut version_ok = strs_len(parts) == 3
+            for i in 0..strs_len(parts) {
+                let p = strs_get(parts, i)
+                if str_len(p) == 0 { version_ok = false }
+                for k in 0..str_len(p) {
+                    if str_byte(p, k) < 48 || str_byte(p, k) > 57 { version_ok = false }
+                }
+            }
+            return lower_name(name, true) && version_ok && inner == rest
+        }
+    }
+    let canonical = relative_key(text)
+    canonical != "" && canonical == text
+}
+
+// `canonical_key`: `module::kind name` in exactly the spelling a compilation writes, of the kind, not the prelude's.
+fn canonical_identity(text: Str, kind: Str) -> Bool {
+    let mut cut = 0 - 1
+    for i in 0..str_len(text) - 1 {
+        if cut < 0 && str_byte(text, i) == 58 && str_byte(text, i + 1) == 58 { cut = i }
+    }
+    if cut < 0 { return false }
+    let module = str_slice(text, 0, cut)
+    let rest = str_slice(text, cut + 2, str_len(text))
+    let mut space = 0 - 1
+    for i in 0..str_len(rest) {
+        if space < 0 && str_byte(rest, i) == 32 { space = i }
+    }
+    if space < 0 { return false }
+    let word = str_slice(rest, 0, space)
+    let name = str_slice(rest, space + 1, str_len(rest))
+    let want = if kind == "function" { "fn" } else { kind }
+    if word != want { return false }
+    if str_len(name) == 0 { return false }
+    let first = str_byte(name, 0)
+    if !((first >= 65 && first <= 90) || (first >= 97 && first <= 122) || first == 95) { return false }
+    for i in 0..str_len(name) {
+        let b = str_byte(name, i)
+        if !((b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 95) { return false }
+    }
+    module != "@core/prelude" && parse_key(module)
+}
+
+// Whether object `n` has exactly the members `names` (each present, none other).
+fn exact_object(j: J, n: Int, names: Strs) -> Bool {
+    if j_kind(j, n) != 6 { return false }
+    let mut c = ints_get(j.first, n)
+    while c >= 0 {
+        let mut known = false
+        for i in 0..strs_len(names) {
+            if strs_get(names, i) == strs_get(j.key, c) { known = true }
+        }
+        if !known { return false }
+        c = ints_get(j.next, c)
+    }
+    for i in 0..strs_len(names) {
+        if j_get(j, n, strs_get(names, i)) < 0 { return false }
+    }
+    true
+}
+
+fn words2(a: Str, b: Str) -> Strs {
+    let out = strs_new()
+    strs_push(out, a)
+    strs_push(out, b)
+    out
+}
+
+// The baseline as `Baseline::validate` reads it: "" and its definitions in `ids`, `kinds`, `files`, `starts`, `ends`
+// and `digests` (the ten sections each, "" for a null), or the reason it is refused.
+fn baseline_read(j: J, ids: Strs, kinds: Strs, files: Strs, starts: Ints, ends: Ints, digests: Vec[Strs], root: Strs, counts: Ints) -> Str {
+    let schema = j_get(j, 0, "schema")
+    if j_kind(j, schema) != 4 || j_str(j, schema) != "nazm.snapshot/3" { return "baseline_wrong_schema" }
+    let status = j_get(j, 0, "status")
+    if j_kind(j, status) == 4 && j_str(j, status) == "unavailable" { return "baseline_unavailable" }
+    let top = strs_new()
+    strs_push(top, "schema")
+    strs_push(top, "status")
+    strs_push(top, "root")
+    strs_push(top, "definitions")
+    strs_push(top, "untracked")
+    strs_push(top, "unsupported")
+    let bad = "baseline_malformed"
+    if !exact_object(j, 0, top) { return bad }
+    if j_kind(j, j_get(j, 0, "status")) != 4 || j_str(j, j_get(j, 0, "status")) != "available" { return bad }
+    let r = j_get(j, 0, "root")
+    if !exact_object(j, r, words2("module", "compiler")) { return bad }
+    let module = j_get(j, r, "module")
+    let compiler = j_get(j, r, "compiler")
+    if j_kind(j, module) != 4 || j_kind(j, compiler) != 4 { return bad }
+    let untracked = j_get(j, 0, "untracked")
+    if !j_int_in(j, untracked, 0, 9223372036854775807) { return bad }
+    let unsupported = j_get(j, 0, "unsupported")
+    if j_kind(j, unsupported) != 5 { return bad }
+    let want = strs_new()
+    strs_push(want, "capabilities")
+    strs_push(want, "tests")
+    strs_push(want, "semantic_history")
+    strs_push(want, "behavioural_equivalence")
+    let mut u = ints_get(j.first, unsupported)
+    let mut k = 0
+    while u >= 0 {
+        if j_kind(j, u) != 4 { return bad }
+        if k >= strs_len(want) || j_str(j, u) != strs_get(want, k) { return bad }
+        k += 1
+        u = ints_get(j.next, u)
+    }
+    if k != strs_len(want) { return bad }
+    let defs = j_get(j, 0, "definitions")
+    if j_kind(j, defs) != 5 { return bad }
+    // Every definition must be well formed to its own fields before any is judged by its value.
+    let mut d = ints_get(j.first, defs)
+    let dnames = strs_new()
+    strs_push(dnames, "identity")
+    strs_push(dnames, "kind")
+    strs_push(dnames, "declaration")
+    strs_push(dnames, "digests")
+    let secs = snap_sections()
+    // The whole array is read as the wire reads it first (a type or a field wrong anywhere is `malformed`), then the
+    // rules over each definition in order.
+    let mut w = d
+    while w >= 0 {
+        if !exact_object(j, w, dnames) { return bad }
+        if j_kind(j, j_get(j, w, "identity")) != 4 || j_kind(j, j_get(j, w, "kind")) != 4 { return bad }
+        let decl = j_get(j, w, "declaration")
+        let sn = strs_new()
+        strs_push(sn, "file")
+        strs_push(sn, "start")
+        strs_push(sn, "end")
+        if !exact_object(j, decl, sn) { return bad }
+        if j_kind(j, j_get(j, decl, "file")) != 4 || !j_int_in(j, j_get(j, decl, "start"), 0, 4294967295) || !j_int_in(j, j_get(j, decl, "end"), 0, 4294967295) { return bad }
+        let dg = j_get(j, w, "digests")
+        if !exact_object(j, dg, secs) { return bad }
+        for q in 0..strs_len(secs) {
+            let v = j_get(j, dg, strs_get(secs, q))
+            let optional = q == 5 || q == 6 || q == 8 || q == 9
+            if !(j_kind(j, v) == 4 || (optional && j_kind(j, v) == 0)) { return bad }
+        }
+        w = ints_get(j.next, w)
+    }
+    if !parse_key(j_str(j, module)) || j_str(j, module) == "@core/prelude" { return bad }
+    while d >= 0 {
+        let kind = j_str(j, j_get(j, d, "kind"))
+        if kind != "function" && kind != "record" && kind != "enum" { return bad }
+        let identity = j_str(j, j_get(j, d, "identity"))
+        if !canonical_identity(identity, kind) { return "baseline_invalid_identity" }
+        let dg = j_get(j, d, "digests")
+        let function = kind == "function"
+        for q in 0..strs_len(secs) {
+            let v = j_get(j, dg, strs_get(secs, q))
+            let optional = q == 5 || q == 6 || q == 8 || q == 9
+            if optional && (j_kind(j, v) == 4) != function { return bad }
+        }
+        for q in 0..strs_len(secs) {
+            let v = j_get(j, dg, strs_get(secs, q))
+            if j_kind(j, v) == 4 && !is_hex64(j_str(j, v)) { return "baseline_invalid_digest" }
+        }
+        for q in 0..strs_len(ids) {
+            if strs_get(ids, q) == identity { return "baseline_duplicate_identity" }
+        }
+        strs_push(ids, identity)
+        strs_push(kinds, kind)
+        let decl = j_get(j, d, "declaration")
+        strs_push(files, j_str(j, j_get(j, decl, "file")))
+        ints_push(starts, j_int(j, j_get(j, decl, "start")))
+        ints_push(ends, j_int(j, j_get(j, decl, "end")))
+        let row = strs_new()
+        for q in 0..strs_len(secs) {
+            let v = j_get(j, dg, strs_get(secs, q))
+            strs_push(row, if j_kind(j, v) == 4 { j_str(j, v) } else { "" })
+        }
+        vec_push(digests, row)
+        d = ints_get(j.next, d)
+    }
+    strs_push(root, j_str(j, module))
+    strs_push(root, j_str(j, compiler))
+    ints_push(counts, j_int(j, untracked))
+    ""
+}
+
+fn json_bool(b: Bool) -> Str { if b { "true" } else { "false" } }
+
+fn decl_json(identity: Str, kind: Str, file: Str, start: Int, end: Int) -> Str {
+    "{\"identity\":" + json_str(identity) + ",\"kind\":" + json_str(kind) + ",\"declaration\":{\"file\":" + json_str(file) + ",\"start\":" + int_to_str(start)
+            + ",\"end\":" + int_to_str(end) + "}}"
+}
+
+// `nazm.delta/3`: what changed from the baseline to the current snapshot.
+fn delta_json(b_ids: Strs, b_kinds: Strs, b_files: Strs, b_starts: Ints, b_ends: Ints, b_digests: Vec[Strs], b_untracked: Int, s: Snap) -> Str {
+    let added = strs_new()
+    let changed = strs_new()
+    let mut unchanged = 0
+    // Both sides are in identity order; the baseline's definitions are looked up by identity.
+    let mut seen = ints_new()
+    for q in 0..strs_len(b_ids) { ints_push(seen, 0) }
+    for i in 0..snap_count(s) {
+        let identity = snap_identity(s, i)
+        let mut at = 0 - 1
+        for q in 0..strs_len(b_ids) {
+            if strs_get(b_ids, q) == identity { at = q }
+        }
+        if at < 0 {
+            strs_push(added, decl_json(identity, snap_kind(s, i), snap_file(s, i), snap_start(s, i), snap_end(s, i)))
+            continue
+        }
+        ints_set(seen, at, 1)
+        let parts = strs_new()
+        let mut any = false
+        let names = snap_sections()
+        for k in 0..strs_len(names) {
+            let now = snap_digest(s, i, k)
+            let before = strs_get(vec_get(b_digests, at), k)
+            if now == "" {
+                strs_push(parts, "\"" + strs_get(names, k) + "\":null")
+            } else {
+                let differs = now != before
+                if differs { any = true }
+                strs_push(parts, "\"" + strs_get(names, k) + "\":" + json_bool(differs))
+            }
+        }
+        if any {
+            strs_push(changed, "{\"identity\":" + json_str(identity) + ",\"kind\":" + json_str(snap_kind(s, i)) + ",\"declaration\":{\"file\":" + json_str(snap_file(s, i))
+                    + ",\"start\":" + int_to_str(snap_start(s, i)) + ",\"end\":" + int_to_str(snap_end(s, i)) + "},\"sections\":{" + str_join(parts, ",") + "}}")
+        } else {
+            unchanged += 1
+        }
+    }
+    // The baseline's, in identity order, that the compilation no longer has.
+    let order = ints_new()
+    for q in 0..strs_len(b_ids) {
+        if ints_get(seen, q) == 1 { continue }
+        let mut p = ints_len(order)
+        while p > 0 && fe_str_less(strs_get(b_ids, q), strs_get(b_ids, ints_get(order, p - 1))) { p -= 1 }
+        ints_push(order, 0)
+        let mut m = ints_len(order) - 1
+        while m > p {
+            ints_set(order, m, ints_get(order, m - 1))
+            m -= 1
+        }
+        ints_set(order, p, q)
+    }
+    let removed = strs_new()
+    for r in 0..ints_len(order) {
+        let q = ints_get(order, r)
+        strs_push(removed, decl_json(strs_get(b_ids, q), strs_get(b_kinds, q), strs_get(b_files, q), ints_get(b_starts, q), ints_get(b_ends, q)))
+    }
+    "{\"schema\":\"nazm.delta/3\",\"status\":\"available\",\"root\":{\"module\":" + json_str(snap_root(s)) + ",\"compiler\":" + json_str(snap_compiler(s))
+            + "},\"baseline\":{\"definitions\":" + int_to_str(strs_len(b_ids)) + ",\"untracked\":" + int_to_str(b_untracked) + "},\"current\":{\"definitions\":"
+            + int_to_str(snap_count(s)) + ",\"untracked\":" + int_to_str(snap_untracked(s)) + "},\"added\":[" + str_join(added, ",") + "],\"removed\":["
+            + str_join(removed, ",") + "],\"changed\":[" + str_join(changed, ",") + "],\"unchanged\":" + int_to_str(unchanged)
+            + ",\"unsupported\":[\"capabilities\",\"tests\",\"semantic_history\",\"behavioural_equivalence\"]}"
+}
+
+// What `nazm delta` prints for the baseline `text` and the compilation rooted at `root`, as one line of JSON:
+// the delta, or why there is none (`unavailable`). The root is opened only for a baseline that is JSON.
+pub fn delta_compute(io: IoCap, root: Str, source_set: Bool, source: Str, text: Str) -> Str {
+    let j = j_parse(text)
+    // A baseline that is not JSON is a malformed one: the root is not even opened.
+    if !j_ok(j) { return unavailable_delta("baseline_malformed") }
+    open_root(io, "delta", root)
+    let f = root_facts(io, root, source, source_set)
+    let b_ids = strs_new()
+    let b_kinds = strs_new()
+    let b_files = strs_new()
+    let b_starts = ints_new()
+    let b_ends = ints_new()
+    let b_digests = vec_new[Strs]()
+    let b_root = strs_new()
+    let b_counts = ints_new()
+    let reason = baseline_read(j, b_ids, b_kinds, b_files, b_starts, b_ends, b_digests, b_root, b_counts)
+    if reason != "" { return unavailable_delta(reason) }
+    let s = snapshot_of(io, "delta", f)
+    if snap_reason(s) != "" {
+        return unavailable_delta(if snap_reason(s) == "incomplete_compilation" { "incomplete_compilation" } else { "no_durable_root" })
+    }
+    if strs_get(b_root, 0) != snap_root(s) { return unavailable_delta("baseline_wrong_root") }
+    if strs_get(b_root, 1) != snap_compiler(s) { return unavailable_delta("baseline_wrong_compiler") }
+    delta_json(b_ids, b_kinds, b_files, b_starts, b_ends, b_digests, ints_get(b_counts, 0), s)
+}
+
+pub fn delta_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let root = cli_value(c, 0)
+    let baseline = cli_value(c, 1)
+    let json = cli_present(c, 2)
+    let why = ut_read_error(io, baseline, true)
+    if why != "" {
+        eprint("nazm delta: " + baseline + ": " + why + nl())
+        exit_with(3)
+    }
+    let out = delta_compute(io, root, cli_present(c, 3), cli_value(c, 3), read_file(baseline))
+    print(show(out, json))
+    if ut_starts(out, "{\"schema\":\"nazm.delta/3\",\"status\":\"unavailable\"") { exit_with(1) }
+    0
+}
+
+// --- nazm diagnostics ----------------------------------------------------------------------------------------
+
+pub fn diagnostics_cli() -> Cli {
+    let c = cli_command("diagnostics", "Print the root's current diagnostics compactly, `nazm.diagnostic-index/1`, or one of them in full, `nazm.diagnostic-detail/1`",
+            "Print the root's current diagnostics compactly, `nazm.diagnostic-index/1`, or one of them in full, `nazm.diagnostic-detail/1`."
+            + nl() + nl()
+            + "Without `--detail`: every diagnostic's id, code, severity, place, owning definition and fix counts — no message, help or "
+            + "label text. With `--detail ID --state DIGEST`: that diagnostic exactly as `nazm.diagnostic/1` publishes it, with its places "
+            + "in their files and, for each fix, the `nazm patch fix` selector where one exists — refused if the sources are no longer "
+            + "the index's state. From the disk as it is now; `nazm check --json` is unchanged. `docs/architecture.md` §7.32.")
+    cli_required_option(c, "root", "ROOT", true, "The compilation's root module")
+    let detail = cli_option(c, "", "detail", "DETAIL", false, "", false, "A diagnostic's id, from an index", "")
+    let state = cli_option(c, "", "state", "STATE", false, "", false, "The index's `state.source`: the sources the id is of", "")
+    cli_requires(c, detail, state)
+    cli_requires(c, state, detail)
+    cli_flag(c, "", "json", "The one canonical compact serialisation. Without it, the same object indented", "")
+    cli_option(c, "", "source-root", "SOURCE_ROOT", true, "", false, "Measure every module's durable identity from this directory, as `nazm check "
+            + "--source-root` does", "")
+    c
+}
+
+fn unavailable_diag(schema: Str, reason: Str) -> Str {
+    "{\"schema\":\"" + schema + "\",\"status\":\"unavailable\",\"reason\":" + json_str(reason) + "}"
+}
+
+// `FILE:START-END` (`sm_place`) as a `SourceSpan` object, or null for no place.
+fn place_json(p: Str) -> Str {
+    if p == "" { return "null" }
+    let mut colon = str_len(p) - 1
+    while colon > 0 && str_byte(p, colon) != 58 { colon -= 1 }
+    let mut dash = colon
+    while dash < str_len(p) && str_byte(p, dash) != 45 { dash += 1 }
+    "{\"file\":" + json_str(str_slice(p, 0, colon)) + ",\"start\":" + str_slice(p, colon + 1, dash) + ",\"end\":" + str_slice(p, dash + 1, str_len(p)) + "}"
+}
+
+fn places_json(ps: Strs) -> Str {
+    let out = strs_new()
+    for i in 0..strs_len(ps) { strs_push(out, place_json(strs_get(ps, i))) }
+    "[" + str_join(out, ",") + "]"
+}
+
+// The file a diagnostic's primary span is in: the one a stage said, else the last beginning at or before it.
+fn diag_module(f: Facts, i: Int) -> Int {
+    let d = fx_diags(f)
+    if dg_file(d, i) >= 0 { return dg_file(d, i) }
+    let mut found = 0
+    for m in 0..fx_modules(f) {
+        if fx_module_base(f, m) <= dg_start(d, i) { found = m }
+    }
+    found
+}
+
+// The durable definition (a function, record or enum) whose declaration holds the span `a..b` of module `m`.
+fn owner_json(f: Facts, m: Int, a: Int, b: Int) -> Str {
+    if !fx_file_known(f, m) || fx_module_key(f, m) == "" { return "null" }
+    let y = symbols_of(f, m, false)
+    let top = sy_kids(y, 0 - 1)
+    for k in 0..ints_len(top) {
+        let i = ints_get(top, k)
+        if sy_start(y, i) <= a && b <= sy_end(y, i) {
+            let kind = sy_kind(y, i)
+            let id = if kind == 1 { fx_fn_identity(f, sy_def(y, i)) } else if kind == 2 { fx_record_identity(f, sy_def(y, i)) } else { fx_enum_identity(f, sy_def(y, i)) }
+            return "{\"identity\":" + json_str(id) + ",\"kind\":\"" + (if kind == 1 { "function" } else if kind == 2 { "record" } else { "enum" }) + "\",\"name\":"
+                    + json_str(sy_name(y, i)) + "}"
+        }
+    }
+    "null"
+}
+
+fn count_fixes(f: Facts, k: Int, kind: Str) -> Int {
+    let d = fx_diags(f)
+    let mut n = 0
+    for i in 0..dg_fix_total(d, k) {
+        if dg_fix_kind(d, k, i) == kind { n += 1 }
+    }
+    n
+}
+
+fn fix_counts_json(f: Facts, k: Int) -> Str {
+    let d = fx_diags(f)
+    "{\"total\":" + int_to_str(dg_fix_total(d, k)) + ",\"automatic\":" + int_to_str(count_fixes(f, k, "automatic")) + ",\"needs_review\":"
+            + int_to_str(count_fixes(f, k, "needs_review")) + "}"
+}
+
+// The owner of diagnostic `k`: none where the compilation was recovered or a module is missing, or the place is none.
+fn owner_of_diag(f: Facts, k: Int, complete: Bool) -> Str {
+    if !complete { return "null" }
+    let d = fx_diags(f)
+    if sm_primary(f, k) == "" { return "null" }
+    let m = diag_module(f, k)
+    let base = fx_module_base(f, m)
+    owner_json(f, m, dg_start(d, k) - base, dg_end(d, k) - base)
+}
+
+// `nazm.diagnostic/1` of diagnostic `k` as `PublishedDiagnostic` (the report without its `schema`).
+fn published_json(f: Facts, k: Int) -> Str {
+    let line = dg_json(fx_diags(f), k)
+    let head = "{\"schema\":\"nazm.diagnostic/1\","
+    "{" + str_slice(line, str_len(head), str_len(line))
+}
+
+pub fn diagnostics_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let root = cli_value(c, 0)
+    let has_detail = cli_present(c, 1)
+    let json = cli_present(c, 3)
+    open_root(io, "diagnostics", root)
+    let f = root_facts(io, root, cli_value(c, 4), cli_present(c, 4))
+    let schema = if has_detail { "nazm.diagnostic-detail/1" } else { "nazm.diagnostic-index/1" }
+    if fx_refusal(f) != "" {
+        print(show(unavailable_diag(schema, "no_durable_root"), json))
+        exit_with(1)
+    }
+    if !fx_carried(f) { refuse(io, "diagnostics", fx_why(f)) }
+    if fx_modules(f) == 0 || fx_module_key(f, 0) == "" {
+        print(show(unavailable_diag(schema, "no_durable_root"), json))
+        exit_with(1)
+    }
+    // A compilation that does not load: the service analyses what loaded, which the facts do not carry.
+    if fe_load_failed(f) { refuse(io, "diagnostics", "a compilation that does not load") }
+    let d = fx_diags(f)
+    fe_unprefix_diags(io, d, fe_prefix(io, root), fe_prefix(io, root) + root)
+    // Whether the outline is of the source as written: no parser stage reported and every module loaded.
+    let complete = early_errors(f) == 0
+    let snap = snap_build(f)
+    if snap_why(snap) != "" { refuse(io, "diagnostics", snap_why(snap)) }
+    let bound = snap_reason(snap) == ""
+    let root_json = "{\"module\":" + json_str(fx_module_key(f, 0)) + ",\"compiler\":" + json_str("nazm " + strs_get(bi_identity(), 1)) + "}"
+    let source = fx_state_source(f)
+    let state_json = "{\"source\":" + json_str(source) + ",\"snapshot\":" + (if bound { json_str(blake3_hex(bytes_from_str(snap_json(snap)))) } else { "null" }) + "}"
+    let order = fx_diag_order(f)
+    let ids = fx_diag_ids(f)
+    if has_detail {
+        if cli_value(c, 2) != source {
+            print(show(unavailable_diag(schema, "stale_state"), json))
+            exit_with(1)
+        }
+        let want = cli_value(c, 1)
+        let mut at = 0 - 1
+        for r in 0..ints_len(order) {
+            if strs_get(ids, ints_get(order, r)) == want && at < 0 { at = ints_get(order, r) }
+        }
+        if at < 0 {
+            print(show(unavailable_diag(schema, "no_such_diagnostic"), json))
+            exit_with(1)
+        }
+        // A fix is a semantic patch (N29) only where there is a snapshot to bind it to and the language service plans it as an edit
+        // among those at the diagnostic's start (`patch_selectors`): the plan's place in that list is the selector.
+        let selectors = ints_new()
+        let mut planned = 0
+        for i in 0..dg_fix_total(d, at) { ints_push(selectors, 0 - 1) }
+        if bound && dg_fix_total(d, at) > 0 && sm_primary(f, at) != "" {
+            if diag_module(f, at) != 0 { refuse(io, "diagnostics", "the patch selectors of a diagnostic in a file other than the root") }
+            let diag = ints_new()
+            let index = ints_new()
+            pp_fix_plans(f, read_file(fe_prefix(io, root) + root), dg_start(d, at), diag, index)
+            // Which of the diagnostics with its code and place this is, in the compiler's order.
+            let mut ordinal = 0
+            for e in 0..at {
+                if dg_severity(d, e) == "error" && dg_code(d, e) != "N0204" && dg_code(d, e) == dg_code(d, at) && dg_start(d, e) == dg_start(d, at)
+                        && dg_end(d, e) == dg_end(d, at) { ordinal += 1 }
+            }
+            let seen = strs_new()
+            for j in 0..ints_len(diag) {
+                let q = ints_get(diag, j)
+                if dg_code(d, q) != dg_code(d, at) || dg_start(d, q) != dg_start(d, at) || dg_end(d, q) != dg_end(d, at) { continue }
+                // The distinct diagnostics among the plans, by everything they publish.
+                let key = dg_json(d, q)
+                let mut n = 0 - 1
+                for t in 0..strs_len(seen) {
+                    if n < 0 && strs_get(seen, t) == key { n = t }
+                }
+                if n < 0 {
+                    strs_push(seen, key)
+                    n = strs_len(seen) - 1
+                }
+                if n != ordinal { continue }
+                let slot = ints_get(index, j)
+                let a = dg_fix_span_start(d, q, slot)
+                let b = dg_fix_span_end(d, q, slot)
+                if slot < ints_len(selectors) && str_slice(fx_module_text(f, 0), a, b) != strs_get(d.fix_replacement, ints_get(d.fix_first, q) + slot) {
+                    ints_set(selectors, slot, j)
+                }
+            }
+        }
+        let fixes = strs_new()
+        for i in 0..dg_fix_total(d, at) {
+            let mut sel = "null"
+            if ints_get(selectors, i) >= 0 {
+                planned += 1
+                sel = "{\"file\":" + json_str(fx_file_path(f, 0)) + ",\"byte_offset\":" + int_to_str(dg_start(d, at)) + ",\"fix\":" + int_to_str(ints_get(selectors, i)) + "}"
+            }
+            strs_push(fixes, "{\"fix\":" + int_to_str(i) + ",\"applicability\":" + json_str(dg_fix_kind(d, at, i)) + ",\"semantic_patch\":" + sel + "}")
+        }
+        print(show("{\"schema\":\"nazm.diagnostic-detail/1\",\"status\":\"available\",\"root\":" + root_json + ",\"state\":" + state_json + ",\"id\":" + json_str(want)
+                + ",\"diagnostic\":" + published_json(f, at) + ",\"locations\":{\"primary\":" + place_json(sm_primary(f, at)) + ",\"secondary\":" + places_json(sm_secondary(f, at))
+                + ",\"fixes\":" + places_json(sm_fixes(f, at)) + "},\"owner\":" + owner_of_diag(f, at, complete) + ",\"facts\":\"unavailable\",\"compiler_fixes\":"
+                + int_to_str(dg_fix_total(d, at)) + ",\"semantic_patches\":" + int_to_str(planned) + ",\"fixes\":[" + str_join(fixes, ",") + "]}", json))
+        return 0
+    }
+    let rows = strs_new()
+    let mut with_fixes = 0
+    let mut automatic = 0
+    let mut review = 0
+    for r in 0..ints_len(order) {
+        let k = ints_get(order, r)
+        if dg_fix_total(d, k) > 0 { with_fixes += 1 }
+        automatic += count_fixes(f, k, "automatic")
+        review += count_fixes(f, k, "needs_review")
+        strs_push(rows, "{\"id\":" + json_str(strs_get(ids, k)) + ",\"code\":" + json_str(dg_code(d, k)) + ",\"severity\":\"error\",\"primary\":" + place_json(sm_primary(f, k))
+                + ",\"owner\":" + owner_of_diag(f, k, complete) + ",\"fixes\":" + fix_counts_json(f, k) + "}")
+    }
+    print(show("{\"schema\":\"nazm.diagnostic-index/1\",\"status\":\"available\",\"root\":" + root_json + ",\"state\":" + state_json + ",\"counts\":{\"total\":"
+            + int_to_str(ints_len(order)) + ",\"error\":" + int_to_str(ints_len(order)) + ",\"with_fixes\":" + int_to_str(with_fixes) + ",\"automatic_fixes\":" + int_to_str(automatic)
+            + ",\"needs_review_fixes\":" + int_to_str(review) + "},\"diagnostics\":[" + str_join(rows, ",") + "]}", json))
+    0
+}
+
+// --- nazm resolve, nazm references ------------------------------------------------------------------------------
+
+pub fn resolve_cli() -> Cli {
+    let c = cli_command("resolve", "Print the compilation's resolved units (N77): one `nazm.resolved/1` line per module with a durable identity — its imports, "
+            + "definitions and every resolved occurrence, by durable identity. Runs the cached check; a reused module's unit is its entry's",
+            "")
+    cli_positional(c, "FILE", true, false, true, "", "")
+    cli_option(c, "", "source-root", "DIR", true, "", false, "Where this project begins. As `nazm check --source-root`", "")
+    c
+}
+
+pub fn references_cli() -> Cli {
+    let c = cli_command("references", "Every occurrence of one entity in the compilation (N77), from its modules' resolved units: `nazm.references/1`. `DEF` is a "
+            + "durable key, `module::kind name`, with `.member` for a variant, field or payload field (`Variant.field`). A module whose check is "
+            + "reused is not checked again; the output says how many were",
+            "")
+    cli_positional(c, "DEF", true, false, false, "", "")
+    cli_positional(c, "FILE", true, false, true, "", "")
+    cli_option(c, "", "source-root", "DIR", true, "", false, "Where this project begins. As `nazm check --source-root`", "")
+    c
+}
+
+// `units`: the compilation rooted at `file` checked as `nazm check` checks it, and its resolved units by module; the program's
+// errors, the loader's or the root's refusal as the reference prints them.
+fn units_of(io: IoCap, name: Str, file: Str, given_set: Bool, given: Str, out: Strs) -> Facts {
+    let library = os_env_get("NAZM_LIBRARY")
+    if library == "" { refuse(io, name, "the standard library's directory (set NAZM_LIBRARY)") }
+    let prefix = fe_prefix(io, file)
+    let given_prefix = if given_set { fe_prefix(io, given) } else { "" }
+    let f = fx_check_in(prefix + file, if given_set { given_prefix + given } else { "" }, library, fe_host_os(), fe_host_arch(), io)
+    if fx_refusal(f) != "" {
+        let why = fe_unprefix(fx_refusal(f), given_prefix)
+        eprint("nazm: " + why + nl())
+        let unreadable = fe_starts(why, "could not read")
+                || (str_len(why) >= 18 && str_slice(why, str_len(why) - 18, str_len(why)) == "is not a directory")
+        exit_with(if unreadable { 3 } else { 1 })
+    }
+    if !fx_carried(f) { refuse(io, name, fx_why(f)) }
+    let d = fx_diags(f)
+    fe_unprefix_diags(io, d, prefix, prefix + file)
+    if fe_load_failed(f) {
+        let mut missing = true
+        for i in 0..dg_len(d) {
+            if dg_code(d, i) != "N0205" { missing = false }
+            eprint(dg_json(d, i) + nl())
+        }
+        exit_with(if missing { 3 } else { 1 })
+    }
+    let mut failed = false
+    for i in 0..dg_len(d) {
+        if dg_severity(d, i) == "error" {
+            failed = true
+            eprint(dg_json(d, i) + nl())
+        }
+    }
+    if failed { exit_with(1) }
+    let why = strs_new()
+    let units = rs_units(f, fe_host_os(), fe_host_arch(), why)
+    if strs_len(why) > 0 { refuse(io, name, strs_get(why, 0)) }
+    for i in 0..strs_len(units) { strs_push(out, strs_get(units, i)) }
+    f
+}
+
+pub fn resolve_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let units = strs_new()
+    units_of(io, "resolve", cli_value(c, 0), cli_present(c, 1), cli_value(c, 1), units)
+    for i in 0..strs_len(units) {
+        if strs_get(units, i) != "" { print(strs_get(units, i) + nl()) }
+    }
+    0
+}
+
+fn opt_member(j: J, n: Int) -> Str {
+    let m = j_get(j, n, "member")
+    if j_kind(j, m) == 4 { return "1" + j_str(j, m) }
+    "0"
+}
+
+pub fn references_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let def = cli_value(c, 0)
+    // `DEF`'s item and member: the part after the first space and before its first `.` is the member's owner.
+    let mut item = def
+    let mut member = "0"
+    let mut space = 0 - 1
+    for i in 0..str_len(def) {
+        if space < 0 && str_byte(def, i) == 32 { space = i }
+    }
+    if space >= 0 {
+        let rest = str_slice(def, space + 1, str_len(def))
+        let mut dot = 0 - 1
+        for i in 0..str_len(rest) {
+            if dot < 0 && str_byte(rest, i) == 46 { dot = i }
+        }
+        if dot >= 0 {
+            let m = str_slice(rest, dot + 1, str_len(rest))
+            item = str_slice(def, 0, str_len(def) - str_len(m) - 1)
+            member = "1" + m
+        }
+    }
+    let units = strs_new()
+    let f = units_of(io, "references", cli_value(c, 1), cli_present(c, 2), cli_value(c, 2), units)
+    let mut kind = ""
+    let mut declaration = "null"
+    let uses = strs_new()
+    for i in 0..strs_len(units) {
+        if strs_get(units, i) == "" { continue }
+        let j = j_parse(strs_get(units, i))
+        let module = j_str(j, j_get(j, 0, "module"))
+        let defs = j_get(j, 0, "definitions")
+        let mut e = ints_get(j.first, defs)
+        while e >= 0 {
+            let t = j_get(j, e, "target")
+            if j_str(j, j_get(j, t, "item")) == item && opt_member(j, t) == member {
+                kind = j_str(j, j_get(j, t, "kind"))
+                declaration = "{\"end\":" + j_str(j, j_get(j, e, "end")) + ",\"module\":" + json_str(module) + ",\"start\":" + j_str(j, j_get(j, e, "start")) + "}"
+            }
+            e = ints_get(j.next, e)
+        }
+        let occ = j_get(j, 0, "occurrences")
+        e = ints_get(j.first, occ)
+        while e >= 0 {
+            let t = j_get(j, e, "target")
+            if j_str(j, j_get(j, t, "item")) == item && opt_member(j, t) == member {
+                kind = j_str(j, j_get(j, t, "kind"))
+                strs_push(uses, "{\"end\":" + j_str(j, j_get(j, e, "end")) + ",\"module\":" + json_str(module) + ",\"start\":" + j_str(j, j_get(j, e, "start")) + "}")
+            }
+            e = ints_get(j.next, e)
+        }
+    }
+    if kind == "" {
+        eprint("nazm: `" + def + "` names nothing this compilation declares or uses" + nl())
+        exit_with(1)
+    }
+    print("{\"checked\":" + int_to_str(fx_modules(f)) + ",\"declaration\":" + declaration + ",\"item\":" + json_str(item) + ",\"kind\":" + json_str(kind) + ",\"member\":"
+            + (if member == "0" { "null" } else { json_str(str_slice(member, 1, str_len(member))) }) + ",\"reused\":0,\"schema\":\"nazm.references/1\",\"uses\":["
+            + str_join(uses, ",") + "]}" + nl())
+    0
+}
