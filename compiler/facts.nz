@@ -655,3 +655,33 @@ fn str_less(a: Str, b: Str) -> Bool {
     }
     str_len(a) < str_len(b)
 }
+
+// --- the reference index (R5 hand-back; `ReferenceIndex`, N17) -------------------------------
+//
+// Every entity the program declares — function, local, record, enum, variant, field, payload
+// field, trait, trait method — with where it is declared and every occurrence the checker
+// resolved to it, as the reference's `references`, `rename` and `symbols` read them. An entity is
+// `0 <= i < fx_ref_count(f)`, in order of its declaration (then of its first use, for one declared
+// nowhere); spans are over the whole compilation's text (`fx_module_at` says whose, `fx_module_base`
+// makes one local); a use is never the declaration. Meaningful where the checker carried the
+// compilation and it did not fail (`fx_carried`, `fx_failed`).
+pub fn fx_ref_count(f: Facts) -> Int { ck_ref_count(f.c) }
+// `function`, `local`, `record`, `enum`, `variant`, `field`, `payload field`, `trait`, `trait method`
+// or `constant`.
+pub fn fx_ref_kind(f: Facts, i: Int) -> Str { ck_ref_kind_name(f.c, i) }
+// Where it is declared, or -1 for an entity declared nowhere the index holds.
+pub fn fx_ref_decl_start(f: Facts, i: Int) -> Int { ck_ref_decl_start(f.c, i) }
+pub fn fx_ref_decl_end(f: Facts, i: Int) -> Int { ck_ref_decl_end(f.c, i) }
+pub fn fx_ref_use_count(f: Facts, i: Int) -> Int { ck_ref_use_count(f.c, i) }
+pub fn fx_ref_use_start(f: Facts, i: Int, k: Int) -> Int { ck_ref_use_start(f.c, i, k) }
+pub fn fx_ref_use_end(f: Facts, i: Int, k: Int) -> Int { ck_ref_use_end(f.c, i, k) }
+
+// The module whose text holds the offset (absolute), or -1.
+pub fn fx_module_at(f: Facts, at: Int) -> Int {
+    let mut m = 0;
+    while m < strs_len(f.texts) {
+        if at >= ints_get(f.bases, m) && at < ints_get(f.bases, m) + str_len(strs_get(f.texts, m)) { return m; }
+        m = m + 1;
+    }
+    0 - 1
+}
