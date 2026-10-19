@@ -27,6 +27,8 @@ pub fn fx_core_why(f: Facts, i: Int) -> Str {
 pub fn fx_core_semantic(f: Facts, i: Int) -> Str { cr_digest_semantic(f, i) }
 pub fn fx_core_body(f: Facts, i: Int) -> Str { cr_digest_body(f, i) }
 pub fn fx_core_document(f: Facts) -> Str { cr_document(f) }
+// The same with each module's source, file index and path (`nazm core-ir --json --with-sources`).
+pub fn fx_core_document_with_sources(f: Facts) -> Str { cr_document_with_sources(f) }
 // Both digests, the semantic one and then the body one, lowering the function once; none (an empty
 // list) where it is not carried.
 pub fn fx_core_digests(f: Facts, i: Int) -> Strs { cr_digests(f, i) }

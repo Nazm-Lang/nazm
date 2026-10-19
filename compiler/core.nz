@@ -101,7 +101,7 @@ fn co_last_transfers(lo: Lo) -> Bool { ints_get(lo.last, 1) == 1 }
 // The comparison's whole output (`run.sh core`): `cr_functions`, `cr_parts`, and — where every
 // function and every part was carried — `%%document` on a line of its own and the document
 // `nazm core-ir` prints, byte for byte (`print.rs`, indented), from the same values.
-pub fn cr_core(f: Facts) -> Str { cr_core_with(f, cr_functions(f)) }
+pub fn cr_core(f: Facts) -> Str { cr_core_with(f, cr_functions(f), false) }
 
 // `cr_core`, its functions lowered per module (design D28): a module whose Core IR unit — its
 // functions' lines — is in `dir` under its check key is read from there, not lowered; every
@@ -207,11 +207,11 @@ pub fn cr_core_units(f: Facts, dir: Str, keys: Strs, io: IoCap) -> Str {
         m = m + 1;
     }
     eprint(str_concat(str_concat(str_concat(str_concat("units: ", int_to_str(reused)), " reused, "), int_to_str(written)), str_concat(" written", co_nl())));
-    cr_core_with(f, str_join(out, ""))
+    cr_core_with(f, str_join(out, ""), false)
 }
 
-fn cr_core_with(f: Facts, functions: Str) -> Str {
-    let parts = cr_parts(f);
+fn cr_core_with(f: Facts, functions: Str, sources: Bool) -> Str {
+    let parts = cr_parts_with(f, sources);
     let lines = strs_new();
     let fl = co_lines(functions);
     let pl = co_lines(parts);
@@ -252,8 +252,14 @@ fn cr_core_with(f: Facts, functions: Str) -> Str {
 
 // The document `nazm core-ir` prints (indented, as `print.rs` writes it), where the lowering carried
 // every function and every part; "" otherwise.
-pub fn cr_document(f: Facts) -> Str {
-    let whole = cr_core(f);
+pub fn cr_document(f: Facts) -> Str { co_document_of(cr_core(f)) }
+
+// `cr_document` with each module's source text, file index and path (`print_with_sources`, what
+// `nazm core-ir --json --with-sources` prints): what the R3 pipeline needs to name a failure's
+// `file:line:column` (R6, the self-build).
+pub fn cr_document_with_sources(f: Facts) -> Str { co_document_of(cr_core_with(f, cr_functions(f), true)) }
+
+fn co_document_of(whole: Str) -> Str {
     let marker = str_concat(str_concat("%%document", co_nl()), "");
     let mut at = 0;
     while at + str_len(marker) <= str_len(whole) {
@@ -343,7 +349,12 @@ pub fn cr_functions(f: Facts) -> Str {
 // The document's other parts (task 5.1c), one line each — `%NAME`, a tab, and its value as
 // `print.rs` writes it compactly, or `- ` and why it is not carried: the entry, the modules, the
 // type table, the statics, the impl table and `derived_hash`.
-pub fn cr_parts(f: Facts) -> Str {
+pub fn cr_parts(f: Facts) -> Str { cr_parts_with(f, false) }
+
+// `cr_parts`; with `sources`, each module also has its text as the compilation holds it, its
+// file's index (its place in load order) and the loader's name for it, as `print.rs` adds them
+// from a source map.
+fn cr_parts_with(f: Facts, sources: Bool) -> Str {
     let c = fx_checker(f);
     let idents = strs_new();
     let mut m = 0;
@@ -375,6 +386,11 @@ pub fn cr_parts(f: Facts) -> Str {
             k = k + 1;
         }
         strs_push(o, co_field("imports", co_list(imports)));
+        if sources {
+            strs_push(o, co_field("source", json_str(fx_module_text(f, m))));
+            strs_push(o, co_field("file", int_to_str(m)));
+            strs_push(o, co_field("path", json_str(fx_module_name(f, m))));
+        }
         strs_push(modules, co_object(o));
         m = m + 1;
     }
