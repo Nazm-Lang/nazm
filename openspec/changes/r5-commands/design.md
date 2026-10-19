@@ -182,7 +182,7 @@ options: none is the long help, a command its `--help`, `help help` its own text
 a command that has no commands of its own is `unrecognized subcommand` under that command's usage
 (under `help`'s own, without the closing line). The commands and their `about`s are a table in
 `nazm.nz`, in `cli.rs`'s order with `help` last; a doc comment changed in `cli.rs` shows as a
-difference in `tests/args/nazm.txt`'s lines. `fmt`, `init`, `check`, `doc`, `fix`, `lsp`, `test`, `patch`, `interface` and `docs` are carried; any other
+difference in `tests/args/nazm.txt`'s lines. `fmt`, `init`, `check`, `doc`, `fix`, `lsp`, `test`, `patch`, `interface`, `docs`, `attest`, `lock`, `update`, `publish` and `yank` are carried; any other
 command, or `help` of one, is `nazm: not carried: nazm CMD`, status 6.
 
 **D13 — `doc` is `apidoc.rs` over R2's facts; `check` runs on the same interface.**
@@ -420,6 +420,38 @@ summaries, Core IR and MIR, and the language service's diagnostic ids and source
 which `compiler/facts.nz` publishes. They are not ported, and `nazm CMD` says so (`not carried`, 6):
 the hand-back to R2 is the reference index first (it also unblocks `patch`'s plans, D18, and
 `lsp`'s references, rename and symbols), then the call graph and provenance.
+
+**D21 — Packages and attestations (task 10.1, 2026-10-19).** `toolchain/commands/pkg.nz` is
+`crates/nazm-package` — `Manifest::parse` with serde's own words for what is wrong (`unknown field
+`x`, expected one of …`, `missing field `version``, `invalid type: integer `5`, expected a string`,
+met in the order the file writes its keys), versions and requirements (`=`, `^`, `~`), the resolver
+(path packages by directory with cycles, diamonds, a name or version that is not the declared one;
+registry packages by the N90 backtracking search over a local registry's indexes, newest first, the
+lockfile's version before the rest, `N0513` naming where it got furthest), a package's BLAKE3 digest
+(manifest and every `.nz` file under its source root, a link to a directory not walked), the features
+enabled (`nazm.lock/2` where any is), `Graph::lock_text`, and a registry's index and published copies
+(`only_files`, the digest held against the index). Its reader of TOML (`toml.nz`) is the subset the
+toolchain writes — comments, tables and arrays of tables, strings, booleans, integers, single-line
+arrays and inline tables — with the `toml` crate's words for the syntax errors a person makes (`key
+with no value, expected `=``, `duplicate key`, `invalid basic string`, `unclosed table`, `string
+values must be quoted`, …); a form it does not read (a multi-line string, a float, a date, a dotted
+key) is refused with status 6, as is a struct written as an array of tables, which serde reads as a
+sequence of its fields. `pkgcmd.nz` is `package.rs`: `lock` (`wrote PATH (N packages)` or `PATH is up
+to date`), `update` (each change, `no changes`; a name that is no registry package refused), `publish`
+(copied through a staging directory and a rename, the index rewritten; `--dry-run`'s
+`nazm.publish-plan/1` line) and `yank` (`--undo`), their refusals printed as `report` prints them.
+`attest.nz` is `attest.rs`: a provenance record wrapped as an in-toto Statement v1 and signed by the
+system's `ssh-keygen -Y sign` in the namespace `nazm-attestation`, verified by `ssh-keygen -Y verify`
+and then the statement's shape and every artefact's digest. The group's command line is `group.nz`'s
+(D18). Run, the programs are started by `proc.nz` (`Command::output`: the parent's environment, input
+empty or given, output and errors collected); a record that is not JSON, or that holds a number serde
+would write differently, is refused. The comparison builds the registry with the reference's own
+`publish` and runs every command line over packages of every shape, a registry of published
+versions, indexes that are wrong, a stale version directory, a package holding a link, forty-eight
+manifests that are wrong in a way of their own (`tests/manifests.txt`) and a key pair made once per run
+for `attest` (`tests/args/lock.txt`, `update.txt`, `publish.txt`, `yank.txt`, `attest.txt`).
+`--locked` of `check` and `build` still refuses where a lockfile exists (D15): `pkg.nz`'s digest now
+makes it possible; the change waits for its own comparison.
 
 ## Risks / Trade-offs
 
