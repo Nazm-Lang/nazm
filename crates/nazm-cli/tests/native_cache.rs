@@ -487,11 +487,11 @@ fn shimmed(dir: &Path, version: &str) -> Command {
     c
 }
 
-#[test]
 #[cfg_attr(
     windows,
     ignore = "the shim is a shell script named `clang`; Windows finds a compiler only as an `.exe`, so a script cannot stand in for it"
 )]
+#[test]
 fn a_backend_that_calls_itself_something_else_reuses_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
     project(dir.path(), A_CALLS_B);

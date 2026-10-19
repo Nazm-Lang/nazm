@@ -12955,12 +12955,12 @@ find = """
     if !prebuilt {
         out.push(Artefact {
             name: "runtime".to_owned(),
-            code: nazm_lir::backend::Code::Llvm(nazm_lir::emit_runtime(needs)),"""
+            code: nazm_lir::backend::Code::Llvm(super::c_library_for("""
 replace = """
     if !prebuilt || true {
         out.push(Artefact {
             name: "runtime".to_owned(),
-            code: nazm_lir::backend::Code::Llvm(nazm_lir::emit_runtime(needs)),"""
+            code: nazm_lir::backend::Code::Llvm(super::c_library_for("""
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "runtime_artifact::a_program_reaching_every_service_behaves_the_same_with_the_artifact_on_both_backends" }]
 
 [[mutation]]
