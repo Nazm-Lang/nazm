@@ -165,9 +165,15 @@ Sizes: **S** under ~300 changed lines, **M** under ~2k, **L** under ~6k, **XL** 
 Slices 8–12 depend only on 4 (and 7 for `trace`/`profile`); they can run in any order between 7
 and 14. Slice 13 may run beside any of them (it touches only `toolchain/harness/` and `xtask/`).
 
-## Open Questions
+## Open Questions — settled by the copyright holder, 2026-10-20
 
-Direction-level, for the copyright holder:
+All four recommendations below were **accepted on 2026-10-20**. On the first, one correction to its
+wording: the removed targets are not after-1.0 work. 0.11.0 ships macOS and Windows only, and each
+removed target returns with its domain track (`v1-every-domain`) before 1.0, which waits for every
+domain. The second extends the R6 rule: the macOS self-build may run on the host as serial
+`cargo xtask host-run` steps, recorded in `docs/runbook.md` when slice 16 lands.
+
+The questions as they were put:
 
 1. **The deferred targets.** The Rust `nazm` — the 0.10.0 release included — builds for Linux,
    WebAssembly, WASI, Android, iOS and five boards, and `contract` compiles to EVM and WebAssembly.
