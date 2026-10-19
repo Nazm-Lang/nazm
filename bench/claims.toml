@@ -499,3 +499,8 @@ why = "hyperfine over a release nazm of 0a52becf on three programs, each measure
 heading = "Eighteen languages on every parameter, re-run and measured (quiet window, 2026-10-19)"
 status = "dated"
 why = "one run of `bench/compare/compare.py --runs 10` on this Mac, begun at load 1.56 with no cargo, rustc or nextest running (fib re-run alone at 1.55, the other programs' loads 1.8-2.3, W = 10's 2.44 from the benchmark's own workers); a record of that date and machine — the script reproduces the method, not these numbers"
+
+[[claim]]
+heading = "Fan-in and the four-task program after their fixes, measured (quiet window, 2026-10-19)"
+status = "dated"
+why = "hyperfine over release nazm builds of 0a52becf and 26e5e64a on bench/compare/nazm/fanin.nz and alloc4.nz, each invocation begun below load 2 with no cargo, rustc or nextest running; a record of that date and machine"
