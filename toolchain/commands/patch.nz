@@ -1,0 +1,265 @@
+// `nazm patch`, written in Nazm (R5, `openspec/changes/r5-commands/`, task 7.2, design D18).
+//
+// `nazm patch rename|fix|apply`, run by the dispatcher (`nazm.nz`).
+//
+// A port of `crates/nazm-cli/src/patch.rs`. `apply` is carried whole: the plan read as serde_json
+// reads it, every file's BLAKE3 digest and every edit's expected bytes checked before anything is
+// written, then each file written through a temporary file and a rename. `rename` and `fix` read
+// their arguments as the reference does and the root as `open_from_disk` reads it; the plan they
+// print binds to the root's semantic snapshot (`nazm.snapshot/3`: digests of references, callers
+// and provenance), which `compiler/` does not publish yet, so past the root they refuse with status 6
+// (design D5, D18).
+
+use "@std/blake3"
+use "../../compiler/diag.nz"
+use "cli.nz"
+use "group.nz"
+use "jsonin.nz"
+use "util.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+fn refuse(io: IoCap, why: Str) -> Int {
+    eprint("patch: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+// The group, as `crates/nazm-cli/src/cli.rs` declares `nazm patch`.
+pub fn patch_group() -> Group {
+    let g = grp_new("patch", "Print a semantic patch plan, `nazm.patch/1`. Plans; never applies",
+            "Print a semantic patch plan, `nazm.patch/1`. Plans; never applies." + nl() + nl()
+            + "A validated rename (`rename`) or a compiler-owned fix (`fix`), as minimal exact-byte edits bound to the root's "
+            + "semantic snapshot, each edited file's digest and each edit's expected bytes, from the disk as it is now. Nothing "
+            + "is written: a patch is a proposal bound to exact source state, not permission to change a file. "
+            + "`docs/architecture.md` §7.31.")
+    let r = cli_command("patch rename", "Rename the entity declared or used at `--byte` of `--file`, by the language service's "
+            + "validated rename: locals and private definitions, and — within a declared workspace (N89) — exported ones, across "
+            + "every module under the source root",
+            "")
+    cli_required_option(r, "root", "ROOT", true, "The compilation's root module")
+    cli_required_option(r, "file", "FILE", true, "The file the position is in. It must be one the root's compilation loads")
+    let rb = cli_required_option(r, "byte", "BYTE", false, "The position, as a byte offset into `--file`")
+    cli_numeric(r, rb)
+    cli_required_option(r, "new-name", "NEW_NAME", false, "The new name: one identifier")
+    cli_flag(r, "", "json", "The one canonical compact serialisation. Without it, the same object indented", "")
+    cli_option(r, "", "source-root", "SOURCE_ROOT", true, "", false, "Measure every module's durable identity from this directory, as "
+            + "`nazm check --source-root` does", "")
+    grp_add(g, r)
+    let f = cli_command("patch fix", "Apply, as a plan, fix `--fix` of those the current diagnostics at `--byte` of `--file` carry, "
+            + "in the order the compiler attached them",
+            "")
+    cli_required_option(f, "root", "ROOT", true, "The compilation's root module")
+    cli_required_option(f, "file", "FILE", true, "The file the position is in. It must be one the root's compilation loads")
+    let fb = cli_required_option(f, "byte", "BYTE", false, "The position, as a byte offset into `--file`: a diagnostic's primary span there")
+    cli_numeric(f, fb)
+    let ff = cli_option(f, "", "fix", "FIX", false, "0", true, "Which of the fixes at that position", "")
+    cli_numeric_size(f, ff)
+    cli_flag(f, "", "json", "The one canonical compact serialisation. Without it, the same object indented", "")
+    cli_option(f, "", "source-root", "SOURCE_ROOT", true, "", false, "Measure every module's durable identity from this directory, as "
+            + "`nazm check --source-root` does", "")
+    grp_add(g, f)
+    let a = cli_command("patch apply", "Apply a `nazm.patch/1` plan to disk, all or nothing (N89): every file must hash to the plan's "
+            + "digest and hold each edit's expected bytes, or nothing is written and the differing file is named. Each file is written "
+            + "through a temporary file and a rename",
+            "")
+    cli_positional(a, "PLAN", true, false, true, "The plan, as `nazm patch rename|fix --json` printed it", "")
+    cli_option(a, "", "base", "BASE", true, "", false, "The directory the plan's paths are relative to: the source root it was planned in. "
+            + "The current directory by default", "")
+    grp_add(g, a)
+    g
+}
+
+// --- reading as `std::fs` does ----------------------------------------------------------------------
+
+// Why `fs::read_to_string` / `fs::read` of `path` fails, or "" where it does not (`utf8` true: also
+// when its bytes are not UTF-8).
+fn read_error(io: IoCap, path: Str, utf8: Bool) -> Str {
+    let st = bytes_new(32)
+    let s = os_stat(path, st)
+    if s < 0 { return ut_os_error(s) }
+    if bytes_read_le[Int](st, 8) == 1 { return "Is a directory (os error 21)" }
+    let h = os_open_read(path)
+    if os_status(h) < 0 { return ut_os_error(os_status(h)) }
+    os_close(h)
+    if utf8 && !ut_utf8_ok(read_file(path)) { return "stream did not contain valid UTF-8" }
+    ""
+}
+
+// --- apply ---------------------------------------------------------------------------------------------
+
+// Whether every component of `rel` is a name (`Component::Normal`): not rooted, not `.` first, no `..`.
+fn inside(rel: Str) -> Bool {
+    if str_len(rel) == 0 || str_byte(rel, 0) == 47 { return false }
+    let mut seen = false
+    let mut from = 0
+    for i in 0..str_len(rel) + 1 {
+        if i == str_len(rel) || str_byte(rel, i) == 47 {
+            let seg = str_slice(rel, from, i)
+            from = i + 1
+            if seg == "" { continue }
+            if seg == ".." { return false }
+            if seg == "." {
+                if !seen { return false }
+                continue
+            }
+            seen = true
+        }
+    }
+    seen
+}
+
+// A member of object `n` that is a string, or "" (and `ok` false) where it is not one.
+fn member_str(j: J, n: Int, key: Str) -> Str {
+    let m = j_get(j, n, key)
+    if j_kind(j, m) == 4 { j_str(j, m) } else { "" }
+}
+
+// An unsigned integer as `Value::as_u64` reads it: written as plain digits, in range.
+fn member_u64(j: J, n: Int, key: Str) -> Int {
+    let m = j_get(j, n, key)
+    if j_kind(j, m) != 3 { return 0 - 1 }
+    let t = j_str(j, m)
+    if str_len(t) == 0 || str_len(t) > 18 { return 0 - 1 }
+    if str_len(t) > 1 && str_byte(t, 0) == 48 { return 0 - 1 }
+    for i in 0..str_len(t) {
+        if str_byte(t, i) < 48 || str_byte(t, i) > 57 { return 0 - 1 }
+    }
+    j_int(j, m)
+}
+
+fn is_boundary(s: Str, at: Int) -> Bool {
+    if at == 0 || at == str_len(s) { return true }
+    if at > str_len(s) { return false }
+    let b = str_byte(s, at)
+    b < 128 || b >= 192
+}
+
+fn apply_refused(io: IoCap, text: Str) -> Int {
+    eprint("nazm patch apply: " + text + nl())
+    exit_with(1)
+    1
+}
+
+fn patch_apply(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let plan = cli_value(c, 0)
+    let base = if cli_present(c, 1) { cli_value(c, 1) } else { "." }
+    let why = read_error(io, plan, true)
+    if why != "" {
+        eprint("nazm patch apply: cannot read " + plan + ": " + why + nl())
+        exit_with(3)
+        return 3
+    }
+    let j = j_parse(read_file(plan))
+    if !j_ok(j) { refuse(io, "a plan that is not JSON, or that this port does not read as serde_json does (its error text is serde's)") }
+    let is_plan = j_kind(j, 0) == 6 && member_str(j, 0, "schema") == "nazm.patch/1" && member_str(j, 0, "status") == "available"
+    if !is_plan { return apply_refused(io, "not an available `nazm.patch/1` plan") }
+    let files = j_get(j, 0, "files")
+    // Everything is checked and computed before anything is written.
+    let paths = strs_new()
+    let texts = strs_new()
+    let mut f = if j_kind(j, files) == 5 { ints_get(j.first, files) } else { 0 - 1 }
+    while f >= 0 {
+        let rel = member_str(j, f, "path")
+        if !inside(rel) { return apply_refused(io, "refused: `" + rel + "` is not a path inside the base") }
+        let path = ut_join(base, rel)
+        if read_error(io, path, false) != "" { return apply_refused(io, "refused: `" + rel + "` cannot be read") }
+        let bytes = read_file(path)
+        if blake3_hex(bytes_from_str(bytes)) != member_str(j, f, "digest") {
+            return apply_refused(io, "refused: `" + rel + "` is not the file the plan was made from; nothing was written")
+        }
+        if !ut_utf8_ok(bytes) { return apply_refused(io, "refused: `" + rel + "` is not UTF-8") }
+        let edits = j_get(j, f, "edits")
+        let starts = ints_new()
+        let ends = ints_new()
+        let replacements = strs_new()
+        let mut e = if j_kind(j, edits) == 5 { ints_get(j.first, edits) } else { 0 - 1 }
+        while e >= 0 {
+            let start = member_u64(j, e, "start")
+            let end = member_u64(j, e, "end")
+            let ex = j_get(j, e, "expected")
+            let rp = j_get(j, e, "replacement")
+            if start < 0 || end < 0 || j_kind(j, ex) != 4 || j_kind(j, rp) != 4 {
+                return apply_refused(io, "refused: an edit of `" + rel + "` is malformed")
+            }
+            let held = start <= end && end <= str_len(bytes) && is_boundary(bytes, start) && is_boundary(bytes, end)
+            if !held || str_slice(bytes, start, end) != j_str(j, ex) {
+                return apply_refused(io, "refused: `" + rel + "` does not hold an edit's expected bytes")
+            }
+            // Back to front (stable), so each edit's offsets are still the planned ones.
+            let mut at = ints_len(starts)
+            while at > 0 && ints_get(starts, at - 1) < start { at -= 1 }
+            ints_push(starts, 0)
+            ints_push(ends, 0)
+            strs_push(replacements, "")
+            let mut k = ints_len(starts) - 1
+            while k > at {
+                ints_set(starts, k, ints_get(starts, k - 1))
+                ints_set(ends, k, ints_get(ends, k - 1))
+                strs_set(replacements, k, strs_get(replacements, k - 1))
+                k -= 1
+            }
+            ints_set(starts, at, start)
+            ints_set(ends, at, end)
+            strs_set(replacements, at, j_str(j, rp))
+            e = ints_get(j.next, e)
+        }
+        let mut out = bytes
+        for k in 0..ints_len(starts) {
+            let s = ints_get(starts, k)
+            let t = ints_get(ends, k)
+            if t > str_len(out) || !is_boundary(out, s) || !is_boundary(out, t) {
+                refuse(io, "edits that overlap (the reference's `replace_range` would panic)")
+            }
+            out = str_slice(out, 0, s) + strs_get(replacements, k) + str_slice(out, t, str_len(out))
+        }
+        strs_push(paths, path)
+        strs_push(texts, out)
+        f = ints_get(j.next, f)
+    }
+    for i in 0..strs_len(paths) {
+        let path = strs_get(paths, i)
+        let tmp = ut_with_extension(path, "nz.nazm-apply")
+        let mut failure = ""
+        if !ut_write_all(io, tmp, strs_get(texts, i)) {
+            failure = "could not be written"
+        } else {
+            let r = os_rename(tmp, path)
+            if r < 0 { failure = ut_os_error(r) }
+        }
+        if failure != "" {
+            os_unlink(tmp)
+            eprint("nazm patch apply: writing " + path + " failed: " + failure + nl())
+            exit_with(4)
+            return 4
+        }
+    }
+    let n = strs_len(paths)
+    print("nazm patch apply: " + int_to_str(n) + " file" + ut_plural(n) + " written" + nl())
+    0
+}
+
+// --- rename and fix -------------------------------------------------------------------------------------
+
+// The root is read as `open_from_disk` reads it; past that the plan needs the snapshot.
+fn patch_plan(io: IoCap, c: Cli, what: Str) -> Int {
+    cli_parse(io, c)
+    let root = cli_value(c, 0)
+    let why = read_error(io, root, true)
+    if why != "" {
+        eprint("nazm patch: " + root + ": " + why + nl())
+        exit_with(4)
+        return 4
+    }
+    refuse(io, "`patch " + what + "` plans bind to the root's semantic snapshot (digests of references, callers and provenance), which compiler/ does not publish")
+}
+
+// `nazm patch`, the group's own commands read from the argument after its name.
+pub fn patch_command(io: IoCap, g: Group) -> Int {
+    let i = grp_route(io, g, 1)
+    let c = grp_kid(g, i)
+    cli_from(c, 2)
+    if i == 2 { return patch_apply(io, c) }
+    patch_plan(io, c, if i == 0 { "rename" } else { "fix" })
+}
