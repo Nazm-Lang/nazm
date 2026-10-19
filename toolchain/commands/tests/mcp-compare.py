@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""One session against `nazm-mcp` and the port, compared, for tests/run.sh's `mcp` part.
+
+    mcp-compare.py protocol REF PORT REPO [ARGS...]    the scripted session of tests/mcp/protocol.txt, the
+                                                       documentation sections of the index it gets, then ARGS
+    mcp-compare.py file REF PORT REPO FILE [ARGS...]   the tools asked of FILE as the root: the snapshot, the
+                                                       diagnostics, the check, `nazm.semantic_delta` against
+                                                       the snapshot the reference gave and against two baselines
+                                                       made wrong, the first three diagnostics in full, a rename
+                                                       at six names and a fix at three diagnostics
+
+Prints `agree`, `refused: WHY` or `differ: WHERE` and, for a difference, the two lines on the lines after. The
+reference runs the session first; its answers (an id, a state, a snapshot) shape what the port is asked.
+Environment: NAZM_REF the reference's `nazm` (for the positions), NAZM_PORT the port's `nazm` (the
+program the port's server asks), NAZM_LIBRARY, KEEP a directory to leave a difference's two answers in.
+"""
+import json
+import os
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def session(program, root, extra, messages, repo, env):
+    data = ''.join(json.dumps(m, separators=(',', ':')) + '\n' for m in messages).encode()
+    p = subprocess.run([sys.executable, '-I', HERE + '/mcp-session.py', program, '--root', root] + extra,
+                       input=data, capture_output=True, cwd=repo, env=env, timeout=600)
+    lines = p.stdout.decode('utf-8', 'replace').split('\n')
+    return [l for l in lines if l], p.stderr.decode('utf-8', 'replace')
+
+
+class Ids:
+    def __init__(self):
+        self.n = 1
+
+    def req(self, method, params=None):
+        self.n += 1
+        m = {"jsonrpc": "2.0", "id": self.n, "method": method}
+        if params is not None:
+            m["params"] = params
+        return m
+
+    def call(self, name, arguments):
+        return self.req("tools/call", {"name": name, "arguments": arguments})
+
+
+def start():
+    return [{"jsonrpc": "2.0", "id": 1, "method": "initialize",
+             "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}},
+            {"jsonrpc": "2.0", "method": "notifications/initialized"}]
+
+
+def result_of(lines, id_):
+    for l in lines:
+        try:
+            m = json.loads(l)
+        except Exception:
+            continue
+        if isinstance(m, dict) and m.get('id') == id_:
+            return m
+    return None
+
+
+def compare(ref_out, port_out, port_err, label):
+    if 'exit 6' in port_out:
+        why = ''
+        for l in port_out:
+            if l.startswith('stderr: '):
+                why = l[len('stderr: '):].split('\n')[0]
+        return 'refused: ' + why[:150].replace('nazm-mcp: not carried: ', '')
+    if ref_out == port_out:
+        return 'agree'
+    for i in range(max(len(ref_out), len(port_out))):
+        a = ref_out[i] if i < len(ref_out) else '<none>'
+        b = port_out[i] if i < len(port_out) else '<none>'
+        if a != b:
+            k = 0
+            while k < min(len(a), len(b)) and a[k] == b[k]:
+                k += 1
+            keep = os.environ.get('KEEP')
+            if keep:
+                os.makedirs(keep, exist_ok=True)
+                tag = label.replace('/', '_')
+                open('%s/mcp-%s.want' % (keep, tag), 'w').write('\n'.join(ref_out) + '\n')
+                open('%s/mcp-%s.got' % (keep, tag), 'w').write('\n'.join(port_out) + '\n')
+            return 'differ: line %d at %d\n  ref  %s\n  port %s' % (i, k, a[max(0, k - 60):k + 160], b[max(0, k - 60):k + 160])
+    return 'agree'
+
+
+def run_both(ref, port, root, extra, messages, repo, env, label):
+    r, _ = session(ref, root, extra, messages, repo, env)
+    p, perr = session(port, root, extra, messages, repo, env)
+    return compare(r, p, perr, label)
+
+
+def protocol(ref, port, repo, extra, env):
+    ids = Ids()
+    msgs = start()
+    for line in open(HERE + '/mcp/protocol.txt'):
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        m = eval(line)
+        msgs.append(ids.req(m[0], m[1]))
+    # The documentation: the index, then three of its sections by id with its state.
+    probe = start() + [{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "nazm.docs_index", "arguments": {}}}]
+    r, _ = session(ref, 'examples/max.nz', extra, probe, repo, env)
+    idx = result_of(r, 2)
+    if idx and 'result' in idx:
+        sc = idx['result']['structuredContent']
+        state = sc.get('state')
+        docs = sc.get('documents', [])
+        for d in docs[:3]:
+            msgs.append(ids.call('nazm.docs_index', {'document': d['id']}))
+            for s in d.get('sections', [])[:2]:
+                msgs.append(ids.call('nazm.docs_section', {'id': s['id'], 'state': state}))
+        if docs:
+            msgs.append(ids.call('nazm.docs_section', {'id': docs[0]['sections'][0]['id'], 'state': 'stale'}))
+    return run_both(ref, port, 'examples/max.nz', extra, msgs, repo, env, 'protocol')
+
+
+def positions(repo, env, f):
+    ref_nazm = env['NAZM_REF']
+    check = subprocess.run([ref_nazm, 'check', '--json', '--no-cache', f], capture_output=True, cwd=repo, env=env)
+    p = subprocess.run([sys.executable, '-I', HERE + '/patch-positions.py', repo + '/' + f], input=check.stderr,
+                       capture_output=True, cwd=repo, env=env)
+    out = []
+    for l in p.stdout.decode('utf-8', 'replace').split('\n'):
+        w = l.split(' ')
+        if len(w) >= 2:
+            out.append(w)
+    return out
+
+
+def file_session(ref, port, repo, f, extra, env):
+    ids = Ids()
+    probe = start() + [ids.call('nazm.semantic_snapshot', {}), ids.call('nazm.diagnostics', {})]
+    r, _ = session(ref, f, extra, probe, repo, env)
+    snap = result_of(r, 2)
+    diag = result_of(r, 3)
+    ids = Ids()
+    msgs = start()
+    msgs.append(ids.call('nazm.semantic_snapshot', {}))
+    msgs.append(ids.call('nazm.diagnostics', {}))
+    msgs.append(ids.call('nazm.command_summary', {'operation': 'check'}))
+    if snap and 'result' in snap:
+        sc = snap['result']['structuredContent']
+        if sc.get('status') == 'available':
+            msgs.append(ids.call('nazm.semantic_delta', {'baseline': sc}))
+            defs = sc.get('definitions', [])
+            if defs:
+                t = json.loads(json.dumps(sc))
+                digests = t['definitions'][0]['digests']
+                named = [k for k in sorted(digests) if isinstance(digests[k], str)]
+                if named:
+                    digests[named[0]] = 'f' + digests[named[0]][1:]
+                    msgs.append(ids.call('nazm.semantic_delta', {'baseline': t}))
+                t = json.loads(json.dumps(sc))
+                t['definitions'][0]['identity'] = t['definitions'][0]['identity'].replace('::fn ', '::fn zz_')
+                msgs.append(ids.call('nazm.semantic_delta', {'baseline': t}))
+    msgs.append(ids.call('nazm.semantic_delta', {'baseline': {}}))
+    if diag and 'result' in diag:
+        sc = diag['result']['structuredContent']
+        if sc.get('status') == 'available':
+            state = sc.get('state', {}).get('source')
+            for d in sc.get('diagnostics', [])[:3]:
+                msgs.append(ids.call('nazm.diagnostic_detail', {'id': d['id'], 'state': state}))
+    verdicts = [run_both(ref, port, f, extra, msgs, repo, env, f)]
+    # The patches in a session of their own: a patch the port refuses must not hide what it answers of the rest.
+    msgs = start()
+    ids = Ids()
+    renames = fixes = 0
+    for w in positions(repo, env, f):
+        if w[0] == 'rename' and renames < 6 and len(w) >= 3:
+            renames += 1
+            msgs.append(ids.call('nazm.semantic_patch', {'operation': 'rename', 'file': os.path.basename(f), 'byte_offset': int(w[1]), 'new_name': w[2]}))
+        if w[0] == 'fix' and fixes < 3:
+            fixes += 1
+            msgs.append(ids.call('nazm.semantic_patch', {'operation': 'diagnostic_fix', 'file': os.path.basename(f), 'byte_offset': int(w[1]), 'fix': 0}))
+    if len(msgs) > 2:
+        verdicts.append(run_both(ref, port, f, extra, msgs, repo, env, f + '.patch'))
+    for v in verdicts:
+        if v.startswith('differ'):
+            return v
+    for v in verdicts:
+        if v.startswith('refused'):
+            return v
+    return 'agree'
+
+
+def main():
+    mode = sys.argv[1]
+    ref, port, repo = sys.argv[2], sys.argv[3], sys.argv[4]
+    env = dict(os.environ)
+    env['NAZM_EXE'] = env.get('NAZM_PORT', '')
+    if mode == 'protocol':
+        print(protocol(ref, port, repo, ['--docs', repo] + sys.argv[5:], env))
+    else:
+        print(file_session(ref, port, repo, sys.argv[5], ['--docs', repo] + sys.argv[6:], env))
+
+
+main()
