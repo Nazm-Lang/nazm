@@ -1,0 +1,29 @@
+# `nazm snapshot`, run in the fixture of run.sh (`fixture snapshot`): the packages and files of check/'s, mut.nz and baselines.
+--help
+-h
+--root
+--root a.nz
+--json --root a.nz
+--root a.nz --json
+--root b.nz
+--root w.nz
+--root m.nz
+--root s.nz
+--root mut.nz
+--root absent.nz
+--root sub
+--root app/src/main.nz
+--root lib/src/a.nz
+--root nopkg.nz
+--root broken
+--root app
+--root a.nz --source-root .
+--root a.nz --source-root sub
+--root a.nz --source-root nowhere
+--root app/src/main.nz --source-root app/src
+--bogus
+--root a.nz --root b.nz
+--root=a.nz
+--root=
+a.nz
+--root a.nz extra

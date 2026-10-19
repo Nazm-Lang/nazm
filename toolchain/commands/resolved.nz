@@ -1,0 +1,185 @@
+// A compilation's resolved units (`nazm.resolved/1`, `nazm_iface::resolved`, R5 design D24): for each module with a durable
+// key, the modules it imports and under what, the definitions it declares and every occurrence in its text of a declared
+// entity, each named by its durable identity — read from R2's facts: the reference index (`fx_ref_*`), the check keys and
+// interfaces the cache files a module under (`fx_check_keys`, `ck_interface_json`) and the syntax tree's `use`s.
+//
+// A module whose unit cannot be written — it has no key, an import has none, or an entity it names is declared where nothing is
+// keyed — has none, as the reference's cache keeps no entry for it; nor has a module that warns, or that writes a closure (the
+// cache keeps a module only when it checked clean and every closure's maker is checked with it). A module imported by two `use`s is refused: the graph keeps
+// one edge for both, and the facts do not say which `use` made it.
+
+use "@std/blake3"
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/package.nz"
+use "../../compiler/facts.nz"
+use "front.nz"
+use "snap.nz"
+
+fn pad12(n: Int) -> Str {
+    let t = int_to_str(n)
+    let mut z = ""
+    for i in 0..12 - str_len(t) { z = z + "0" }
+    z + t
+}
+
+// One entity's target as `DurableTarget` writes it, or "" where it has none (a local, a constant) and "!" where it is declared
+// where nothing is keyed.
+fn target_json(f: Facts, ents: Ents, e: Int) -> Str {
+    let kind = fx_ref_kind(f, e)
+    if kind == "local" || kind == "constant" { return "" }
+    if ints_get(ents.hasdef, e) != 1 { return "!" }
+    "{\"item\":" + json_str(strs_get(ents.def, e)) + ",\"member\":" + (if ints_get(ents.hasmem, e) == 1 { json_str(strs_get(ents.mem, e)) } else { "null" })
+            + ",\"kind\":" + json_str(kind) + "}"
+}
+
+// Module `m`'s imports, from the `use`s of its text and the graph's edges in the order they were made. "" and a reason in `why` where
+// the facts cannot say.
+fn imports_json(f: Facts, m: Int, hashes: Strs, why: Strs) -> Str {
+    let c = fx_checker(f)
+    let t = fx_tree(f)
+    let prog = fx_module_program(f, m)
+    let imps = sx_items(t, sx_field(t, prog, "imports"))
+    let out = strs_new()
+    let seen = strs_new()
+    if ints_len(imps) > ck_module_deps(c, m) {
+        strs_push(why, "a module that imports itself")
+        return ""
+    }
+    for k in 0..ints_len(imps) {
+        let node = ints_get(imps, k)
+        let ps = sx_field(t, node, "path_span")
+        let written = str_slice(fx_module_text(f, m), fx_start(f, ps), fx_end(f, ps))
+        let mut a = 0
+        let mut b = str_len(written)
+        while a < b && str_byte(written, a) == 34 { a += 1 }
+        while b > a && str_byte(written, b - 1) == 34 { b -= 1 }
+        let lit = str_slice(written, a, b)
+        for q in 0..strs_len(seen) {
+            if strs_get(seen, q) == lit {
+                strs_push(why, "a module imported by two `use`s")
+                return ""
+            }
+        }
+        strs_push(seen, lit)
+        let target = ck_module_dep(c, m, k)
+        let alias = sx_field(t, node, "alias")
+        let named = if sx_is_some(t, alias) { json_str(sx_name(t, sx_unwrap(t, alias), "name")) } else { "null" }
+        strs_push(out, "{\"written\":" + json_str(lit) + ",\"alias\":" + named + ",\"module\":" + json_str(fx_module_key(f, target)) + ",\"interface\":"
+                + (if strs_get(hashes, target) == "" { "null" } else { json_str(strs_get(hashes, target)) }) + "}")
+    }
+    "[" + str_join(out, ",") + "]"
+}
+
+// The units of every module, by module (`""` for one with none), each as one `nazm.resolved/1` line; `why` where the facts cannot say.
+pub fn rs_units(f: Facts, os: Str, arch: Str, why: Strs) -> Strs {
+    let c = fx_checker(f)
+    let keys = strs_new()
+    for m in 0..fx_modules(f) { strs_push(keys, fx_module_key(f, m)) }
+    let checks = fx_check_keys(f, os, arch)
+    let hashes = strs_new()
+    for m in 0..fx_modules(f) {
+        let json = ck_interface_json(c, m, keys)
+        strs_push(hashes, if json == "" { "" } else { blake3_hex(bytes_from_str(json)) })
+    }
+    let ents = ents_new(f)
+    let n = fx_ref_count(f)
+    let tj = strs_new()
+    for e in 0..n { strs_push(tj, target_json(f, ents, e)) }
+    // A module that warns is not kept as checked (L15): it has no unit, as one that is not clean has none.
+    let warned = ints_new()
+    for m in 0..fx_modules(f) { ints_push(warned, 0) }
+    let dd = fx_diags(f)
+    for i in 0..dg_len(dd) {
+        if dg_severity(dd, i) == "error" { continue }
+        let mut found = 0
+        if dg_file(dd, i) >= 0 {
+            found = dg_file(dd, i)
+        } else {
+            for m in 0..fx_modules(f) {
+                if fx_module_base(f, m) <= dg_start(dd, i) { found = m }
+            }
+        }
+        ints_set(warned, found, 1)
+    }
+    // A closure exists only while its maker's body is checked, so a module that writes one files no entry (declined).
+    for i in 0..ck_fn_count(c) {
+        if ck_fn_closure(c, i) && ck_fn_module(c, i) >= 0 && ck_fn_module(c, i) < fx_modules(f) { ints_set(warned, ck_fn_module(c, i), 1) }
+    }
+    let out = strs_new()
+    for m in 0..fx_modules(f) {
+        if strs_get(checks, m) == "-" || strs_get(hashes, m) == "" || ints_get(warned, m) == 1 {
+            strs_push(out, "")
+            continue
+        }
+        let base = fx_module_base(f, m)
+        let end = base + str_len(fx_module_text(f, m))
+        let defs = strs_new()
+        let occ = strs_new()
+        let mut writable = true
+        for e in 0..n {
+            let ds = fx_ref_decl_start(f, e)
+            let here = ds >= base && ds < end
+            let mut used = false
+            for u in 0..fx_ref_use_count(f, e) {
+                let a = fx_ref_use_start(f, e, u)
+                if a >= base && a < end { used = true }
+            }
+            if !here && !used { continue }
+            let tg = strs_get(tj, e)
+            if tg == "" { continue }
+            if tg == "!" {
+                // Declared nowhere the facts' index holds (a field a constant's initializer names): its definition is not said.
+                if ds < 0 { strs_push(why, "an entity the facts' index has no declaration of (a " + fx_ref_kind(f, e) + " named in a constant's initializer)") }
+                writable = false
+                continue
+            }
+            // Sorted by (start, end, target): the item, then the member (none first), then the kind.
+            let tail = ints_get(ents.hasdef, e)
+            if here {
+                let s = ds - base
+                let x = fx_ref_decl_end(f, e) - base
+                strs_push(defs, pad12(s) + pad12(x) + strs_get(ents.def, e) + str_from_byte(0) + (if ints_get(ents.hasmem, e) == 1 { "1" + strs_get(ents.mem, e) } else { "0" })
+                        + str_from_byte(0) + fx_ref_kind(f, e) + str_from_byte(1) + "{\"start\":" + int_to_str(s) + ",\"end\":" + int_to_str(x) + ",\"target\":" + tg + "}")
+            }
+            for u in 0..fx_ref_use_count(f, e) {
+                let a = fx_ref_use_start(f, e, u)
+                if a >= base && a < end {
+                    let s = a - base
+                    let x = fx_ref_use_end(f, e, u) - base
+                    strs_push(occ, pad12(s) + pad12(x) + strs_get(ents.def, e) + str_from_byte(0) + (if ints_get(ents.hasmem, e) == 1 { "1" + strs_get(ents.mem, e) } else { "0" })
+                            + str_from_byte(0) + fx_ref_kind(f, e) + str_from_byte(1) + "{\"start\":" + int_to_str(s) + ",\"end\":" + int_to_str(x) + ",\"target\":" + tg + "}")
+                }
+            }
+        }
+        if !writable {
+            strs_push(out, "")
+            continue
+        }
+        let sd = sn_sort(defs)
+        let so = sn_sort(occ)
+        let dj = strs_new()
+        for i in 0..strs_len(sd) { strs_push(dj, after_mark(strs_get(sd, i))) }
+        let oj = strs_new()
+        for i in 0..strs_len(so) {
+            if i > 0 && strs_get(so, i) == strs_get(so, i - 1) { continue }
+            strs_push(oj, after_mark(strs_get(so, i)))
+        }
+        let imports = imports_json(f, m, hashes, why)
+        if imports == "" {
+            strs_push(out, "")
+            continue
+        }
+        strs_push(out, "{\"schema\":\"nazm.resolved/1\",\"module\":" + json_str(strs_get(keys, m)) + ",\"source\":" + json_str(fx_source_fingerprint(f, m, os, arch))
+                + ",\"imports\":" + imports + ",\"definitions\":[" + str_join(dj, ",") + "],\"occurrences\":[" + str_join(oj, ",") + "]}")
+    }
+    out
+}
+
+// The part of a sort row after its mark (byte 1).
+fn after_mark(row: Str) -> Str {
+    let mut cut = 0
+    while str_byte(row, cut) != 1 { cut += 1 }
+    str_slice(row, cut + 1, str_len(row))
+}

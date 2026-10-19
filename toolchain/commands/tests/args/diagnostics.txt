@@ -1,0 +1,28 @@
+# `nazm diagnostics`, run in the fixture of run.sh (`fixture diagnostics`): b.nz and mut.nz have an error, mut.nz a fix.
+--help
+-h
+--root
+--root a.nz
+--root b.nz
+--json --root b.nz
+--root w.nz
+--root m.nz
+--root s.nz
+--root absent.nz
+--root sub
+--root mut.nz
+--root app/src/main.nz
+--root lib/src/a.nz
+--root nopkg.nz
+--root b.nz --detail N0300@b.nz:37-38#0
+--root b.nz --state dc6fb9bba73feca87fb25fe450568b9ee7e921d436a9f165ca2e52d98aac35fc
+--root b.nz --detail N0300@b.nz:37-38#0 --state dc6fb9bba73feca87fb25fe450568b9ee7e921d436a9f165ca2e52d98aac35fc
+--json --root b.nz --detail N0300@b.nz:37-38#0 --state dc6fb9bba73feca87fb25fe450568b9ee7e921d436a9f165ca2e52d98aac35fc
+--root b.nz --detail N0300@b.nz:37-38#0 --state 00
+--root b.nz --detail nope --state dc6fb9bba73feca87fb25fe450568b9ee7e921d436a9f165ca2e52d98aac35fc
+--root mut.nz --detail N0310@mut.nz:38-39#0 --state d86c113b6a953bed81b84e8a7d3b1c653c8df0f8f055a20fc3035fe30cd3be5e
+--json --root mut.nz --detail N0310@mut.nz:38-39#0 --state d86c113b6a953bed81b84e8a7d3b1c653c8df0f8f055a20fc3035fe30cd3be5e
+--root absent.nz --detail x --state y
+--root b.nz --source-root .
+--root app/src/main.nz --source-root app/src
+--bogus

@@ -65,6 +65,9 @@ pub struct Cli {
     grp: Ints,
     conf_a: Ints,
     conf_b: Ints,
+    // `requires`: the first argument asks for the second, each a pair.
+    req_a: Ints,
+    req_b: Ints,
     // Where the command's own arguments begin: after `nazm CMD`, the argument after the command.
     first: Ints,
 }
@@ -74,7 +77,7 @@ pub fn cli_command(name: Str, about: Str, long_about: Str) -> Cli {
             value: strs_new(), required: ints_new(), multiple: ints_new(), path: ints_new(), default: strs_new(),
             has_default: ints_new(), help: strs_new(), long_help: strs_new(), order: ints_new(), explicit: ints_new(),
             val_arg: ints_new(), val_text: strs_new(), pend: ints_new(), pend_vals: strs_new(), delim: strs_new(), numeric: ints_new(), grp: ints_new(),
-            conf_a: ints_new(), conf_b: ints_new(), first: ints_new())
+            conf_a: ints_new(), conf_b: ints_new(), req_a: ints_new(), req_b: ints_new(), first: ints_new())
 }
 
 fn cli_add(c: Cli, kind: Int, short: Str, long: Str, value: Str, required: Bool, multiple: Bool, path: Bool,
@@ -167,6 +170,13 @@ fn cli_group_text(c: Cli) -> Str {
 pub fn cli_conflicts(c: Cli, a: Int, b: Int) -> Int {
     ints_push(c.conf_a, a)
     ints_push(c.conf_b, b)
+    0
+}
+
+// `a` requires `b` (`requires`): given without it, `b` is missing as a required argument is.
+pub fn cli_requires(c: Cli, a: Int, b: Int) -> Int {
+    ints_push(c.req_a, a)
+    ints_push(c.req_b, b)
     0
 }
 
@@ -947,7 +957,11 @@ pub fn cli_parse(io: IoCap, c: Cli) -> Int {
     // `validate_required`.
     let missing = ints_new()
     for a in 0..ints_len(c.kind) {
-        if cli_is_required(c, a) && ints_get(c.explicit, a) == 0 { ints_push(missing, a) }
+        let mut asked = false
+        for k in 0..ints_len(c.req_a) {
+            if ints_get(c.req_b, k) == a && ints_get(c.explicit, ints_get(c.req_a, k)) == 1 { asked = true }
+        }
+        if (cli_is_required(c, a) || asked) && ints_get(c.explicit, a) == 0 { ints_push(missing, a) }
     }
     let mut group_missing = ints_len(c.grp) > 0
     for i in 0..ints_len(c.grp) {

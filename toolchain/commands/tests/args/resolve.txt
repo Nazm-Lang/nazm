@@ -1,0 +1,22 @@
+# `nazm resolve`, run in the fixture of run.sh (`fixture resolve`): check's files and packages.
+--help
+-h
+''
+a.nz
+b.nz
+w.nz
+m.nz
+s.nz
+absent.nz
+sub
+app/src/main.nz
+lib/src/a.nz
+nopkg.nz
+broken
+app
+a.nz --source-root .
+a.nz --source-root sub
+a.nz --source-root nowhere
+--source-root
+a.nz b.nz
+--bogus a.nz

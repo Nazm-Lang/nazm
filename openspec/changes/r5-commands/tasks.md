@@ -123,9 +123,20 @@
       D19; 3,342 inputs, `--hash` too: 3,342 agree, 0 differ, 0 refused; 28 command lines agree) and
       `docs` (D20; every one of the 1,498 sections by id and every form of the index: 1,652 runs
       agree; 13 corpora each with one thing wrong: 39 runs agree; 36 command lines agree) and
-      `patch apply` (7.2). Not ported: `context`, `snapshot`, `delta`, `diagnostics`, `resolve`,
-      `references`, `inspect`, `repo` and the MCP server, which need the reference index, the call
-      graph, provenance, Core IR/MIR and the language service's diagnostic ids from `compiler/` (D20)
+      `patch` (7.2) and, since R2 publishes the reference index, the call graph, provenance and the
+      diagnostic ids (design D24, R5d), `snapshot`, `delta`, `diagnostics`, `resolve` and `references`:
+      `run.sh agent` over 3,399 inputs, 2,954 agree, 0 differ, 445 refused; by command, runs agree / differ /
+      refused: `snapshot` 3,399 (compact and indented each) 3,277 / 0 / 122, `diagnostics` 3,399 (each form)
+      2,987 / 0 / 412, `diagnostics --detail` 2,094 1,182 / 0 / 912, `delta` against the reference's snapshot and
+      two baselines made wrong 3,396 each 3,279 / 0 / 117, `resolve` 3,393 / 0 / 6, `references` of the first
+      three definitions 6,152 runs 6,135 / 0 / 17; `tests/args/{snapshot,delta,diagnostics,resolve,references}.txt`
+      agree (the whole of `tests/args/`: 966 of 981 command lines agree, 0 differ, 15 refused). `resolve` and
+      `references` equal the reference's with a cold check cache, as they are asked in the comparison: the
+      reference's answer is the cache's, which keeps no module that warns, writes a closure or has no durable
+      key. Not ported: `context` (a function's `effects`: what it requires, what a caller must assume and
+      the first call that requires each, are not published), `inspect` (MIR digests and the backend's static
+      tables) and `repo` (`nazm-repo`: the map and the task planner, 3.8k lines over the repository's manifests,
+      catalogue and schemas)
 
 ## 10. Packages
 - [x] 10.1 `lock`, `update`, `publish`, `yank`, `attest` (design D21, 2026-10-19): `pkg.nz`, `toml.nz`,
