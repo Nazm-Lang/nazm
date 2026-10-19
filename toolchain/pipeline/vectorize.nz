@@ -1,0 +1,201 @@
+// Vectorisation (N66, `docs/internal/architecture.md` §7.68), as a native build does it: one loop
+// idiom recognised in Core IR and replaced by `ints_sum_from`, every other loop left as it is — a
+// port of `crates/nazm-service/src/vectorize.rs` (`rewrite`) over the document `cir.nz` reads, for
+// `pipeline build` (R8 slice 4; `nazm lir --ops`, which R3 is compared with, does not rewrite).
+//
+// The idiom: a counter from `0`, compared with `ints_len(v)`, whose body is exactly
+// `s = s + ints_get(v, i); i = i + 1;`. The loop statement becomes a block of
+// `s = ints_sum_from(s, v); i = ints_len(v);`, the call at the addition's span.
+
+use "cir.nz"
+use "@std/json"
+
+fn vz_local(c: Cir, e: Int) -> Int {
+    if e < 0 || op(c, e) != "local" { return 0 - 1 }
+    ival(c, e, "local")
+}
+
+// The value of an `Int` constant `e` reads, or -1 with `ok` false.
+fn vz_int_is(c: Cir, consts: Int, e: Int, want: Int) -> Bool {
+    if e < 0 || op(c, e) != "const" { return false }
+    let k = at(c, consts, ival(c, e, "const"))
+    if k < 0 || sval(c, k, "type") != "Int" { return false }
+    let v = kid(c, k, "value")
+    v >= 0 && json_kind(c.doc, v) == "number" && int_of(c, v) == want
+}
+
+fn vz_writes(c: Cir, s: Int, l: Int) -> Bool {
+    (op(c, s) == "let" || op(c, s) == "assign") && ival(c, s, "local") == l
+}
+
+// A new local read in the document.
+fn vz_read(c: Cir, l: Int, ty: Str, at_: Str) -> Int {
+    let keys = strs_new()
+    let vals = ints_new()
+    strs_push(keys, "op")
+    ints_push(vals, json_add_str(c.doc, "local"))
+    strs_push(keys, "local")
+    ints_push(vals, json_add_int(c.doc, l))
+    strs_push(keys, "type")
+    ints_push(vals, json_add_str(c.doc, ty))
+    strs_push(keys, "at")
+    ints_push(vals, json_add_str(c.doc, at_))
+    json_add_object(c.doc, keys, vals)
+}
+
+fn vz_builtin(c: Cir, name: Str, args: Ints, at_: Str, callee_at: Str) -> Int {
+    let keys = strs_new()
+    let vals = ints_new()
+    strs_push(keys, "op")
+    ints_push(vals, json_add_str(c.doc, "builtin"))
+    strs_push(keys, "builtin")
+    ints_push(vals, json_add_str(c.doc, name))
+    strs_push(keys, "type_args")
+    ints_push(vals, json_add_array(c.doc, ints_new()))
+    strs_push(keys, "args")
+    ints_push(vals, json_add_array(c.doc, args))
+    strs_push(keys, "type")
+    ints_push(vals, json_add_str(c.doc, "Int"))
+    strs_push(keys, "at")
+    ints_push(vals, json_add_str(c.doc, at_))
+    if callee_at != "" {
+        strs_push(keys, "callee_at")
+        ints_push(vals, json_add_str(c.doc, callee_at))
+    }
+    json_add_object(c.doc, keys, vals)
+}
+
+fn vz_assign(c: Cir, l: Int, value: Int, at_: Str) -> Int {
+    let keys = strs_new()
+    let vals = ints_new()
+    strs_push(keys, "op")
+    ints_push(vals, json_add_str(c.doc, "assign"))
+    strs_push(keys, "local")
+    ints_push(vals, json_add_int(c.doc, l))
+    strs_push(keys, "path")
+    ints_push(vals, json_add_array(c.doc, ints_new()))
+    strs_push(keys, "value")
+    ints_push(vals, value)
+    strs_push(keys, "ends")
+    ints_push(vals, json_add_str(c.doc, "falls-through"))
+    strs_push(keys, "at")
+    ints_push(vals, json_add_str(c.doc, at_))
+    json_add_object(c.doc, keys, vals)
+}
+
+// The replacement of the loop statement `stmts[k]` of a block, or -1 where it is not the idiom.
+fn vz_idiom(c: Cir, consts: Int, stmts: Int, k: Int) -> Int {
+    let lp = at(c, stmts, k)
+    let cond = kid(c, lp, "cond")
+    if cond < 0 || op(c, cond) != "<" { return 0 - 1 }
+    let i = vz_local(c, kid(c, cond, "lhs"))
+    let rhs = kid(c, cond, "rhs")
+    if i < 0 || rhs < 0 || op(c, rhs) != "builtin" || sval(c, rhs, "builtin") != "ints_len" { return 0 - 1 }
+    let vexpr = at(c, kid(c, rhs, "args"), 0)
+    let v = vz_local(c, vexpr)
+    if v < 0 { return 0 - 1 }
+    // The counter's last write before the loop, in this block, sets it to 0; nothing after it but
+    // plain bindings of other locals to a constant or a local.
+    let mut w = 0 - 1
+    for j in 0..k {
+        if vz_writes(c, at(c, stmts, j), i) { w = j }
+    }
+    if w < 0 || !vz_int_is(c, consts, kid(c, at(c, stmts, w), "value"), 0) { return 0 - 1 }
+    for j in w + 1..k {
+        let s = at(c, stmts, j)
+        if op(c, s) != "let" && op(c, s) != "assign" { return 0 - 1 }
+        if ival(c, s, "local") == i { return 0 - 1 }
+        let val = op(c, kid(c, s, "value"))
+        if val != "const" && val != "local" { return 0 - 1 }
+    }
+    let body = kid(c, lp, "body")
+    let bs = kid(c, body, "stmts")
+    if count(c, bs) != 2 || kid(c, body, "tail") >= 0 { return 0 - 1 }
+    let a1 = at(c, bs, 0)
+    let a2 = at(c, bs, 1)
+    if op(c, a1) != "assign" || op(c, a2) != "assign" { return 0 - 1 }
+    if count(c, kid(c, a1, "path")) != 0 || count(c, kid(c, a2, "path")) != 0 { return 0 - 1 }
+    let s = ival(c, a1, "local")
+    if ival(c, a2, "local") != i || s == i || s == v { return 0 - 1 }
+    let add = kid(c, a1, "value")
+    if add < 0 || op(c, add) != "+" { return 0 - 1 }
+    let acc = kid(c, add, "lhs")
+    let get = kid(c, add, "rhs")
+    if get < 0 || op(c, get) != "builtin" || sval(c, get, "builtin") != "ints_get" { return 0 - 1 }
+    let gargs = kid(c, get, "args")
+    if vz_local(c, acc) != s || vz_local(c, at(c, gargs, 0)) != v || vz_local(c, at(c, gargs, 1)) != i { return 0 - 1 }
+    let step = kid(c, a2, "value")
+    if step < 0 || op(c, step) != "+" || vz_local(c, kid(c, step, "lhs")) != i || !vz_int_is(c, consts, kid(c, step, "rhs"), 1) {
+        return 0 - 1
+    }
+    let vty = sval(c, vexpr, "type")
+    let sum_args = ints_new()
+    ints_push(sum_args, vz_read(c, s, "Int", sval(c, acc, "at")))
+    ints_push(sum_args, vz_read(c, v, vty, sval(c, get, "at")))
+    let sum = vz_builtin(c, "ints_sum_from", sum_args, sval(c, add, "at"), sval(c, get, "callee_at"))
+    let len_args = ints_new()
+    ints_push(len_args, vz_read(c, v, vty, sval(c, rhs, "at")))
+    let len = vz_builtin(c, "ints_len", len_args, sval(c, rhs, "at"), if sval(c, get, "callee_at") != "" { sval(c, rhs, "at") } else { "" })
+    let stmts2 = ints_new()
+    ints_push(stmts2, vz_assign(c, s, sum, sval(c, add, "at")))
+    ints_push(stmts2, vz_assign(c, i, len, sval(c, step, "at")))
+    let bkeys = strs_new()
+    let bvals = ints_new()
+    strs_push(bkeys, "ends")
+    ints_push(bvals, json_add_str(c.doc, "falls-through"))
+    strs_push(bkeys, "owns")
+    ints_push(bvals, json_add_array(c.doc, ints_new()))
+    strs_push(bkeys, "stmts")
+    ints_push(bvals, json_add_array(c.doc, stmts2))
+    strs_push(bkeys, "tail")
+    ints_push(bvals, json_add_null(c.doc))
+    strs_push(bkeys, "at")
+    ints_push(bvals, json_add_str(c.doc, sval(c, lp, "at")))
+    let block = json_add_object(c.doc, bkeys, bvals)
+    let skeys = strs_new()
+    let svals = ints_new()
+    strs_push(skeys, "op")
+    ints_push(svals, json_add_str(c.doc, "block"))
+    strs_push(skeys, "body")
+    ints_push(svals, block)
+    strs_push(skeys, "ends")
+    ints_push(svals, json_add_str(c.doc, "falls-through"))
+    json_add_object(c.doc, skeys, svals)
+}
+
+fn vz_block(c: Cir, consts: Int, b: Int) -> Int {
+    if b < 0 { return 0 }
+    let stmts = kid(c, b, "stmts")
+    for k in 0..count(c, stmts) {
+        let s = at(c, stmts, k)
+        let o = op(c, s)
+        if o == "loop" {
+            let r = vz_idiom(c, consts, stmts, k)
+            if r >= 0 {
+                // The statement replaced in place: the array's element `k` names the new node.
+                ints_set(c.doc.kids, vec_get(c.doc.nodes, stmts).first + k, r)
+            } else {
+                vz_block(c, consts, kid(c, s, "body"))
+            }
+        } else if o == "if" {
+            vz_block(c, consts, kid(c, s, "then"))
+            vz_block(c, consts, kid(c, s, "else"))
+        } else if o == "match" {
+            let arms = kid(c, s, "arms")
+            for a in 0..count(c, arms) { vz_block(c, consts, kid(c, at(c, arms, a), "body")) }
+        } else if o == "block" || o == "scope" {
+            vz_block(c, consts, kid(c, s, "body"))
+        }
+    }
+    0
+}
+
+/// Every summation idiom of every function's body rewritten in place (`vectorize::rewrite`).
+pub fn vectorize(c: Cir) -> Int ! {} {
+    let fs = kid(c, json_root(c.doc), "functions")
+    for i in 0..count(c, fs) {
+        let f = at(c, fs, i)
+        if kid(c, f, "body") >= 0 { vz_block(c, kid(c, f, "consts"), kid(c, f, "body")) }
+    }
+    0
+}

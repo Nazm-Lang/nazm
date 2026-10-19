@@ -354,6 +354,22 @@ builds every program with stage *s−1*'s `nazm build --backend nazm --no-cache 
 `grep` for one thread, `clang -c`, `cc`) is gone. The fixpoint compares the executables; the Core IR
 check runs the last stage's `fe --coredoc-sources` beside the seed's `core-ir --with-sources`.
 
+### Slice 4 — the evidence
+
+- **The summation rewrite.** The first run found two programs (`tests/compat/v1/run/stdlib.nz`,
+  `compiler/conformance/sequences.nz`) whose objects differed: the Rust build rewrites the summation
+  idiom in Core IR before MIR (`nazm_service::vectorize`, N66) and `nazm lir --ops`, which R3 was
+  compared with, does not. `toolchain/pipeline/vectorize.nz` ports it; `pipeline build` applies it.
+- **The comparison**, `toolchain/commands/tests/build.sh` on the macOS host (one `host-run` at a
+  time; the reference's `nzcg` through `host-run` too), 2026-10-20: 123 inputs
+  (`tests/compat/v1/{run,trap,refuse,check}`, `compiler/conformance/`,
+  `toolchain/codegen/tests/programs/`) × 6 modes (`exe`, `heap` with `--heap-limit 64M`, `objects`,
+  `x86` and `windows` with `--objects`, `cached` built twice over one object store): **738 agree, 0
+  differ, 0 refused** — executables, every object and `link.txt`, standard output and error and
+  the status byte for byte, the refusals and check failures with their diagnostics included.
+  Largest host-run peak (the driver with its stages, and the reference's `nzcg`): 77 MiB; no
+  withdrawal condition.
+
 ## Slice 1 — the evidence
 
 - The checkout's `nazm check` of `toolchain/interp/main.nz` and `toolchain/harness/check/main.nz`:

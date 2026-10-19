@@ -39,10 +39,15 @@
 ## 4. Slice 4 — `nazm build` in Nazm: the driver
 - [x] 4.1 Design (Opus): one program or `libexec/` children; the object cache; the counted heap in
       the LIR; the one-thread decision; linking per target (`design.md`, *Slice 4*, S4.1–S4.7)
-- [ ] 4.2 `build` group 1 (`design.md`) for the macOS triples, Windows x86_64 and the internal Linux
+- [x] 4.2 `build` group 1 (`design.md`) for the macOS triples, Windows x86_64 and the internal Linux
       one; compared with the Rust `build --backend nazm` on the corpus: objects with `--objects`,
-      the executables' behaviour
+      the executables' behaviour (`toolchain/commands/build.nz`; `nazm-pipeline build`/`put` and
+      the summation rewrite, `toolchain/pipeline/vectorize.nz`; `toolchain/commands/tests/build.sh`:
+      see *Slice 4 — the evidence* in `design.md`)
 - [ ] 4.3 `selfbuild.sh` builds through the stage's `nazm build` instead of its glue
+- [ ] 4.4 Left by 4.2: the runtime's units through the object store (clang's `-###` probe, R3's
+      keys) and the user cache for shared units; `build --help` and clap's usage errors; Rust's
+      exact refusal texts for the targets it names
 
 ## 5. Slice 5 — the LLVM path
 - [ ] 5.1 LIR → LLVM IR text (`nazm-lir`'s `op/llvm.rs`, `op/soa.rs`, `debug.rs`), byte for byte

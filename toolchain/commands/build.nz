@@ -1,0 +1,1017 @@
+// `nazm build`, written in Nazm: the driver (R8 slice 4, `openspec/changes/r8-cut-over/design.md`,
+// *Slice 4*, S4.1–S4.7).
+//
+// `nazm build --backend nazm [OPTIONS] FILE`, run by the dispatcher (`nazm.nz`). A port of
+// `crates/nazm-cli/src/build/` for the flags of group 1 on Nazm's own code generator:
+//
+//   the front end   in process, as `nazm check` runs it (R2's facts, `front.nz`): the diagnostics
+//                   as the Rust build writes them, then the Core IR document to the working
+//                   directory, and the facts let go;
+//   the pipeline    a stage, `nazm-pipeline build` (R3): every unit's LIR with the heap's renaming,
+//                   the Nazm backend's runtime units and the plan;
+//   the generator   a stage, `nzcg` (R9), once over every unit;
+//   clang           the runtime's units, and the link — or `--objects DIR` and `link.txt`.
+//
+// The stages are found by `NAZM_PIPELINE` and `NAZM_NZCG`, or in the directory `NAZM_LIBEXEC`
+// names; the standard library by `NAZM_LIBRARY`. Each stage is admitted by `host-run`'s checks
+// before it starts (the counted heap linked, one heap limit of at most 2 GiB), the stages run one
+// at a time, and each one's peak is held to `host-run`'s withdrawal conditions (design S4.2).
+//
+// What this port does not carry — the LLVM backend (the default), Cranelift, the flags of groups
+// 2–4, a package's build, `--help` and the usage errors — it says so on standard error and exits 6
+// before writing anything (R5's convention). Without `--no-cache` each unit's object is looked up in
+// the project's object store by its key and only the misses are generated, then filed (design
+// S4.5); the runtime's units are compiled by clang every time.
+
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/package.nz"
+use "../../compiler/facts.nz"
+use "../../compiler/facts-core.nz"
+use "front.nz"
+use "util.nz"
+use "@std/file"
+
+fn nl() -> Str { str_from_byte(10) }
+
+// What this port does not carry: said on standard error, status 6.
+fn bd_refuse(io: IoCap, why: Str) -> Int {
+    eprint("nazm: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+fn bd_fail(io: IoCap, text: Str, code: Int) -> Int {
+    eprint(text + nl())
+    exit_with(code)
+    0
+}
+
+// --- the command line -------------------------------------------------------------------------
+
+struct Opts {
+    file: Str,
+    out: Str,
+    json: Bool,
+    target: Str,
+    objects: Str,
+    links: Strs,
+    no_cache: Bool,
+    heap: Int,
+    stack: Int,
+    deny: Bool,
+    backend: Str,
+}
+
+// `--stack-size` and `--heap-limit`'s sizes: bytes, or a number with `K`, `M` or `G`; -1 for one
+// that is not a size.
+fn bd_size(raw: Str) -> Int {
+    let n = str_len(raw)
+    if n == 0 { return 0 - 1 }
+    let last = str_byte(raw, n - 1)
+    let mut unit = 1
+    let mut digits = raw
+    if last == 75 || last == 107 { unit = 1024 }
+    if last == 77 || last == 109 { unit = 1048576 }
+    if last == 71 || last == 103 { unit = 1073741824 }
+    if unit > 1 { digits = str_slice(raw, 0, n - 1) }
+    if str_len(digits) == 0 || str_len(digits) > 12 { return 0 - 1 }
+    let mut v = 0
+    for i in 0..str_len(digits) {
+        let b = str_byte(digits, i)
+        if b < 48 || b > 57 { return 0 - 1 }
+        v = v * 10 + (b - 48)
+    }
+    v * unit
+}
+
+// The flags of `nazm build` this port does not carry, by group (design, *`nazm build`'s flags*).
+fn bd_later(name: Str) -> Bool {
+    name == "emit-ir" || name == "opt-level" || name == "debug" || name == "layout" || name == "release"
+            || name == "build-report" || name == "summary-json" || name == "lib" || name == "shared"
+            || name == "runtime" || name == "locked" || name == "profile" || name == "provenance"
+            || name == "attest-with" || name == "sbom" || name == "timings" || name == "features"
+            || name == "function" || name == "harness" || name == "board" || name == "stack-watermark"
+}
+
+fn bd_takes_value(name: Str) -> Bool {
+    name == "out" || name == "target" || name == "objects" || name == "link" || name == "heap-limit"
+            || name == "stack-size" || name == "backend"
+}
+
+fn bd_parse(io: IoCap, from: Int) -> Opts {
+    let mut o = Opts(file: "", out: "", json: false, target: "", objects: "", links: strs_new(), no_cache: false,
+            heap: 0 - 1, stack: 0 - 1, deny: false, backend: "llvm")
+    let mut has_file = false
+    let mut k = from
+    let mut rest = false
+    let mut has_out = false
+    let mut has_objects = false
+    while k < args_count() {
+        let a = arg(k)
+        k += 1
+        if rest || !ut_starts(a, "-") || a == "-" {
+            if has_file { bd_refuse(io, "`nazm build` with arguments after the file (the usage errors are not ported)") }
+            o.file = a
+            has_file = true
+        } else if a == "--" {
+            rest = true
+        } else {
+            let mut name = ""
+            let mut value = ""
+            let mut has_value = false
+            if a == "-o" {
+                name = "out"
+            } else if ut_starts(a, "-o") {
+                name = "out"
+                value = str_slice(a, 2, str_len(a))
+                has_value = true
+            } else if ut_starts(a, "--") {
+                let body = str_slice(a, 2, str_len(a))
+                let eq = ut_find(body, "=", 0)
+                if eq >= 0 {
+                    name = str_slice(body, 0, eq)
+                    value = str_slice(body, eq + 1, str_len(body))
+                    has_value = true
+                } else {
+                    name = body
+                }
+            } else {
+                bd_refuse(io, "`nazm build " + a + "` (the short flags and the usage errors are not ported)")
+            }
+            if name == "help" { bd_refuse(io, "`nazm build --help` (the help text is not ported)") }
+            if bd_later(name) { bd_refuse(io, "`nazm build --" + name + "` (R8 slice 5 or 6)") }
+            if bd_takes_value(name) {
+                if !has_value {
+                    if k >= args_count() { bd_refuse(io, "`--" + name + "` without its value (the usage errors are not ported)") }
+                    value = arg(k)
+                    k += 1
+                }
+                if name == "out" {
+                    o.out = value
+                    has_out = true
+                } else if name == "target" {
+                    o.target = value
+                } else if name == "objects" {
+                    o.objects = value
+                    has_objects = true
+                } else if name == "link" {
+                    strs_push(o.links, value)
+                } else if name == "backend" {
+                    o.backend = value
+                } else {
+                    let n = bd_size(value)
+                    if name == "heap-limit" {
+                        if n < 65536 || n > 1099511627776 { bd_refuse(io, "`--heap-limit " + value + "` (the usage errors are not ported)") }
+                        o.heap = n
+                    } else {
+                        if n < 65536 || n > 4294967296 { bd_refuse(io, "`--stack-size " + value + "` (the usage errors are not ported)") }
+                        o.stack = n
+                    }
+                }
+            } else if has_value {
+                bd_refuse(io, "`" + a + "` (the usage errors are not ported)")
+            } else if name == "json" {
+                o.json = true
+            } else if name == "no-cache" {
+                o.no_cache = true
+            } else if name == "deny-warnings" {
+                o.deny = true
+            } else {
+                bd_refuse(io, "`nazm build " + a + "` (the usage errors are not ported)")
+            }
+        }
+    }
+    if !has_file { bd_refuse(io, "`nazm build` without a file (the usage errors are not ported)") }
+    if o.backend == "llvm" { bd_refuse(io, "`nazm build --backend llvm`, the default (R8 slice 5): build with `--backend nazm`") }
+    if o.backend == "cranelift" { bd_refuse(io, "`nazm build --backend cranelift` (Cranelift is not ported: `rewrite-in-nazm` decision 3)") }
+    if o.backend != "nazm" { bd_refuse(io, "`--backend " + o.backend + "` (the usage errors are not ported)") }
+    if !has_out { o.out = "" }
+    if !has_objects { o.objects = "" }
+    o
+}
+
+// --- the target -------------------------------------------------------------------------------
+
+// The host's triple, as `Target::host` names it.
+fn bd_host() -> Str {
+    let os = fe_host_os()
+    let arch = fe_host_arch()
+    if os == "macos" { return arch + "-apple-darwin" }
+    if os == "windows" { return "x86_64-pc-windows-gnu" }
+    arch + "-unknown-linux-gnu"
+}
+
+fn bd_os(t: Str) -> Str {
+    if ut_contains(t, "-apple-darwin") { return "macos" }
+    if ut_contains(t, "-windows-") { return "windows" }
+    "linux"
+}
+
+fn bd_arch(t: Str) -> Str { if ut_starts(t, "x86_64") { "x86_64" } else { "aarch64" } }
+
+// The targets this driver builds for: the two macOS ones and Windows on x86_64, which Nazm's code
+// generator carries before 1.0; and Linux, inside the contained runner only, for the self-build
+// (design S4.4; `docs/user/support.md`: not a supported target).
+fn bd_target(io: IoCap, o: Opts) -> Str {
+    let t = if o.target == "" { bd_host() } else { o.target }
+    if t == "aarch64-apple-darwin" || t == "x86_64-apple-darwin" || t == "x86_64-pc-windows-gnu" { return t }
+    if (t == "aarch64-unknown-linux-gnu" || t == "x86_64-unknown-linux-gnu") && os_env_get("NAZM_CONTAINED") == "1" { return t }
+    bd_refuse(io, "the target `" + t + "` (Nazm's code generator builds for aarch64-apple-darwin, x86_64-apple-darwin and x86_64-pc-windows-gnu; Linux for the contained self-build only)")
+    t
+}
+
+// --- the stages, admitted as `host-run` admits a program ----------------------------------------
+
+// The stage `name` (`nazm-pipeline`, `nzcg`): its variable's path, or the one in `NAZM_LIBEXEC`.
+fn bd_stage(io: IoCap, variable: Str, name: Str) -> Str {
+    let named = os_env_get(variable)
+    if named != "" {
+        if ut_kind(io, named) != 0 {
+            bd_fail(io, "nazm: `--backend nazm` runs " + name + ": `" + variable + "` names `" + named + "`, which is not a file", 4)
+        }
+        return named
+    }
+    let dir = os_env_get("NAZM_LIBEXEC")
+    if dir == "" {
+        bd_fail(io, "nazm: `--backend nazm` runs " + name + ": set `" + variable + "`, or `NAZM_LIBEXEC` to the directory holding it", 4)
+    }
+    let p = ut_join(dir, name)
+    if ut_kind(io, p) != 0 { bd_fail(io, "nazm: `--backend nazm` runs " + name + ": it is not installed at `" + p + "`", 4) }
+    p
+}
+
+// `host-run`'s reading of an image (`heap_limit_of`): the counted heap linked, one heap limit, at
+// most 2 GiB. "" when it is admitted, else the refusal's name and why.
+fn bd_admitted(image: Str) -> Str {
+    if ut_find(image, "nz.heap_malloc", 0) < 0 {
+        return "no-counted-heap: the executable does not link the counted heap (`nz.heap_malloc` is not in it): build it with `--heap-limit`"
+    }
+    let before = "the heap limit of "
+    let after = " bytes is reached"
+    let found = strs_new()
+    let mut from = 0
+    let mut at = ut_find(image, before, from)
+    while at >= 0 {
+        let start = at + str_len(before)
+        let mut end = start
+        while end < str_len(image) && str_byte(image, end) >= 48 && str_byte(image, end) <= 57 { end += 1 }
+        if end > start && end + str_len(after) <= str_len(image) && str_slice(image, end, end + str_len(after)) == after {
+            let n = str_slice(image, start, end)
+            let mut seen = false
+            for i in 0..strs_len(found) { if strs_get(found, i) == n { seen = true } }
+            if !seen { strs_push(found, n) }
+        }
+        from = start
+        at = ut_find(image, before, from)
+    }
+    if strs_len(found) == 0 { return "no-heap-limit: the executable carries no heap limit (its `N0406` message is not in it)" }
+    if strs_len(found) > 1 { return "ambiguous-heap-limit: the executable names several heap limits" }
+    let limit = strs_get(found, 0)
+    if str_len(limit) > 10 || bd_size(limit) > 2147483648 {
+        return "heap-limit-too-large: its heap limit is " + limit + " bytes, over the 2 GiB (2147483648) a stage may have"
+    }
+    ""
+}
+
+fn bd_limit_of(image: Str) -> Int {
+    let before = "the heap limit of "
+    let at = ut_find(image, before, 0)
+    let start = at + str_len(before)
+    let mut end = start
+    while end < str_len(image) && str_byte(image, end) >= 48 && str_byte(image, end) <= 57 { end += 1 }
+    bd_size(str_slice(image, start, end))
+}
+
+// `host-run`'s state directory: where its withdrawal marker is.
+fn bd_state_dir(io: IoCap) -> Str {
+    let d = os_env_get("NAZM_HOST_RUN_DIR")
+    if d != "" { return d }
+    os_env_get("HOME") + "/.cache/nazm-host-run"
+}
+
+fn bd_check_stage(io: IoCap, path: Str, name: Str) -> Int {
+    let why = bd_admitted(read_file(path))
+    if why != "" { bd_fail(io, "nazm: " + name + " (`" + path + "`) is not admitted as a stage: " + why, 4) }
+    bd_limit_of(read_file(path))
+}
+
+// A stage run to its end: whether it started, its status, its output and errors, and its peak.
+struct Ran {
+    started: Bool,
+    status: Int,
+    out: Str,
+    err: Str,
+    peak: Int,
+}
+
+fn bd_collect(from: OsHandle, into: Chan[Str]) -> Int ! { io } {
+    let all = match file_read_rest(File(handle: from)) {
+        Result.Ok(value: b) => bytes_to_str(b),
+        Result.Err(error: e) => "",
+    }
+    chan_send_of(into, all)
+    0
+}
+
+// `program` with `args`, its environment `env` (`NAME=value`) — this process's when `inherit` —
+// its standard input empty; its output and errors collected, and its peak resident memory.
+fn bd_run(io: IoCap, proc: ProcessCap, sp: SpawnCap, program: Str, args: Strs, inherit: Bool, env: Strs) -> Ran ! { io, spawn } {
+    let all = strs_new()
+    if inherit {
+        for i in 0..os_env_count() { strs_push(all, os_env_at(i)) }
+    } else {
+        for i in 0..strs_len(env) { strs_push(all, strs_get(env, i)) }
+    }
+    let h = os_spawn_with(program, args, "", all, 2)
+    if os_status(h) < 0 { return Ran(started: false, status: 0, out: "", err: ut_os_error(os_status(h)), peak: 0) }
+    let errors = chan_new_of[Str](1)
+    let out = os_child_pipe(h, 1)
+    let err = os_child_pipe(h, 2)
+    let got = vec_new[Str]()
+    let mut stdout = ""
+    scope {
+        spawn bd_collect(err, errors)
+        stdout = match file_read_rest(File(handle: out)) {
+            Result.Ok(value: b) => bytes_to_str(b),
+            Result.Err(error: e) => "",
+        }
+        chan_recv_of(errors, got);
+    }
+    os_close(out)
+    os_close(err)
+    let status = os_wait(h)
+    let peak = os_child_rusage(h)
+    os_close(h)
+    Ran(started: true, status: status, out: stdout, err: if vec_len(got) > 0 { vec_get(got, 0) } else { "" }, peak: peak)
+}
+
+// A stage, run as `host-run` runs a program: refused while the rule is withdrawn; its peak and
+// `N0406` held to the withdrawal conditions against its own limit (design S4.2).
+fn bd_stage_run(io: IoCap, proc: ProcessCap, sp: SpawnCap, program: Str, limit: Int, args: Strs) -> Ran ! { io, spawn } {
+    let marker = bd_state_dir(io) + "/withdrawn"
+    if ut_kind(io, marker) >= 0 {
+        bd_fail(io, "nazm: withdrawn: the rule is withdrawn: " + read_file(marker) + ". Host runs stay refused until it is investigated; then remove the marker file " + marker, 4)
+    }
+    let r = bd_run(io, proc, sp, program, args, true, strs_new())
+    if !r.started { return r }
+    let mut why = ""
+    if r.peak > limit + 268435456 {
+        why = "peak resident memory " + int_to_str(r.peak) + " bytes exceeds the heap limit " + int_to_str(limit) + " by more than 268435456"
+    } else if ut_contains(r.err, "error[N0406]") && r.status != 2 {
+        why = "an N0406 was written but the program did not stop with status 2 (it ended " + int_to_str(r.status) + ")"
+    }
+    if why != "" {
+        let why_at = why + " (running " + program + ")"
+        let made = strs_new()
+        ut_make_dirs(io, bd_state_dir(io), made)
+        write_file(marker, why_at)
+        bd_fail(io, "nazm: WITHDRAWAL CONDITION: " + why + ". The host rule is withdrawn: only `cargo xtask contained` until it is investigated (marker: " + marker + ")", 70)
+    }
+    r
+}
+
+// --- the front end, in process ----------------------------------------------------------------
+
+// `crate::emit` of the diagnostics `which` picks, into `out`.
+fn bd_emit(f: Facts, names: Strs, which: Ints, json: Bool, out: Strs) -> Int {
+    let d = fx_diags(f)
+    let texts = fe_texts(f)
+    let bases = fe_bases(f)
+    for k in 0..ints_len(which) {
+        let i = ints_get(which, k)
+        if json { strs_push(out, dg_json(d, i) + nl()) } else { strs_push(out, dg_render(d, i, names, texts, bases)) }
+    }
+    0
+}
+
+// What the front end leaves the build: the Core IR document, the authority line and the files the
+// program loads (which the output may not be written over).
+struct Front {
+    doc: Str,
+    authority: Str,
+    files: Strs,
+    store: Str,
+}
+
+// What `main` holds, read from its signature as the parser gives it (`authority::of_main`, `line`).
+fn bd_reaches(c: Str) -> Str {
+    if c == "OutCap" { return "prints to standard output and error" }
+    if c == "IoCap" { return "files, arguments, the terminal and the process's exit" }
+    if c == "NetCap" { return "the network" }
+    if c == "ProcessCap" { return "other programs and the environment" }
+    if c == "SpawnCap" { return "threads" }
+    if c == "RandomCap" { return "the system's randomness" }
+    if c == "TimeCap" { return "the clocks" }
+    if c == "ForeignCap" { return "C functions" }
+    if c == "VouchCap" { return "vouching for values' provenance" }
+    if c == "MmioCap" { return "device memory" }
+    "an authority this build does not describe"
+}
+
+fn bd_authority(text: Str) -> Str {
+    let t = sx_tree()
+    let program = sx_parse_source(text, t, dg_new())
+    let fns = sx_items(t, sx_field(t, program, "functions"))
+    for i in 0..ints_len(fns) {
+        let f = ints_get(fns, i)
+        if sx_name(t, f, "name") == "main" && !sx_is_some(t, sx_field(t, f, "method_of")) {
+            let parts = strs_new()
+            let params = sx_items(t, sx_field(t, f, "params"))
+            for j in 0..ints_len(params) {
+                let p = ints_get(params, j)
+                let ty = sx_name(t, sx_field(t, p, "ty"), "name")
+                if ut_ends(ty, "Cap") {
+                    let span = sx_field(t, p, "span")
+                    let given = if sx_s(t, span) == sx_e(t, span) { " (given to main)" } else { "" }
+                    strs_push(parts, ty + given + ": " + bd_reaches(ty))
+                }
+            }
+            if strs_len(parts) == 0 { return "authority: none" }
+            return "authority: " + str_join(parts, "; ")
+        }
+    }
+    ""
+}
+
+// The front end over the program, as `nazm check` runs it: every refusal, load failure, error and
+// warning written as the Rust build writes them, ending the process where the build ends; else the
+// document and what the link needs. The facts are this function's alone, and go when it returns.
+fn bd_front(io: IoCap, o: Opts, target: Str, output: Str) -> Front {
+    let library = os_env_get("NAZM_LIBRARY")
+    if library == "" { bd_refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
+    let file = o.file
+    let prefix = fe_prefix(io, file)
+    let abs = prefix + file
+    if ut_kind(io, file) == 1 { bd_refuse(io, "a package's directory (R8 slice 6)") }
+    let root = pk_decide(abs, io)
+    if pk_root_how(root) == 1 { bd_refuse(io, "a package's build (its manifest's `heap-limit`, `--locked`, `--features`: R8 slice 6)") }
+    let f = fx_check_in(abs, "", library, bd_os(target), bd_arch(target), io)
+    if fx_refusal(f) != "" {
+        let why = fx_refusal(f)
+        let unreadable = ut_starts(why, "could not read") || ut_ends(why, "is not a directory")
+        bd_fail(io, "nazm: " + why, if unreadable { 3 } else { 1 })
+    }
+    let d = fx_diags(f)
+    fe_unprefix_diags(io, d, prefix, abs)
+    let names = fe_names(f, prefix)
+    let out = strs_new()
+    if fe_load_failed(f) {
+        if !fx_carried(f) { bd_refuse(io, fx_why(f)) }
+        let all = ints_new()
+        let mut missing = true
+        for i in 0..dg_len(d) {
+            if strs_get(d.code, i) != "N0205" { missing = false }
+            ints_push(all, i)
+        }
+        bd_emit(f, names, all, o.json, out)
+        eprint(str_join(out, ""))
+        exit_with(if missing { 3 } else { 1 })
+    }
+    if !fx_carried(f) { bd_refuse(io, fx_why(f)) }
+    // The output may not be written over the program's own source or any module it loads.
+    let files = strs_new()
+    for m in 0..fx_modules(f) { strs_push(files, fx_module_name(f, m)) }
+    bd_clobbers(io, abs, files, output)
+    let warnings = ints_new()
+    let errors = ints_new()
+    let mut unsupported = false
+    for i in 0..dg_len(d) {
+        if strs_get(d.severity, i) == "warning" { ints_push(warnings, i) } else { ints_push(errors, i) }
+        if strs_get(d.severity, i) != "warning" && strs_get(d.code, i) == "N0101" { unsupported = true }
+    }
+    if ints_len(errors) > 0 {
+        bd_emit(f, names, errors, o.json, out)
+        eprint(str_join(out, ""))
+        let n = ints_len(errors)
+        if unsupported {
+            bd_fail(io, "nazm: " + int_to_str(n) + " construct" + ut_plural(n) + " outside `nazm build`'s subset. Nothing was written; `nazm run --interpret` still executes this program.", 1)
+        }
+        bd_fail(io, "nazm: " + int_to_str(n) + " error" + ut_plural(n), 1)
+    }
+    if ints_len(warnings) > 0 {
+        let w = ints_len(warnings)
+        if o.deny { eprint("nazm: " + int_to_str(w) + " warning" + ut_plural(w) + ", refused by --deny-warnings" + nl()) }
+        bd_emit(f, names, warnings, o.json, out)
+        eprint(str_join(out, ""))
+        if o.deny { bd_fail(io, "nazm: " + int_to_str(w) + " error" + ut_plural(w), 1) }
+    }
+    let doc = fx_core_document_with_sources(f)
+    if doc == "" { bd_refuse(io, "a program whose Core IR the front end does not carry") }
+    // The project's object store (`derived::objects`): `NAZM_CACHE_DIR`, or the source root's `.nazm`.
+    let named = os_env_get("NAZM_CACHE_DIR")
+    let store = if named != "" { named } else { pk_root_path(root) + "/.nazm" }
+    Front(doc: doc, authority: bd_authority(fx_module_text(f, 0)), files: files, store: store)
+}
+
+// The front end run and its document written into a new working directory: the directory and the
+// authority line. The facts and the document are this function's, and go when it returns.
+fn bd_started(io: IoCap, o: Opts, target: Str, output: Str) -> Strs {
+    let fr = bd_front(io, o, target, output)
+    let work = bd_workdir(io, output)
+    if write_file(work + "/core.json", fr.doc) < 0 {
+        bd_remove(io, work)
+        bd_fail(io, "nazm: cannot write " + work + "/core.json", 4)
+    }
+    let out = strs_new()
+    strs_push(out, work)
+    strs_push(out, fr.authority)
+    strs_push(out, fr.store)
+    out
+}
+
+// `same_file`: canonical paths when both exist, else the paths as written.
+fn bd_same(io: IoCap, a: Str, b: Str) -> Bool {
+    let ca = fe_canonical(io, a)
+    let cb = fe_canonical(io, b)
+    if ca != "" && cb != "" { return ca == cb }
+    a == b
+}
+
+fn bd_clobbers(io: IoCap, abs: Str, files: Strs, output: Str) -> Int {
+    let mut hit = bd_same(io, abs, output)
+    for i in 0..strs_len(files) {
+        if bd_same(io, strs_get(files, i), output) { hit = true }
+    }
+    if hit { bd_fail(io, "nazm: refusing to write the executable over its own source (" + output + "). Pass -o with a different path.", 1) }
+    0
+}
+
+// --- the working directory ----------------------------------------------------------------------
+
+// `rm -r` of what this build made: every entry under `dir`, then `dir`.
+fn bd_remove(io: IoCap, dir: Str) -> Int {
+    let d = os_dir_open(dir)
+    if os_status(d) < 0 { return 0 }
+    let names = strs_new()
+    let buf = bytes_new(1024)
+    let mut n = os_dir_next(d, buf)
+    while n > 0 {
+        strs_push(names, bytes_to_str(bytes_slice(buf, 0, n)))
+        n = os_dir_next(d, buf)
+    }
+    os_close(d)
+    for i in 0..strs_len(names) {
+        let p = dir + "/" + strs_get(names, i)
+        if ut_kind(io, p) == 1 { bd_remove(io, p) } else { os_unlink(p) }
+    }
+    os_rmdir(dir)
+    0
+}
+
+// `scratch::exclusive`: `PARENT/STEM<pid>`, or `-N` after it, made new with mode 0700.
+fn bd_workdir(io: IoCap, output: Str) -> Str {
+    let parent = ut_parent(output)
+    let why = strs_new()
+    if parent != "" && !ut_make_dirs(io, parent, why) {
+        bd_fail(io, "nazm: cannot create " + parent + ": " + str_join(why, ""), 4)
+    }
+    let stem = ut_file_name(output) + ".nazm-"
+    let pid = int_to_str(os_pid())
+    for k in 0..64 {
+        let name = if k == 0 { stem + pid } else { stem + pid + "-" + int_to_str(k) }
+        let dir = if parent == "" { name } else { parent + "/" + name }
+        let r = os_mkdir(dir)
+        if r == 0 {
+            os_chmod(dir, 448)
+            return dir
+        }
+        if ut_kind(io, dir) < 0 { bd_fail(io, "nazm: cannot create " + dir + ": " + ut_os_error(r), 4) }
+    }
+    bd_fail(io, "nazm: cannot create a working directory beside " + output + ": no free scratch directory name", 4)
+    ""
+}
+
+fn bd_copy(io: IoCap, from: Str, to: Str) -> Bool { write_file(to, read_file(from)) >= 0 }
+
+// --- clang ----------------------------------------------------------------------------------------
+
+// The driver's environment: nothing but what `backend::PASSED` hands over.
+fn bd_passed(io: IoCap) -> Strs {
+    let names = text_split_spaces("PATH LD_LIBRARY_PATH TMPDIR TMP TEMP SystemRoot DEVELOPER_DIR SDKROOT MACOSX_DEPLOYMENT_TARGET IPHONEOS_DEPLOYMENT_TARGET TVOS_DEPLOYMENT_TARGET WATCHOS_DEPLOYMENT_TARGET XROS_DEPLOYMENT_TARGET")
+    let out = strs_new()
+    for i in 0..strs_len(names) {
+        let v = os_env_get(strs_get(names, i))
+        if v != "" || bd_env_has(io, strs_get(names, i)) { strs_push(out, strs_get(names, i) + "=" + v) }
+    }
+    out
+}
+
+fn bd_env_has(io: IoCap, name: Str) -> Bool {
+    for i in 0..os_env_count() {
+        if ut_starts(os_env_at(i), name + "=") { return true }
+    }
+    false
+}
+
+fn text_split_spaces(s: Str) -> Strs {
+    let out = strs_new()
+    let mut from = 0
+    for i in 0..str_len(s) + 1 {
+        if i == str_len(s) || str_byte(s, i) == 32 {
+            if i > from { strs_push(out, str_slice(s, from, i)) }
+            from = i + 1
+        }
+    }
+    out
+}
+
+// `-target T` for a target that is not the host's.
+fn bd_target_args(cross: Str, out: Strs) -> Int {
+    if cross != "" {
+        strs_push(out, "-target")
+        strs_push(out, cross)
+    }
+    0
+}
+
+// The object format whose linker strips what nothing reaches: "macho", "elf" or "".
+fn bd_family(target: Str) -> Str {
+    if ut_contains(target, "-apple-") { return "macho" }
+    if ut_contains(target, "-linux-") { return "elf" }
+    ""
+}
+
+// MinGW-w64's libraries (`windows_libraries`).
+fn bd_windows_libraries(out: Strs) -> Int {
+    strs_push(out, "-static")
+    strs_push(out, "-pthread")
+    strs_push(out, "-lws2_32")
+    strs_push(out, "-lbcrypt")
+    strs_push(out, "-Wl,--stack,8388608")
+    strs_push(out, "-Wl,--no-insert-timestamp")
+    0
+}
+
+// TLS's libraries (`tls::link_args`), or the reason they cannot be linked, after an `!`.
+fn bd_tls_args(io: IoCap, target: Str) -> Strs {
+    let out = strs_new()
+    let named = os_env_get("NAZM_OPENSSL_DIR")
+    if bd_os(target) == "macos" {
+        let mut dir = ""
+        if named != "" {
+            if ut_kind(io, named + "/lib/libssl.3.dylib") != 0 && ut_kind(io, named + "/lib/libssl.dylib") != 0 {
+                strs_push(out, "!NAZM_OPENSSL_DIR is " + named + ", which has no lib/libssl.3.dylib")
+                return out
+            }
+            dir = named
+        } else {
+            let places = text_split_spaces("/opt/homebrew/opt/openssl@3 /usr/local/opt/openssl@3 /opt/local")
+            for i in 0..strs_len(places) {
+                let p = strs_get(places, i)
+                if dir == "" && (ut_kind(io, p + "/lib/libssl.3.dylib") == 0 || ut_kind(io, p + "/lib/libssl.dylib") == 0) { dir = p }
+            }
+            if dir == "" {
+                strs_push(out, "!this program uses TLS, which links OpenSSL 3, and none was found: install it with `brew install openssl@3`, or name an installation with NAZM_OPENSSL_DIR")
+                return out
+            }
+        }
+        strs_push(out, "-L" + dir + "/lib")
+        strs_push(out, "-lssl")
+        strs_push(out, "-lcrypto")
+        strs_push(out, "-framework")
+        strs_push(out, "Security")
+        strs_push(out, "-framework")
+        strs_push(out, "CoreFoundation")
+        return out
+    }
+    if bd_os(target) == "linux" {
+        if named != "" { strs_push(out, "-L" + named + "/lib") }
+        strs_push(out, "-l:libssl.so.3")
+        strs_push(out, "-l:libcrypto.so.3")
+        return out
+    }
+    strs_push(out, "-lsecur32")
+    strs_push(out, "-lcrypt32")
+    strs_push(out, "-lncrypt")
+    out
+}
+
+// Whether clang's own message says the link or the toolchain's setup failed (`toolchain_failure`).
+fn bd_toolchain_failure(said: Str) -> Bool {
+    let marks = strs_new()
+    strs_push(marks, "linker command failed")
+    strs_push(marks, "xcrun:")
+    strs_push(marks, "ld: library")
+    strs_push(marks, "ld: framework")
+    strs_push(marks, "unable to find sdk")
+    strs_push(marks, "cannot find -l")
+    strs_push(marks, "xcode-select:")
+    strs_push(marks, "Failed to determine realpath")
+    strs_push(marks, "xcodebuild -sdk")
+    for i in 0..strs_len(marks) {
+        if ut_contains(said, strs_get(marks, i)) { return true }
+    }
+    false
+}
+
+// `report_clang` of a run of clang that failed: what it said and why, `kept` kept.
+fn bd_report_clang(io: IoCap, r: Ran, kept: Str, work: Str, keep: Bool) -> Int {
+    if !r.started {
+        bd_remove(io, work)
+        bd_fail(io, "nazm: `clang` was not found on PATH, and `nazm build` needs it to assemble the LLVM IR it generates.", 4)
+    }
+    if !keep { bd_remove(io, work) }
+    eprint(r.err)
+    let code = "Some(" + int_to_str(r.status) + ")"
+    if bd_toolchain_failure(r.err) {
+        bd_fail(io, "nazm: `clang` failed while linking or setting up (exit " + code + ") — its message above is about the toolchain or its environment, not about the generated IR. The IR has been kept at " + kept + " in case it is needed.", 4)
+    }
+    bd_fail(io, "nazm: `clang` rejected the generated IR (exit " + code + "). This is a bug in `nazm build`, not in your program — the IR has been kept at " + kept + " to report it with.", 4)
+}
+
+// --- the code generator's refusals --------------------------------------------------------------
+
+// One `N0101` per construct the generator refused, as `nazm_codegen_nazm::refusals` makes them; a
+// failure that names nothing, or any other, `N0900`.
+fn bd_generator_failed(io: IoCap, o: Opts, r: Ran, work: Str) -> Int {
+    bd_remove(io, work)
+    let shown = strs_new()
+    let mut n = 0
+    let mut refused = false
+    if r.status == 3 {
+        for line in text_split(r.err, nl()) {
+            if ut_starts(line, "nzcg: refused: ") {
+                strs_push(shown, bd_synthetic("N0101", "the Nazm backend cannot build this: " + str_slice(line, 15, str_len(line)), "`nazm build --backend llvm` is the default backend", o.json))
+                n += 1
+                refused = true
+            }
+        }
+    }
+    if n == 0 {
+        let what = if r.status == 3 { "Nazm's code generator refused without naming what: " + ut_trim_end(r.err) } else {
+            "Nazm's code generator failed (status " + int_to_str(r.status) + "): " + ut_trim_end(r.err)
+        }
+        strs_push(shown, bd_synthetic("N0900", what, "", o.json))
+        n = 1
+    }
+    eprint(str_join(shown, ""))
+    if refused {
+        bd_fail(io, "nazm: " + int_to_str(n) + " construct" + ut_plural(n) + " outside `nazm build`'s subset. Nothing was written; `nazm run --interpret` still executes this program.", 1)
+    }
+    bd_fail(io, "nazm: " + int_to_str(n) + " error" + ut_plural(n), 1)
+}
+
+// A diagnostic with no span, as `Diagnostic::render` and `to_json` write one (`Span::synthetic`).
+fn bd_synthetic(code: Str, message: Str, help: Str, json: Bool) -> Str {
+    if json {
+        let h = if help == "" { "null" } else { bd_json_str(help) }
+        return "{\"schema\":\"nazm.diagnostic/1\",\"code\":" + bd_json_str(code) + ",\"severity\":\"error\",\"message\":" + bd_json_str(message) + ",\"help\":" + h + "}" + nl()
+    }
+    let out = "error[" + code + "]: " + message + nl()
+    if help == "" { out } else { out + "  = help: " + help + nl() }
+}
+
+fn bd_json_str(s: Str) -> Str {
+    let out = strs_new()
+    strs_push(out, "\"")
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        if b == 34 { strs_push(out, "\\\"") } else if b == 92 { strs_push(out, "\\\\") } else if b == 10 { strs_push(out, "\\n") } else if b == 9 { strs_push(out, "\\t") } else if b == 13 { strs_push(out, "\\r") } else if b < 32 {
+            let hex = "0123456789abcdef"
+            strs_push(out, "\\u00" + str_slice(hex, b / 16, b / 16 + 1) + str_slice(hex, b % 16, b % 16 + 1))
+        } else {
+            strs_push(out, str_slice(s, i, i + 1))
+        }
+    }
+    strs_push(out, "\"")
+    str_join(out, "")
+}
+
+// --- the command ----------------------------------------------------------------------------------
+
+// The plan `nazm-pipeline build` wrote: lines `KEY VALUE`.
+fn bd_plan(text: Str, key: Str) -> Strs {
+    let out = strs_new()
+    for line in text_split(text, nl()) {
+        if ut_starts(line, key + " ") { strs_push(out, str_slice(line, str_len(key) + 1, str_len(line))) }
+    }
+    out
+}
+
+// `prog.exe` for a Windows executable named without an extension (`published_name`).
+fn bd_published(output: Str, target: Str, objects: Bool) -> Str {
+    if bd_os(target) == "windows" && !objects && ut_extension(output) == "" && ut_file_name(output) != "" { return output + ".exe" }
+    output
+}
+
+pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Int {
+    let o = bd_parse(io, 1)
+    let target = bd_target(io, o)
+    let host = bd_host()
+    let cross = if target == host { "" } else { target }
+    // A foreign object that is not there is refused before anything is compiled (N42).
+    for i in 0..strs_len(o.links) {
+        if ut_kind(io, strs_get(o.links, i)) != 0 {
+            bd_fail(io, "nazm: `--link " + strs_get(o.links, i) + "`: no such file; `--link` names an object or library that defines foreign functions", 3)
+        }
+    }
+    let pipeline = bd_stage(io, "NAZM_PIPELINE", "nazm-pipeline")
+    let nzcg = bd_stage(io, "NAZM_NZCG", "nzcg")
+    let pipeline_limit = bd_check_stage(io, pipeline, "nazm-pipeline")
+    let nzcg_limit = bd_check_stage(io, nzcg, "nzcg")
+    // A target the host cannot link is built as objects, or refused before anything is compiled.
+    let links_here = target == host || (bd_os(target) == "macos" && bd_os(host) == "macos")
+    if !links_here && o.objects == "" {
+        bd_fail(io, "nazm: this host has no linker for `" + target + "`; build it with `--objects DIR`, which writes every object and `DIR/link.txt` for that target's own toolchain to link", 4)
+    }
+    let named = if o.out != "" { o.out } else { ut_stem(o.file) }
+    let output = bd_published(named, target, o.objects != "")
+
+    // The front end, in process; its facts gone before any stage starts.
+    let started = bd_started(io, o, target, output)
+    let work = strs_get(started, 0)
+    let authority = strs_get(started, 1)
+    let store = strs_get(started, 2)
+    os_mkdir(work + "/rt")
+    os_mkdir(work + "/obj")
+    os_mkdir(work + "/units")
+
+    // The pipeline: MIR, LIR and the runtime's units.
+    let pargs = strs_new()
+    strs_push(pargs, "--target")
+    strs_push(pargs, target)
+    strs_push(pargs, "build")
+    strs_push(pargs, work + "/core.json")
+    strs_push(pargs, work)
+    strs_push(pargs, if o.stack >= 0 { int_to_str(o.stack) } else { "-" })
+    strs_push(pargs, if o.heap >= 0 { int_to_str(o.heap) } else { "-" })
+    // The object store (design S4.5), unless `--no-cache`: each unit's object is looked up by its
+    // key, and only the misses are generated.
+    if !o.no_cache {
+        strs_push(pargs, store)
+        strs_push(pargs, nzcg)
+    }
+    let pr = bd_stage_run(io, proc, sp, pipeline, pipeline_limit, pargs)
+    if !pr.started || pr.status != 0 {
+        bd_remove(io, work)
+        let said = if pr.started { ut_trim_end(pr.err) } else { "it did not start: " + pr.err }
+        bd_refuse(io, "a program the pipeline does not lower (status " + int_to_str(pr.status) + "): " + said)
+    }
+    let plan = read_file(work + "/plan.txt")
+    let units = bd_plan(plan, "unit")
+    let runtime = bd_plan(plan, "runtime")
+    let one_thread = strs_get(bd_plan(plan, "one-thread"), 0) == "yes"
+    let tls = strs_get(bd_plan(plan, "tls"), 0) == "yes"
+    let foreign = bd_plan(plan, "foreign")
+    let cached = bd_plan(plan, "cached")
+    let missed = strs_new()
+    for k in 0..strs_len(units) {
+        let mut hit = false
+        for j in 0..strs_len(cached) { if strs_get(cached, j) == strs_get(units, k) { hit = true } }
+        if !hit { strs_push(missed, strs_get(units, k)) }
+    }
+
+    // The code generator, once over every unit.
+    let cargs = strs_new()
+    strs_push(cargs, "--target")
+    strs_push(cargs, target)
+    if one_thread { strs_push(cargs, "--one-thread") }
+    strs_push(cargs, work + "/lir.txt")
+    strs_push(cargs, work + "/obj")
+    if strs_len(missed) > 0 {
+        let cr = bd_stage_run(io, proc, sp, nzcg, nzcg_limit, cargs)
+        if !cr.started {
+            bd_remove(io, work)
+            bd_fail(io, "nazm: Nazm's code generator `" + nzcg + "` did not run: " + cr.err, 4)
+        }
+        if cr.status != 0 { bd_generator_failed(io, o, cr, work) }
+    }
+    for k in 0..strs_len(missed) {
+        let from = work + "/obj/unit-" + int_to_str(k) + ".o"
+        if ut_kind(io, from) != 0 || os_rename(from, work + "/" + strs_get(missed, k) + ".o") != 0 {
+            bd_remove(io, work)
+            bd_fail(io, "nazm: Nazm's code generator wrote no object for unit " + strs_get(missed, k), 1)
+        }
+    }
+    // What was generated is filed in the store; a store that will not take it fails nothing.
+    if !o.no_cache && strs_len(missed) > 0 {
+        let put = strs_new()
+        strs_push(put, "--target")
+        strs_push(put, target)
+        strs_push(put, "put")
+        strs_push(put, store)
+        strs_push(put, nzcg)
+        strs_push(put, work)
+        bd_stage_run(io, proc, sp, pipeline, pipeline_limit, put)
+    }
+    let objects = strs_new()
+    for k in 0..strs_len(units) { strs_push(objects, work + "/" + strs_get(units, k) + ".o") }
+
+    // The runtime's units, by clang, in link order.
+    let env = bd_passed(io)
+    for i in 0..strs_len(runtime) {
+        let name = strs_get(runtime, i)
+        let ll = work + "/" + name + ".ll"
+        let obj = work + "/" + name + ".o"
+        os_rename(work + "/rt/" + name + ".ll", ll)
+        let a = strs_new()
+        strs_push(a, "-O0")
+        strs_push(a, "-Wno-override-module")
+        strs_push(a, "-c")
+        bd_target_args(cross, a)
+        if bd_family(target) == "elf" {
+            strs_push(a, "-ffunction-sections")
+            strs_push(a, "-fdata-sections")
+        }
+        strs_push(a, "-o")
+        strs_push(a, obj)
+        strs_push(a, ll)
+        let r = bd_run(io, proc, sp, "clang", a, false, env)
+        if !r.started || r.status != 0 { bd_report_clang(io, r, ll, work, true) }
+        strs_push(objects, obj)
+    }
+
+    // `--objects DIR`: every object in link order and `link.txt`, for the target's own toolchain.
+    if o.objects != "" {
+        let why = strs_new()
+        if !ut_make_dirs(io, o.objects, why) {
+            bd_remove(io, work)
+            bd_fail(io, "nazm: cannot write " + o.objects + ": " + str_join(why, ""), 4)
+        }
+        let listed = strs_new()
+        let all = strs_new()
+        for i in 0..strs_len(objects) { strs_push(all, strs_get(objects, i)) }
+        for i in 0..strs_len(o.links) { strs_push(all, strs_get(o.links, i)) }
+        for i in 0..strs_len(all) {
+            let num = if i < 10 { "0" + int_to_str(i) } else { int_to_str(i) }
+            let to = num + "-" + ut_file_name(strs_get(all, i))
+            if !bd_copy(io, strs_get(all, i), ut_join(o.objects, to)) {
+                bd_remove(io, work)
+                bd_fail(io, "nazm: cannot write " + o.objects, 4)
+            }
+            strs_push(listed, to)
+        }
+        let mut libs = if bd_os(target) == "linux" { "-lpthread -lm" } else if bd_os(target) == "windows" {
+            "-static -pthread -lws2_32 -lbcrypt -Wl,--stack,8388608 -Wl,--no-insert-timestamp"
+        } else { "" }
+        let mut has_tls = false
+        for i in 0..strs_len(runtime) { if strs_get(runtime, i) == "tls" { has_tls = true } }
+        if has_tls {
+            let t = bd_tls_args(io, target)
+            if strs_len(t) > 0 && !ut_starts(strs_get(t, 0), "!") { libs = libs + " " + str_join(t, " ") }
+        }
+        let text = "# Written by nazm build --objects. Link these, in this order, with the target's toolchain." + nl()
+                + "target " + target + nl() + "objects " + str_join(listed, " ") + nl() + "libraries " + libs + nl()
+        if write_file(ut_join(o.objects, "link.txt"), text) < 0 {
+            bd_remove(io, work)
+            bd_fail(io, "nazm: cannot write " + o.objects, 4)
+        }
+        bd_remove(io, work)
+        eprint("nazm: wrote " + int_to_str(strs_len(all)) + " objects for " + target + " to " + o.objects + "; link them as " + o.objects + "/link.txt says" + nl())
+        return 0
+    }
+
+    // The link, in the working directory under the output's own name.
+    let exe = work + "/" + ut_file_name(output)
+    let linked = bd_link(io, proc, sp, target, cross, exe, objects, o.links, strs_new())
+    let mut result = linked
+    if (!linked.started || linked.status != 0) && tls {
+        let t = bd_tls_args(io, target)
+        if strs_len(t) > 0 && ut_starts(strs_get(t, 0), "!") {
+            eprint("nazm: " + str_slice(strs_get(t, 0), 1, str_len(strs_get(t, 0))) + nl())
+        } else {
+            result = bd_link(io, proc, sp, target, cross, exe, objects, o.links, t)
+        }
+    }
+    if !result.started || result.status != 0 {
+        if result.started && strs_len(foreign) > 0 {
+            bd_remove(io, work)
+            eprint(result.err)
+            let shown = strs_new()
+            for i in 0..strs_len(foreign) { strs_push(shown, "`" + strs_get(foreign, i) + "`") }
+            bd_fail(io, "nazm: linking failed. This program calls the foreign function" + ut_plural(strs_len(foreign)) + " " + str_join(shown, ", ")
+                    + "; each must be defined by an object or library passed with `--link FILE`", 4)
+        }
+        bd_report_clang(io, result, work, work, true)
+    }
+    // Published last, so an existing output survives every failure above.
+    let moved = os_rename(exe, output)
+    bd_remove(io, work)
+    if moved != 0 { bd_fail(io, "nazm: cannot write " + output + ": " + ut_os_error(moved), 4) }
+    if authority != "" { eprint(authority + nl()) }
+    print(output + nl())
+    0
+}
+
+// The link: `clang` with the build's arguments, the objects in order, the foreign inputs, the
+// system libraries, and the linker's dead-stripping (`Backend::link`); `extra` after the libraries
+// (TLS's, on the second attempt).
+fn bd_link(io: IoCap, proc: ProcessCap, sp: SpawnCap, target: Str, cross: Str, exe: Str, objects: Strs, links: Strs, extra: Strs) -> Ran ! { io, spawn } {
+    let a = strs_new()
+    strs_push(a, "-O0")
+    strs_push(a, "-Wno-override-module")
+    bd_target_args(cross, a)
+    strs_push(a, "-o")
+    strs_push(a, exe)
+    for i in 0..strs_len(objects) { strs_push(a, strs_get(objects, i)) }
+    for i in 0..strs_len(links) { strs_push(a, strs_get(links, i)) }
+    for i in 0..strs_len(extra) { strs_push(a, strs_get(extra, i)) }
+    if bd_os(target) == "linux" { strs_push(a, "-lm") }
+    if bd_os(target) == "windows" { bd_windows_libraries(a) }
+    if bd_family(target) == "macho" { strs_push(a, "-Wl,-dead_strip") }
+    if bd_family(target) == "elf" { strs_push(a, "-Wl,--gc-sections") }
+    let env = bd_passed(io)
+    strs_push(env, "ZERO_AR_DATE=1")
+    bd_run(io, proc, sp, "clang", a, false, env)
+}
