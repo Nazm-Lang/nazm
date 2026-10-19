@@ -69,20 +69,26 @@ pub fn runtime_declarations(out: &mut String, single: bool) {
 }
 
 /// The reference counting a program does most, which a unit may inline (R1, 5b.9).
-const INLINABLE: [&str; 5] = [
+/// `nz.vec_release` is its count's step alone, calling `nz.vec_free` after the last reference
+/// (binary-trees, 2026-10-19).
+const INLINABLE: [&str; 6] = [
     "nz.arr_retain",
     "nz.arr_release",
     "nz.seq_release",
     "nz.str_retain",
     "nz.str_release",
+    "nz.vec_release",
 ];
 
 /// The reference counts a program of one thread adjusts with ordinary loads and stores
 /// (`Needs::single`, the speed milestone): a string's, a closure's and a channel's. Each is
 /// atomic because a task may hold the value too (a `Str` and a channel may cross into one), and
 /// a program whose `main` holds no authority to start a thread has no task — the rule that
-/// already makes its failure state plain globals. A sequence's count is plain everywhere.
-pub const PLAIN_IN_ONE_THREAD: [&str; 7] = [
+/// already makes its failure state plain globals. A sequence's count is plain everywhere; the
+/// memory report's counts of sequences made and reclaimed, atomic because a task may make or free
+/// a sequence of its own, are plain in a program of one thread too (binary-trees, 2026-10-19: two
+/// atomic additions for every box made and freed).
+pub const PLAIN_IN_ONE_THREAD: [&str; 11] = [
     "nz.str_retain",
     "nz.str_release",
     "nz.closure_retain",
@@ -90,6 +96,10 @@ pub const PLAIN_IN_ONE_THREAD: [&str; 7] = [
     "nz.chan_retain",
     "nz.chan_release",
     "nz.chanv_release",
+    "nz.seq_new",
+    "nz.seq_release",
+    "nz.vec_drain",
+    "nz.strs_release",
 ];
 
 /// `text` with the counts of [`PLAIN_IN_ONE_THREAD`]'s functions made plain, for a program of
@@ -143,13 +153,17 @@ fn plain_count(line: &str) -> Option<String> {
 
 /// One runtime function's definition, as the runtime holds it.
 fn definition(name: &str) -> Option<&'static str> {
-    for text in [SEQUENCE_RUNTIME, STRING_RUNTIME] {
-        let Some(at) = text.find(&format!(" @{name}(")) else {
-            continue;
-        };
-        let start = text.get(..at)?.rfind("define ")?;
-        let end = at + text.get(at..)?.find("\n}\n")? + 3;
-        return text.get(start..end);
+    let wanted = format!(" @{name}(");
+    for text in [SEQUENCE_RUNTIME, STRING_RUNTIME, SHIM_SEQUENCE_RUNTIME] {
+        // The definition's line, never a call to it from a function defined earlier.
+        let mut start = 0;
+        for line in text.split_inclusive('\n') {
+            if line.starts_with("define ") && line.contains(&wanted) {
+                let end = start + text.get(start..)?.find("\n}\n")? + 3;
+                return text.get(start..end);
+            }
+            start += line.len();
+        }
     }
     None
 }
@@ -189,6 +203,9 @@ pub fn inline_reference_counting(unit: &str, single: bool) -> String {
     let has = |needle: &str| unit.lines().any(|l| l.starts_with(needle));
     if !has("declare void @free(") {
         out.push_str("declare void @free(ptr)\n");
+    }
+    if wanted.contains(&"nz.vec_release") && !has("declare void @nz.vec_free(") {
+        out.push_str("declare void @nz.vec_free(ptr, ptr, i64, ptr)\n");
     }
     for g in ["nz.seq_reclaimed", "nz.str_reclaimed"] {
         if !has(&format!("@{g} = ")) {
@@ -782,10 +799,18 @@ copy:
 /// an element's (`%q` that queue) only queues, three words — handle, element release, stride —
 /// on a buffer the queue grows. Should growing fail, that one sequence is emptied there and
 /// then, as before R1a. The stack a release takes is bounded by the types, not by the value.
+///
+/// **The count's step is apart from the rest (binary-trees, 2026-10-19).** `nz.vec_release` is
+/// the null test and the decrement alone, which a unit inlines (`INLINABLE`); what follows the
+/// last reference — the queue, the walk, the frees — is `nz.vec_free`, called only then. Whole,
+/// the release was too large to inline, so every release that was not the last — six of the eight
+/// a node of a `Box` tree takes as it is read — was a call, and a frame with the queue's room in
+/// it. `nz.vec_free` is `noinline nounwind`, spelt so that a program of one thread, which inlines
+/// what is `noinline` for preemption's sake, keeps it out of line: inlined back, the release
+/// would be whole again. An element's release cannot fail, so nothing unwinds through it.
 const SHIM_SEQUENCE_RUNTIME: &str = r"
 define hidden void @nz.vec_release(ptr %h, ptr %f, i64 %stride, ptr %q) {
 entry:
-  %own = alloca [3 x i64]
   %none = icmp eq ptr %h, null
   br i1 %none, label %done, label %drop
 drop:
@@ -794,8 +819,17 @@ drop:
   %rc2 = sub i64 %rc, 1
   store i64 %rc2, ptr %rcp
   %last = icmp sle i64 %rc2, 0
-  br i1 %last, label %which, label %done
-which:
+  br i1 %last, label %free, label %done
+free:
+  call void @nz.vec_free(ptr %h, ptr %f, i64 %stride, ptr %q)
+  br label %done
+done:
+  ret void
+}
+
+define hidden void @nz.vec_free(ptr %h, ptr %f, i64 %stride, ptr %q) noinline nounwind {
+entry:
+  %own = alloca [3 x i64]
   %nested = icmp ne ptr %q, null
   br i1 %nested, label %enqueue, label %outer
 enqueue:

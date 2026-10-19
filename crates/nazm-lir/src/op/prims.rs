@@ -42,6 +42,17 @@ impl Fx<'_, '_> {
         // Immutable indirection (R1a): a `Box[T]` and a `Chain[T]` are their `Vec[T]`, so each of
         // their operations is the `Vec` one it means, taking the same path — a field-by-field
         // layout's included — as the `Vec` would.
+        if matches!(op, Intrinsic::BoxFresh | Intrinsic::BoxFill) {
+            let t = element(op, elem);
+            if self.soa_elem_fields(t).is_none() {
+                if op == Intrinsic::BoxFresh {
+                    self.box_fresh(dst, t);
+                } else {
+                    self.box_fill(dst, args, t);
+                }
+                return;
+            }
+        }
         let same = match op {
             Intrinsic::BoxFresh | Intrinsic::ListEmpty => Some(Intrinsic::VecNew),
             Intrinsic::BoxFill | Intrinsic::ListPush => Some(Intrinsic::VecPush),
@@ -1055,6 +1066,36 @@ pub(crate) fn element(op: Intrinsic, elem: Option<Ty>) -> Ty {
 }
 
 impl Fx<'_, '_> {
+    /// `box_fresh` (R1a): the `Vec` a `Box[T]` is, with storage for exactly its one element
+    /// already in place, so the `box_fill` that follows grows nothing. A `Vec`'s first growth
+    /// takes four elements; a box holds one, and a tree of boxes paid for four in every node.
+    /// The header is the destination's before the storage is asked for, so a refusal leaves a
+    /// valid empty sequence to release.
+    fn box_fresh(&mut self, dst: mir::LocalId, t: Ty) {
+        let h = self.rt_v("nz.seq_new", &[], Class::Ptr);
+        let null = self.is_null(h);
+        self.guard(null, "N0406", "out of memory");
+        self.set(dst, h);
+        let bytes = self.iconst(i64::from(self.size(t).max(1)));
+        let data = self.rt_v("malloc", &[bytes], Class::Ptr);
+        let none = self.is_null(data);
+        self.guard(none, "N0406", "out of memory");
+        self.store(h, rt::SEQ_DATA, data);
+        let one = self.iconst(1);
+        self.store(h, rt::SEQ_CAP, one);
+    }
+
+    /// `box_fill` (R1a): the one element written into the room `box_fresh` made, which nothing
+    /// else has seen — no growth to ask for, so no call.
+    fn box_fill(&mut self, dst: mir::LocalId, args: &[mir::Operand], t: Ty) {
+        let h = self.arg(args, 0);
+        let data = self.load(Class::Ptr, h, rt::SEQ_DATA);
+        self.store_element(data, args.get(1), t, false);
+        let one = self.iconst(1);
+        self.store(h, rt::SEQ_LEN, one);
+        self.set(dst, one);
+    }
+
     /// A number of kind `k`'s text written at `buf`, which has 48 bytes: how many.
     fn digits_into(&mut self, k: nazm_sema::NumKind, x: V, buf: V) -> V {
         use nazm_sema::NumKind;

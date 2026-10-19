@@ -455,3 +455,61 @@ fn a_box_type_crosses_a_modules_interface() {
     );
     assert!(r.stdout.starts_with("42"), "{r:?}");
 }
+
+/// Binary-trees (2026-10-19): a `Box` is a sequence header and storage for exactly its one
+/// element, made together and filled without asking to grow — a `Vec`'s first growth takes four,
+/// so a tree of boxes paid for four elements in every node and ran at nine times C's memory. A
+/// release that is not the last is inlined: `nz.vec_release` is the count's step, `nz.vec_free`
+/// the rest. The generated code is read as emitted, before any optimisation.
+#[test]
+fn a_box_holds_one_element_and_its_release_is_inlined() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("prog.nz"),
+        "enum Tree { Leaf, Node(left: Box[Tree], right: Box[Tree]) }\n\
+         fn make(d: Int) -> Tree { if d > 0 { Tree.Node(left: box_new(make(d - 1)), right: box_new(make(d - 1))) } else { Tree.Leaf } }\n\
+         fn check(t: Tree) -> Int { match t { Tree.Leaf => 1, Tree.Node(left: l, right: r) => 1 + check(box_get(l)) + check(box_get(r)), } }\n\
+         fn main() -> Int { check(make(10)) }\n",
+    )
+    .unwrap();
+    let exe = d.path().join(crate::common::exe_name("prog"));
+    let b = run_bounded(
+        Command::new(NAZM).current_dir(d.path()).args([
+            "build",
+            "--no-cache",
+            "--emit-ir",
+            "prog.nz",
+            "-o",
+            exe.to_str().unwrap(),
+        ]),
+        "nazm build",
+    );
+    assert_eq!(b.code, Some(0), "{}", b.stderr);
+    let mut unit = String::new();
+    for e in std::fs::read_dir(d.path()).unwrap() {
+        let p = e.unwrap().path();
+        let n = p.file_name().unwrap().to_string_lossy().into_owned();
+        if n.ends_with(".ll") && n.contains(".m") {
+            unit.push_str(&std::fs::read_to_string(&p).unwrap());
+        }
+    }
+    let make = unit
+        .split("\ndefine ")
+        .find(|f| f.contains(".make("))
+        .expect("make's definition");
+    // A `Tree` is 24 bytes: each box's storage is asked for at that size, and never grown.
+    assert_eq!(make.matches("malloc(i64 24)").count(), 2, "{make}");
+    assert!(!make.contains("@nz.arr_grow("), "{make}");
+    assert!(
+        unit.contains("define available_externally hidden void @nz.vec_release("),
+        "{unit}"
+    );
+    assert!(unit.contains("declare void @nz.vec_free("), "{unit}");
+    let r = run_bounded(
+        common::bounded_exe(&exe).env(nazm_lir::MEMORY_VARIABLE, "1"),
+        "prog",
+    );
+    assert_eq!(r.code, Some(0), "{r:?}");
+    assert!(r.stdout.starts_with("2047"), "{r:?}");
+    assert!(nothing_live(&report(&r)), "{r:?}");
+}
