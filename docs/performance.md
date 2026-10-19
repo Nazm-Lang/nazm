@@ -4542,3 +4542,21 @@ leads:** start-up among checked languages (1.93 ms, first of ten rows), peak mem
 Fortran 1.2×, Go 1.2× faster), `fib` against unchecked C/C++/Rust/Zig (1.26×: the overflow checks; checked Rust is 44.5),
 and build time against C, Rust's cached build, Go and Fortran on `words` (a cold build is 4.6× C's; warm, 370 ms against Go's
 62 ms and C's 78 ms).
+
+## Fan-in and the four-task program after their fixes, measured (quiet window, 2026-10-19)
+
+The two regressions of the quiet-window runs above, after `6b5d066e` (a channel waiter is counted out by
+whoever takes it off a list, runtime ABI 50: woken waiters no longer hold every send and receive on the
+locked path) and `26e5e64a` (a whole-program link generates for the target's baseline CPU, so ThinLTO's
+atomics are single LSE instructions on arm64 rather than exclusive-load retry loops). The same sources built
+`--no-cache --opt-level 2` by the release `nazm` of `0a52becf` and of `26e5e64a`, run side by side in one
+`hyperfine -N --warmup 3` call (20 runs fan-in, 15 the four-task `alloc4.nz`), each begun below load 2 (1.82,
+1.56) with no cargo, rustc or nextest running. Apple M1 Pro, macOS 27.2. Both fan-in builds print 499999500000.
+
+| program | `0a52becf` median (min–max) | `26e5e64a` median (min–max) | change |
+| --- | ---: | ---: | --- |
+| fan-in, 1,000,000 values, 8 producers | 908.1 ms (68.0–1,490.3); CPU 4.89 s | **365.9 ms** (244.7–798.3); CPU 2.37 s | 2.5× faster; below the 445 ms baseline |
+| four tasks (`bench/compare/nazm/alloc4.nz`) | 294.4 ms (261.0–436.8); CPU 1.14 s | **214.2 ms** (199.1–234.5); CPU 0.85 s | −27%; within 5% of v1's 203 ms |
+
+Fan-in is still spread (σ about a third of the mean) and 5.4× Go's 67 ms: the remaining gap is the
+many-producer path of the channel itself, not the regression.
