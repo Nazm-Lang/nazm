@@ -1,0 +1,2 @@
+pub enum Maybe[T] { No, Yes(value: T) }
+fn main() -> Int { 0 }

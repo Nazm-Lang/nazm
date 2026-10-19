@@ -1,0 +1,2 @@
+pub struct Q { x: Int }
+fn main() -> Int { 0 }

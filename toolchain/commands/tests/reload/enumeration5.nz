@@ -1,0 +1,2 @@
+enum F { A }
+fn main() -> Int { 0 }

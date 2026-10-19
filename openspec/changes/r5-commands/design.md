@@ -468,8 +468,8 @@ status 1 when anything was refused. `reload-check` compares two programs' functi
 signature as `Types::show` writes it with the effects its declaration or its body gives, and the text of
 its declaration — and writes `nazm.reload-check/1` (the runtime ABI revision, 49, is held by `run.sh`); the
 records and enums it also compares by layout need the type of each field and payload, which
-`compiler/sema.nz` does not publish, so a program that defines one is refused (`ck_record_field_ty` and a
-record's type are the hand-back). `doctor` runs `clang --version` and `-dumpmachine` with the environment a
+`compiler/sema.nz` did not publish, so a program that defined one was refused (D24 carries them now, a generic
+one apart). `doctor` runs `clang --version` and `-dumpmachine` with the environment a
 build gives it (`backend::PASSED`), links a probe from LLVM IR in a scratch directory, and asks
 `dsymutil` on macOS: both sides ran with `PATH` and `TMPDIR` as they are and made wrong. `run.sh bindgen`
 runs every header of `tests/bindgen` and `bench/compare` with and without `-o`, `run.sh reload` every pair
