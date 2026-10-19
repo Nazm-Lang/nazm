@@ -41,6 +41,13 @@ No cell says just "supported".
 | `aarch64-linux-android` | run-verified on a Linux kernel | unsupported | static Bionic executables, linked by the NDK r27c's `clang` for API level 30, run on an aarch64 Linux kernel in a Debian container; no Android device or emulator (Gate 3) | not exercised |
 | `aarch64-apple-ios` | compile-only | unsupported | linked against Xcode 27's iOS SDK, an archive and a program; never run — no simulator runtime is installed (Gate 3) | not exercised |
 
+**Linux triples inside the Nazm toolchain are internal.** The pipeline written in Nazm accepts the
+Linux triples so that the contained self-build (`cargo xtask contained selfbuild`, Linux aarch64 in
+the container) can run; that is an implementation detail of that build, decided 2026-10-20
+(`openspec/changes/r6-host-qualification`), and **no user-facing support claim**. The rows above
+are the whole claim: no Linux target is supported *by the Nazm-written toolchain*, and
+`x86_64-unknown-linux-gnu` stays compile-only.
+
 Cranelift's two `unsupported` reasons: its object writer has no format for a target without an
 operating system, and this Cranelift is built without a WebAssembly backend.
 

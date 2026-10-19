@@ -1,8 +1,7 @@
 # Draft — `docs/runbook.md`, *Mandatory containment* (R6, task 7.2)
 
-**A proposal, not applied.** If the copyright holder accepts `design.md` decision 3, this replaces
-the section's first subsection and adds the one after it; everything else in *Mandatory
-containment* is unchanged. Until then `docs/runbook.md` is the rule.
+**Accepted 2026-10-20 and applied** to `docs/runbook.md` (with the runner's name and refusals added
+there, which now is the text that rules). Kept as the record of what was proposed.
 
 ```diff
  ### What must never run uncontained

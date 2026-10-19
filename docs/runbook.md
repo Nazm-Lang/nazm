@@ -18,13 +18,58 @@ execution contract. These rules did not expire with it.*
 
 Only through the verified contained runner, `cargo xtask contained <workload>`:
 
-- any generated compiler stage — `nzlex`, `nzparse`, `nzcheck`, `nzemit`, `nazmc`;
+- any generated compiler stage built **without a heap limit** — `nzlex`, `nzparse`, `nzcheck`,
+  `nzemit`, `nazmc` — and any program written in Nazm built without one;
 - the selfhost suite and `compiler/bootstrap.sh`;
+- the self-build, `toolchain/selfbuild/selfbuild.sh` (`cargo xtask contained selfbuild`);
 - fuzzing, the mutation catalogue, and heavy benchmarks.
 
 **An environment variable is a declaration, not a ceiling. Never set `NAZM_CONTAINED=1` on
 the host, and never use `NAZM_ALLOW_UNCONTAINED=1`.** The runner sets `NAZM_CONTAINED=1`
 only *inside* an environment where a real ceiling already applies.
+
+### What may run on the host: one bounded-heap stage — R6, 2026-10-20
+
+*Decided by the copyright holder on 2026-10-20, on the evidence of
+`openspec/changes/r6-host-qualification/` (decision 3).*
+
+One program written in Nazm — the front end (`compiler/diagnose.nz`), the pipeline
+(`toolchain/pipeline/main.nz`), the code generator (`toolchain/codegen/main.nz`), a command of
+`toolchain/commands/`, or a harness tool — may run on the **macOS host** when **all** of these hold:
+
+- it was built with a heap limit of **at most 2 GiB** (`nazm build --heap-limit`, or the
+  self-build's runtime with that limit), which its runner checks before starting it: the counted
+  heap is linked (`nz.heap_malloc` is in the executable) and the limit its `N0406` message names
+  is not larger. A program that never allocates links no counted heap and is refused;
+- it is the **only** such process, and no contained workload is running;
+- it runs in the foreground under a wall-clock deadline, its output bounded and drained as the
+  contained runner's is;
+- its peak resident memory is recorded (`/usr/bin/time -l` reports memory; no timing is taken
+  from it).
+
+The one way to start it is `cargo xtask host-run [--deadline-secs N] -- EXECUTABLE [ARGS...]`
+(`xtask/src/host_run.rs`; default deadline 900 s, at most 3600 s). It refuses, by name: `not-macos`,
+`host-environment` (either containment variable set), `usage`, `no-executable`, `no-counted-heap`,
+`no-heap-limit`, `ambiguous-heap-limit`, `heap-limit-too-large`, `withdrawn`,
+`another-stage-running` and `contained-workload-running`. Do not run a Nazm-built program on the
+host any other way.
+
+The heap limit is a ceiling the program enforces on itself: every byte its code and runtime ask
+for is counted first, and an allocation past the limit does not happen (`N0406`, status 2;
+`docs/spec.md`, *A bounded heap*). It does not count a task's stack, the image, C's own
+allocations or child processes — hence one at a time, and the deadline.
+
+**Still contained only:** the selfhost suite, `compiler/bootstrap.sh`, the self-build, fuzzing, the
+mutation catalogue, heavy benchmarks, any program built without a limit, and two host stages at
+once. `NAZM_CONTAINED=1` and `NAZM_ALLOW_UNCONTAINED=1` stay forbidden on a host.
+
+**Withdrawn at once**, back to contained only until investigated, if a host run's peak resident
+memory exceeds its heap limit by more than 256 MiB, if an `N0406` does not stop the program, or
+when the counted heap's runtime changes (`crates/nazm-runtime/src/heap.rs`, the pipeline's
+`count_heap`) until `cargo xtask contained selfbuild` passes again with its heap probe. The runner
+reports the first two itself, as `WITHDRAWAL CONDITION`, and writes a marker
+(`~/.cache/nazm-host-run/withdrawn`) that makes every later `host-run` refuse until a person has
+investigated and removed it. The third is a person's to apply: leave that marker in place.
 
 The reason is specific to this platform: **macOS cannot cap a child's memory.** `RLIMIT_AS`
 is an alias of `RLIMIT_RSS` there, and `setrlimit(2)` documents it as advisory — the system
