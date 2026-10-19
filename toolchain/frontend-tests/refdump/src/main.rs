@@ -434,7 +434,10 @@ fn provenance(path: &str) -> String {
     for (i, f) in a.resolution.functions().iter().enumerate() {
         let Some(p) = &f.provenance else { continue };
         let positions = |xs: &[u32]| {
-            xs.iter().map(ToString::to_string).collect::<Vec<_>>().join(",")
+            xs.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
         };
         let received: Vec<String> = p
             .receives
@@ -462,7 +465,8 @@ fn coredigests(path: &str) -> String {
     let Ok(mut loaded) = nazm_service::load::load(p, root.path()) else {
         return "fails\n".to_owned();
     };
-    loaded.graph = std::mem::take(&mut loaded.graph).with_config(nazm_core::sema::BuildConfig::host());
+    loaded.graph =
+        std::mem::take(&mut loaded.graph).with_config(nazm_core::sema::BuildConfig::host());
     let built = nazm_core::on_lowered(
         &loaded.map,
         &loaded.graph,
@@ -485,6 +489,34 @@ fn coredigests(path: &str) -> String {
     built.unwrap_or_else(|_| "fails\n".to_owned())
 }
 
+/// The identities of the diagnostics as the language service indexes them (N30): `state<TAB>` the
+/// source state and then every id in the canonical order, one a line; `unavailable` where the
+/// service has no index, `stops` where the compilation does not load.
+fn diagids(path: &str) -> String {
+    let p = std::path::Path::new(path);
+    let Ok(root) = nazm_service::root::decide(p, None) else {
+        return "stops\n".to_owned();
+    };
+    if nazm_service::load::load(p, root.path()).is_err() {
+        return "stops\n".to_owned();
+    }
+    let mut service = nazm_service::LanguageService::with_source_root(None);
+    if service.open_from_disk(p).is_err() {
+        return "stops\n".to_owned();
+    }
+    match service.diagnostic_index(p, 0) {
+        nazm_service::IndexResult::Available(i) => {
+            let mut out = format!("state\t{}\n", i.state.source);
+            for d in &i.diagnostics {
+                out.push_str(&d.id);
+                out.push('\n');
+            }
+            out
+        }
+        nazm_service::IndexResult::Unavailable(_) => "unavailable\n".to_owned(),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("builtins") {
@@ -495,7 +527,10 @@ fn main() {
         eprintln!("usage: refdump tokens|tree FILE");
         std::process::exit(2);
     };
-    if matches!(mode.as_str(), "keys" | "refs" | "calls" | "provenance" | "coredigests") {
+    if matches!(
+        mode.as_str(),
+        "keys" | "refs" | "calls" | "provenance" | "coredigests" | "diagids"
+    ) {
         let path = path.clone();
         let mode = mode.clone();
         let out = std::thread::Builder::new()
@@ -505,6 +540,7 @@ fn main() {
                 "refs" => refs(&path),
                 "provenance" => provenance(&path),
                 "coredigests" => coredigests(&path),
+                "diagids" => diagids(&path),
                 _ => calls(&path),
             })
             .expect("spawn")

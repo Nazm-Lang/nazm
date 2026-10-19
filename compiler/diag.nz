@@ -43,6 +43,20 @@ pub fn dg_new() -> Diags {
 }
 
 pub fn dg_len(d: Diags) -> Int { strs_len(d.code) }
+// Where diagnostic `i`'s primary span is (over the whole compilation's text), and the file a stage
+// said it is in (by load order; -1 where none did).
+pub fn dg_start(d: Diags, i: Int) -> Int { ints_get(d.start, i) }
+pub fn dg_end(d: Diags, i: Int) -> Int { ints_get(d.end, i) }
+pub fn dg_file(d: Diags, i: Int) -> Int { ints_get(d.file, i) }
+// Its secondary labels' and its fixes' spans, in order.
+pub fn dg_secondary_count(d: Diags, i: Int) -> Int { ints_get(d.sec_count, i) }
+pub fn dg_secondary_start(d: Diags, i: Int, k: Int) -> Int { ints_get(d.sec_start, ints_get(d.sec_first, i) + k) }
+pub fn dg_secondary_end(d: Diags, i: Int, k: Int) -> Int { ints_get(d.sec_end, ints_get(d.sec_first, i) + k) }
+pub fn dg_fix_total(d: Diags, i: Int) -> Int { ints_get(d.fix_count, i) }
+pub fn dg_fix_span_start(d: Diags, i: Int, k: Int) -> Int { ints_get(d.fix_start, ints_get(d.fix_first, i) + k) }
+pub fn dg_fix_span_end(d: Diags, i: Int, k: Int) -> Int { ints_get(d.fix_end, ints_get(d.fix_first, i) + k) }
+// "automatic" or "needs_review".
+pub fn dg_fix_kind(d: Diags, i: Int, k: Int) -> Str { strs_get(d.fix_applicability, ints_get(d.fix_first, i) + k) }
 pub fn dg_code(d: Diags, i: Int) -> Str { strs_get(d.code, i) }
 // "error" or "warning".
 pub fn dg_severity(d: Diags, i: Int) -> Str { strs_get(d.severity, i) }

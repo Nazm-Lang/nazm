@@ -469,3 +469,24 @@ pub fn fd_coredigests(f: Facts) -> Str {
     }
     str_join(out, "")
 }
+
+// The diagnostics' identities, `state.source` and then every id in the canonical order (what
+// `refdump diagids` prints from the language service's index); `unavailable` where the service has
+// no index (the root has no durable key), `stops` where the front end did not carry the compilation
+// or it did not load.
+pub fn fd_diagids(f: Facts) -> Str {
+    if fx_carried(f) == false || fx_refusal(f) != "" || fx_loaded(f) == false { return str_concat("stops", nl()); }
+    if fx_diag_available(f) == false { return str_concat("unavailable", nl()); }
+    let out = strs_new();
+    strs_push(out, cat3("state", tab(), fx_state_source(f)));
+    strs_push(out, nl());
+    let ids = fx_diag_ids(f);
+    let order = fx_diag_order(f);
+    let mut i = 0;
+    while i < ints_len(order) {
+        strs_push(out, strs_get(ids, ints_get(order, i)));
+        strs_push(out, nl());
+        i = i + 1;
+    }
+    str_join(out, "")
+}
