@@ -420,6 +420,38 @@ fn calls(path: &str) -> String {
     out
 }
 
+/// The provenance summaries, one line per function that has one: `FUNCTION<TAB>RESULT<TAB>PASSES ON<TAB>
+/// REACHES<TAB>RECEIVES`: the function by its number, the origins its result carries and the
+/// positions it passes on and that reach the path sink, each joined by commas, and the origins
+/// each parameter is handed, joined by commas and the parameters by semicolons; `-` for none.
+fn provenance(path: &str) -> String {
+    let (_, a) = match analysed(path) {
+        Ok(x) => x,
+        Err(w) => return format!("{w}\n"),
+    };
+    let dash = |s: String| if s.is_empty() { "-".to_owned() } else { s };
+    let mut out = String::new();
+    for (i, f) in a.resolution.functions().iter().enumerate() {
+        let Some(p) = &f.provenance else { continue };
+        let positions = |xs: &[u32]| {
+            xs.iter().map(ToString::to_string).collect::<Vec<_>>().join(",")
+        };
+        let received: Vec<String> = p
+            .receives
+            .iter()
+            .map(|o| dash(o.names().join(",")))
+            .collect();
+        out.push_str(&format!(
+            "{i}\t{}\t{}\t{}\t{}\n",
+            dash(p.origins.names().join(",")),
+            dash(positions(&p.params)),
+            dash(positions(&p.reaches)),
+            dash(received.join(";"))
+        ));
+    }
+    out
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("builtins") {
@@ -430,7 +462,7 @@ fn main() {
         eprintln!("usage: refdump tokens|tree FILE");
         std::process::exit(2);
     };
-    if matches!(mode.as_str(), "keys" | "refs" | "calls") {
+    if matches!(mode.as_str(), "keys" | "refs" | "calls" | "provenance") {
         let path = path.clone();
         let mode = mode.clone();
         let out = std::thread::Builder::new()
@@ -438,6 +470,7 @@ fn main() {
             .spawn(move || match mode.as_str() {
                 "keys" => keys(&path),
                 "refs" => refs(&path),
+                "provenance" => provenance(&path),
                 _ => calls(&path),
             })
             .expect("spawn")

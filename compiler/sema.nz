@@ -14089,6 +14089,32 @@ fn restricted_flow(c: Ck) -> Int {
         g = g + 1;
     }
     if explicit == false { return 0; }
+    let pr = prov_solve(c);
+    let ps = pr.ps;
+    let pf = pr.pf;
+    // The language's policy, in functions that declared an effect set: one diagnostic per site,
+    // in module and body order.
+    let mut k = 0;
+    while k < ints_len(pf.ffn) {
+        if ints_get(c.fneff, ints_get(pf.ffn, k)) >= 0 { refuse_flows(c, ps, pf, k); }
+        k = k + 1;
+    }
+    ss(c, s_module(), pr.saved);
+    0
+}
+
+// Every function's provenance solved (`solve`): the facts of every body, the summaries, what
+// reaches a sink and what each parameter and capture is handed, to their fixed point. The module
+// it leaves the checker in is the one it was in, `saved`.
+pub struct Pr {
+    ps: Ps,
+    pf: Pf,
+    saved: Int,
+}
+
+fn prov_solve(c: Ck) -> Pr {
+    let n = strs_len(c.fnname);
+    let mut g = 0;
     let saved = gs(c, s_module());
     let bloc = ints_new();
     let mut b = 0;
@@ -14112,6 +14138,18 @@ fn restricted_flow(c: Ck) -> Int {
                 i = i + 1;
             }
             ints_set(ps.sp, g, all);
+        }
+        g = g + 1;
+    }
+    // An export is called by C, with anything (N55): what its parameters are handed is unknown.
+    g = 0;
+    while g < n {
+        if ints_get(c.fnexp, g) == 1 {
+            let mut i = 0;
+            while i < ints_get(ps.rcc, g) {
+                ints_set(ps.rcv, ints_get(ps.rcf, g) + i, bor(ints_get(ps.rcv, ints_get(ps.rcf, g) + i), pow2(3)));
+                i = i + 1;
+            }
         }
         g = g + 1;
     }
@@ -14189,15 +14227,7 @@ fn restricted_flow(c: Ck) -> Int {
         again = grown || captures_grew;
         first = false;
     }
-    // The language's policy, in functions that declared an effect set: one diagnostic per site,
-    // in module and body order.
-    let mut k = 0;
-    while k < ints_len(pf.ffn) {
-        if ints_get(c.fneff, ints_get(pf.ffn, k)) >= 0 { refuse_flows(c, ps, pf, k); }
-        k = k + 1;
-    }
-    ss(c, s_module(), saved);
-    0
+    Pr(ps: ps, pf: pf, saved: saved)
 }
 
 // One function's refusals, by where each is.
@@ -15765,11 +15795,22 @@ pub struct Rix {
     cgf: Ints,
     cgc: Ints,
     cgl: Ints,
+    // The provenance summaries, once asked for (`ck_prov_has`): per function whether it has one,
+    // the origins its result carries and the parameters it passes on and that reach the path
+    // sink, as masks; and what each parameter is handed, a run of `pvv` (an origin mask each).
+    pvn: Ints,
+    pvh: Ints,
+    pvo: Ints,
+    pvp: Ints,
+    pvr: Ints,
+    pvf: Ints,
+    pvv: Ints,
 }
 
 fn rix_new() -> Rix {
     Rix(ok: ints_new(), k: ints_new(), ds: ints_new(), de: ints_new(), uf: ints_new(), uc: ints_new(), us: ints_new(), ue: ints_new(),
-            cgn: ints_new(), cgf: ints_new(), cgc: ints_new(), cgl: ints_new())
+            cgn: ints_new(), cgf: ints_new(), cgc: ints_new(), cgl: ints_new(),
+            pvn: ints_new(), pvh: ints_new(), pvo: ints_new(), pvp: ints_new(), pvr: ints_new(), pvf: ints_new(), pvv: ints_new())
 }
 
 // A declaration: where the entity is declared, unless that is no width or no place; the span is
@@ -16257,3 +16298,83 @@ pub fn ck_call_site(c: Ck, i: Int, k: Int) -> Int { ints_get(c.rix.cgl, ints_get
 pub fn ck_site_start(c: Ck, site: Int) -> Int { ints_get(c.sstart, site) }
 pub fn ck_site_end(c: Ck, site: Int) -> Int { ints_get(c.send, site) }
 pub fn ck_site_spawned(c: Ck, site: Int) -> Bool { ints_get(c.sspawn, site) == 1 }
+
+// --- provenance summaries (R5 hand-back; `FnDef::provenance`, N38) ----------------------------
+//
+// What each function's body makes of where its values come from, solved for the whole program as
+// the language's one rule needs (`prov_solve`) — but for every program, not only where the rule
+// could fire: the origins its result carries whatever it is given (`argument`, `file`,
+// `authority`, `unknown`), the parameters whose provenance its result carries, those whose value
+// may reach the path `write_file` writes to, and the origins the program's calls and `spawn`s
+// hand each parameter. A function without a checked body has none.
+
+fn pv_build(c: Ck) -> Int {
+    if ints_len(c.rix.pvn) > 0 { return 0; }
+    ints_push(c.rix.pvn, 1);
+    let r = c.rix;
+    let n = strs_len(c.fnname);
+    let mut wide = false;
+    let mut g = 0;
+    while g < n {
+        ints_push(r.pvh, 0);
+        ints_push(r.pvo, 0);
+        ints_push(r.pvp, 0);
+        ints_push(r.pvr, 0);
+        ints_push(r.pvf, 0);
+        if ints_get(c.fnpc, g) + captures_of(c, g) > 60 { wide = true; }
+        g = g + 1;
+    }
+    if wide || strs_len(c.stop) > 0 { return 0; }
+    let pr = prov_solve(c);
+    let ps = pr.ps;
+    g = 0;
+    while g < n {
+        ints_set(r.pvf, g, ints_len(r.pvv));
+        if ints_get(ps.at, g) >= 0 {
+            ints_set(r.pvh, g, 1);
+            ints_set(r.pvo, g, ints_get(ps.so, g));
+            ints_set(r.pvp, g, ints_get(ps.sp, g));
+            ints_set(r.pvr, g, ps_reach(ps, g, 0));
+            let mut i = 0;
+            while i < ints_get(c.fnpc, g) {
+                ints_push(r.pvv, ints_get(ps.rcv, ints_get(ps.rcf, g) + i));
+                i = i + 1;
+            }
+        }
+        g = g + 1;
+    }
+    ss(c, s_module(), pr.saved);
+    0
+}
+
+pub fn ck_prov_has(c: Ck, g: Int) -> Bool {
+    pv_build(c);
+    ints_get(c.rix.pvh, g) == 1
+}
+
+fn pv_origin_names(mask: Int) -> Strs {
+    let out = strs_new();
+    if has_bit(mask, 0) { strs_push(out, "argument"); }
+    if has_bit(mask, 1) { strs_push(out, "file"); }
+    if has_bit(mask, 2) { strs_push(out, "authority"); }
+    if has_bit(mask, 3) { strs_push(out, "unknown"); }
+    out
+}
+
+// The origins its result carries, by name in id order.
+pub fn ck_prov_origins(c: Ck, g: Int) -> Strs { pv_origin_names(ints_get(c.rix.pvo, g)) }
+// The parameters (and captures, after them) whose provenance its result carries, in order.
+pub fn ck_prov_passes_on(c: Ck, g: Int) -> Ints { bits_of(ints_get(c.rix.pvp, g)) }
+// The parameters whose value may reach the path a `write_file` writes to, in order.
+pub fn ck_prov_reaches(c: Ck, g: Int) -> Ints {
+    let out = ints_new();
+    let bits = bits_of(ints_get(c.rix.pvr, g));
+    let mut i = 0;
+    while i < ints_len(bits) {
+        if ints_get(bits, i) < ints_get(c.fnpc, g) { ints_push(out, ints_get(bits, i)); }
+        i = i + 1;
+    }
+    out
+}
+// The origins the program's calls hand parameter `i`, by name in id order.
+pub fn ck_prov_receives(c: Ck, g: Int, i: Int) -> Strs { pv_origin_names(ints_get(c.rix.pvv, ints_get(c.rix.pvf, g) + i)) }

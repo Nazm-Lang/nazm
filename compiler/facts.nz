@@ -732,3 +732,17 @@ pub fn fx_call_type_args(f: Facts, i: Int, k: Int) -> Strs {
     }
     out
 }
+
+// --- provenance summaries (R5 hand-back; `FnDef::provenance`, N38) ----------------------------
+//
+// Function `i`'s (`ck_fn_*`'s numbering) provenance, solved for the whole compilation: whether it has
+// one (`fx_prov_has`: a checked body does), the origins its result carries whatever it is given
+// (`argument`, `file`, `authority`, `unknown`), the positions of the parameters — and, after them,
+// the captures — whose provenance its result carries, the positions of the parameters whose value
+// may reach the path `write_file` writes to, and the origins the program's calls hand parameter `k`.
+// Solved when first asked for, so a tool that does not ask pays nothing.
+pub fn fx_prov_has(f: Facts, i: Int) -> Bool { ck_prov_has(f.c, i) }
+pub fn fx_prov_origins(f: Facts, i: Int) -> Strs { ck_prov_origins(f.c, i) }
+pub fn fx_prov_passes_on(f: Facts, i: Int) -> Ints { ck_prov_passes_on(f.c, i) }
+pub fn fx_prov_reaches(f: Facts, i: Int) -> Ints { ck_prov_reaches(f.c, i) }
+pub fn fx_prov_receives(f: Facts, i: Int, k: Int) -> Strs { ck_prov_receives(f.c, i, k) }
