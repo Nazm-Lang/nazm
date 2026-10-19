@@ -59,7 +59,9 @@ use stores::Stores;
 pub(crate) use release::link_args as release_link_args;
 
 use self::preflight::{preflight, Settled};
-pub(crate) use preflight::{board_for, board_of, published_name, read_board, switch_target};
+pub(crate) use preflight::{
+    board_for, board_of, c_library_for, published_name, read_board, switch_target,
+};
 
 use link::{link_name, linked, published, sibling, write_ir};
 use lower::{lowered, Lowered};

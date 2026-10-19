@@ -1328,6 +1328,7 @@ declare i32 @_commit(i32)
 declare i32 @_wunlink(ptr)
 declare i32 @_wrmdir(ptr)
 declare i32 @MoveFileExW(ptr, ptr, i32)
+declare i32 @GetFileAttributesW(ptr)
 declare i32 @BCryptGenRandom(ptr, ptr, i32, i32)
 declare ptr @strerror(i32)
 declare i64 @strlen(ptr)
@@ -1506,6 +1507,20 @@ w3:
 open:
   %flags = phi i32 [ 32896, %r ], [ 33665, %w0 ], [ 33161, %w1 ], [ 34177, %w2 ], [ 32898, %w3 ]
   %fd = call i32 (ptr, i32, ...) @_wopen(ptr %w, i32 %flags, i32 384)
+  %bad = icmp slt i32 %fd, 0
+  br i1 %bad, label %which, label %done
+which:
+  ; Windows refuses a directory with "access denied"; every other system says what it is.
+  %at = call i32 @GetFileAttributesW(ptr %w)
+  %valid = icmp ne i32 %at, -1
+  %dirbit = and i32 %at, 16
+  %hasdir = icmp ne i32 %dirbit, 0
+  %isdir = and i1 %valid, %hasdir
+  br i1 %isdir, label %dir, label %done
+dir:
+  call void @nz.win.set_errno(i32 21)
+  br label %done
+done:
   call void @free(ptr %w)
   ret i32 %fd
 }

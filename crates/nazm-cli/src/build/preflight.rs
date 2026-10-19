@@ -497,6 +497,20 @@ pub(crate) fn read_board(
     })
 }
 
+/// The runtime's text for `t`'s C library. Windows' own `snprintf` and `strtod` are the old
+/// `msvcrt`'s where a toolchain links that (MSYS2's `mingw64`): `%.2f` rounds a tie away from
+/// zero and `strtod` does not read `inf` or `nan`. MinGW's own, in `libmingwex`, are C99's on every
+/// toolchain, and they are what the runtime must call there for a number to print and parse as
+/// it does everywhere else.
+pub(crate) fn c_library_for(t: &nazm_lir::backend::Target, text: String) -> String {
+    if matches!(t.os, nazm_lir::backend::Os::Windows) {
+        text.replace("@snprintf(", "@__mingw_snprintf(")
+            .replace("@strtod(", "@__mingw_strtod(")
+    } else {
+        text
+    }
+}
+
 pub(crate) fn switch_target(
     t: &nazm_lir::backend::Target,
 ) -> Option<nazm_lir::runtime::switch::SwitchTarget> {
