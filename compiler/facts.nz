@@ -50,6 +50,9 @@ pub struct Facts {
     programs: Ints,
     // The root file's directory, normalised, which a source's path is shown relative to.
     dir: Strs,
+    // The source root, normalised, which a file's place in the language service's identities is
+    // relative to ("" until the compilation is rooted).
+    sroot: Strs,
 }
 
 // A line break, written so that no string literal in this file holds one.
@@ -58,7 +61,8 @@ fn nl() -> Str { str_from_byte(10) }
 fn facts_new() -> Facts {
     let t = sx_tree();
     let f = Facts(why: strs_new(), refused: ints_new(), refusal: strs_new(), d: dg_new(), t: t, c: ck_none(t), names: strs_new(), texts: strs_new(), bases: ints_new(),
-            keys: strs_new(), programs: ints_new(), dir: strs_new());
+            keys: strs_new(), programs: ints_new(), dir: strs_new(), sroot: strs_new());
+    strs_push(f.sroot, "");
     strs_push(f.why, "");
     ints_push(f.refused, 0);
     strs_push(f.refusal, "");
@@ -116,6 +120,7 @@ fn check_as(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os: S
     }
     if how == 2 { return give_up(f, "the loader stops at a `nazm.root` marker"); }
     let source_root = pk_root_path(root);
+    strs_set(f.sroot, 0, pk_normalise(source_root));
     // A package's compilation (N46): the package and its dependencies, resolved.
     let mut packages = pk_none();
     if how == 1 {
@@ -184,7 +189,7 @@ fn check_as(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os: S
     let mut stopped = ck_stopped(c);
     if unsure { stopped = "a condition on the host, which was not given"; }
     let done = Facts(why: f.why, refused: f.refused, refusal: f.refusal, d: d, t: t, c: c, names: f.names, texts: f.texts, bases: f.bases, keys: f.keys, programs: f.programs,
-            dir: f.dir);
+            dir: f.dir, sroot: f.sroot);
     if stopped == "" {
         if program {
             dg_append(d, ck_diags(c), 0);
@@ -746,3 +751,255 @@ pub fn fx_prov_origins(f: Facts, i: Int) -> Strs { ck_prov_origins(f.c, i) }
 pub fn fx_prov_passes_on(f: Facts, i: Int) -> Ints { ck_prov_passes_on(f.c, i) }
 pub fn fx_prov_reaches(f: Facts, i: Int) -> Ints { ck_prov_reaches(f.c, i) }
 pub fn fx_prov_receives(f: Facts, i: Int, k: Int) -> Strs { ck_prov_receives(f.c, i, k) }
+
+fn cat3(a: Str, b: Str, c: Str) -> Str { str_concat(str_concat(a, b), c) }
+
+// --- the diagnostics' identities (R5 hand-back; N30, `nazm.diagnostic-index/1`) ---------------
+//
+// What the language service says of the compilation's diagnostics, and what `check --summary-json`
+// links a command's diagnostics to: the state the identities are of (`fx_state_source`) and each
+// diagnostic's id (`fx_diag_ids`, by its place in `fx_diags`) in the canonical order
+// (`fx_diag_order`). Of a compilation checked as a module (`fx_check_module*`), as the service
+// analyses one: a program's missing `main` is no part of it. Available (`fx_diag_available`) where
+// the front end carried the compilation, every module loaded, and the root has a durable key.
+
+// Whether module `m` has a place in the service's identities (every file but the core prelude's),
+// and its path there: its durable key, else its path relative to the source root, `..` where it is
+// not under it (`Paths::of`).
+pub fn fx_file_known(f: Facts, m: Int) -> Bool { strs_get(f.names, m) != "@core/prelude.nz" }
+pub fn fx_file_path(f: Facts, m: Int) -> Str {
+    if strs_get(f.keys, m) != "" { return strs_get(f.keys, m); }
+    relative_to(strs_get(f.sroot, 0), pk_normalise(strs_get(f.names, m)))
+}
+
+// `path` relative to `base`, both normalised and absolute; `/`-separated, `..` for each of the
+// base's directories it leaves.
+fn relative_to(base: Str, path: Str) -> Str {
+    let b = path_parts(base);
+    let p = path_parts(path);
+    let mut common = 0;
+    while common < strs_len(b) && common < strs_len(p) && strs_get(b, common) == strs_get(p, common) { common = common + 1; }
+    let out = strs_new();
+    let mut i = common;
+    while i < strs_len(b) {
+        strs_push(out, "..");
+        i = i + 1;
+    }
+    i = common;
+    while i < strs_len(p) {
+        strs_push(out, strs_get(p, i));
+        i = i + 1;
+    }
+    str_join(out, "/")
+}
+
+fn path_parts(path: Str) -> Strs {
+    let out = strs_new();
+    let mut from = 0;
+    let mut i = 0;
+    while i <= str_len(path) {
+        if i == str_len(path) || str_byte(path, i) == 47 {
+            if i > from { strs_push(out, str_slice(path, from, i)); }
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+pub fn fx_diag_available(f: Facts) -> Bool {
+    fx_carried(f) && fx_refusal(f) == "" && fx_loaded(f) && fx_module_key(f, 0) != ""
+}
+
+// `nazm.diagnostic-index/1`'s `state.source`: BLAKE3 over the root's identity and every loaded
+// file's path and exact bytes, in load order.
+pub fn fx_state_source(f: Facts) -> Str {
+    let fields = strs_new();
+    strs_push(fields, "source");
+    strs_push(fields, fx_module_key(f, 0));
+    strs_push(fields, str_concat("nazm ", strs_get(bi_identity(), 1)));
+    let mut m = 0;
+    while m < strs_len(f.names) {
+        if fx_file_known(f, m) {
+            strs_push(fields, fx_file_path(f, m));
+            strs_push(fields, strs_get(f.texts, m));
+        }
+        m = m + 1;
+    }
+    fx_framed("nazm.diagnostic-index/1", fields)
+}
+
+// The file an offset of the compilation is in: the one a stage said, else the last beginning at or
+// before it.
+fn file_at(f: Facts, known: Int, at: Int) -> Int {
+    if known >= 0 { return known; }
+    let mut m = 0;
+    let mut found = 0;
+    while m < ints_len(f.bases) {
+        if ints_get(f.bases, m) <= at { found = m; }
+        m = m + 1;
+    }
+    found
+}
+
+// A place as the identities write it, `FILE:START-END` (offsets local to the file), "" where there
+// is none: the synthetic span, or a file outside the service's identities.
+fn place_of(f: Facts, known: Int, s: Int, e: Int) -> Str {
+    let m = file_at(f, known, s);
+    if s == 0 && e == 0 && m == 0 { return ""; }
+    if fx_file_known(f, m) == false { return ""; }
+    let base = ints_get(f.bases, m);
+    str_concat(str_concat(str_concat(fx_file_path(f, m), ":"), str_concat(int_to_str(s - base), "-")), int_to_str(e - base))
+}
+
+// Whether the place `a` sorts before `b` as `Option<SourceSpan>` does: none first, then by file,
+// start and end — compared as `(file, start, end)`, the file bytewise. A place is written
+// `FILE<TAB>START<TAB>END` here so that none is "".
+fn place_less(a: Str, b: Str) -> Bool { place_key_less(place_parts(a), place_parts(b)) }
+
+fn place_parts(p: Str) -> Strs {
+    // `FILE:START-END`: the file runs to the last `:`.
+    let out = strs_new();
+    if p == "" { return out; }
+    let mut colon = str_len(p) - 1;
+    while colon > 0 && str_byte(p, colon) != 58 { colon = colon - 1; }
+    let mut dash = colon;
+    while dash < str_len(p) && str_byte(p, dash) != 45 { dash = dash + 1; }
+    strs_push(out, str_slice(p, 0, colon));
+    strs_push(out, str_slice(p, colon + 1, dash));
+    strs_push(out, str_slice(p, dash + 1, str_len(p)));
+    out
+}
+
+// A run of decimal digits as a number.
+fn digits_int(s: Str) -> Int {
+    let mut n = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        n = n * 10 + str_byte(s, i) - 48;
+        i = i + 1;
+    }
+    n
+}
+
+fn place_key_less(a: Strs, b: Strs) -> Bool {
+    if strs_len(a) == 0 { return strs_len(b) > 0; }
+    if strs_len(b) == 0 { return false; }
+    if strs_get(a, 0) != strs_get(b, 0) { return str_less(strs_get(a, 0), strs_get(b, 0)); }
+    if digits_int(strs_get(a, 1)) != digits_int(strs_get(b, 1)) { return digits_int(strs_get(a, 1)) < digits_int(strs_get(b, 1)); }
+    digits_int(strs_get(a, 2)) < digits_int(strs_get(b, 2))
+}
+
+// Lists of places, compared as `Vec<Option<SourceSpan>>`: element by element, a prefix first. Each
+// list is its places joined by a byte below every other, so that is a comparison of strings
+// by their elements: here made by hand.
+fn places_less(a: Strs, b: Strs) -> Bool {
+    let mut i = 0;
+    while i < strs_len(a) && i < strs_len(b) {
+        if strs_get(a, i) != strs_get(b, i) { return place_less(strs_get(a, i), strs_get(b, i)); }
+        i = i + 1;
+    }
+    strs_len(a) < strs_len(b)
+}
+
+fn diag_secondary(f: Facts, k: Int) -> Strs {
+    let out = strs_new();
+    let d = fx_diags(f);
+    let mut i = 0;
+    while i < dg_secondary_count(d, k) {
+        strs_push(out, place_of(f, 0 - 1, dg_secondary_start(d, k, i), dg_secondary_end(d, k, i)));
+        i = i + 1;
+    }
+    out
+}
+
+fn diag_fixes(f: Facts, k: Int) -> Strs {
+    let out = strs_new();
+    let d = fx_diags(f);
+    let mut i = 0;
+    while i < dg_fix_total(d, k) {
+        strs_push(out, place_of(f, 0 - 1, dg_fix_span_start(d, k, i), dg_fix_span_end(d, k, i)));
+        i = i + 1;
+    }
+    out
+}
+
+fn diag_primary(f: Facts, k: Int) -> Str {
+    let d = fx_diags(f);
+    place_of(f, dg_file(d, k), dg_start(d, k), dg_end(d, k))
+}
+
+// Whether diagnostic `a` goes before `b` in the canonical order: primary place, code, secondary
+// places, fix places, then the order the compiler gave them in.
+fn diag_less(f: Facts, a: Int, b: Int) -> Bool {
+    let d = fx_diags(f);
+    let pa = diag_primary(f, a);
+    let pb = diag_primary(f, b);
+    if pa != pb { return place_less(pa, pb); }
+    if dg_code(d, a) != dg_code(d, b) { return str_less(dg_code(d, a), dg_code(d, b)); }
+    let sa = diag_secondary(f, a);
+    let sb = diag_secondary(f, b);
+    if strs_len(sa) != strs_len(sb) || str_join(sa, "|") != str_join(sb, "|") { if places_less(sa, sb) { return true; } if places_less(sb, sa) { return false; } }
+    let fa = diag_fixes(f, a);
+    let fb = diag_fixes(f, b);
+    if strs_len(fa) != strs_len(fb) || str_join(fa, "|") != str_join(fb, "|") { if places_less(fa, fb) { return true; } if places_less(fb, fa) { return false; } }
+    a < b
+}
+
+// The errors among the diagnostics of `fx_diags` in the canonical order: for each position, which
+// one.
+pub fn fx_diag_order(f: Facts) -> Ints {
+    let order = ints_new();
+    let n = dg_len(fx_diags(f));
+    let mut i = 0;
+    while i < n {
+        // The service's list holds the analysis's errors; the checker's warnings are published
+        // beside them, with no id.
+        if dg_severity(fx_diags(f), i) != "error" {
+            i = i + 1;
+            continue;
+        }
+        let mut at = 0;
+        while at < ints_len(order) && diag_less(f, ints_get(order, at), i) { at = at + 1; }
+        ints_push(order, 0);
+        let mut j = ints_len(order) - 1;
+        while j > at {
+            ints_set(order, j, ints_get(order, j - 1));
+            j = j - 1;
+        }
+        ints_set(order, at, i);
+        i = i + 1;
+    }
+    order
+}
+
+// Each diagnostic's id, `CODE@FILE:START-END#N` (`-` for a place it has none), by its place in
+// `fx_diags`: N counts the earlier ones in the canonical order with the same code and place.
+pub fn fx_diag_ids(f: Facts) -> Strs {
+    let d = fx_diags(f);
+    let order = fx_diag_order(f);
+    let out = strs_new();
+    let stems = strs_new();
+    let mut i = 0;
+    while i < dg_len(d) {
+        strs_push(out, "");
+        i = i + 1;
+    }
+    i = 0;
+    while i < ints_len(order) {
+        let k = ints_get(order, i);
+        let mut place = diag_primary(f, k);
+        if place == "" { place = "-"; }
+        let stem = cat3(dg_code(d, k), "@", place);
+        let mut n = 0;
+        let mut j = 0;
+        while j < strs_len(stems) {
+            if strs_get(stems, j) == stem { n = n + 1; }
+            j = j + 1;
+        }
+        strs_push(stems, stem);
+        strs_set(out, k, cat3(stem, "#", int_to_str(n)));
+        i = i + 1;
+    }
+    out
+}
