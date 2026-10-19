@@ -100,7 +100,13 @@
 
 ## 9. The agent commands and the MCP server
 - [ ] 9.1 `context`, `snapshot`, `delta`, `diagnostics`, `docs`, `repo`, `patch`, `resolve`,
-      `references`, `inspect`, `interface`, the MCP server
+      `references`, `inspect`, `interface`, the MCP server. Part done (2026-10-19): `interface` (design
+      D19; 3,342 inputs, `--hash` too: 3,342 agree, 0 differ, 0 refused; 29 command lines agree) and
+      `docs` (D20; every one of the 1,498 sections by id and every form of the index: 1,652 runs
+      agree; 13 corpora each with one thing wrong: 39 runs agree; 37 command lines agree) and
+      `patch apply` (7.2). Not ported: `context`, `snapshot`, `delta`, `diagnostics`, `resolve`,
+      `references`, `inspect`, `repo` and the MCP server, which need the reference index, the call
+      graph, provenance, Core IR/MIR and the language service's diagnostic ids from `compiler/` (D20)
 
 ## 10. Packages
 - [ ] 10.1 `lock`, `update`, `publish`, `yank`, `attest`

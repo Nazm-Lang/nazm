@@ -1,0 +1,104 @@
+// `nazm interface`, written in Nazm (R5, `openspec/changes/r5-commands/`, task 9.1, design D19).
+//
+// `nazm interface [--hash] [--source-root DIR] FILE`, run by the dispatcher (`nazm.nz`).
+//
+// A port of `crates/nazm-cli/src/interface.rs` over R2's front end: the root checked as a module
+// (`fx_check_module_in`, `Entry::Absent`), and the root module's published interface as
+// `compiler/sema.nz` writes it (`ck_interface_json`, the bytes the check cache keys on) — one
+// `nazm.interface/N` object, or with `--hash` its BLAKE3 as `blake3-256 HEX`. A compilation that
+// fails is its errors rendered and `nazm: N errors` (1); one that does not load is the loader's
+// diagnostics (3 when every one is `N0205`, else 1).
+
+use "@std/blake3"
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/facts.nz"
+use "cli.nz"
+use "front.nz"
+use "util.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+// The command line, as `crates/nazm-cli/src/cli.rs` declares `nazm interface`.
+pub fn interface_cli() -> Cli {
+    let c = cli_command("interface", "Write a module's published interface: what it offers, durably",
+            "Write a module's published interface: what it offers, durably." + nl() + nl()
+            + "The file named is the root, so the source root is its directory. Output is one `nazm.interface/1` JSON object on "
+            + "stdout — the same bytes every time, for the same interface, in this process and the next one. This is not a cache "
+            + "and reuses nothing; see `docs/architecture.md` §7.3.")
+    cli_positional(c, "FILE", true, false, true, "", "")
+    cli_flag(c, "", "hash", "Print the fingerprint instead of the interface: `blake3-256 <hex>`", "")
+    cli_option(c, "", "source-root", "DIR", true, "", false, "Where this project begins. As `nazm check --source-root`", "")
+    c
+}
+
+fn refuse(io: IoCap, why: Str) -> Int {
+    eprint("interface: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+// `nazm interface`, its arguments read into `c` (`interface_cli`) from where `cli_from` says.
+pub fn interface_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let file = cli_value(c, 0)
+    let hash = cli_present(c, 1)
+    let given = cli_value(c, 2)
+    let library = os_env_get("NAZM_LIBRARY")
+    if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
+    let given_prefix = if cli_present(c, 2) { fe_prefix(io, given) } else { "" }
+    let prefix = fe_prefix(io, file)
+    let f = fx_check_module_in(prefix + file, if cli_present(c, 2) { given_prefix + given } else { "" }, library, fe_host_os(), fe_host_arch(), io)
+    if fx_refusal(f) != "" {
+        let why = fe_unprefix(fx_refusal(f), given_prefix)
+        eprint("nazm: " + why + nl())
+        let unreadable = fe_starts(why, "could not read")
+                || (str_len(why) >= 18 && str_slice(why, str_len(why) - 18, str_len(why)) == "is not a directory")
+        exit_with(if unreadable { 3 } else { 1 })
+    }
+    if !fx_carried(f) { refuse(io, fx_why(f)) }
+    let d = fx_diags(f)
+    fe_unprefix_diags(io, d, prefix, prefix + file)
+    let names = fe_names(f, prefix)
+    let texts = fe_texts(f)
+    let bases = fe_bases(f)
+    if fe_load_failed(f) {
+        let out = strs_new()
+        let mut missing = true
+        for i in 0..dg_len(d) {
+            if strs_get(d.code, i) != "N0205" { missing = false }
+            strs_push(out, dg_render(d, i, names, texts, bases))
+        }
+        eprint(str_join(out, ""))
+        exit_with(if missing { 3 } else { 1 })
+    }
+    let out = strs_new()
+    let mut errors = 0
+    for i in 0..dg_len(d) {
+        if dg_severity(d, i) != "error" { continue }
+        errors += 1
+        strs_push(out, dg_render(d, i, names, texts, bases))
+    }
+    if errors > 0 {
+        eprint(str_join(out, "") + "nazm: " + int_to_str(errors) + " error" + ut_plural(errors) + nl())
+        exit_with(1)
+        return 1
+    }
+    let keys = strs_new()
+    for m in 0..fx_modules(f) { strs_push(keys, fx_module_key(f, m)) }
+    let json = ck_interface_json(fx_checker(f), 0, keys)
+    if json == "" {
+        if fx_module_key(f, 0) == "" { refuse(io, "a root module with no durable key") }
+        // `PersistentUnitInterface::published`'s refusal: a dependency outside the source root.
+        eprint("nazm: a module it imports has no durable identity, so this interface could not name its dependencies" + nl())
+        exit_with(1)
+        return 1
+    }
+    if hash {
+        print("blake3-256 " + blake3_hex(bytes_from_str(json)) + nl())
+    } else {
+        print(json + nl())
+    }
+    0
+}
