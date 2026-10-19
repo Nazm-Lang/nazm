@@ -7,7 +7,8 @@
 // its summary line); with `--facts`, what `nazm doc` would read of the compilation, as
 // `facts-dump.nz` prints it (design D24); with `--core`, each function's Core IR as `core.nz`
 // lowers it (D25); with `--refs`, the reference index as `facts-dump.nz` prints it (R5 hand-back); with `--calls`, the call graph, the provenance summaries and Core IR's digests likewise; with `--coredoc`, the whole Core IR document
-// `nazm core-ir` prints, where every function and part is carried; with `--diagids`, the diagnostics' identities; with `--fieldtypes`, the declared types of the
+// `nazm core-ir` prints, where every function and part is carried (`--coredoc-sources`: with each module's source,
+// as `--with-sources` adds it, what the self-build gives the pipeline); with `--diagids`, the diagnostics' identities; with `--fieldtypes`, the declared types of the
 // records' fields and the enums' payloads.
 // Otherwise the loader's (`load.nz`, the standard modules and the core prelude from LIBRARY,
 // `library` by default), then every file's lexer and parser diagnostics at their offsets in the
@@ -36,7 +37,7 @@ fn main(io: IoCap) -> Int {
     let mut at = 0;
     let mut mode = "";
     if args_count() > 1 {
-        if arg(0) == "--syntax" || arg(0) == "--text" || arg(0) == "--facts" || arg(0) == "--core" || arg(0) == "--keys" || arg(0) == "--units" || arg(0) == "--refs" || arg(0) == "--calls" || arg(0) == "--provenance" || arg(0) == "--coredigests" || arg(0) == "--coredoc" || arg(0) == "--diagids" || arg(0) == "--fieldtypes" {
+        if arg(0) == "--syntax" || arg(0) == "--text" || arg(0) == "--facts" || arg(0) == "--core" || arg(0) == "--keys" || arg(0) == "--units" || arg(0) == "--refs" || arg(0) == "--calls" || arg(0) == "--provenance" || arg(0) == "--coredigests" || arg(0) == "--coredoc" || arg(0) == "--coredoc-sources" || arg(0) == "--diagids" || arg(0) == "--fieldtypes" {
             at = 1;
             mode = arg(0);
         }
@@ -63,7 +64,7 @@ fn main(io: IoCap) -> Int {
         let t = sx_tree();
         sx_parse_source(ld_with_newline(read_file(path)), t, d);
     } else {
-        let f = checked(path, library, os, arch, mode == "--facts" || mode == "--core" || mode == "--units" || mode == "--refs" || mode == "--calls" || mode == "--provenance" || mode == "--coredigests" || mode == "--coredoc" || mode == "--diagids" || mode == "--fieldtypes", io);
+        let f = checked(path, library, os, arch, mode == "--facts" || mode == "--core" || mode == "--units" || mode == "--refs" || mode == "--calls" || mode == "--provenance" || mode == "--coredigests" || mode == "--coredoc" || mode == "--coredoc-sources" || mode == "--diagids" || mode == "--fieldtypes", io);
         // Where the front end stopped, standard error says at what (design D13).
         if fx_why(f) != "" { eprint(str_concat(str_concat("diagnose: ", fx_why(f)), nl())); }
         if mode == "--text" {
@@ -127,6 +128,10 @@ fn main(io: IoCap) -> Int {
         }
         if mode == "--coredoc" {
             if fx_carried(f) && fx_loaded(f) && fx_failed(f) == false { print(fx_core_document(f)); }
+            return 0;
+        }
+        if mode == "--coredoc-sources" {
+            if fx_carried(f) && fx_loaded(f) && fx_failed(f) == false { print(fx_core_document_with_sources(f)); }
             return 0;
         }
         if mode == "--coredigests" {
