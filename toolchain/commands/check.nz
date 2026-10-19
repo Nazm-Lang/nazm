@@ -10,8 +10,9 @@
 // statuses.
 //
 // Where the reference would do something this port does not carry — the checker stops, a package,
-// a `nazm.root` marker, `--profile`, `--profile-report`, `--cache-report`,
-// `--summary-json` — it says so on standard error and exits 6 before writing anything else. The
+// a `nazm.root` marker, `--profile`, `--profile-report`, `--cache-report` — it says so on standard
+// error and exits 6 before writing anything else. `--summary-json` is `summary.nz`'s (design D23), `--locked`
+// `lockcheck.nz`'s. The
 // check cache (`.nazm/check/`) is derived data and is neither read nor written (design D11).
 //
 // The standard library is read from the directory `NAZM_LIBRARY` names: the reference compiles in
@@ -24,6 +25,8 @@ use "../../compiler/package.nz"
 use "../../compiler/facts.nz"
 use "cli.nz"
 use "front.nz"
+use "summary.nz"
+use "lockcheck.nz"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -288,6 +291,15 @@ fn check_library(io: IoCap, modules: Strs, library: Str, json: Bool) -> Int {
     0
 }
 
+// `--summary-json`: the summary of what the command reached, in place of its rendering, and the status.
+fn finish_summary(io: IoCap, f: Facts, abs: Str, given: Str, library: Str, which: Ints, status: Str, code: Int, with_map: Bool) -> Int {
+    let g = fx_check_module_in(abs, given, library, fe_host_os(), fe_host_arch(), io)
+    if !fx_carried(g) { refuse(io, fx_why(g)) }
+    print(sm_summary(f, g, which, status, code, readable_text(io, abs), with_map) + nl())
+    exit_with(code)
+    0
+}
+
 // `nazm check`, its arguments read into `c` (`check_cli`) from where `cli_from` says.
 pub fn check_command(io: IoCap, c: Cli) -> Int {
     cli_parse(io, c)
@@ -353,13 +365,14 @@ pub fn check_command(io: IoCap, c: Cli) -> Int {
         exit_with(5)
     }
     if locked {
-        // `verify_locked`: a lockfile that is not there; one that is, is not read here.
-        let lock = fe_canonical(io, strs_get(packages.dirs, pk_root_package(packages))) + "/nazm.lock"
-        if exists(io, lock) { refuse(io, "`--locked` (the lockfile's verification)") }
-        eprint("error[N0505]: `--locked`, and there is no `" + lock + "`" + nl())
-        eprint("  = help: `nazm lock` writes it" + nl())
-        eprint("nazm: 1 error" + nl())
-        exit_with(1)
+        // `verify_locked`: the lockfile beside the root manifest, held to the resolution (`pkg.nz`).
+        let dir = fe_canonical(io, strs_get(packages.dirs, pk_root_package(packages)))
+        let verdict = lk_verify(io, dir)
+        if fe_starts(verdict, "R") { refuse(io, str_slice(verdict, 1, str_len(verdict))) }
+        if fe_starts(verdict, "E") {
+            eprint(str_slice(verdict, 1, str_len(verdict)))
+            exit_with(1)
+        }
     }
     // `profile::enforce`: an unknown profile is refused before anything is checked; a profile
     // other than `general`, and the report, are not carried.
@@ -379,7 +392,7 @@ pub fn check_command(io: IoCap, c: Cli) -> Int {
     let given = cli_value(c, 2)
     let given_prefix = if cli_present(c, 2) { fe_prefix(io, given) } else { "" }
     if cli_present(c, 2) && packaged { refuse(io, "`--source-root` for a package's module") }
-    if cli_present(c, 5) { refuse(io, "`--summary-json` (the language service's diagnostic identities)") }
+    let summary = cli_present(c, 5)
     if report && !no_cache { refuse(io, "`--cache-report` with the check cache") }
     if !entry && exists(io, file) && !readable_text(io, file) { refuse(io, "a root module that is not a readable UTF-8 file") }
 
@@ -389,6 +402,12 @@ pub fn check_command(io: IoCap, c: Cli) -> Int {
     if fx_refusal(f) != "" {
         // `root::decide`'s refusal, in its words: 3 for what cannot be read, else 1 (`root_status`).
         let why = fe_unprefix(fx_refusal(f), given_prefix)
+        if summary {
+            let unreadable = fe_starts(why, "could not read")
+                    || (str_len(why) >= 18 && str_slice(why, str_len(why) - 18, str_len(why)) == "is not a directory")
+            finish_summary(io, f, abs, if cli_present(c, 2) { given_prefix + given } else { "" }, library, ints_new(),
+                    if unreadable { "unreadable" } else { "refused" }, if unreadable { 3 } else { 1 }, false)
+        }
         eprint("nazm: " + why + nl())
         let unreadable = fe_starts(why, "could not read")
                 || (str_len(why) >= 18 && str_slice(why, str_len(why) - 18, str_len(why)) == "is not a directory")
@@ -406,6 +425,10 @@ pub fn check_command(io: IoCap, c: Cli) -> Int {
         for i in 0..dg_len(d) {
             if strs_get(d.code, i) != "N0205" { missing = false }
             ints_push(all, i)
+        }
+        if summary {
+            finish_summary(io, f, abs, if cli_present(c, 2) { given_prefix + given } else { "" }, library, all,
+                    if missing { "unreadable" } else { "rejected" }, if missing { 3 } else { 1 }, true)
         }
         emit(f, names, all, json, out)
         eprint(str_join(out, ""))
@@ -437,6 +460,14 @@ pub fn check_command(io: IoCap, c: Cli) -> Int {
     let errors = ints_new()
     for i in 0..dg_len(d) {
         if strs_get(d.severity, i) == "warning" { ints_push(warnings, i) } else { ints_push(errors, i) }
+    }
+    if summary {
+        let all = ints_new()
+        for i in 0..ints_len(errors) { ints_push(all, ints_get(errors, i)) }
+        for i in 0..ints_len(warnings) { ints_push(all, ints_get(warnings, i)) }
+        let ok = ints_len(errors) == 0 && !(deny && ints_len(warnings) > 0)
+        finish_summary(io, f, abs, if cli_present(c, 2) { given_prefix + given } else { "" }, library, all,
+                if ok { "success" } else { "rejected" }, if ok { 0 } else { 1 }, true)
     }
     emit(f, names, warnings, json, out)
     let warned = str_join(out, "")

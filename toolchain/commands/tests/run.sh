@@ -358,6 +358,29 @@ fixture() {
       printf 'use "lib:a.nz";\nfn main() -> Int { 0 }\n' > "$dir/bad/src/main.nz"
       printf 'use "lib:a.nz";\nfn main() -> Int { 0 }\n' > "$dir/nopkg.nz"
       printf 'schema = "nazm.package/9"\n' > "$dir/broken/nazm.toml"
+      # lk/ is app/ with a lockfile (written by the reference); lk1/ ... lk12/ hold it wrong in a way each:
+      # a digest, a version, a package it does not use, a package missing, a package twice, another
+      # schema, TOML that is not, a field it does not know, no schema, an empty file, a directory.
+      mkdir -p "$dir/lk/src"
+      printf 'schema = "nazm.package/1"\n\n[package]\nname = "lk"\nversion = "0.1.0"\nmain = "main.nz"\n\n[dependencies]\nlib = { path = "../lib", version = "1.0.0" }\n' > "$dir/lk/nazm.toml"
+      cp "$dir/app/src/main.nz" "$dir/lk/src/main.nz"
+      (cd "$dir" && "$ref" lock lk > /dev/null 2>&1)
+      for n in 1 2 3 4 5 6 7 8 9 10 11 12; do cp -R "$dir/lk" "$dir/lk$n"; done
+      (
+        cd "$dir"
+        awk 'BEGIN{n=0} /^digest/ && n==0 {sub(/"blake3:./,"\"blake3:x"); n=1} {print}' lk/nazm.lock > lk1/nazm.lock
+        sed 's/^version = "1.0.0"/version = "1.0.1"/' lk/nazm.lock > lk2/nazm.lock
+        { cat lk/nazm.lock; printf '\n[[package]]\nname = "zzz"\nversion = "1.0.0"\nsource = "path+../zzz"\ndigest = "blake3:00"\ndependencies = []\n'; } > lk3/nazm.lock
+        awk 'BEGIN{RS="";ORS="\n\n"} !/name = "lib"/' lk/nazm.lock > lk4/nazm.lock
+        awk 'BEGIN{RS="";ORS="\n\n"} {print} /name = "lib"/{print}' lk/nazm.lock > lk5/nazm.lock
+        sed 's|nazm.lock/1|nazm.lock/9|' lk/nazm.lock > lk6/nazm.lock
+        printf 'not toml' > lk7/nazm.lock
+        awk '/^dependencies/ {print "extra = 1"} {print}' lk/nazm.lock > lk8/nazm.lock
+        grep -v '^schema' lk/nazm.lock > lk9/nazm.lock
+        : > lk10/nazm.lock
+        sed 's|nazm.lock/1|nazm.lock/2|' lk/nazm.lock > lk11/nazm.lock
+        rm lk12/nazm.lock; mkdir lk12/nazm.lock
+      )
       ;;
     doc)
       printf '// Adds.\n//   Two lines.\npub fn add(a: Int, b: Int) -> Int { a + b }\n\n@deprecated("use add")\npub fn plus(a: Int) -> Int { a }\n\n/// Kept.\npub struct P { x: Int, y: Str }\n\npub enum E { A, B(n: Int) }\n' > "$dir/a.nz"
@@ -634,7 +657,9 @@ part_check() {
     run "$d/ref.json" "$R5_REF" check --json --no-cache "$f"
     run "$d/got.text" timeout "$R5_DEADLINE" "$R5_PORT" check --no-cache "$f"
     run "$d/got.json" timeout "$R5_DEADLINE" "$R5_PORT" check --json --no-cache "$f"
-    kinds="text json"
+    run "$d/ref.sum" "$R5_REF" check --summary-json --no-cache "$f"
+    run "$d/got.sum" timeout "$R5_DEADLINE" "$R5_PORT" check --summary-json --no-cache "$f"
+    kinds="text json sum"
     if grep -q "^warning\[" "$d/ref.text.e"; then
       run "$d/ref.deny" "$R5_REF" check --no-cache --deny-warnings "$f"
       run "$d/got.deny" timeout "$R5_DEADLINE" "$R5_PORT" check --no-cache --deny-warnings "$f"
@@ -852,7 +877,8 @@ part_lsp() {
   [ "$differ" -eq 0 ] || status=1
 
   # Every input of check opened as it is on disk — its diagnostics published, then closed — and
-  # again with hover at a few positions (tests/lsp-session.py writes both sessions).
+  # again with hover at a few positions, and with what a client asks of forty of its names: definition, hover, references,
+  # rename, symbols (tests/lsp-session.py writes the sessions).
   command -v python3 > /dev/null || { echo "lsp corpus: skipped (no python3 to write the sessions)"; return; }
   list="$work/lsp-inputs.txt"
   if [ $# -gt 0 ]; then
@@ -871,8 +897,8 @@ part_lsp() {
     mkdir -p "$d"
     verdict=agree
     why=""
-    for mode in open hover; do
-      if [ $mode = hover ]; then m=hover; else m=""; fi
+    for mode in open hover nav flat syms symsflat; do
+      if [ $mode = open ]; then m=""; else m=$mode; fi
       if ! python3 -I "$R5_ROOT/toolchain/commands/tests/lsp-session.py" "$R5_ROOT/$f" $m > "$d/$mode.in"; then verdict=skipped; break; fi
       (cd "$R5_ROOT" && { rc=0; "$R5_REF" lsp < "$d/$mode.in" > "$d/ref.$mode" 2>&1 || rc=$?; echo "exit $rc" >> "$d/ref.$mode"; })
       (cd "$R5_ROOT" && { rc=0; timeout "$R5_DEADLINE" "$R5_PORT" lsp < "$d/$mode.in" > "$d/got.$mode" 2>&1 || rc=$?; echo "exit $rc" >> "$d/got.$mode"; })

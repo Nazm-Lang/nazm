@@ -1,0 +1,249 @@
+// `nazm.command-summary/1` (R5, design D23): what `check --summary-json` prints, as
+// `crates/nazm-service/src/summary.rs` builds it — the command's own outcome and a reference to each
+// diagnostic it reported, linked to the language service's identities (N30) where the command read
+// exactly the sources the service reads. The identities come from a second compilation of the same
+// root, checked as a module (`fx_check_module_in`), as the service analyses one.
+
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/package.nz"
+use "../../compiler/facts.nz"
+use "front.nz"
+
+fn sm_nl() -> Str { str_from_byte(10) }
+
+// The file an offset of the compilation is in: the one a stage said, else the last beginning at or
+// before it.
+fn sm_file_at(f: Facts, known: Int, at: Int) -> Int {
+    if known >= 0 { return known }
+    let mut found = 0
+    for m in 0..fx_modules(f) {
+        if fx_module_base(f, m) <= at { found = m }
+    }
+    found
+}
+
+// A place as the service writes it, `FILE:START-END` (offsets local to the file), "" where there is
+// none: the synthetic span, or a file outside the service's identities.
+pub fn sm_place(f: Facts, known: Int, s: Int, e: Int) -> Str {
+    let m = sm_file_at(f, known, s)
+    if s == 0 && e == 0 && m == 0 { return "" }
+    if !fx_file_known(f, m) { return "" }
+    let base = fx_module_base(f, m)
+    fx_file_path(f, m) + ":" + int_to_str(s - base) + "-" + int_to_str(e - base)
+}
+
+pub fn sm_primary(f: Facts, k: Int) -> Str {
+    let d = fx_diags(f)
+    sm_place(f, dg_file(d, k), dg_start(d, k), dg_end(d, k))
+}
+
+pub fn sm_secondary(f: Facts, k: Int) -> Strs {
+    let d = fx_diags(f)
+    let out = strs_new()
+    for i in 0..dg_secondary_count(d, k) {
+        strs_push(out, sm_place(f, 0 - 1, dg_secondary_start(d, k, i), dg_secondary_end(d, k, i)))
+    }
+    out
+}
+
+pub fn sm_fixes(f: Facts, k: Int) -> Strs {
+    let d = fx_diags(f)
+    let out = strs_new()
+    for i in 0..dg_fix_total(d, k) {
+        strs_push(out, sm_place(f, 0 - 1, dg_fix_span_start(d, k, i), dg_fix_span_end(d, k, i)))
+    }
+    out
+}
+
+fn sm_digits(s: Str) -> Int {
+    let mut n = 0
+    for i in 0..str_len(s) { n = n * 10 + str_byte(s, i) - 48 }
+    n
+}
+
+// `FILE:START-END` as (file, start, end); the file runs to the last `:`. Empty for no place.
+fn sm_parts(p: Str) -> Strs {
+    let out = strs_new()
+    if p == "" { return out }
+    let mut colon = str_len(p) - 1
+    while colon > 0 && str_byte(p, colon) != 58 { colon -= 1 }
+    let mut dash = colon
+    while dash < str_len(p) && str_byte(p, dash) != 45 { dash += 1 }
+    strs_push(out, str_slice(p, 0, colon))
+    strs_push(out, str_slice(p, colon + 1, dash))
+    strs_push(out, str_slice(p, dash + 1, str_len(p)))
+    out
+}
+
+// `Option<SourceSpan>`'s order: none first, then file (bytewise), start, end.
+fn sm_place_less(a: Str, b: Str) -> Bool {
+    let x = sm_parts(a)
+    let y = sm_parts(b)
+    if strs_len(x) == 0 { return strs_len(y) > 0 }
+    if strs_len(y) == 0 { return false }
+    if strs_get(x, 0) != strs_get(y, 0) { return fe_str_less(strs_get(x, 0), strs_get(y, 0)) }
+    if sm_digits(strs_get(x, 1)) != sm_digits(strs_get(y, 1)) { return sm_digits(strs_get(x, 1)) < sm_digits(strs_get(y, 1)) }
+    sm_digits(strs_get(x, 2)) < sm_digits(strs_get(y, 2))
+}
+
+// Lists of places compared element by element, a prefix first.
+fn sm_places_less(a: Strs, b: Strs) -> Bool {
+    let mut i = 0
+    while i < strs_len(a) && i < strs_len(b) {
+        if strs_get(a, i) != strs_get(b, i) { return sm_place_less(strs_get(a, i), strs_get(b, i)) }
+        i += 1
+    }
+    strs_len(a) < strs_len(b)
+}
+
+fn sm_same(a: Strs, b: Strs) -> Bool { strs_len(a) == strs_len(b) && str_join(a, str_from_byte(0)) == str_join(b, str_from_byte(0)) }
+
+// A diagnostic's structure, what the canonical order and the linking read: primary place, code,
+// secondary places, fix places.
+pub struct Sm {
+    primary: Str,
+    code: Str,
+    secondary: Strs,
+    fixes: Strs,
+}
+
+pub fn sm_structure(f: Facts, k: Int) -> Sm {
+    Sm(primary: sm_primary(f, k), code: dg_code(fx_diags(f), k), secondary: sm_secondary(f, k), fixes: sm_fixes(f, k))
+}
+
+// A structure with no place at all: where the command's places are not linked.
+fn sm_unplaced(s: Sm) -> Sm {
+    let sec = strs_new()
+    for i in 0..strs_len(s.secondary) { strs_push(sec, "") }
+    let fix = strs_new()
+    for i in 0..strs_len(s.fixes) { strs_push(fix, "") }
+    Sm(primary: "", code: s.code, secondary: sec, fixes: fix)
+}
+
+pub fn sm_less(a: Sm, b: Sm) -> Bool {
+    if a.primary != b.primary { return sm_place_less(a.primary, b.primary) }
+    if a.code != b.code { return fe_str_less(a.code, b.code) }
+    if !sm_same(a.secondary, b.secondary) {
+        if sm_places_less(a.secondary, b.secondary) { return true }
+        if sm_places_less(b.secondary, a.secondary) { return false }
+    }
+    if !sm_same(a.fixes, b.fixes) {
+        if sm_places_less(a.fixes, b.fixes) { return true }
+        if sm_places_less(b.fixes, a.fixes) { return false }
+    }
+    false
+}
+
+pub fn sm_equal(a: Sm, b: Sm) -> Bool { a.primary == b.primary && a.code == b.code && sm_same(a.secondary, b.secondary) && sm_same(a.fixes, b.fixes) }
+
+// Whether `g`, the module compilation, is what the service holds of the root: the front end carried
+// it, and the root has a durable key.
+pub fn sm_current(g: Facts) -> Bool {
+    fx_carried(g) && fx_refusal(g) == "" && fx_modules(g) > 0 && fx_module_key(g, 0) != ""
+}
+
+// Whether the command (`f`) read exactly the sources the service (`g`) reads: the same files, in the
+// same order, by name and bytes.
+fn sm_same_sources(f: Facts, g: Facts) -> Bool {
+    if fx_modules(f) != fx_modules(g) { return false }
+    for m in 0..fx_modules(f) {
+        if fx_module_name(f, m) != fx_module_name(g, m) || fx_module_text(f, m) != fx_module_text(g, m) { return false }
+    }
+    true
+}
+
+fn sm_place_json(p: Str) -> Str {
+    if p == "" { return "null" }
+    let x = sm_parts(p)
+    "{\"file\":" + json_str(strs_get(x, 0)) + ",\"start\":" + strs_get(x, 1) + ",\"end\":" + strs_get(x, 2) + "}"
+}
+
+// How many of diagnostic `k`'s fixes are of the applicability.
+fn sm_count_fixes(f: Facts, k: Int, kind: Str) -> Int {
+    let d = fx_diags(f)
+    let mut n = 0
+    for i in 0..dg_fix_total(d, k) {
+        if dg_fix_kind(d, k, i) == kind { n += 1 }
+    }
+    n
+}
+
+// The summary of what a `check` reached: `f` the command's compilation (`which` its diagnostics, in
+// the order it reported them), `g` the module compilation the service reads, `opened` whether the
+// service could read the root file. `status` and `code` are the command's own.
+pub fn sm_summary(f: Facts, g: Facts, which: Ints, status: Str, code: Int, opened: Bool, with_map: Bool) -> Str {
+    let current = opened && sm_current(g)
+    let linked = current && with_map && sm_same_sources(f, g)
+    let d = fx_diags(f)
+    let n = ints_len(which)
+    // The references, in the canonical order of their structure, ties by the command's own.
+    let structs = vec_new[Sm]()
+    let order = ints_new()
+    for j in 0..n {
+        let s = sm_structure(f, ints_get(which, j))
+        let s2 = if linked { s } else { sm_unplaced(s) }
+        vec_push(structs, s2)
+        let mut at = 0
+        while at < ints_len(order) && !sm_less(s2, vec_get(structs, ints_get(order, at))) { at += 1 }
+        ints_push(order, 0)
+        let mut i = ints_len(order) - 1
+        while i > at {
+            ints_set(order, i, ints_get(order, i - 1))
+            i -= 1
+        }
+        ints_set(order, at, j)
+    }
+    // The service's entries, in its order, to link to.
+    let mut ids = strs_new()
+    let mut entries = ints_new()
+    let taken = ints_new()
+    if linked {
+        ids = fx_diag_ids(g)
+        entries = fx_diag_order(g)
+        for i in 0..ints_len(entries) { ints_push(taken, 0) }
+    }
+    let rows = strs_new()
+    let mut errors = 0
+    let mut with_fixes = 0
+    let mut automatic = 0
+    let mut review = 0
+    for r in 0..n {
+        let j = ints_get(order, r)
+        let k = ints_get(which, j)
+        let s = vec_get(structs, j)
+        let mut id = "null"
+        let mut kindof = "command"
+        if linked {
+            let mut e = 0
+            let mut found = false
+            while e < ints_len(entries) && !found {
+                if ints_get(taken, e) == 0 && sm_equal(sm_structure(g, ints_get(entries, e)), s) {
+                    found = true
+                    ints_set(taken, e, 1)
+                    id = json_str(strs_get(ids, ints_get(entries, e)))
+                    kindof = "index"
+                } else {
+                    e += 1
+                }
+            }
+        }
+        let total = dg_fix_total(d, k)
+        let a = sm_count_fixes(f, k, "automatic")
+        let nr = sm_count_fixes(f, k, "needs_review")
+        if dg_severity(d, k) == "error" { errors += 1 }
+        if total > 0 { with_fixes += 1 }
+        automatic += a
+        review += nr
+        strs_push(rows, "{\"id\":" + id + ",\"scope\":\"" + kindof + "\",\"code\":" + json_str(dg_code(d, k)) + ",\"severity\":\"" + dg_severity(d, k)
+                + "\",\"primary\":" + sm_place_json(s.primary) + ",\"fixes\":{\"total\":" + int_to_str(total) + ",\"automatic\":" + int_to_str(a)
+                + ",\"needs_review\":" + int_to_str(nr) + "}}")
+    }
+    let root = if current { json_str(fx_module_key(g, 0)) } else { "null" }
+    let state = if linked { json_str(fx_state_source(g)) } else { "null" }
+    "{\"schema\":\"nazm.command-summary/1\",\"command\":\"check\",\"status\":\"" + status + "\",\"exit_code\":" + int_to_str(code) + ",\"root\":" + root
+            + ",\"state\":" + state + ",\"counts\":{\"diagnostics\":" + int_to_str(n) + ",\"error\":" + int_to_str(errors) + ",\"with_fixes\":"
+            + int_to_str(with_fixes) + ",\"automatic_fixes\":" + int_to_str(automatic) + ",\"needs_review_fixes\":" + int_to_str(review)
+            + "},\"diagnostics\":[" + str_join(rows, ",") + "],\"artifact\":null}"
+}
