@@ -486,6 +486,13 @@ fn a_select_that_does_not_wait_lets_a_sibling_on_its_worker_run() {
     }
 }
 
+/// How long into a four-second wait the CPU time is read: three seconds, and on Windows one, where
+/// starting PowerShell to read it can itself take a second or more under a loaded machine and the
+/// process must still be waiting when it is read.
+fn sample_after() -> std::time::Duration {
+    std::time::Duration::from_secs(if cfg!(windows) { 1 } else { 3 })
+}
+
 /// Q1-M-11: a deadline too far to count in nanoseconds is "never" — a parked task waits without
 /// using a CPU. Before the fix the wrapped deadline was already past: the task was woken, found
 /// its own (second-resolution) deadline not yet reached, parked again, and its worker spun. The
@@ -495,6 +502,20 @@ fn a_select_that_does_not_wait_lets_a_sibling_on_its_worker_run() {
 /// The CPU time `ps` reports for a running process, in seconds: `00:00:01` (procps) or `0:01.49`
 /// (BSD) — seconds, minutes, hours from the right.
 fn cpu_seconds(pid: u32) -> (f64, String) {
+    // Windows has no `ps`: its own accounting of the process's processor time, in seconds.
+    if cfg!(windows) {
+        let cpu = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!("(Get-Process -Id {pid}).TotalProcessorTime.TotalSeconds"),
+            ])
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&cpu.stdout).trim().to_owned();
+        let note = format!("{text}{}", String::from_utf8_lossy(&cpu.stderr));
+        return (text.parse::<f64>().unwrap_or(f64::MAX), note);
+    }
     let cpu = Command::new("ps")
         .args(["-o", "time=", "-p", &pid.to_string()])
         .output()
@@ -531,7 +552,7 @@ fn a_pool_task_waiting_on_a_deadline_parks_without_spinning() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_secs(3));
+    std::thread::sleep(sample_after());
     let (seconds, text) = cpu_seconds(child.id());
     let o = child.wait_with_output().unwrap();
     assert_eq!(
@@ -542,7 +563,7 @@ fn a_pool_task_waiting_on_a_deadline_parks_without_spinning() {
     );
     assert_eq!(String::from_utf8_lossy(&o.stdout), "-20\n");
     assert!(
-        seconds < 1.0,
+        seconds < if cfg!(windows) { 0.5 } else { 1.0 },
         "a pool task waiting four seconds used {text} of CPU in three"
     );
 }
@@ -569,18 +590,8 @@ fn a_deadline_past_the_nanosecond_range_parks_without_spinning() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_secs(3));
-    let cpu = Command::new("ps")
-        .args(["-o", "time=", "-p", &child.id().to_string()])
-        .output()
-        .unwrap();
-    let text = String::from_utf8_lossy(&cpu.stdout).trim().to_owned();
-    // `00:00:01` (procps) or `0:01.49` (BSD): seconds, minutes, hours from the right.
-    let seconds: f64 = text
-        .rsplit(':')
-        .zip([1.0, 60.0, 3600.0])
-        .map(|(part, unit)| part.trim().parse::<f64>().unwrap_or(f64::MAX) * unit)
-        .sum();
+    std::thread::sleep(sample_after());
+    let (seconds, text) = cpu_seconds(child.id());
     let o = child.wait_with_output().unwrap();
     assert_eq!(
         o.status.code(),
@@ -590,7 +601,7 @@ fn a_deadline_past_the_nanosecond_range_parks_without_spinning() {
     );
     assert_eq!(String::from_utf8_lossy(&o.stdout), "00\n");
     assert!(
-        seconds < 1.0,
+        seconds < if cfg!(windows) { 0.5 } else { 1.0 },
         "a parked task with a far deadline used {text} of CPU in three seconds"
     );
 }

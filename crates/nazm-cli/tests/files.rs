@@ -37,11 +37,21 @@ fn kind(r: Result[Int, IoError]) -> Str ! {} {
     }
 }
 
-fn opened(r: Result[File, IoError]) -> Str ! {} {
+// Closed again at once: Windows will not rename or remove a file that is still open.
+fn opened(r: Result[File, IoError]) -> Str ! { io } {
     match r {
-        Result.Ok(value: f) => "opened",
+        Result.Ok(value: f) => { file_close(f); "opened" },
         Result.Err(error: e) => io_kind_name(e.kind),
     }
+}
+
+// A file created and closed again: Windows will not rename or remove one that is still open.
+fn made(io: IoCap, path: Str) -> Int ! { io } {
+    match file_create(io, path) {
+        Result.Ok(value: f) => { file_close(f); },
+        Result.Err(error: e) => { line(io, io_error_show(e)); },
+    };
+    0
 }
 
 fn text(r: Result[Bytes, IoError]) -> Str ! {} {
@@ -98,8 +108,8 @@ fn main(io: IoCap) -> Int ! { io } {
     line(io, kind(file_replace_atomic(io, "w/one.txt", bytes_from_str("replaced"))));
     line(io, text(file_read_all(io, "w/one.txt")));
     line(io, kind(file_replace_atomic(io, "w/fresh.txt", bytes_from_str("new"))));
-    file_create(io, "w/c.txt");
-    file_create(io, "w/B.txt");
+    made(io, "w/c.txt");
+    made(io, "w/B.txt");
     match dir_list(io, "w") {
         Result.Ok(value: names) => { line(io, str_join(names, ",")); },
         Result.Err(error: e) => { line(io, io_error_show(e)); },
