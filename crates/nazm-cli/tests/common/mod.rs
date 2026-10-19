@@ -283,6 +283,16 @@ pub(crate) fn c_host_libs() -> &'static [&'static str] {
     }
 }
 
+/// The return type of a generated function that can fail, in LLVM text: on Windows, where a
+/// failure is a returned flag rather than an unwind, the value paired with it.
+pub(crate) fn ret(t: &str) -> String {
+    if cfg!(windows) {
+        format!("{{{t}, i1}}")
+    } else {
+        t.to_owned()
+    }
+}
+
 /// The name `nazm build -o NAME` publishes on this platform: `NAME` plus the platform's
 /// executable suffix (`.exe` on Windows, where the build adds it to a name with no extension;
 /// nothing elsewhere). Every test that starts, reads or looks for a program it built names it

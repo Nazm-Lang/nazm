@@ -372,12 +372,7 @@ fn build(dir: &Path) -> std::path::PathBuf {
     let exe = dir.join(crate::common::exe_name("harness"));
     let mut clang = Command::new("clang");
     clang.args(["-O1", "-Wno-override-module", "-pthread"]);
-    if cfg!(windows) {
-        // The `os` unit's sockets and random bytes are Winsock's and CNG's; `nazm build` links
-        // them the same way (`-lws2_32 -lbcrypt`).
-        clang.args(["-lws2_32", "-lbcrypt"]);
-    }
-    let o = clang
+    clang
         .arg(dir.join("runtime.ll"))
         .arg(dir.join("switch.ll"))
         .arg(dir.join("errno.ll"))
@@ -385,9 +380,14 @@ fn build(dir: &Path) -> std::path::PathBuf {
         .arg(dir.join("stack.ll"))
         .arg(dir.join("harness.c"))
         .arg("-o")
-        .arg(&exe)
-        .output()
-        .expect("clang");
+        .arg(&exe);
+    if cfg!(windows) {
+        // The `os` unit's sockets and random bytes are Winsock's and CNG's; `nazm build` links
+        // them the same way (`-lws2_32 -lbcrypt`), after the objects that call them: a GNU
+        // linker resolves a library only for what precedes it.
+        clang.args(["-lws2_32", "-lbcrypt"]);
+    }
+    let o = clang.output().expect("clang");
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     exe
 }
@@ -417,7 +417,8 @@ fn the_runtime_s_services_keep_their_contract_when_called_directly() {
         "{out}{}",
         String::from_utf8_lossy(&o.stderr)
     );
-    assert_eq!(out, "ok\n");
+    // The C harness writes through text-mode standard output, which ends a line CR LF on Windows.
+    assert_eq!(out.replace("\r\n", "\n"), "ok\n");
 }
 
 const NAZM: &str = env!("CARGO_BIN_EXE_nazm");

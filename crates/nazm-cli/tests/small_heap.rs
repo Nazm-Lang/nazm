@@ -136,9 +136,11 @@ fn small_heap_everywhere(units: &[(String, String)]) {
     assert!(units.iter().any(|(n, _)| n == "small"), "{units:?}");
     for (name, text) in units {
         let c = text.contains("@malloc(") || text.contains("@free(") || text.contains("@realloc(");
+        // The stack unit calls C's allocator for a task's stack where threads have none of their
+        // own; Windows asks the system for stacks and the unit has no `malloc` there.
         assert_eq!(
             c,
-            name == "small" || name == "stack",
+            name == "small" || (name == "stack" && !cfg!(windows)),
             "{name} reaches C's allocator past the small-block heap"
         );
     }
@@ -220,6 +222,10 @@ fn peak(exe: &Path) -> f64 {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "measures peak resident memory with /usr/bin/time, which Windows does not have"
+)]
 fn blocks_freed_on_another_thread_go_back_to_c_past_the_bound() {
     // Without the bound, `main`'s list would keep every block the task allocated — 200,000 of
     // 224 bytes, some 45 MB — while the task, its own list empty, asked C for each new one.

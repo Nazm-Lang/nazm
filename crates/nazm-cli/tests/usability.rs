@@ -372,19 +372,22 @@ fn unbounded_recursion_reports_n0408_instead_of_crashing() {
          fn main() -> Int { down(0, \"a\") }\n",
     );
     // Mutual, and through a non-recursive helper between the two checks.
+    // A string per frame here too: with none, a recent LLVM turns the cycle into a loop that never
+    // grows the stack, and a program that never overflows is not what this tests.
     exhausts(
-        "fn helper(n: Int) -> Int { ping(n) + 1 }\n\
-         fn ping(n: Int) -> Int { pong(n + 1) }\n\
-         fn pong(n: Int) -> Int { helper(n + 1) }\n\
-         fn main() -> Int { ping(0) }\n",
+        "fn helper(n: Int, s: Str) -> Int { let t = str_concat(s, \"x\"); ping(n, t) + str_len(t) }\n\
+         fn ping(n: Int, s: Str) -> Int { pong(n + 1, str_slice(s, 0, 1)) }\n\
+         fn pong(n: Int, s: Str) -> Int { helper(n + 1, s) }\n\
+         fn main() -> Int { ping(0, \"a\") }\n",
     );
 }
 
 #[test]
 fn a_task_that_exhausts_its_stack_fails_its_scope_after_the_join() {
+    // A string per frame, so the recursion is not one LLVM can turn into a loop.
     exhausts(
-        "fn down(n: Int) -> Int { down(n + 1) + 1 }\n\
-         fn job(c: Chan) -> Int { chan_send(c, 1); down(0) }\n\
+        "fn down(n: Int, s: Str) -> Int { let t = str_concat(s, \"x\"); down(n + 1, str_slice(t, 0, 1)) + str_len(t) }\n\
+         fn job(c: Chan) -> Int { chan_send(c, 1); down(0, \"a\") }\n\
          fn main(t: SpawnCap) -> Int { let c = chan_new(4); scope { spawn job(c); spawn job(c); } 0 }\n",
     );
 }

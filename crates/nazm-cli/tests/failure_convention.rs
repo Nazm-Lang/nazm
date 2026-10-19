@@ -224,7 +224,8 @@ int main(void) {
             "host",
         );
         assert_eq!(r.code, Some(2), "{backend} -O{opt}: {r:?}");
-        assert_eq!(r.stdout, "5\n", "{backend} -O{opt}");
+        // A C host's text-mode standard output ends its lines with CR LF on Windows.
+        assert_eq!(r.stdout.replace("\r\n", "\n"), "5\n", "{backend} -O{opt}");
         assert!(
             r.stderr.contains("N0401]: division by zero at lib.nz:2:20"),
             "{backend} -O{opt}: {r:?}"

@@ -284,6 +284,7 @@ fn the_user_cache_is_under_the_home_directory_unless_a_variable_moves_it() {
     c.env_remove("NAZM_USER_CACHE_DIR")
         .env_remove("NAZM_CACHE_DIR")
         .env("HOME", home.path())
+        .env("LOCALAPPDATA", xdg.path())
         .env("XDG_CACHE_HOME", xdg.path());
     build_with(c, p.path(), "prog", &[]);
     let expected = if cfg!(target_os = "macos") {
@@ -303,6 +304,7 @@ fn the_user_cache_is_under_the_home_directory_unless_a_variable_moves_it() {
     let mut c = Command::new(NAZM);
     c.env_remove("NAZM_USER_CACHE_DIR")
         .env("NAZM_CACHE_DIR", moved.path())
+        .env("LOCALAPPDATA", home.path())
         .env("HOME", home.path())
         .env("XDG_CACHE_HOME", home.path());
     let did = build_with(c, project().path(), "prog", &[]);
@@ -319,6 +321,7 @@ fn the_user_cache_is_under_the_home_directory_unless_a_variable_moves_it() {
     c.env("NAZM_USER_CACHE_DIR", "")
         .env_remove("NAZM_CACHE_DIR")
         .env("HOME", home.path())
+        .env("LOCALAPPDATA", home.path())
         .env("XDG_CACHE_HOME", home.path());
     let did = build_with(c, p.path(), "prog", &[]);
     assert_eq!(

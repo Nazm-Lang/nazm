@@ -229,17 +229,26 @@ fn a_call_into_an_imported_module_is_a_reference_the_linker_resolves() {
         .expect("a unit for a.nz")
         .1;
     assert!(
-        caller.contains("declare i64 @nz.m.b_2Enz.twice(i64)"),
+        caller.contains(&format!(
+            "declare {} @nz.m.b_2Enz.twice(i64)",
+            crate::common::ret("i64")
+        )),
         "the caller should declare the callee, not define it:\n{caller}"
     );
-    assert!(!caller.contains("define hidden i64 @nz.m.b_2Enz.twice"));
+    assert!(!caller.contains(&format!(
+        "define hidden {} @nz.m.b_2Enz.twice",
+        crate::common::ret("i64")
+    )));
 
     let callee = &art
         .iter()
         .find(|(_, ir)| ir.contains("b.nz\""))
         .expect("a unit for b.nz")
         .1;
-    assert!(callee.contains("define hidden i64 @nz.m.b_2Enz.twice(i64 %p0)"));
+    assert!(callee.contains(&format!(
+        "define hidden {} @nz.m.b_2Enz.twice(i64 %p0)",
+        crate::common::ret("i64")
+    )));
 
     assert_eq!(build_and_run(dir.path(), files).stdout, "8");
 }

@@ -44,6 +44,10 @@ fn symbols(exe: &Path) -> String {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "Windows links without dead-stripping (D14 covers Mach-O and ELF): generated code is one `.text$nM` between the pool's preemption markers, not a section per function"
+)]
 fn an_unused_standard_function_is_left_out_and_the_program_still_runs() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("main.nz"), PROGRAM).expect("program");
@@ -88,6 +92,10 @@ fn an_unused_standard_function_is_left_out_and_the_program_still_runs() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "Windows links without dead-stripping (D14 covers Mach-O and ELF): generated code is one `.text$nM` between the pool's preemption markers, not a section per function"
+)]
 fn a_dead_stripped_executable_is_smaller_than_the_same_objects_linked_whole() {
     // The same objects, from `--objects`, linked as `link.txt` says without stripping: the build's
     // own executable is smaller, and only the whole link holds the unused function.

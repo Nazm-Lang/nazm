@@ -222,6 +222,12 @@ fn run_page(page: &str, min_runs: usize, min_commands: usize) {
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
+        // The pages show the executable as `hello`; Windows names it `hello.exe`.
+        let shows = if cfg!(windows) {
+            shows.replace(".exe\n", "\n")
+        } else {
+            shows
+        };
         assert_eq!(
             out.status.success(),
             !step.fails,
