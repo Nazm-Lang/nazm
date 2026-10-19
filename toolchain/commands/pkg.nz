@@ -1,0 +1,1787 @@
+// Packages for the commands that make them (R5, `openspec/changes/r5-commands/`, design D21): a port of
+// `crates/nazm-package` — the manifest (`Manifest::parse`), versions and requirements, the resolver
+// (path packages by directory, registry packages by the N90 backtracking search over a local
+// registry's indexes), a package's BLAKE3 digest, the lockfile's exact bytes, and a registry's index
+// and published copies — over `toml.nz`'s reader of the TOML the toolchain's own files are written in.
+//
+// Every refusal of the reference is a diagnostic here as there (`error[N05xx]: …`); where the TOML
+// reader does not read a file (a form of TOML the toolchain never writes) the answer is
+// "unsupported" and the command refuses with status 6 instead of guessing at the `toml` crate's text.
+
+use "@std/blake3"
+use "../../compiler/syntax.nz"
+use "toml.nz"
+use "util.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+pub fn pkg_manifest() -> Str { "nazm.toml" }
+pub fn pkg_lockfile() -> Str { "nazm.lock" }
+
+// --- diagnostics ---------------------------------------------------------------------------------------
+
+// The refusals so far: code, message, help ("" for none).
+pub struct Dgs {
+    code: Strs,
+    message: Strs,
+    help: Strs,
+    // Why the answer is not the reference's ("" while it is): a form of TOML or a place this port does not read.
+    unsupported: Strs,
+}
+
+pub fn dgs_new() -> Dgs {
+    let d = Dgs(code: strs_new(), message: strs_new(), help: strs_new(), unsupported: strs_new())
+    strs_push(d.unsupported, "")
+    d
+}
+
+pub fn dgs_add(d: Dgs, code: Str, message: Str, help: Str) -> Int {
+    strs_push(d.code, code)
+    strs_push(d.message, message)
+    strs_push(d.help, help)
+    0
+}
+
+pub fn dgs_len(d: Dgs) -> Int { strs_len(d.code) }
+
+pub fn dgs_unsupported(d: Dgs, why: Str) -> Int {
+    if strs_get(d.unsupported, 0) == "" { strs_set(d.unsupported, 0, why) }
+    0
+}
+
+pub fn dgs_why(d: Dgs) -> Str { strs_get(d.unsupported, 0) }
+
+// `package.rs`'s `report`: each diagnostic and the count, as text.
+pub fn dgs_text(d: Dgs) -> Str {
+    let out = strs_new()
+    for i in 0..dgs_len(d) {
+        strs_push(out, "error[" + strs_get(d.code, i) + "]: " + strs_get(d.message, i) + nl())
+        if strs_get(d.help, i) != "" { strs_push(out, "  = help: " + strs_get(d.help, i) + nl()) }
+    }
+    strs_push(out, "nazm: " + int_to_str(dgs_len(d)) + " error" + ut_plural(dgs_len(d)) + nl())
+    str_join(out, "")
+}
+
+// --- versions ----------------------------------------------------------------------------------------------
+
+// Whether `p` is a decimal number written without a leading zero.
+fn part_ok(p: Str) -> Bool {
+    if str_len(p) == 0 || str_len(p) > 20 { return false }
+    for i in 0..str_len(p) {
+        if str_byte(p, i) < 48 || str_byte(p, i) > 57 { return false }
+    }
+    if str_len(p) > 1 && str_byte(p, 0) == 48 { return false }
+    // A part above `u64::MAX` is no version.
+    if str_len(p) == 20 && ut_less(p, "18446744073709551616") == false { return false }
+    true
+}
+
+fn parts_of(v: Str) -> Strs {
+    let out = strs_new()
+    let mut from = 0
+    for i in 0..str_len(v) + 1 {
+        if i == str_len(v) || str_byte(v, i) == 46 {
+            strs_push(out, str_slice(v, from, i))
+            from = i + 1
+        }
+    }
+    out
+}
+
+// `Version::parse`: exactly three decimal numbers.
+pub fn ver_ok(v: Str) -> Bool {
+    let p = parts_of(v)
+    if strs_len(p) != 3 { return false }
+    for i in 0..3 {
+        if !part_ok(strs_get(p, i)) { return false }
+    }
+    true
+}
+
+fn cmp_part(a: Str, b: Str) -> Int {
+    if str_len(a) != str_len(b) { return if str_len(a) < str_len(b) { 0 - 1 } else { 1 } }
+    if a == b { 0 } else if ut_less(a, b) { 0 - 1 } else { 1 }
+}
+
+// `-1`, `0` or `1`: the order of two versions.
+pub fn ver_cmp(a: Str, b: Str) -> Int {
+    let x = parts_of(a)
+    let y = parts_of(b)
+    for i in 0..3 {
+        let c = cmp_part(strs_get(x, i), strs_get(y, i))
+        if c != 0 { return c }
+    }
+    0
+}
+
+fn ver_part(v: Str, i: Int) -> Str { strs_get(parts_of(v), i) }
+
+// A requirement `K` + version, `K` one of `=`, `^`, `~`; "" for what `VersionReq::parse` refuses.
+pub fn req_parse(text: Str) -> Str {
+    if ut_starts(text, "^") {
+        let v = str_slice(text, 1, str_len(text))
+        return if ver_ok(v) { text } else { "" }
+    }
+    if ut_starts(text, "~") {
+        let v = str_slice(text, 1, str_len(text))
+        return if ver_ok(v) { text } else { "" }
+    }
+    let v = if ut_starts(text, "=") { str_slice(text, 1, str_len(text)) } else { text }
+    if ver_ok(v) { "=" + v } else { "" }
+}
+
+// `VersionReq::matches`.
+pub fn req_matches(r: Str, v: Str) -> Bool {
+    let kind = str_slice(r, 0, 1)
+    let base = str_slice(r, 1, str_len(r))
+    if kind == "=" { return ver_cmp(v, base) == 0 }
+    if kind == "^" {
+        if ver_cmp(v, base) < 0 { return false }
+        if ver_part(base, 0) != "0" { return ver_part(v, 0) == ver_part(base, 0) }
+        if ver_part(base, 1) != "0" { return ver_part(v, 0) == "0" && ver_part(v, 1) == ver_part(base, 1) }
+        return ver_cmp(v, base) == 0
+    }
+    ver_cmp(v, base) >= 0 && ver_part(v, 0) == ver_part(base, 0) && ver_part(v, 1) == ver_part(base, 1)
+}
+
+// `valid_name`: `[a-z][a-z0-9-]*`, at most 64 bytes, not ending in `-`.
+pub fn name_ok(n: Str) -> Bool {
+    if str_len(n) == 0 || str_len(n) > 64 { return false }
+    let f = str_byte(n, 0)
+    if f < 97 || f > 122 { return false }
+    for i in 0..str_len(n) {
+        let b = str_byte(n, i)
+        if !((b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b == 45) { return false }
+    }
+    str_byte(n, str_len(n) - 1) != 45
+}
+
+// `contained`: a relative path that stays where it starts.
+fn contained(rel: Str) -> Bool {
+    if str_len(rel) == 0 || str_byte(rel, 0) == 47 { return false }
+    let mut from = 0
+    for i in 0..str_len(rel) + 1 {
+        if i == str_len(rel) || str_byte(rel, i) == 47 {
+            if str_slice(rel, from, i) == ".." { return false }
+            from = i + 1
+        }
+    }
+    true
+}
+
+// `heap_size`: bytes, or a number with a `K`, `M` or `G` suffix, from 64 KiB to 1 TiB; -1 and the
+// reason in `why` where it is not one; -2 where the number is one this port does not add up (more than
+// sixteen digits: past what a size can be, but not `u64`'s own refusal).
+fn heap_size(raw: Str, why: Strs) -> Int {
+    let n = str_len(raw)
+    let mut unit = 1
+    let mut digits = raw
+    if n > 0 {
+        let last = str_slice(raw, n - 1, n)
+        if last == "K" || last == "k" {
+            unit = 1024
+            digits = str_slice(raw, 0, n - 1)
+        } else if last == "M" || last == "m" {
+            unit = 1048576
+            digits = str_slice(raw, 0, n - 1)
+        } else if last == "G" || last == "g" {
+            unit = 1073741824
+            digits = str_slice(raw, 0, n - 1)
+        }
+    }
+    let not_size = "`" + raw + "` is not a size: bytes, or a number with `K`, `M` or `G`"
+    // `u64::from_str`: an optional `+`, then digits only, not past `u64::MAX`.
+    let mut body = digits
+    if ut_starts(body, "+") { body = str_slice(body, 1, str_len(body)) }
+    let mut ok = str_len(body) > 0
+    for i in 0..str_len(body) {
+        if str_byte(body, i) < 48 || str_byte(body, i) > 57 { ok = false }
+    }
+    if ok {
+        let mut z = 0
+        while z < str_len(body) - 1 && str_byte(body, z) == 48 { z += 1 }
+        body = str_slice(body, z, str_len(body))
+        if str_len(body) > 20 || (str_len(body) == 20 && !ut_less(body, "18446744073709551616")) { ok = false }
+    }
+    if !ok {
+        strs_push(why, not_size)
+        return 0 - 1
+    }
+    if str_len(body) > 16 { return 0 - 2 }
+    let mut v = 0
+    for i in 0..str_len(body) { v = v * 10 + (str_byte(body, i) - 48) }
+    let bytes = v * unit
+    if v > 1099511627776 || bytes < 65536 || bytes > 1099511627776 {
+        if v > 1099511627776 && unit > 1 {
+            // `v * unit` may pass `u64`, which is "too large"; or not, and is then too big a heap.
+            return 0 - 2
+        }
+        strs_push(why, "`" + raw + "` is " + int_to_str(bytes) + " bytes; a heap limit is from 64K to 1024G")
+        return 0 - 1
+    }
+    bytes
+}
+
+// --- the manifest -----------------------------------------------------------------------------------------------
+
+pub struct Mf {
+    // 1 where the text is a manifest; 0 where it is not (the diagnostic is added); -1 where it is a
+    // form this port does not read.
+    state: Ints,
+    name: Strs,
+    version: Strs,
+    root: Strs,
+    main: Strs,
+    has_main: Ints,
+    registry: Strs,
+    has_registry: Ints,
+    profile: Strs,
+    has_profile: Ints,
+    heap: Ints,
+    // The dependencies in name order: name, kind (0 path, 1 registry), path, and the version (a path's
+    // exact one) or the requirement (`=1.2.3`, `^1.2.3`, `~1.2.3`).
+    d_name: Strs,
+    d_kind: Ints,
+    d_path: Strs,
+    d_ver: Strs,
+    // The features in name order, each with its items.
+    f_name: Strs,
+    f_item_of: Ints,
+    f_item: Strs,
+    // The features each dependency is asked for: dependency name, feature, in name order of the
+    // dependency and the order written.
+    r_dep: Strs,
+    r_feature: Strs,
+}
+
+pub fn mf_new() -> Mf {
+    let m = Mf(state: ints_new(), name: strs_new(), version: strs_new(), root: strs_new(), main: strs_new(), has_main: ints_new(), registry: strs_new(),
+            has_registry: ints_new(), profile: strs_new(), has_profile: ints_new(), heap: ints_new(), d_name: strs_new(), d_kind: ints_new(),
+            d_path: strs_new(), d_ver: strs_new(), f_name: strs_new(), f_item_of: ints_new(), f_item: strs_new(), r_dep: strs_new(), r_feature: strs_new())
+    ints_push(m.state, 1)
+    strs_push(m.name, "")
+    strs_push(m.version, "")
+    strs_push(m.root, "src")
+    strs_push(m.main, "")
+    ints_push(m.has_main, 0)
+    strs_push(m.registry, "")
+    ints_push(m.has_registry, 0)
+    strs_push(m.profile, "")
+    ints_push(m.has_profile, 0)
+    ints_push(m.heap, 0 - 1)
+    m
+}
+
+pub fn mf_name(m: Mf) -> Str { strs_get(m.name, 0) }
+pub fn mf_version(m: Mf) -> Str { strs_get(m.version, 0) }
+pub fn mf_root(m: Mf) -> Str { strs_get(m.root, 0) }
+
+// What serde says of a value of the wrong type: `invalid type: integer `5`, expected a string`.
+fn unexpected(t: Toml, n: Int) -> Str {
+    let k = tm_kind(t, n)
+    if k == tm_string() { return "string " + debug_quote(tm_text(t, n)) }
+    if k == tm_int() { return "integer `" + tm_text(t, n) + "`" }
+    if k == tm_bool() { return "boolean `" + tm_text(t, n) + "`" }
+    if k == tm_array() { return "sequence" }
+    "map"
+}
+
+fn bad_type(t: Toml, n: Int, expected: Str) -> Str { "invalid type: " + unexpected(t, n) + ", expected " + expected }
+
+fn expected_list(names: Strs) -> Str {
+    let parts = strs_new()
+    for i in 0..strs_len(names) { strs_push(parts, "`" + strs_get(names, i) + "`") }
+    str_join(parts, ", ")
+}
+
+// serde's `unknown_field`: the expected names as `OneOf` writes them.
+fn unknown_field(name: Str, fields: Strs) -> Str {
+    let n = strs_len(fields)
+    let said = if n == 1 { expected_list(fields) } else if n == 2 { "`" + strs_get(fields, 0) + "` or `" + strs_get(fields, 1) + "`" } else { "one of " + expected_list(fields) }
+    "unknown field `" + name + "`, expected " + said
+}
+
+fn fields(a: Str, b: Str, c: Str, d: Str, e: Str, f: Str) -> Strs {
+    let out = strs_new()
+    strs_push(out, a)
+    if b != "" { strs_push(out, b) }
+    if c != "" { strs_push(out, c) }
+    if d != "" { strs_push(out, d) }
+    if e != "" { strs_push(out, e) }
+    if f != "" { strs_push(out, f) }
+    out
+}
+
+// A string field's value, or "" with the reason added to `err`.
+fn want_string(t: Toml, n: Int, err: Strs) -> Str {
+    if tm_kind(t, n) != tm_string() {
+        strs_push(err, bad_type(t, n, "a string"))
+        return ""
+    }
+    tm_text(t, n)
+}
+
+// A `Vec<String>`: its items, or the reason added to `err`.
+fn want_strings(t: Toml, n: Int, err: Strs) -> Strs {
+    let out = strs_new()
+    if tm_kind(t, n) != tm_array() {
+        strs_push(err, bad_type(t, n, "a sequence"))
+        return out
+    }
+    let mut c = tm_first(t, n)
+    while c >= 0 {
+        if tm_kind(t, c) != tm_string() {
+            strs_push(err, bad_type(t, c, "a string"))
+            return out
+        }
+        strs_push(out, tm_text(t, c))
+        c = tm_next(t, c)
+    }
+    out
+}
+
+fn insert_sorted(names: Strs, name: Str) -> Int {
+    let mut at = 0
+    while at < strs_len(names) && ut_less(strs_get(names, at), name) { at += 1 }
+    at
+}
+
+// `Manifest::parse` of `text`, named `file` in a diagnostic.
+pub fn mf_parse(text: Str, file: Str, d: Dgs) -> Mf {
+    let m = mf_new()
+    let t = tm_parse(text)
+    if !tm_ok(t) {
+        if tm_message(t) != "" {
+            dgs_add(d, "N0500", "`" + file + "`: " + tm_message(t), "")
+            ints_set(m.state, 0, 0)
+        } else {
+            dgs_unsupported(d, "a manifest in TOML this port does not read (" + tm_why(t) + ")")
+            ints_set(m.state, 0, 0 - 1)
+        }
+        return m
+    }
+    let err = strs_new()
+    let top = fields("schema", "package", "dependencies", "registry", "features", "")
+    let mut schema = ""
+    let mut has_schema = false
+    let mut has_package = false
+    let mut has_name = false
+    let mut has_version = false
+    // The dependencies and features as the file wrote them, sorted afterwards.
+    let dn = strs_new()
+    let dnode = ints_new()
+    let fnames = strs_new()
+    let fnode = ints_new()
+    let mut c = tm_first(t, 0)
+    while c >= 0 && strs_len(err) == 0 {
+        let k = tm_key(t, c)
+        if k == "schema" {
+            schema = want_string(t, c, err)
+            has_schema = true
+        } else if k == "package" {
+            if tm_kind(t, c) == tm_array() {
+                dgs_unsupported(d, "a struct given as an array of tables (serde reads it as a sequence of its fields)")
+                ints_set(m.state, 0, 0 - 1)
+                return m
+            }
+            if tm_kind(t, c) != tm_table() {
+                strs_push(err, bad_type(t, c, "struct RawPackage"))
+            } else {
+                has_package = true
+                let pf = fields("name", "version", "root", "main", "profile", "heap-limit")
+                let mut p = tm_first(t, c)
+                while p >= 0 && strs_len(err) == 0 {
+                    let pk = tm_key(t, p)
+                    if pk == "name" {
+                        strs_set(m.name, 0, want_string(t, p, err))
+                        has_name = true
+                    } else if pk == "version" {
+                        strs_set(m.version, 0, want_string(t, p, err))
+                        has_version = true
+                    } else if pk == "root" {
+                        strs_set(m.root, 0, want_string(t, p, err))
+                    } else if pk == "main" {
+                        strs_set(m.main, 0, want_string(t, p, err))
+                        ints_set(m.has_main, 0, 1)
+                    } else if pk == "profile" {
+                        strs_set(m.profile, 0, want_string(t, p, err))
+                        ints_set(m.has_profile, 0, 1)
+                    } else if pk == "heap-limit" {
+                        let h = want_string(t, p, err)
+                        if strs_len(err) == 0 {
+                            let why = strs_new()
+                            let v = heap_size(h, why)
+                            if v == 0 - 2 {
+                                dgs_unsupported(d, "a heap limit with more than sixteen digits")
+                                ints_set(m.state, 0, 0 - 1)
+                                return m
+                            }
+                            if v < 0 { strs_push(err, "`heap-limit`: " + strs_get(why, 0)) } else { ints_set(m.heap, 0, v) }
+                        }
+                    } else {
+                        strs_push(err, unknown_field(pk, pf))
+                    }
+                    p = tm_next(t, p)
+                }
+                if strs_len(err) == 0 && !has_name { strs_push(err, "missing field `name`") }
+                if strs_len(err) == 0 && !has_version { strs_push(err, "missing field `version`") }
+            }
+        } else if k == "dependencies" {
+            if tm_kind(t, c) != tm_table() {
+                strs_push(err, bad_type(t, c, "a map"))
+            } else {
+                let df = fields("path", "version", "features", "", "", "")
+                let mut e = tm_first(t, c)
+                while e >= 0 && strs_len(err) == 0 {
+                    if tm_kind(t, e) == tm_array() {
+                        dgs_unsupported(d, "a struct given as an array of tables (serde reads it as a sequence of its fields)")
+                        ints_set(m.state, 0, 0 - 1)
+                        return m
+                    }
+                    if tm_kind(t, e) != tm_table() {
+                        strs_push(err, bad_type(t, e, "struct RawDependency"))
+                    } else {
+                        let mut has_v = false
+                        let mut q = tm_first(t, e)
+                        while q >= 0 && strs_len(err) == 0 {
+                            let qk = tm_key(t, q)
+                            if qk == "path" || qk == "version" {
+                                want_string(t, q, err)
+                                if qk == "version" { has_v = true }
+                            } else if qk == "features" {
+                                want_strings(t, q, err)
+                            } else {
+                                strs_push(err, unknown_field(qk, df))
+                            }
+                            q = tm_next(t, q)
+                        }
+                        if strs_len(err) == 0 && !has_v { strs_push(err, "missing field `version`") }
+                        if strs_len(err) == 0 {
+                            let at = insert_sorted(dn, tm_key(t, e))
+                            strs_push(dn, "")
+                            ints_push(dnode, 0)
+                            let mut j = strs_len(dn) - 1
+                            while j > at {
+                                strs_set(dn, j, strs_get(dn, j - 1))
+                                ints_set(dnode, j, ints_get(dnode, j - 1))
+                                j -= 1
+                            }
+                            strs_set(dn, at, tm_key(t, e))
+                            ints_set(dnode, at, e)
+                        }
+                    }
+                    e = tm_next(t, e)
+                }
+            }
+        } else if k == "registry" {
+            if tm_kind(t, c) == tm_array() {
+                dgs_unsupported(d, "a struct given as an array of tables (serde reads it as a sequence of its fields)")
+                ints_set(m.state, 0, 0 - 1)
+                return m
+            }
+            if tm_kind(t, c) != tm_table() {
+                strs_push(err, bad_type(t, c, "struct RawRegistry"))
+            } else {
+                let mut has_path = false
+                let mut p = tm_first(t, c)
+                while p >= 0 && strs_len(err) == 0 {
+                    if tm_key(t, p) == "path" {
+                        strs_set(m.registry, 0, want_string(t, p, err))
+                        has_path = true
+                    } else {
+                        strs_push(err, unknown_field(tm_key(t, p), fields("path", "", "", "", "", "")))
+                    }
+                    p = tm_next(t, p)
+                }
+                if strs_len(err) == 0 && !has_path { strs_push(err, "missing field `path`") }
+                ints_set(m.has_registry, 0, 1)
+            }
+        } else if k == "features" {
+            if tm_kind(t, c) != tm_table() {
+                strs_push(err, bad_type(t, c, "a map"))
+            } else {
+                let mut e = tm_first(t, c)
+                while e >= 0 && strs_len(err) == 0 {
+                    want_strings(t, e, err)
+                    let at = insert_sorted(fnames, tm_key(t, e))
+                    strs_push(fnames, "")
+                    ints_push(fnode, 0)
+                    let mut j = strs_len(fnames) - 1
+                    while j > at {
+                        strs_set(fnames, j, strs_get(fnames, j - 1))
+                        ints_set(fnode, j, ints_get(fnode, j - 1))
+                        j -= 1
+                    }
+                    strs_set(fnames, at, tm_key(t, e))
+                    ints_set(fnode, at, e)
+                    e = tm_next(t, e)
+                }
+            }
+        } else {
+            strs_push(err, unknown_field(k, top))
+        }
+        c = tm_next(t, c)
+    }
+    if strs_len(err) == 0 && !has_schema { strs_push(err, "missing field `schema`") }
+    if strs_len(err) == 0 && !has_package { strs_push(err, "missing field `package`") }
+    let pre = "`" + file + "`: "
+    if strs_len(err) > 0 {
+        dgs_add(d, "N0500", pre + strs_get(err, 0), "")
+        ints_set(m.state, 0, 0)
+        return m
+    }
+    // The validations, in the reference's order.
+    let bad = strs_new()
+    if schema != "nazm.package/1" {
+        strs_push(bad, "the schema is `" + schema + "`; this compiler reads `nazm.package/1`")
+    } else if !name_ok(mf_name(m)) {
+        strs_push(bad, "`" + mf_name(m) + "` is not a package name: lowercase ASCII letters, digits and `-`, starting with a letter, at most 64 bytes")
+    } else if !ver_ok(mf_version(m)) {
+        strs_push(bad, "`" + mf_version(m) + "` is not a version: MAJOR.MINOR.PATCH")
+    } else if !contained(mf_root(m)) {
+        strs_push(bad, "the root `" + mf_root(m) + "` leaves the package")
+    } else if ints_get(m.has_main, 0) == 1 && (!contained(strs_get(m.main, 0)) || !ut_ends(strs_get(m.main, 0), ".nz")) {
+        strs_push(bad, "the entry `" + strs_get(m.main, 0) + "` is not a `.nz` file inside the root")
+    }
+    if strs_len(bad) == 0 {
+        // Each dependency, by name; its features first (`dependency_features`).
+        for i in 0..strs_len(dn) {
+            let name = strs_get(dn, i)
+            let e = ints_get(dnode, i)
+            let path = tm_get(t, e, "path")
+            let version = tm_text(t, tm_get(t, e, "version"))
+            let feats = tm_get(t, e, "features")
+            if feats >= 0 && tm_first(t, feats) >= 0 {
+                let mut f = tm_first(t, feats)
+                while f >= 0 {
+                    strs_push(m.r_dep, name)
+                    strs_push(m.r_feature, tm_text(t, f))
+                    f = tm_next(t, f)
+                }
+            }
+            if strs_len(bad) > 0 { continue }
+            if !name_ok(name) {
+                strs_push(bad, "`" + name + "` is not a package name")
+            } else if name == mf_name(m) {
+                strs_push(bad, "`" + name + "` depends on itself")
+            } else if path >= 0 {
+                if !ver_ok(version) {
+                    strs_push(bad, "the dependency `" + name + "`'s version `" + version + "` is not MAJOR.MINOR.PATCH")
+                } else {
+                    strs_push(m.d_name, name)
+                    ints_push(m.d_kind, 0)
+                    strs_push(m.d_path, tm_text(t, path))
+                    strs_push(m.d_ver, version)
+                }
+            } else {
+                let r = req_parse(version)
+                if r == "" {
+                    strs_push(bad, "the dependency `" + name + "`'s version `" + version + "` is not a requirement: `1.2.3`, `=1.2.3`, `^1.2.3` or `~1.2.3`")
+                } else {
+                    strs_push(m.d_name, name)
+                    ints_push(m.d_kind, 1)
+                    strs_push(m.d_path, "")
+                    strs_push(m.d_ver, r)
+                }
+            }
+        }
+    }
+    if strs_len(bad) == 0 {
+        // Features: additive names; each item another of this package's features or `DEPENDENCY/FEATURE`.
+        for i in 0..strs_len(fnames) {
+            let feature = strs_get(fnames, i)
+            let items = tm_first(t, ints_get(fnode, i))
+            if strs_len(bad) > 0 { continue }
+            if !name_ok(feature) {
+                strs_push(bad, "`" + feature + "` is not a feature name: lowercase ASCII letters, digits and `-`")
+                continue
+            }
+            let mut it = items
+            while it >= 0 && strs_len(bad) == 0 {
+                let item = tm_text(t, it)
+                let slash = ut_find(item, "/", 0)
+                let mut known = false
+                if slash >= 0 {
+                    let dep = str_slice(item, 0, slash)
+                    let mut declared = false
+                    for k in 0..strs_len(m.d_name) { if strs_get(m.d_name, k) == dep { declared = true } }
+                    known = declared && name_ok(str_slice(item, slash + 1, str_len(item)))
+                } else {
+                    for k in 0..strs_len(fnames) { if strs_get(fnames, k) == item { known = true } }
+                }
+                if !known {
+                    strs_push(bad, "the feature `" + feature + "` enables `" + item + "`, which is neither one of this package's features nor `DEPENDENCY/FEATURE` of a dependency it declares")
+                }
+                it = tm_next(t, it)
+            }
+            strs_push(m.f_name, feature)
+            let mut it2 = items
+            while it2 >= 0 {
+                ints_push(m.f_item_of, strs_len(m.f_name) - 1)
+                strs_push(m.f_item, tm_text(t, it2))
+                it2 = tm_next(t, it2)
+            }
+        }
+    }
+    if strs_len(bad) == 0 {
+        for i in 0..strs_len(m.r_dep) {
+            if !name_ok(strs_get(m.r_feature, i)) {
+                strs_push(bad, "the dependency `" + strs_get(m.r_dep, i) + "` is asked for `" + strs_get(m.r_feature, i) + "`, not a feature name")
+                break
+            }
+        }
+    }
+    if strs_len(bad) > 0 {
+        dgs_add(d, "N0500", pre + strs_get(bad, 0), "")
+        ints_set(m.state, 0, 0)
+    }
+    m
+}
+
+// --- paths -------------------------------------------------------------------------------------------------------
+
+// `fs::canonicalize`, or "" where the path does not exist.
+pub fn pkg_canonical(io: IoCap, path: Str) -> Str {
+    let mut room = 4096
+    while room <= 1048576 {
+        let out = bytes_new(room)
+        let n = os_realpath(path, out)
+        if n >= 0 { return bytes_to_str(bytes_slice(out, 0, n)) }
+        room = room * 4
+    }
+    ""
+}
+
+// `Path::join`: an absolute `rel` replaces `base`.
+pub fn pkg_join(base: Str, rel: Str) -> Str {
+    if ut_starts(rel, "/") { return rel }
+    ut_join(base, rel)
+}
+
+fn components(path: Str) -> Strs {
+    let out = strs_new()
+    let mut from = 0
+    for i in 0..str_len(path) + 1 {
+        if i == str_len(path) || str_byte(path, i) == 47 {
+            let seg = str_slice(path, from, i)
+            from = i + 1
+            if seg != "" { strs_push(out, seg) }
+        }
+    }
+    out
+}
+
+// `relative`: `to` relative to `from`, `/`-separated; both canonical.
+fn relative(from: Str, to: Str) -> Str {
+    let a = components(from)
+    let b = components(to)
+    let mut common = 0
+    while common < strs_len(a) && common < strs_len(b) && strs_get(a, common) == strs_get(b, common) { common += 1 }
+    let parts = strs_new()
+    for _ in common..strs_len(a) { strs_push(parts, "..") }
+    for i in common..strs_len(b) { strs_push(parts, strs_get(b, i)) }
+    if strs_len(parts) == 0 { "." } else { str_join(parts, "/") }
+}
+
+// --- hashing the package ------------------------------------------------------------------------------------------
+
+fn le64(n: Int) -> Str {
+    let parts = strs_new()
+    let mut v = n
+    for _ in 0..8 {
+        strs_push(parts, str_from_byte(v % 256))
+        v = v / 256
+    }
+    str_join(parts, "")
+}
+
+// `sources`: every `.nz` file under `root` as (relative path, absolute path), in path order; a
+// symbolic link to a directory is not walked.
+pub fn pkg_sources(io: IoCap, root: Str, rels: Strs, paths: Strs) -> Int {
+    let stack_dir = strs_new()
+    let stack_rel = strs_new()
+    strs_push(stack_dir, root)
+    strs_push(stack_rel, "")
+    let found_rel = strs_new()
+    let found_path = strs_new()
+    while strs_len(stack_dir) > 0 {
+        let dir = strs_get(stack_dir, strs_len(stack_dir) - 1)
+        let prefix = strs_get(stack_rel, strs_len(stack_rel) - 1)
+        strs_pop(stack_dir)
+        strs_pop(stack_rel)
+        let h = os_dir_open(dir)
+        if os_status(h) < 0 { continue }
+        let names = strs_new()
+        let buf = bytes_new(1024)
+        let mut n = os_dir_next(h, buf)
+        while n > 0 {
+            let name = bytes_to_str(bytes_slice(buf, 0, n))
+            if name != "." && name != ".." { strs_push(names, name) }
+            n = os_dir_next(h, buf)
+        }
+        os_close(h)
+        for i in 0..strs_len(names) {
+            let name = strs_get(names, i)
+            let rel = if prefix == "" { name } else { prefix + "/" + name }
+            let path = ut_join(dir, name)
+            let lst = bytes_new(48)
+            let is_real_dir = os_lstat(path, lst) == 0 && bytes_read_le[Int](lst, 8) == 1
+            if is_real_dir {
+                strs_push(stack_dir, path)
+                strs_push(stack_rel, rel)
+            } else if ut_kind(io, path) == 1 {
+                continue
+            } else if ut_ends(name, ".nz") {
+                strs_push(found_rel, rel)
+                strs_push(found_path, path)
+            }
+        }
+    }
+    // Sorted by relative path, then path.
+    let order = ints_new()
+    for i in 0..strs_len(found_rel) {
+        let mut at = ints_len(order)
+        while at > 0 && ut_less(strs_get(found_rel, i), strs_get(found_rel, ints_get(order, at - 1))) { at -= 1 }
+        ints_push(order, 0)
+        let mut k = ints_len(order) - 1
+        while k > at {
+            ints_set(order, k, ints_get(order, k - 1))
+            k -= 1
+        }
+        ints_set(order, at, i)
+    }
+    for i in 0..ints_len(order) {
+        strs_push(rels, strs_get(found_rel, ints_get(order, i)))
+        strs_push(paths, strs_get(found_path, ints_get(order, i)))
+    }
+    0
+}
+
+// A package's BLAKE3 over its manifest and its sources: `blake3:` and the hex.
+pub fn pkg_digest(io: IoCap, manifest: Str, source_root: Str) -> Str {
+    let rels = strs_new()
+    let paths = strs_new()
+    pkg_sources(io, source_root, rels, paths)
+    let parts = strs_new()
+    strs_push(parts, "nazm.package-digest/1" + str_from_byte(0) + le64(str_len(manifest)) + manifest)
+    for i in 0..strs_len(rels) {
+        let bytes = if ut_read_error(io, strs_get(paths, i), false) == "" { read_file(strs_get(paths, i)) } else { "" }
+        strs_push(parts, strs_get(rels, i) + str_from_byte(0) + le64(str_len(bytes)) + bytes)
+    }
+    "blake3:" + blake3_hex(bytes_from_str(str_join(parts, "")))
+}
+
+// --- the resolver -----------------------------------------------------------------------------------------------------
+
+pub struct Found {
+    mf: Vec[Mf],
+    dir: Strs,
+    // The edges: from, dependency name, to.
+    e_from: Ints,
+    e_name: Strs,
+    e_to: Ints,
+    // Which of the found came from the registry.
+    registry: Ints,
+    path: Strs,
+}
+
+pub fn found_new() -> Found {
+    Found(mf: vec_new[Mf](), dir: strs_new(), e_from: ints_new(), e_name: strs_new(), e_to: ints_new(), registry: ints_new(), path: strs_new())
+}
+
+fn index_of_dir(f: Found, dir: Str) -> Int {
+    for i in 0..strs_len(f.dir) { if strs_get(f.dir, i) == dir { return i } }
+    0 - 1
+}
+
+pub fn found_by_name(f: Found, name: Str) -> Int {
+    for i in 0..vec_len(f.mf) { if mf_name(vec_get(f.mf, i)) == name { return i } }
+    0 - 1
+}
+
+fn version_mismatch(d: Dgs, name: Str, want: Str, have: Str, by: Str) -> Int {
+    dgs_add(d, "N0502", "`" + by + "` declares `" + name + "` at " + want + ", and its manifest says " + have,
+            "a dependency's declared version must equal the version its own manifest states")
+    0 - 1
+}
+
+// `Resolver::visit`: the package in `dir_in` and the path packages it depends on; its index among the
+// found, or -1 with the refusal added. `wanted` is "" for the root.
+pub fn visit(io: IoCap, f: Found, d: Dgs, dir_in: Str, wanted: Str, want_ver: Str, by: Str) -> Int {
+    if strs_len(f.path) > 256 {
+        dgs_add(d, "N0504", "the chain of dependencies is deeper than 256", "")
+        return 0 - 1
+    }
+    let manifest_path = pkg_join(dir_in, "nazm.toml")
+    let canonical = pkg_canonical(io, dir_in)
+    if canonical == "" {
+        let name = if wanted == "" { "the root package" } else { wanted }
+        dgs_add(d, "N0501", "`" + name + "`" + (if by == "" { "" } else { ", declared by `" + by + "`" }) + ": no directory `" + dir_in + "`", "")
+        return 0 - 1
+    }
+    for i in 0..strs_len(f.path) {
+        if strs_get(f.path, i) == canonical {
+            let names = strs_new()
+            for k in i..strs_len(f.path) {
+                let at = index_of_dir(f, strs_get(f.path, k))
+                if at >= 0 { strs_push(names, mf_name(vec_get(f.mf, at))) }
+            }
+            if strs_len(names) > 0 { strs_push(names, strs_get(names, 0)) }
+            dgs_add(d, "N0504", "a dependency cycle: " + str_join(names, " → "), "")
+            return 0 - 1
+        }
+    }
+    let known = index_of_dir(f, canonical)
+    if known >= 0 {
+        // A diamond: the same package, reached again, at the version it states.
+        if wanted != "" && mf_version(vec_get(f.mf, known)) != want_ver {
+            return version_mismatch(d, wanted, want_ver, mf_version(vec_get(f.mf, known)), by)
+        }
+        return known
+    }
+    if ut_read_error(io, manifest_path, true) != "" {
+        dgs_add(d, "N0501", "no manifest `" + manifest_path + "`", "")
+        return 0 - 1
+    }
+    let m = mf_parse(read_file(manifest_path), manifest_path, d)
+    if ints_get(m.state, 0) != 1 { return 0 - 1 }
+    if wanted != "" {
+        if mf_name(m) != wanted {
+            dgs_add(d, "N0503", "`" + by + "` declares the dependency `" + wanted + "`, and the package at `" + dir_in + "` is named `" + mf_name(m) + "`", "")
+            return 0 - 1
+        }
+        if mf_version(m) != want_ver { return version_mismatch(d, wanted, want_ver, mf_version(m), by) }
+    }
+    let other = found_by_name(f, mf_name(m))
+    if other >= 0 {
+        dgs_add(d, "N0503", "two packages named `" + mf_name(m) + "`: `" + strs_get(f.dir, other) + "` and `" + canonical + "`; one build has one package of each name", "")
+        return 0 - 1
+    }
+    let index = vec_len(f.mf)
+    vec_push(f.mf, m)
+    strs_push(f.dir, canonical)
+    ints_push(f.registry, 0)
+    strs_push(f.path, canonical)
+    for k in 0..strs_len(m.d_name) {
+        if ints_get(m.d_kind, k) != 0 { continue }
+        let child = visit(io, f, d, pkg_join(canonical, strs_get(m.d_path, k)), strs_get(m.d_name, k), strs_get(m.d_ver, k), mf_name(m))
+        if child < 0 { return 0 - 1 }
+        strs_push(f.e_name, strs_get(m.d_name, k))
+        ints_push(f.e_from, index)
+        ints_push(f.e_to, child)
+    }
+    strs_pop(f.path)
+    index
+}
+
+// --- a local registry ---------------------------------------------------------------------------------------------------
+
+// Reads table `n` as `struct NAME`: each field by name with its kind (`s` a string, `b` a boolean, `a` a
+// sequence of strings, `v` a sequence), in document order as serde meets them; the node of each field in
+// `out` (-1 where absent). The error text, or "".
+fn read_struct(t: Toml, n: Int, names: Strs, kinds: Str, required: Ints, out: Ints) -> Str {
+    for i in 0..strs_len(names) { ints_push(out, 0 - 1) }
+    let mut c = tm_first(t, n)
+    while c >= 0 {
+        let k = tm_key(t, c)
+        let mut at = 0 - 1
+        for i in 0..strs_len(names) { if strs_get(names, i) == k { at = i } }
+        if at < 0 { return unknown_field(k, names) }
+        let kind = str_slice(kinds, at, at + 1)
+        let err = strs_new()
+        if kind == "s" { want_string(t, c, err) }
+        if kind == "b" && tm_kind(t, c) != tm_bool() { strs_push(err, bad_type(t, c, "a boolean")) }
+        if kind == "a" { want_strings(t, c, err) }
+        if kind == "v" && tm_kind(t, c) != tm_array() { strs_push(err, bad_type(t, c, "a sequence")) }
+        if strs_len(err) > 0 { return strs_get(err, 0) }
+        ints_set(out, at, c)
+        c = tm_next(t, c)
+    }
+    for i in 0..strs_len(names) {
+        if ints_get(required, i) == 1 && ints_get(out, i) < 0 { return "missing field `" + strs_get(names, i) + "`" }
+    }
+    ""
+}
+
+fn names3(a: Str, b: Str, c: Str) -> Strs { fields(a, b, c, "", "", "") }
+
+// One package's index: its versions ascending, each with its digest and whether it is yanked.
+pub struct Idx {
+    ok: Ints,
+    name: Strs,
+    version: Strs,
+    digest: Strs,
+    yanked: Ints,
+    registry: Strs,
+}
+
+fn well_formed_digest(dg: Str) -> Bool {
+    if !ut_starts(dg, "blake3:") || str_len(dg) != 7 + 64 { return false }
+    for i in 7..str_len(dg) {
+        let b = str_byte(dg, i)
+        if !((b >= 48 && b <= 57) || (b >= 97 && b <= 102)) { return false }
+    }
+    true
+}
+
+// `Index::read`.
+pub fn idx_read(io: IoCap, registry: Str, name: Str, d: Dgs) -> Idx {
+    let ix = Idx(ok: ints_new(), name: strs_new(), version: strs_new(), digest: strs_new(), yanked: ints_new(), registry: strs_new())
+    ints_push(ix.ok, 0)
+    strs_push(ix.name, name)
+    strs_push(ix.registry, registry)
+    if !name_ok(name) {
+        dgs_add(d, "N0500", "`" + name + "` is not a package name", "")
+        return ix
+    }
+    let path = ut_join(ut_join(registry, "index"), name + ".toml")
+    if ut_read_error(io, path, true) != "" {
+        dgs_add(d, "N0501", "the registry at `" + registry + "` has no package `" + name + "`", "")
+        return ix
+    }
+    let t = tm_parse(read_file(path))
+    if !tm_ok(t) {
+        if tm_message(t) != "" { dgs_add(d, "N0512", "`" + path + "`: " + tm_message(t), "") } else { dgs_unsupported(d, "a registry index in TOML this port does not read (" + tm_why(t) + ")") }
+        return ix
+    }
+    let pre = "`" + path + "`: "
+    let o = ints_new()
+    let req = ints_new()
+    ints_push(req, 1)
+    ints_push(req, 1)
+    ints_push(req, 0)
+    let err = read_struct(t, 0, names3("schema", "name", "version"), "ssv", req, o)
+    if err != "" {
+        dgs_add(d, "N0512", pre + err, "")
+        return ix
+    }
+    if tm_text(t, ints_get(o, 0)) != "nazm.registry-index/1" {
+        dgs_add(d, "N0512", pre + "the schema is `" + tm_text(t, ints_get(o, 0)) + "`, not `nazm.registry-index/1`", "")
+        return ix
+    }
+    if tm_text(t, ints_get(o, 1)) != name {
+        dgs_add(d, "N0512", pre + "it indexes `" + tm_text(t, ints_get(o, 1)) + "`, not `" + name + "`", "")
+        return ix
+    }
+    // The entries, each read as `struct RawEntry`, kept in version order.
+    let versions = strs_new()
+    let digests = strs_new()
+    let yanked = ints_new()
+    let mut e = if ints_get(o, 2) >= 0 { tm_first(t, ints_get(o, 2)) } else { 0 - 1 }
+    while e >= 0 {
+        if tm_kind(t, e) != tm_table() {
+            dgs_add(d, "N0512", pre + bad_type(t, e, "struct RawEntry"), "")
+            return ix
+        }
+        let eo = ints_new()
+        let ereq = ints_new()
+        ints_push(ereq, 1)
+        ints_push(ereq, 1)
+        ints_push(ereq, 0)
+        let eerr = read_struct(t, e, names3("version", "digest", "yanked"), "ssb", ereq, eo)
+        if eerr != "" {
+            dgs_add(d, "N0512", pre + eerr, "")
+            return ix
+        }
+        let v = tm_text(t, ints_get(eo, 0))
+        if !ver_ok(v) {
+            dgs_add(d, "N0512", pre + "`" + v + "` is not a version", "")
+            return ix
+        }
+        let dg = tm_text(t, ints_get(eo, 1))
+        if !well_formed_digest(dg) {
+            dgs_add(d, "N0512", pre + v + "'s digest `" + dg + "` is not `blake3:` and 64 hex digits", "")
+            return ix
+        }
+        let mut at = 0
+        while at < strs_len(versions) && ver_cmp(strs_get(versions, at), v) < 0 { at += 1 }
+        if at < strs_len(versions) && ver_cmp(strs_get(versions, at), v) == 0 {
+            dgs_add(d, "N0512", pre + v + " is recorded twice", "")
+            return ix
+        }
+        strs_push(versions, "")
+        strs_push(digests, "")
+        ints_push(yanked, 0)
+        let mut j = strs_len(versions) - 1
+        while j > at {
+            strs_set(versions, j, strs_get(versions, j - 1))
+            strs_set(digests, j, strs_get(digests, j - 1))
+            ints_set(yanked, j, ints_get(yanked, j - 1))
+            j -= 1
+        }
+        strs_set(versions, at, v)
+        strs_set(digests, at, dg)
+        ints_set(yanked, at, if ints_get(eo, 2) >= 0 && tm_text(t, ints_get(eo, 2)) == "true" { 1 } else { 0 })
+        e = tm_next(t, e)
+    }
+    ints_set(ix.ok, 0, 1)
+    for i in 0..strs_len(versions) {
+        strs_push(ix.version, strs_get(versions, i))
+        strs_push(ix.digest, strs_get(digests, i))
+        ints_push(ix.yanked, ints_get(yanked, i))
+    }
+    ix
+}
+
+fn idx_find(ix: Idx, v: Str) -> Int {
+    for i in 0..strs_len(ix.version) { if ver_cmp(strs_get(ix.version, i), v) == 0 { return i } }
+    0 - 1
+}
+
+pub fn idx_dir(ix: Idx, v: Str) -> Str {
+    ut_join(ut_join(ut_join(strs_get(ix.registry, 0), "packages"), strs_get(ix.name, 0)), v)
+}
+
+// `only_files`: a tree holding anything but regular files and directories is refused (`N0514`).
+pub fn only_files(io: IoCap, dir: Str, d: Dgs) -> Bool {
+    let stack = strs_new()
+    strs_push(stack, dir)
+    while strs_len(stack) > 0 {
+        let cur = strs_get(stack, strs_len(stack) - 1)
+        strs_pop(stack)
+        let h = os_dir_open(cur)
+        if os_status(h) < 0 {
+            dgs_add(d, "N0514", "`" + cur + "` cannot be read: " + ut_os_error(os_status(h)), "")
+            return false
+        }
+        let names = strs_new()
+        let buf = bytes_new(1024)
+        let mut n = os_dir_next(h, buf)
+        while n > 0 {
+            let name = bytes_to_str(bytes_slice(buf, 0, n))
+            if name != "." && name != ".." { strs_push(names, name) }
+            n = os_dir_next(h, buf)
+        }
+        os_close(h)
+        for i in 0..strs_len(names) {
+            let path = ut_join(cur, strs_get(names, i))
+            let lst = bytes_new(48)
+            let k = if os_lstat(path, lst) == 0 { bytes_read_le[Int](lst, 8) } else { 0 - 1 }
+            if k == 1 {
+                strs_push(stack, path)
+            } else if k != 0 {
+                dgs_add(d, "N0514", "`" + path + "` is not a file or a directory; a registry package holds only those", "")
+                return false
+            }
+        }
+    }
+    true
+}
+
+// `Index::fetch`: the published copy of `v` — checked — as its manifest, or a refusal; `dir_out[0]` is
+// where it is.
+pub fn idx_fetch(io: IoCap, ix: Idx, v: Str, d: Dgs, dir_out: Strs) -> Mf {
+    let bad = mf_new()
+    ints_set(bad.state, 0, 0)
+    let at = idx_find(ix, v)
+    let name = strs_get(ix.name, 0)
+    if at < 0 {
+        dgs_add(d, "N0501", "the registry has no `" + name + "` " + v, "")
+        return bad
+    }
+    let dir = idx_dir(ix, v)
+    strs_push(dir_out, dir)
+    if ut_kind(io, dir) != 1 {
+        dgs_add(d, "N0501", "the registry indexes `" + name + "` " + v + " and has no copy at `" + dir + "`", "")
+        return bad
+    }
+    if !only_files(io, dir, d) { return bad }
+    let manifest_path = ut_join(dir, "nazm.toml")
+    if ut_read_error(io, manifest_path, false) != "" {
+        dgs_add(d, "N0501", "no manifest `" + manifest_path + "`", "")
+        return bad
+    }
+    let bytes = read_file(manifest_path)
+    let m = mf_parse(ut_lossy(bytes), manifest_path, d)
+    if ints_get(m.state, 0) != 1 { return bad }
+    if mf_name(m) != name || ver_cmp(mf_version(m), v) != 0 {
+        dgs_add(d, "N0500", "the registry's copy of `" + name + "` " + v + " says it is `" + mf_name(m) + "` " + mf_version(m), "")
+        return bad
+    }
+    let have = pkg_digest(io, bytes, ut_join(dir, mf_root(m)))
+    if have != strs_get(ix.digest, at) {
+        dgs_add(d, "N0507", "the registry's copy of `" + name + "` " + v + " does not match the digest its index records: it changed after it was published",
+                "a published version is immutable; publish a new version instead")
+        return bad
+    }
+    m
+}
+
+// --- the registry search (N90) ------------------------------------------------------------------------------------------
+
+pub struct Search {
+    registry: Strs,
+    // What the path packages require: package, requirement, who.
+    b_name: Strs,
+    b_req: Strs,
+    b_who: Strs,
+    path_names: Strs,
+    // The versions the lockfile prefers: name, version.
+    p_name: Strs,
+    p_ver: Strs,
+    idx: Vec[Idx],
+    idx_name: Strs,
+    mfs: Vec[Mf],
+    mf_key: Strs,
+    mf_dir: Strs,
+    tried: Ints,
+    // The deepest dead end: depth (-1 for none), the package and what was required of it, with who.
+    deep: Ints,
+    deep_name: Strs,
+    deep_req: Strs,
+    deep_who: Strs,
+    d: Dgs,
+    io: Ints,
+}
+
+fn search_index(io: IoCap, s: Search, name: Str) -> Int {
+    for i in 0..strs_len(s.idx_name) { if strs_get(s.idx_name, i) == name { return i } }
+    let ix = idx_read(io, strs_get(s.registry, 0), name, s.d)
+    if ints_get(ix.ok, 0) != 1 { return 0 - 1 }
+    vec_push(s.idx, ix)
+    strs_push(s.idx_name, name)
+    strs_len(s.idx_name) - 1
+}
+
+// A registry version's manifest, read once and checked.
+fn search_manifest(io: IoCap, s: Search, name: Str, v: Str) -> Int {
+    let key = name + "@" + v
+    for i in 0..strs_len(s.mf_key) { if strs_get(s.mf_key, i) == key { return i } }
+    let ii = search_index(io, s, name)
+    if ii < 0 { return 0 - 1 }
+    let dir = strs_new()
+    let m = idx_fetch(io, vec_get(s.idx, ii), v, s.d, dir)
+    if ints_get(m.state, 0) != 1 { return 0 - 1 }
+    for k in 0..strs_len(m.d_name) {
+        if ints_get(m.d_kind, k) == 0 {
+            dgs_add(s.d, "N0500", "the registry's `" + name + "` " + v + " depends on `" + strs_get(m.d_name, k) + "` by path; a registry package depends only on the registry", "")
+            return 0 - 1
+        }
+    }
+    vec_push(s.mfs, m)
+    strs_push(s.mf_key, key)
+    strs_push(s.mf_dir, strs_get(dir, 0))
+    strs_len(s.mf_key) - 1
+}
+
+// A chosen assignment: package names ascending and their versions.
+pub struct Chosen {
+    name: Strs,
+    ver: Strs,
+}
+
+fn chosen_with(c: Chosen, name: Str, v: Str) -> Chosen {
+    let out = Chosen(name: strs_new(), ver: strs_new())
+    let mut placed = false
+    for i in 0..strs_len(c.name) {
+        if !placed && ut_less(name, strs_get(c.name, i)) {
+            strs_push(out.name, name)
+            strs_push(out.ver, v)
+            placed = true
+        }
+        strs_push(out.name, strs_get(c.name, i))
+        strs_push(out.ver, strs_get(c.ver, i))
+    }
+    if !placed {
+        strs_push(out.name, name)
+        strs_push(out.ver, v)
+    }
+    out
+}
+
+fn chosen_get(c: Chosen, name: Str) -> Str {
+    for i in 0..strs_len(c.name) { if strs_get(c.name, i) == name { return strs_get(c.ver, i) } }
+    ""
+}
+
+fn dead_end(s: Search, depth: Int, name: Str, req: Strs, who: Strs) -> Int {
+    if ints_get(s.deep, 0) < 0 || depth >= ints_get(s.deep, 0) {
+        ints_set(s.deep, 0, depth)
+        strs_set(s.deep_name, 0, name)
+        while strs_len(s.deep_req) > 0 {
+            strs_pop(s.deep_req)
+            strs_pop(s.deep_who)
+        }
+        for i in 0..strs_len(req) {
+            strs_push(s.deep_req, strs_get(req, i))
+            strs_push(s.deep_who, strs_get(who, i))
+        }
+    }
+    0
+}
+
+// `solve`: the first complete assignment in name order, each package's candidates newest first, the
+// lockfile's choice before the rest. `found[0]` is 1 and `result` the assignment where there is one; an
+// error ends the search with `s.d` non-empty.
+fn solve(io: IoCap, s: Search, chosen: Chosen, found: Ints, result: Vec[Chosen]) -> Int {
+    // Every requirement under `chosen`: the path packages', and each chosen version's.
+    let r_name = strs_new()
+    let r_req = strs_new()
+    let r_who = strs_new()
+    for i in 0..strs_len(s.b_name) {
+        strs_push(r_name, strs_get(s.b_name, i))
+        strs_push(r_req, strs_get(s.b_req, i))
+        strs_push(r_who, strs_get(s.b_who, i))
+    }
+    for i in 0..strs_len(chosen.name) {
+        let mi = search_manifest(io, s, strs_get(chosen.name, i), strs_get(chosen.ver, i))
+        if mi < 0 { return 0 - 1 }
+        let m = vec_get(s.mfs, mi)
+        for k in 0..strs_len(m.d_name) {
+            if ints_get(m.d_kind, k) == 1 {
+                strs_push(r_name, strs_get(m.d_name, k))
+                strs_push(r_req, strs_get(m.d_ver, k))
+                strs_push(r_who, "`" + strs_get(chosen.name, i) + "` " + strs_get(chosen.ver, i))
+            }
+        }
+    }
+    // A requirement a choice placed on a package already chosen must hold of it.
+    for i in 0..strs_len(chosen.name) {
+        let name = strs_get(chosen.name, i)
+        let reqs = strs_new()
+        let whos = strs_new()
+        let mut holds = true
+        for k in 0..strs_len(r_name) {
+            if strs_get(r_name, k) == name {
+                strs_push(reqs, strs_get(r_req, k))
+                strs_push(whos, strs_get(r_who, k))
+                if !req_matches(strs_get(r_req, k), strs_get(chosen.ver, i)) { holds = false }
+            }
+        }
+        if strs_len(reqs) > 0 && !holds {
+            dead_end(s, strs_len(chosen.name), name, reqs, whos)
+            return 0
+        }
+    }
+    // The first package, in name order, required and not chosen.
+    let mut next = ""
+    for k in 0..strs_len(r_name) {
+        let n = strs_get(r_name, k)
+        if chosen_get(chosen, n) == "" && (next == "" || ut_less(n, next)) { next = n }
+    }
+    if next == "" {
+        ints_set(found, 0, 1)
+        vec_push(result, chosen)
+        return 0
+    }
+    let on_req = strs_new()
+    let on_who = strs_new()
+    for k in 0..strs_len(r_name) {
+        if strs_get(r_name, k) == next {
+            strs_push(on_req, strs_get(r_req, k))
+            strs_push(on_who, strs_get(r_who, k))
+        }
+    }
+    for i in 0..strs_len(s.path_names) {
+        if strs_get(s.path_names, i) == next {
+            dgs_add(s.d, "N0503", "`" + next + "` is a path package and also a registry dependency of `" + strs_get(on_who, 0) + "`; one build has one package of each name", "")
+            return 0 - 1
+        }
+    }
+    let mut preferred = ""
+    for i in 0..strs_len(s.p_name) { if strs_get(s.p_name, i) == next { preferred = strs_get(s.p_ver, i) } }
+    let ii = search_index(io, s, next)
+    if ii < 0 { return 0 - 1 }
+    let ix = vec_get(s.idx, ii)
+    let cands = strs_new()
+    if preferred != "" {
+        let mut ok = true
+        for k in 0..strs_len(on_req) { if !req_matches(strs_get(on_req, k), preferred) { ok = false } }
+        if ok && idx_find(ix, preferred) >= 0 { strs_push(cands, preferred) }
+    }
+    let mut e = strs_len(ix.version)
+    while e > 0 {
+        e -= 1
+        let v = strs_get(ix.version, e)
+        let mut ok = true
+        for k in 0..strs_len(on_req) { if !req_matches(strs_get(on_req, k), v) { ok = false } }
+        if ints_get(ix.yanked, e) == 0 && ok && (preferred == "" || ver_cmp(v, preferred) != 0) { strs_push(cands, v) }
+    }
+    if strs_len(cands) == 0 {
+        dead_end(s, strs_len(chosen.name), next, on_req, on_who)
+        return 0
+    }
+    for ci in 0..strs_len(cands) {
+        ints_set(s.tried, 0, ints_get(s.tried, 0) + 1)
+        if ints_get(s.tried, 0) > 10000 {
+            dgs_add(s.d, "N0513", "the resolver stopped after 10000 candidate versions without an answer; this does not show that none exists", "")
+            return 0 - 1
+        }
+        let r = solve(io, s, chosen_with(chosen, next, strs_get(cands, ci)), found, result)
+        if r < 0 { return 0 - 1 }
+        if ints_get(found, 0) == 1 { return 0 }
+    }
+    0
+}
+
+// `explain`: `N0513`, naming the package no version of which fitted where the search got furthest.
+fn explain(s: Search) -> Int {
+    let said = strs_new()
+    for i in 0..strs_len(s.deep_req) {
+        strs_push(said, strs_get(s.deep_who, i) + " requires " + strs_get(s.deep_req, i))
+    }
+    let tried = ints_get(s.tried, 0)
+    dgs_add(s.d, "N0513", "no choice of versions satisfies every requirement: no published version of `" + strs_get(s.deep_name, 0) + "` satisfies " + str_join(said, ", ")
+            + " (after trying " + int_to_str(tried) + " candidate version" + ut_plural(tried) + ")",
+            "one build has one version of each package; the requirements must overlap for some choice of the others")
+    0
+}
+
+// `Resolver::solve_registry`: every registry dependency solved once every path package is known, the
+// chosen packages added to `f`, the registry's edges added, and a cycle through them refused.
+pub fn solve_registry(io: IoCap, f: Found, d: Dgs, root_dir: Str, p_name: Strs, p_ver: Strs) -> Int {
+    let s = Search(registry: strs_new(), b_name: strs_new(), b_req: strs_new(), b_who: strs_new(), path_names: strs_new(), p_name: p_name, p_ver: p_ver,
+            idx: vec_new[Idx](), idx_name: strs_new(), mfs: vec_new[Mf](), mf_key: strs_new(), mf_dir: strs_new(), tried: ints_new(), deep: ints_new(),
+            deep_name: strs_new(), deep_req: strs_new(), deep_who: strs_new(), d: d, io: ints_new())
+    ints_push(s.tried, 0)
+    ints_push(s.deep, 0 - 1)
+    strs_push(s.deep_name, "")
+    let path_count = vec_len(f.mf)
+    for i in 0..path_count {
+        let m = vec_get(f.mf, i)
+        strs_push(s.path_names, mf_name(m))
+        for k in 0..strs_len(m.d_name) {
+            if ints_get(m.d_kind, k) == 1 {
+                strs_push(s.b_name, strs_get(m.d_name, k))
+                strs_push(s.b_req, strs_get(m.d_ver, k))
+                strs_push(s.b_who, "`" + mf_name(m) + "`")
+            }
+        }
+    }
+    if strs_len(s.b_name) == 0 { return 0 }
+    let root_m = vec_get(f.mf, 0)
+    if ints_get(root_m.has_registry, 0) == 0 {
+        dgs_add(d, "N0501", "`" + strs_get(s.b_name, 0) + "` is a registry dependency, and the root manifest names no `[registry]`", "")
+        return 0 - 1
+    }
+    strs_push(s.registry, pkg_join(root_dir, strs_get(root_m.registry, 0)))
+    let found = ints_new()
+    ints_push(found, 0)
+    let result = vec_new[Chosen]()
+    let r = solve(io, s, Chosen(name: strs_new(), ver: strs_new()), found, result)
+    if r < 0 { return 0 - 1 }
+    if ints_get(found, 0) != 1 {
+        explain(s)
+        return 0 - 1
+    }
+    let chosen = vec_get(result, 0)
+    for i in 0..strs_len(chosen.name) {
+        let mi = search_manifest(io, s, strs_get(chosen.name, i), strs_get(chosen.ver, i))
+        if mi < 0 { return 0 - 1 }
+        vec_push(f.mf, vec_get(s.mfs, mi))
+        strs_push(f.dir, strs_get(s.mf_dir, mi))
+        ints_push(f.registry, 1)
+    }
+    // Each package's registry dependencies, as edges to the packages chosen for them.
+    for i in 0..vec_len(f.mf) {
+        let m = vec_get(f.mf, i)
+        for k in 0..strs_len(m.d_name) {
+            if ints_get(m.d_kind, k) != 1 { continue }
+            let to = found_by_name(f, strs_get(m.d_name, k))
+            if to >= 0 {
+                strs_push(f.e_name, strs_get(m.d_name, k))
+                ints_push(f.e_from, i)
+                ints_push(f.e_to, to)
+            }
+        }
+    }
+    refuse_cycles(f, d)
+}
+
+// The edges out of package `v`, by dependency name.
+fn edges_of(f: Found, v: Int) -> Ints {
+    let out = ints_new()
+    let names = strs_new()
+    for e in 0..ints_len(f.e_from) {
+        if ints_get(f.e_from, e) != v { continue }
+        let n = strs_get(f.e_name, e)
+        let mut at = 0
+        while at < strs_len(names) && ut_less(strs_get(names, at), n) { at += 1 }
+        if at < strs_len(names) && strs_get(names, at) == n {
+            ints_set(out, at, ints_get(f.e_to, e))
+            continue
+        }
+        strs_push(names, "")
+        ints_push(out, 0)
+        let mut j = strs_len(names) - 1
+        while j > at {
+            strs_set(names, j, strs_get(names, j - 1))
+            ints_set(out, j, ints_get(out, j - 1))
+            j -= 1
+        }
+        strs_set(names, at, n)
+        ints_set(out, at, ints_get(f.e_to, e))
+    }
+    out
+}
+
+// `refuse_cycles`: a cycle through registry edges, which no directory walk saw.
+fn refuse_cycles(f: Found, d: Dgs) -> Int {
+    let n = vec_len(f.mf)
+    let state = ints_new()
+    for _ in 0..n { ints_push(state, 0) }
+    for start in 0..n {
+        if ints_get(state, start) != 0 { continue }
+        // A stack of (node, the edges still to take, popped from the back).
+        let node = ints_new()
+        let rest = vec_new[Ints]()
+        ints_push(node, start)
+        vec_push(rest, edges_of(f, start))
+        ints_set(state, start, 1)
+        while ints_len(node) > 0 {
+            let top = ints_len(node) - 1
+            let v = ints_get(node, top)
+            let r = vec_get(rest, top)
+            if ints_len(r) == 0 {
+                ints_set(state, v, 2)
+                ints_pop(node)
+                vec_pop(rest)
+                continue
+            }
+            let w = ints_get(r, ints_len(r) - 1)
+            ints_pop(r)
+            if ints_get(state, w) == 1 {
+                let names = strs_new()
+                for i in 0..ints_len(node) { strs_push(names, mf_name(vec_get(f.mf, ints_get(node, i)))) }
+                strs_push(names, mf_name(vec_get(f.mf, w)))
+                dgs_add(d, "N0504", "a dependency cycle: " + str_join(names, " → "), "")
+                return 0 - 1
+            }
+            if ints_get(state, w) == 0 {
+                ints_set(state, w, 1)
+                ints_push(node, w)
+                vec_push(rest, edges_of(f, w))
+            }
+        }
+    }
+    0
+}
+
+// --- the graph ---------------------------------------------------------------------------------------------------------------
+
+// A resolved build: every package sorted by name, and which is the root.
+pub struct Graph {
+    name: Strs,
+    version: Strs,
+    dir: Strs,
+    source_root: Strs,
+    // The entry module's path, "" for none.
+    main: Strs,
+    source: Strs,
+    digest: Strs,
+    // Each package's dependencies, by name, to their places in the list.
+    d_first: Ints,
+    d_count: Ints,
+    d_name: Strs,
+    d_to: Ints,
+    mfs: Vec[Mf],
+    // The features enabled for each package: package, name.
+    f_pkg: Ints,
+    f_name: Strs,
+    root: Ints,
+}
+
+fn graph_new() -> Graph {
+    let g = Graph(name: strs_new(), version: strs_new(), dir: strs_new(), source_root: strs_new(), main: strs_new(), source: strs_new(), digest: strs_new(),
+            d_first: ints_new(), d_count: ints_new(), d_name: strs_new(), d_to: ints_new(), mfs: vec_new[Mf](), f_pkg: ints_new(), f_name: strs_new(), root: ints_new())
+    ints_push(g.root, 0)
+    g
+}
+
+pub fn graph_len(g: Graph) -> Int { strs_len(g.name) }
+
+fn feature_items(m: Mf, feature: Str, out: Strs) -> Bool {
+    let mut at = 0 - 1
+    for i in 0..strs_len(m.f_name) { if strs_get(m.f_name, i) == feature { at = i } }
+    if at < 0 { return false }
+    for i in 0..ints_len(m.f_item_of) {
+        if ints_get(m.f_item_of, i) == at { strs_push(out, strs_get(m.f_item, i)) }
+    }
+    true
+}
+
+// A package's dependency `name` as its place in the graph, or -1.
+fn dep_of(g: Graph, p: Int, name: Str) -> Int {
+    for k in 0..ints_get(g.d_count, p) {
+        if strs_get(g.d_name, ints_get(g.d_first, p) + k) == name { return ints_get(g.d_to, ints_get(g.d_first, p) + k) }
+    }
+    0 - 1
+}
+
+// `Graph::enable`: every package's enabled features, additive until nothing more is.
+fn enable(g: Graph, d: Dgs) -> Int {
+    let n = graph_len(g)
+    let w_pkg = ints_new()
+    let w_feat = strs_new()
+    let w_who = strs_new()
+    let on_pkg = ints_new()
+    let on_name = strs_new()
+    for i in 0..n {
+        let m = vec_get(g.mfs, i)
+        let tmp = strs_new()
+        if feature_items(m, "default", tmp) {
+            ints_push(w_pkg, i)
+            strs_push(w_feat, "default")
+            strs_push(w_who, "`" + strs_get(g.name, i) + "`'s default")
+        }
+        for r in 0..strs_len(m.r_dep) {
+            let j = dep_of(g, i, strs_get(m.r_dep, r))
+            if j >= 0 {
+                ints_push(w_pkg, j)
+                strs_push(w_feat, strs_get(m.r_feature, r))
+                strs_push(w_who, "the package `" + strs_get(g.name, i) + "`")
+            }
+        }
+    }
+    let errors = strs_new()
+    while ints_len(w_pkg) > 0 {
+        let top = ints_len(w_pkg) - 1
+        let i = ints_get(w_pkg, top)
+        let f = strs_get(w_feat, top)
+        let asker = strs_get(w_who, top)
+        ints_pop(w_pkg)
+        strs_pop(w_feat)
+        strs_pop(w_who)
+        let m = vec_get(g.mfs, i)
+        let items = strs_new()
+        if !feature_items(m, f, items) {
+            strs_push(errors, asker + " asks `" + strs_get(g.name, i) + "` for the feature `" + f + "`, which it does not declare")
+            continue
+        }
+        let mut already = false
+        for k in 0..ints_len(on_pkg) { if ints_get(on_pkg, k) == i && strs_get(on_name, k) == f { already = true } }
+        if already { continue }
+        ints_push(on_pkg, i)
+        strs_push(on_name, f)
+        for k in 0..strs_len(items) {
+            let item = strs_get(items, k)
+            let slash = ut_find(item, "/", 0)
+            if slash >= 0 {
+                let j = dep_of(g, i, str_slice(item, 0, slash))
+                if j >= 0 {
+                    ints_push(w_pkg, j)
+                    strs_push(w_feat, str_slice(item, slash + 1, str_len(item)))
+                    strs_push(w_who, "the feature `" + strs_get(g.name, i) + "/" + f + "`")
+                }
+            } else {
+                ints_push(w_pkg, i)
+                strs_push(w_feat, item)
+                strs_push(w_who, "the feature `" + strs_get(g.name, i) + "/" + f + "`")
+            }
+        }
+    }
+    if strs_len(errors) > 0 {
+        // Sorted by message and each once.
+        let sorted = strs_new()
+        for i in 0..strs_len(errors) {
+            let e = strs_get(errors, i)
+            let at = insert_sorted(sorted, e)
+            if at < strs_len(sorted) && strs_get(sorted, at) == e { continue }
+            strs_push(sorted, "")
+            let mut j = strs_len(sorted) - 1
+            while j > at {
+                strs_set(sorted, j, strs_get(sorted, j - 1))
+                j -= 1
+            }
+            strs_set(sorted, at, e)
+        }
+        for i in 0..strs_len(sorted) { dgs_add(d, "N0500", strs_get(sorted, i), "") }
+        return 0 - 1
+    }
+    // `default` names a group, not a feature: what it enables is recorded, not its name.
+    for i in 0..n {
+        let names = strs_new()
+        for k in 0..ints_len(on_pkg) {
+            if ints_get(on_pkg, k) == i && strs_get(on_name, k) != "default" {
+                let at = insert_sorted(names, strs_get(on_name, k))
+                strs_push(names, "")
+                let mut j = strs_len(names) - 1
+                while j > at {
+                    strs_set(names, j, strs_get(names, j - 1))
+                    j -= 1
+                }
+                strs_set(names, at, strs_get(on_name, k))
+            }
+        }
+        for k in 0..strs_len(names) {
+            ints_push(g.f_pkg, i)
+            strs_push(g.f_name, strs_get(names, k))
+        }
+    }
+    0
+}
+
+// The registry versions a lockfile records, by name; empty when there is none or it cannot be read.
+pub fn locked_registry_versions(io: IoCap, path: Str, names: Strs, vers: Strs) -> Int {
+    if ut_read_error(io, path, true) != "" { return 0 }
+    let t = tm_parse(read_file(path))
+    if !tm_ok(t) { return 0 }
+    let o = ints_new()
+    let req = ints_new()
+    ints_push(req, 1)
+    ints_push(req, 0)
+    if read_struct(t, 0, fields("schema", "package", "", "", "", ""), "sv", req, o) != "" { return 0 }
+    let mut e = if ints_get(o, 1) >= 0 { tm_first(t, ints_get(o, 1)) } else { 0 - 1 }
+    while e >= 0 {
+        if tm_kind(t, e) != tm_table() { return clear_pair(names, vers) }
+        let eo = ints_new()
+        let ereq = ints_new()
+        for _ in 0..6 { ints_push(ereq, 1) }
+        ints_set(ereq, 4, 0)
+        ints_set(ereq, 5, 0)
+        if read_struct(t, e, fields("name", "version", "source", "digest", "dependencies", "features"), "sssdaa", ereq, eo) != "" { return clear_pair(names, vers) }
+        if ut_starts(tm_text(t, ints_get(eo, 2)), "registry+") && ver_ok(tm_text(t, ints_get(eo, 1))) {
+            strs_push(names, tm_text(t, ints_get(eo, 0)))
+            strs_push(vers, tm_text(t, ints_get(eo, 1)))
+        }
+        e = tm_next(t, e)
+    }
+    0
+}
+
+fn clear_pair(names: Strs, vers: Strs) -> Int {
+    while strs_len(names) > 0 {
+        strs_pop(names)
+        strs_pop(vers)
+    }
+    0
+}
+
+// `resolve_preferring`: the package in `dir` and everything it depends on. `dropping`: -1 prefers the
+// lockfile's registry versions, 0 drops every one's preference, 1 those named in `names`.
+pub fn graph_resolve(io: IoCap, dir: Str, dropping: Int, names: Strs, d: Dgs) -> Graph {
+    let g = graph_new()
+    let f = found_new()
+    let root = visit(io, f, d, dir, "", "", "")
+    if root < 0 { return g }
+    let root_dir = strs_get(f.dir, root)
+    let mut p_name = strs_new()
+    let mut p_ver = strs_new()
+    locked_registry_versions(io, ut_join(root_dir, "nazm.lock"), p_name, p_ver)
+    if dropping == 0 {
+        clear_pair(p_name, p_ver)
+    } else if dropping == 1 {
+        let keep_n = strs_new()
+        let keep_v = strs_new()
+        for i in 0..strs_len(p_name) {
+            let mut named = false
+            for k in 0..strs_len(names) { if strs_get(names, k) == strs_get(p_name, i) { named = true } }
+            if !named {
+                strs_push(keep_n, strs_get(p_name, i))
+                strs_push(keep_v, strs_get(p_ver, i))
+            }
+        }
+        p_name = keep_n
+        p_ver = keep_v
+    }
+    if solve_registry(io, f, d, root_dir, p_name, p_ver) < 0 { return g }
+    if dgs_why(d) != "" { return g }
+    // Sorted by name.
+    let n = vec_len(f.mf)
+    let order = ints_new()
+    for i in 0..n {
+        let mut at = ints_len(order)
+        while at > 0 && ut_less(mf_name(vec_get(f.mf, i)), mf_name(vec_get(f.mf, ints_get(order, at - 1)))) { at -= 1 }
+        ints_push(order, 0)
+        let mut k = ints_len(order) - 1
+        while k > at {
+            ints_set(order, k, ints_get(order, k - 1))
+            k -= 1
+        }
+        ints_set(order, at, i)
+    }
+    let position = ints_new()
+    for _ in 0..n { ints_push(position, 0) }
+    for i in 0..n { ints_set(position, ints_get(order, i), i) }
+    for i in 0..n {
+        let old = ints_get(order, i)
+        let m = vec_get(f.mf, old)
+        let pdir = strs_get(f.dir, old)
+        let sr = pkg_canonical(io, pkg_join(pdir, mf_root(m)))
+        if sr == "" {
+            dgs_add(d, "N0500", "`" + mf_name(m) + "`: no source root `" + pkg_join(pdir, mf_root(m)) + "`", "")
+            return g
+        }
+        let mbytes = if ut_read_error(io, ut_join(pdir, "nazm.toml"), false) == "" { read_file(ut_join(pdir, "nazm.toml")) } else { "" }
+        strs_push(g.name, mf_name(m))
+        strs_push(g.version, mf_version(m))
+        strs_push(g.dir, pdir)
+        strs_push(g.source_root, sr)
+        strs_push(g.main, if ints_get(m.has_main, 0) == 1 { pkg_join(sr, strs_get(m.main, 0)) } else { "" })
+        strs_push(g.digest, pkg_digest(io, mbytes, sr))
+        strs_push(g.source, if ints_get(f.registry, old) == 1 { "registry+" + mf_name(m) + "@" + mf_version(m) } else { "path+" + relative(root_dir, pdir) })
+        vec_push(g.mfs, m)
+        ints_push(g.d_first, strs_len(g.d_name))
+        let es = edges_of(f, old)
+        // Edge names in the same order as `edges_of`.
+        let en = strs_new()
+        for e in 0..ints_len(f.e_from) {
+            if ints_get(f.e_from, e) == old {
+                let nm = strs_get(f.e_name, e)
+                let at = insert_sorted(en, nm)
+                if at < strs_len(en) && strs_get(en, at) == nm { continue }
+                strs_push(en, "")
+                let mut j = strs_len(en) - 1
+                while j > at {
+                    strs_set(en, j, strs_get(en, j - 1))
+                    j -= 1
+                }
+                strs_set(en, at, nm)
+            }
+        }
+        for k in 0..strs_len(en) {
+            strs_push(g.d_name, strs_get(en, k))
+            ints_push(g.d_to, ints_get(position, ints_get(es, k)))
+        }
+        ints_push(g.d_count, strs_len(en))
+    }
+    ints_set(g.root, 0, ints_get(position, root))
+    if enable(g, d) < 0 { return g }
+    g
+}
+
+// `Graph::lock_text`: the lockfile's exact bytes.
+pub fn graph_lock_text(g: Graph) -> Str {
+    let out = strs_new()
+    strs_push(out, "# Written by `nazm lock`. Do not edit: `nazm lock` rewrites it." + nl())
+    let featured = ints_len(g.f_pkg) > 0
+    strs_push(out, "schema = \"" + (if featured { "nazm.lock/2" } else { "nazm.lock/1" }) + "\"" + nl())
+    for p in 0..graph_len(g) {
+        strs_push(out, nl() + "[[package]]" + nl())
+        strs_push(out, "name = \"" + strs_get(g.name, p) + "\"" + nl())
+        strs_push(out, "version = \"" + strs_get(g.version, p) + "\"" + nl())
+        let source = strs_get(g.source, p)
+        let mut esc = ""
+        for i in 0..str_len(source) {
+            let b = str_byte(source, i)
+            if b == 92 { esc = esc + "/" } else if b == 34 { esc = esc + "\\\"" } else { esc = esc + str_from_byte(b) }
+        }
+        strs_push(out, "source = \"" + esc + "\"" + nl())
+        strs_push(out, "digest = \"" + strs_get(g.digest, p) + "\"" + nl())
+        let deps = strs_new()
+        for k in 0..ints_get(g.d_count, p) { strs_push(deps, "\"" + strs_get(g.d_name, ints_get(g.d_first, p) + k) + "\"") }
+        strs_push(out, "dependencies = [" + str_join(deps, ", ") + "]" + nl())
+        if featured {
+            let fs = strs_new()
+            for k in 0..ints_len(g.f_pkg) {
+                if ints_get(g.f_pkg, k) == p { strs_push(fs, "\"" + strs_get(g.f_name, k) + "\"") }
+            }
+            strs_push(out, "features = [" + str_join(fs, ", ") + "]" + nl())
+        }
+    }
+    str_join(out, "")
+}
+
+// `write_lock`: the lockfile beside the root manifest, if its bytes would change. 1 written, 0 up to
+// date, -1 with the reason in `why`.
+pub fn graph_write_lock(io: IoCap, g: Graph, why: Strs) -> Int {
+    let path = ut_join(strs_get(g.dir, ints_get(g.root, 0)), "nazm.lock")
+    let text = graph_lock_text(g)
+    if ut_read_error(io, path, true) == "" && read_file(path) == text { return 0 }
+    // `fs::write`: created or truncated.
+    if !ut_write_all(io, path, text) {
+        strs_push(why, ut_os_error(os_status(os_open_write(path, 0))))
+        return 0 - 1
+    }
+    1
+}

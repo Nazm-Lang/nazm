@@ -1,0 +1,37 @@
+# `nazm publish`'s command lines, run in the fixture of run.sh (`fixture pkg`).
+--help
+-h
+
+pub/deep
+pub/deep --registry
+pub/deep --registry reg
+pub/deep --registry reg --dry-run
+--dry-run pub/deep --registry reg
+pub/deep2 --registry reg
+pub/deep2 --registry reg --dry-run
+pub/util-1.0.0 --registry reg
+pub/util-1.0.0 --registry reg --dry-run
+pub/util-3.0.0 --registry reg
+pub/util-3.0.0 --registry reg --dry-run
+pub/util-3.0.0 --registry fresh
+pub/util-3.0.0 --registry nested/fresh/reg
+pub/util-3.0.0 --registry fresh --dry-run
+pub/util-3.0.0 --registry pub/util-3.0.0
+pub/util-3.0.0 --registry reg/index
+pub/util-3.0.0 --registry reg/index/util.toml
+app1
+app1 --registry reg
+app1 --registry reg --dry-run
+app --registry reg
+app --registry reg --dry-run
+one
+one --registry reg
+one --registry reg --dry-run
+absent --registry reg
+absent --registry reg --dry-run
+bad --registry reg
+bad --registry reg --dry-run
+nosrc --registry reg
+link --registry reg
+link --registry reg --dry-run
+stale --registry reg

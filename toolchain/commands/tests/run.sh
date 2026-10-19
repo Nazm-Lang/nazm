@@ -15,7 +15,7 @@
 #         toolchain/frontend-tests/inputs, or the FILEs named — a copy is formatted by each side
 #         twice: `fmt --check FILE`, then `fmt FILE`, which rewrites it. Then one `fmt --check`
 #         over every input at once, and a missing file named after one that is rewritten.
-#   args  Every command line in tests/args/CMD.txt, run by both sides as `nazm CMD LINE` in the same
+#   args  Every command line in tests/args/CMD.txt (R5_ARGS="lock yank" for those commands only), run by both sides as `nazm CMD LINE` in the same
 #         fixture directory: clap's usage errors and help, and what the command then does (design,
 #         D8); and every line of tests/args/nazm.txt as `nazm LINE`: the top level (design, D12).
 #   init  `nazm init` of every template, the trees written compared file by file (design, D9).
@@ -185,6 +185,145 @@ part_fmt() {
 # --- one run of a command, recorded ---------------------------------------------------------------
 
 # The fixture a command line runs in: what each command's lines name.
+# The packages `lock`, `update`, `publish` and `yank` run on, in `DIR`: path packages (a library, an
+# application, a diamond, a cycle, a version that is not the one declared, a name that is not the
+# directory's, features, a manifest that is not one), a registry of published versions made by the
+# reference's own `publish`, applications that depend on it (one that cannot be solved), indexes that are
+# wrong, a stale version directory, and a package holding a link.
+pkg_fixture() {
+  dir=$1
+  mkdir -p "$dir"
+  mk() {
+    mkdir -p "$1/src"
+    printf 'schema = "nazm.package/1"\n\n[package]\nname = "%s"\nversion = "%s"\n%s' "$2" "$3" "${4:-}" > "$1/nazm.toml"
+    printf 'pub fn f() -> Int { %s }\n' "$(echo "$3" | tr -d .)" > "$1/src/lib.nz"
+  }
+  (
+    cd "$dir"
+    mk one one 1.0.0
+    mk lib lib 1.0.0
+    printf '\n[features]\nx = []\n' >> lib/nazm.toml
+    mk app app 0.1.0 '
+[dependencies]
+lib = { path = "../lib", version = "1.0.0" }
+'
+    mk mid mid 1.0.0 '
+[dependencies]
+lib = { path = "../lib", version = "1.0.0" }
+'
+    mk dia dia 1.0.0 '
+[dependencies]
+lib = { path = "../lib", version = "1.0.0" }
+mid = { path = "../mid", version = "1.0.0" }
+'
+    mk wrong wrong 1.0.0 '
+[dependencies]
+lib = { path = "../lib", version = "2.0.0" }
+'
+    mk cyc1 cyc1 1.0.0 '
+[dependencies]
+cyc2 = { path = "../cyc2", version = "1.0.0" }
+'
+    mk cyc2 cyc2 1.0.0 '
+[dependencies]
+cyc1 = { path = "../cyc1", version = "1.0.0" }
+'
+    mk badname badname 1.0.0 '
+[dependencies]
+lib = { path = "../one", version = "1.0.0" }
+'
+    mk feat feat 1.0.0 '
+[dependencies]
+lib = { path = "../lib", version = "1.0.0", features = ["x"] }
+
+[features]
+default = ["extra"]
+extra = []
+'
+    mk nofeat nofeat 1.0.0 '
+[dependencies]
+lib = { path = "../lib", version = "1.0.0", features = ["nope"] }
+'
+    mk bad bad 1.0.0 'mystery = 1
+'
+    mk nosrc nosrc 1.0.0
+    rm -rf nosrc/src
+    mkdir -p reg sub
+    for v in 1.0.0 1.1.0 1.2.0 2.0.0; do mk "pub/util-$v" util "$v"; "$ref" publish "pub/util-$v" --registry reg > /dev/null 2>&1; done
+    mk pub/util-3.0.0 util 3.0.0
+    mk pub/deep deep 1.0.0 '
+[dependencies]
+util = { version = "^1.0.0" }
+'
+    "$ref" publish pub/deep --registry reg > /dev/null 2>&1
+    mk pub/deep2 deep 1.1.0 '
+[dependencies]
+util = { version = "~1.1.0" }
+'
+    mk pub/odd odd 1.0.0 '
+[dependencies]
+util = { version = "2.0.0" }
+'
+    "$ref" publish pub/odd --registry reg > /dev/null 2>&1
+    mk app1 app1 0.1.0 '
+[registry]
+path = "../reg"
+
+[dependencies]
+deep = { version = "^1.0.0" }
+'
+    mk app2 app2 0.1.0 '
+[registry]
+path = "../reg"
+
+[dependencies]
+deep = { version = "^1.0.0" }
+odd = { version = "1.0.0" }
+'
+    mk app3 app3 0.1.0 '
+[registry]
+path = "../reg"
+
+[dependencies]
+util = { version = "^1.0.0" }
+'
+    mk app4 app4 0.1.0 '
+[dependencies]
+util = { version = "^1.0.0" }
+'
+    mk app5 app5 0.1.0 '
+[registry]
+path = "../reg"
+
+[dependencies]
+nothere = { version = "^1.0.0" }
+'
+    mk app6 app6 0.1.0 '
+[registry]
+path = "../reg"
+
+[dependencies]
+util = { version = "^9.0.0" }
+'
+    mk link link 1.0.0
+    ln -s ../../one/src/lib.nz link/src/linked
+    mk stale stale 1.0.0
+    mkdir -p reg/packages/stale/1.0.0
+    printf 'schema = "nazm.registry-index/9"\nname = "broken"\n' > reg/index/broken.toml
+    printf 'schema = "nazm.registry-index/1"\nname = "dup"\n\n[[version]]\nversion = "1.0.0"\ndigest = "blake3:%064d"\n\n[[version]]\nversion = "1.0.0"\ndigest = "blake3:%064d"\n' 0 0 > reg/index/dup.toml
+    printf 'schema = "nazm.registry-index/1"\nname = "badidx"\n\n[[version]]\nversion = "1.0.0"\ndigest = "sha256:abc"\n' > reg/index/badidx.toml
+    # m1, m2, … : one package each, written with the manifest of the same line of tests/manifests.txt.
+    n=0
+    while IFS= read -r body; do
+      n=$((n + 1))
+      mkdir -p "m$n/src"
+      printf 'pub fn f() -> Int { 1 }\n' > "m$n/src/lib.nz"
+      # shellcheck disable=SC2059
+      printf "$body" > "m$n/nazm.toml"
+    done < "$root/toolchain/commands/tests/manifests.txt"
+  )
+}
+
 fixture() {
   cmd=$1 dir=$2
   mkdir -p "$dir"
@@ -321,6 +460,34 @@ fixture() {
       # The repository's documentation, linked: the corpus every line reads with `--root .`.
       ln -s "$root/docs" "$dir/docs"
       ;;
+    attest)
+      # A key pair made once per run and copied into every fixture (so both sides sign with one key), an
+      # artefact, the provenance record that names it, and variants of the record.
+      if [ ! -f "$work/akey/key" ]; then
+        mkdir -p "$work/akey"
+        ssh-keygen -q -t ed25519 -N '' -C test -f "$work/akey/key"
+        printf 'tester %s\n' "$(cat "$work/akey/key.pub")" > "$work/akey/allowed"
+      fi
+      cp "$work/akey/key" "$work/akey/key.pub" "$work/akey/allowed" "$dir/"
+      printf 'hello\n' > "$dir/art.bin"
+      printf 'other\n' > "$dir/other.bin"
+      printf '{"schema":"nazm.provenance/1","output":{"files":[]}}' > "$dir/none.json"
+      h=$(cd "$dir" && "$ref" attest sign --key key none.json art.bin 2>&1 | sed 's/.*blake3:\([0-9a-f]*\)).*/\1/')
+      printf '{"schema":"nazm.provenance/1","output":{"files":[{"path":"art.bin","digest":"blake3:%s"}]},"n":7,"s":"x\\u00e9y","nested":{"b":[true,null,-3],"a":"z"}}\n' "$h" > "$dir/prov.json"
+      printf '{"schema":"nazm.provenance/2","output":{"files":[{"digest":"blake3:%s"}]}}\n' "$h" > "$dir/schema.json"
+      printf '{"schema":"nazm.provenance/1","output":{"files":[{"digest":"blake3:%s"}]},"f":1.5}\n' "$h" > "$dir/frac.json"
+      printf '[]\n' > "$dir/array.json"
+      printf '{"schema":"nazm.provenance/1","output":{"files":[{"digest":"sha256:%s"}]}}\n' "$h" > "$dir/sha.json"
+      cp "$dir/prov.json" "$dir/prov2.json"
+      mkdir -p "$dir/sub"
+      # a statement signed once, to verify
+      (cd "$dir" && "$ref" attest sign --key key --out signed.json prov.json art.bin > /dev/null 2>&1)
+      printf 'not json' > "$dir/notjson.json"
+      printf '{"_type":"x","predicateType":"y"}' > "$dir/badtype.json"
+      printf '{"_type":"https://in-toto.io/Statement/v1","predicateType":"urn:nazm:provenance:1","subject":[{"name":"x","digest":{"blake3":"00"}}]}' > "$dir/nosubject.json"
+      for f in notjson badtype nosubject; do (cd "$dir" && ssh-keygen -q -Y sign -n nazm-attestation -f key "$f.json" 2>/dev/null); done
+      ;;
+    lock|update|publish|yank) pkg_fixture "$dir" ;;
     init)
       mkdir -p "$dir/empty" "$dir/full/sub"
       printf 'kept\n' > "$dir/full/keep.txt"
@@ -349,7 +516,9 @@ record() {
 
 part_args() {
   n=0 agree=0 differ=0 refused=0
-  for cmd in fmt init check doc fix lsp test patch interface docs nazm; do
+  for cmd in fmt init check doc fix lsp test patch interface docs attest lock update publish yank nazm; do
+    # R5_ARGS names the commands whose lines to run (all by default).
+    case " ${R5_ARGS:-$cmd} " in *" $cmd "*) ;; *) continue ;; esac
     file="$root/toolchain/commands/tests/args/$cmd.txt"
     [ -f "$file" ] || continue
     while IFS= read -r line; do

@@ -1,0 +1,56 @@
+# `nazm attest`'s command lines, run in the fixture of run.sh (`fixture attest`): a key pair, an artefact,
+# a provenance record naming it, variants of the record, and statements signed with the key.
+--help
+-h
+help
+help sign
+help verify
+help help
+help bogus
+bogus
+sgn
+--bogus
+-- sign
+sign
+sign --help
+sign -h
+sign --key key
+sign --key key prov.json
+sign --key key --out
+sign --key key prov.json art.bin
+sign --key key prov.json art.bin other.bin
+sign --key key --out o.json prov.json art.bin
+sign --key key --out sub/o.json prov.json art.bin
+sign --key key --out absent/o.json prov.json art.bin
+sign --key key --out art.bin prov.json art.bin
+sign prov.json art.bin
+sign --key nokey prov.json art.bin
+sign --key key none.json art.bin
+sign --key key schema.json art.bin
+sign --key key array.json art.bin
+sign --key key sha.json art.bin
+sign --key key absent.json art.bin
+sign --key key sub art.bin
+sign --key key prov.json absent.bin
+sign --key key prov.json sub
+sign --key key prov.json art.bin art.bin
+sign --key key prov.json other.bin
+sign --key key prov2.json art.bin
+verify
+verify --help
+verify -h
+verify --allowed-signers allowed
+verify --allowed-signers allowed --identity tester
+verify --allowed-signers allowed --identity tester signed.json
+verify --allowed-signers allowed --identity tester signed.json art.bin
+verify --allowed-signers allowed --identity tester signed.json art.bin art.bin
+verify --allowed-signers allowed --identity other signed.json art.bin
+verify --allowed-signers nokey --identity tester signed.json art.bin
+verify --allowed-signers allowed --identity tester absent.json art.bin
+verify --allowed-signers allowed --identity tester prov.json art.bin
+verify --allowed-signers allowed --identity tester signed.json other.bin
+verify --allowed-signers allowed --identity tester signed.json absent.bin
+verify --allowed-signers allowed --identity tester notjson.json art.bin
+verify --allowed-signers allowed --identity tester badtype.json art.bin
+verify --allowed-signers allowed --identity tester nosubject.json art.bin
+verify --identity tester --allowed-signers allowed signed.json art.bin

@@ -7,7 +7,7 @@
 // command that does not exist (with the similar one `strsim::jaro` finds above 0.7), and the help
 // on standard error with status 5 when no command is named. Help and the version are standard output
 // and status 0; a usage error is standard error and status 5 (`main.rs`, `parse_cli`). Then the
-// command: `fmt`, `init`, `check`, `doc`, `fix`, `lsp`, `test`, `patch`, `interface` and `docs` are carried (`fmt.nz`, `init.nz`,
+// command: `fmt`, `init`, `check`, `doc`, `fix`, `lsp`, `test`, `patch`, `interface`, `docs`, `attest`, `lock`, `update`, `publish` and `yank` are carried (`fmt.nz`, `init.nz`,
 // `check.nz`, `doc.nz`, `fix.nz`, `lsp.nz`), every other says it is not carried and exits 6.
 
 use "cli.nz"
@@ -22,6 +22,8 @@ use "group.nz"
 use "patch.nz"
 use "interface.nz"
 use "docs.nz"
+use "attest.nz"
+use "pkgcmd.nz"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -233,6 +235,10 @@ fn command_cli(name: Str) -> Cli {
     if name == "test" { return test_cli() }
     if name == "interface" { return interface_cli() }
     if name == "docs" { return docs_cli() }
+    if name == "lock" { return lock_cli() }
+    if name == "update" { return update_cli() }
+    if name == "publish" { return publish_cli() }
+    if name == "yank" { return yank_cli() }
     cli_command("", "", "")
 }
 
@@ -251,6 +257,7 @@ fn help_command(io: IoCap, k: Int) -> Int {
                 + nl() + nl() + "Arguments:" + nl() + "  [COMMAND]...  Print help for the subcommand(s)" + nl())
     }
     if name == "patch" { return grp_help_command(io, patch_group(), k + 1) }
+    if name == "attest" { return grp_help_command(io, attest_group(), k + 1) }
     let c = command_cli(name)
     if c.name == "" { not_carried(io, "nazm help " + name) }
     if k + 1 < args_count() {
@@ -260,7 +267,7 @@ fn help_command(io: IoCap, k: Int) -> Int {
     show(io, cli_help(c, true))
 }
 
-fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Int {
+fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap) -> Int {
     let n = args_count()
     if n == 0 { missing(io) }
     let s = arg(0)
@@ -309,6 +316,7 @@ fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Int {
     if !is_command(s) { unrecognized(io, s, true) }
     if s == "help" { return help_command(io, 1) }
     if s == "patch" { return patch_command(io, patch_group()) }
+    if s == "attest" { return attest_command(io, proc, sp, v, attest_group()) }
     let c = command_cli(s)
     if c.name == "" { not_carried(io, "nazm " + s) }
     cli_from(c, 1)
@@ -320,6 +328,10 @@ fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Int {
     if s == "test" { return test_command(io, proc, sp, c) }
     if s == "interface" { return interface_command(io, c) }
     if s == "docs" { return docs_command(io, c) }
+    if s == "lock" { return lock_command(io, c) }
+    if s == "update" { return update_command(io, c) }
+    if s == "publish" { return publish_command(io, c) }
+    if s == "yank" { return yank_command(io, c) }
     check_command(io, c)
 }
 

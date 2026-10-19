@@ -1,0 +1,19 @@
+# `nazm update`'s command lines, run in the fixture of run.sh (`fixture pkg`).
+--help
+-h
+
+one
+app
+app1
+app1 util
+app1 deep
+app1 util deep
+app1 nothere
+app1 util nothere
+app lib
+app3 util
+app2
+app5
+app6
+absent
+one --bogus

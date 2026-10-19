@@ -1,0 +1,217 @@
+// `nazm attest`, written in Nazm (R5, `openspec/changes/r5-commands/`, task 10.1, design D21).
+//
+// `nazm attest sign --key KEY [--out FILE] PROVENANCE ARTEFACT...` and `nazm attest verify
+// --allowed-signers FILE --identity ID STATEMENT ARTEFACT...`, run by the dispatcher (`nazm.nz`).
+//
+// A port of `crates/nazm-cli/src/attest.rs`: a provenance record becomes an in-toto Statement v1 — one
+// subject per artefact, with its BLAKE3 digest — written as `serde_json` writes a `Value` (keys
+// sorted, two spaces) and signed by the system's `ssh-keygen -Y sign` in the namespace
+// `nazm-attestation`; verification is `ssh-keygen -Y verify` over the statement and then the
+// statement's shape and every artefact's digest among its subjects. A record or statement that is
+// not JSON is refused with status 6 where the reference prints serde's error (sign), and a record
+// holding a number that `serde_json` would write differently from how it is written (a fraction, an
+// exponent, more than 19 digits, `-0`) is refused.
+
+use "@std/blake3"
+use "../../compiler/diag.nz"
+use "cli.nz"
+use "group.nz"
+use "jsonin.nz"
+use "proc.nz"
+use "util.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+fn refuse(io: IoCap, why: Str) -> Int {
+    eprint("attest: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+// The group, as `crates/nazm-cli/src/cli.rs` declares `nazm attest`.
+pub fn attest_group() -> Group {
+    let g = grp_new("attest", "Sign and verify in-toto statements of a build's provenance (N94)", "")
+    let s = cli_command("attest sign", "Wrap a provenance record in an in-toto Statement v1 over the ARTEFACTs — each checked to be an output "
+            + "the record names — and sign it with `ssh-keygen -Y sign`, writing `FILE.sig`", "")
+    cli_required_option(s, "key", "KEY", true, "The private key, as `ssh-keygen -f` takes it")
+    cli_option(s, "", "out", "OUT", true, "", false, "Where the statement goes: `PROVENANCE.intoto.json` by default", "")
+    cli_positional(s, "PROVENANCE", true, false, true, "", "")
+    cli_positional(s, "ARTEFACTS", true, true, true, "", "")
+    grp_add(g, s)
+    let v = cli_command("attest verify", "Verify a signed statement for IDENTITY against an allowed-signers file, and that every ARTEFACT's digest "
+            + "is one of its subjects", "")
+    cli_required_option(v, "allowed-signers", "ALLOWED_SIGNERS", true, "")
+    cli_required_option(v, "identity", "IDENTITY", false, "")
+    cli_positional(v, "STATEMENT", true, false, true, "", "")
+    cli_positional(v, "ARTEFACTS", true, true, true, "", "")
+    grp_add(g, v)
+    g
+}
+
+// `blake3_of`: the file's BLAKE3, or "" with `err` set to `cannot read PATH: REASON`.
+fn blake3_of(io: IoCap, path: Str, err: Strs) -> Str {
+    let why = ut_read_error(io, path, false)
+    if why != "" {
+        strs_push(err, "cannot read " + path + ": " + why)
+        return ""
+    }
+    blake3_hex(bytes_from_str(read_file(path)))
+}
+
+// `refuse(code, what)`: the message and the status.
+fn stop(io: IoCap, code: Int, what: Str) -> Int {
+    eprint("nazm: " + what + nl())
+    exit_with(code)
+    code
+}
+
+// `read_or_invalid`: unreadable (3), or not what it should be (1).
+fn status_of(e: Str) -> Int { if ut_starts(e, "cannot read") { 3 } else { 1 } }
+
+// Whether every number of the parsed value is one `serde_json` writes back as it was written.
+fn plain_numbers(j: J) -> Bool {
+    for n in 0..ints_len(j.kind) {
+        if ints_get(j.kind, n) != 3 { continue }
+        let t = strs_get(j.text, n)
+        let start = if ut_starts(t, "-") { 1 } else { 0 }
+        if str_len(t) - start < 1 || str_len(t) - start > 19 { return false }
+        if t == "-0" { return false }
+        if str_len(t) - start > 1 && str_byte(t, start) == 48 { return false }
+        for i in start..str_len(t) {
+            if str_byte(t, i) < 48 || str_byte(t, i) > 57 { return false }
+        }
+    }
+    true
+}
+
+fn attest_sign(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, c: Cli) -> Int ! { io, spawn } {
+    cli_parse(io, c)
+    let key = cli_value(c, 0)
+    let has_out = cli_present(c, 1)
+    let out = cli_value(c, 1)
+    let provenance = cli_value(c, 2)
+    let artefacts = cli_values(c, 3)
+    let why = ut_read_error(io, provenance, true)
+    if why != "" { return stop(io, 3, "cannot read " + provenance + ": " + why) }
+    let text = read_file(provenance)
+    let j = j_parse(text)
+    if !j_ok(j) { refuse(io, "a provenance record that is not JSON, or that this port does not read as serde_json does (its error text is serde's)") }
+    // `statement`: every artefact is checked before any key is used.
+    let schema = j_get(j, 0, "schema")
+    if j_kind(j, 0) != 6 || j_kind(j, schema) != 4 || j_str(j, schema) != "nazm.provenance/1" {
+        return stop(io, 1, "the record is not `nazm.provenance/1`")
+    }
+    let named = strs_new()
+    let output = j_get(j, 0, "output")
+    let files = j_get(j, output, "files")
+    if j_kind(j, files) == 5 {
+        let mut f = ints_get(j.first, files)
+        while f >= 0 {
+            let d = j_get(j, f, "digest")
+            if j_kind(j, d) == 4 && ut_starts(j_str(j, d), "blake3:") { strs_push(named, str_slice(j_str(j, d), 7, str_len(j_str(j, d)))) }
+            f = ints_get(j.next, f)
+        }
+    }
+    if !plain_numbers(j) { refuse(io, "a provenance record with a number serde_json would write differently") }
+    let subjects = strs_new()
+    for i in 0..strs_len(artefacts) {
+        let a = strs_get(artefacts, i)
+        let err = strs_new()
+        let d = blake3_of(io, a, err)
+        if strs_len(err) > 0 { return stop(io, status_of(strs_get(err, 0)), strs_get(err, 0)) }
+        let mut found = false
+        for k in 0..strs_len(named) { if strs_get(named, k) == d { found = true } }
+        if !found {
+            return stop(io, 1, a + " is not an output the provenance record names (blake3:" + d + ")")
+        }
+        strs_push(subjects, "{\"name\":" + json_str(ut_file_name(a)) + ",\"digest\":{\"blake3\":" + json_str(d) + "}}")
+    }
+    let doc = "{\"_type\":\"https://in-toto.io/Statement/v1\",\"subject\":[" + str_join(subjects, ",") + "],\"predicateType\":\"urn:nazm:provenance:1\",\"predicate\":" + text + "}"
+    // The path the statement goes to is the command line's, whatever the record said.
+    let file = str_vouch(if has_out { out } else { provenance + ".intoto.json" })
+    if !ut_write_all(io, file, j_pretty(j_parse(doc)) + nl()) {
+        return stop(io, 4, "cannot write " + file + ": " + ut_os_error(os_status(os_open_write(file, 0))))
+    }
+    let sig = file + ".sig"
+    os_unlink(sig)
+    let args = strs_new()
+    strs_push(args, "-q")
+    strs_push(args, "-Y")
+    strs_push(args, "sign")
+    strs_push(args, "-n")
+    strs_push(args, "nazm-attestation")
+    strs_push(args, "-f")
+    strs_push(args, key)
+    strs_push(args, file)
+    let ran = pr_run(io, proc, sp, "ssh-keygen", args, strs_new(), false, "")
+    if !ran.started { return stop(io, 4, "cannot run ssh-keygen: " + ran.why) }
+    if ran.status == 0 && ut_kind(io, sig) == 0 {
+        eprint("nazm: signed " + file + " (" + sig + ")" + nl())
+        return 0
+    }
+    stop(io, 4, "ssh-keygen could not sign: " + ut_trim(ut_lossy(ran.err)))
+}
+
+fn attest_verify(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int ! { io, spawn } {
+    cli_parse(io, c)
+    let allowed = cli_value(c, 0)
+    let identity = cli_value(c, 1)
+    let statement = cli_value(c, 2)
+    let artefacts = cli_values(c, 3)
+    let sig = statement + ".sig"
+    if ut_read_error(io, statement, false) != "" { return stop(io, 3, "cannot read " + statement) }
+    let text = read_file(statement)
+    let args = strs_new()
+    strs_push(args, "-Y")
+    strs_push(args, "verify")
+    strs_push(args, "-n")
+    strs_push(args, "nazm-attestation")
+    strs_push(args, "-I")
+    strs_push(args, identity)
+    strs_push(args, "-f")
+    strs_push(args, allowed)
+    strs_push(args, "-s")
+    strs_push(args, sig)
+    let ran = pr_run(io, proc, sp, "ssh-keygen", args, strs_new(), true, text)
+    if !ran.started { return stop(io, 4, "cannot run ssh-keygen: " + ran.why) }
+    if ran.status != 0 {
+        return stop(io, 1, "the signature does not verify for `" + identity + "`: " + ut_trim(ut_lossy(ran.err)))
+    }
+    let j = if ut_utf8_ok(text) { j_parse(text) } else { j_parse("") }
+    if !j_ok(j) { return stop(io, 1, "the statement is not JSON") }
+    let t = j_get(j, 0, "_type")
+    let p = j_get(j, 0, "predicateType")
+    if j_kind(j, 0) != 6 || j_kind(j, t) != 4 || j_str(j, t) != "https://in-toto.io/Statement/v1" || j_kind(j, p) != 4 || j_str(j, p) != "urn:nazm:provenance:1" {
+        return stop(io, 1, "the statement is not an in-toto Statement v1 of a Nazm provenance record")
+    }
+    let subjects = strs_new()
+    let list = j_get(j, 0, "subject")
+    if j_kind(j, list) == 5 {
+        let mut s = ints_get(j.first, list)
+        while s >= 0 {
+            let d = j_get(j, j_get(j, s, "digest"), "blake3")
+            if j_kind(j, d) == 4 { strs_push(subjects, j_str(j, d)) }
+            s = ints_get(j.next, s)
+        }
+    }
+    for i in 0..strs_len(artefacts) {
+        let a = strs_get(artefacts, i)
+        let err = strs_new()
+        let d = blake3_of(io, a, err)
+        if strs_len(err) > 0 { return stop(io, status_of(strs_get(err, 0)), strs_get(err, 0)) }
+        let mut found = false
+        for k in 0..strs_len(subjects) { if strs_get(subjects, k) == d { found = true } }
+        if !found { return stop(io, 1, a + " (blake3:" + d + ") is not a subject of the statement") }
+    }
+    let n = strs_len(artefacts)
+    print("verified: " + int_to_str(n) + " artefact" + ut_plural(n) + " signed by `" + identity + "`" + nl())
+    0
+}
+
+// `nazm attest`, the group's own commands read from the argument after its name.
+pub fn attest_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, g: Group) -> Int ! { io, spawn } {
+    let i = grp_route(io, g, 1)
+    let c = grp_kid(g, i)
+    cli_from(c, 2)
+    if i == 0 { attest_sign(io, proc, sp, v, c) } else { attest_verify(io, proc, sp, c) }
+}

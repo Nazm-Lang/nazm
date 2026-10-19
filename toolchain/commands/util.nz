@@ -303,6 +303,36 @@ pub fn ut_find(s: Str, p: Str, from: Int) -> Int {
     0 - 1
 }
 
+// The directory part of a path (`Path::parent`), "" where there is none.
+pub fn ut_parent(path: Str) -> Str {
+    let mut at = 0 - 1
+    for i in 0..str_len(path) { if str_byte(path, i) == 47 { at = i } }
+    if at < 0 { "" } else { str_slice(path, 0, at) }
+}
+
+// `fs::create_dir_all`, as `std::fs` does it: make the directory; where its parent is missing, make that
+// first; any other failure stands unless the path is a directory. The system's reason in `why`.
+pub fn ut_make_dirs(io: IoCap, path: Str, why: Strs) -> Bool {
+    if path == "" { return true }
+    let r = os_mkdir(path)
+    if r == 0 { return true }
+    if r == 0 - 2 {
+        let parent = ut_parent(path)
+        if parent == "" {
+            strs_push(why, "failed to create whole tree")
+            return false
+        }
+        if !ut_make_dirs(io, parent, why) { return false }
+        let r2 = os_mkdir(path)
+        if r2 == 0 || ut_kind(io, path) == 1 { return true }
+        strs_push(why, ut_os_error(r2))
+        return false
+    }
+    if ut_kind(io, path) == 1 { return true }
+    strs_push(why, ut_os_error(r))
+    false
+}
+
 pub fn ut_starts(s: Str, p: Str) -> Bool { str_len(s) >= str_len(p) && str_slice(s, 0, str_len(p)) == p }
 
 pub fn ut_ends(s: Str, p: Str) -> Bool { str_len(s) >= str_len(p) && str_slice(s, str_len(s) - str_len(p), str_len(s)) == p }
