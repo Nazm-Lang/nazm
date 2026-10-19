@@ -222,9 +222,10 @@ fn run_page(page: &str, min_runs: usize, min_commands: usize) {
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
-        // The pages show the executable as `hello`; Windows names it `hello.exe`.
+        // The pages show the executable as `hello` and paths as `demo/nazm.lock`; Windows names
+        // it `hello.exe` and joins a path with `\`.
         let shows = if cfg!(windows) {
-            shows.replace(".exe\n", "\n")
+            shows.replace(".exe\n", "\n").replace('\\', "/")
         } else {
             shows
         };
