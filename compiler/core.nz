@@ -250,6 +250,58 @@ fn cr_core_with(f: Facts, functions: Str) -> Str {
     str_join(lines, "")
 }
 
+// The document `nazm core-ir` prints (indented, as `print.rs` writes it), where the lowering carried
+// every function and every part; "" otherwise.
+pub fn cr_document(f: Facts) -> Str {
+    let whole = cr_core(f);
+    let marker = str_concat(str_concat("%%document", co_nl()), "");
+    let mut at = 0;
+    while at + str_len(marker) <= str_len(whole) {
+        if (at == 0 || str_byte(whole, at - 1) == 10) && str_slice(whole, at, at + str_len(marker)) == marker {
+            return str_slice(whole, at + str_len(marker), str_len(whole));
+        }
+        at = at + 1;
+    }
+    ""
+}
+
+// Function `i`'s digests as `cir::digests` computes them, from its printed object: the `semantic`
+// one and the `body` one, hexadecimal; "" where the function is not carried.
+pub fn cr_digest_semantic(f: Facts, i: Int) -> Str { co_digest_member(cr_function(f, i), "semantic") }
+pub fn cr_digest_body(f: Facts, i: Int) -> Str { co_digest_member(cr_function(f, i), "body") }
+// Both, lowering the function once: the semantic one and then the body one, or none.
+pub fn cr_digests(f: Facts, i: Int) -> Strs {
+    let o = cr_function(f, i);
+    let out = strs_new();
+    if co_digest_member(o, "semantic") == "" { return out; }
+    strs_push(out, co_digest_member(o, "semantic"));
+    strs_push(out, co_digest_member(o, "body"));
+    out
+}
+
+fn co_digest_member(object: Str, member: Str) -> Str {
+    if co_stopped_value(object) { return ""; }
+    let at = co_find(object, "\"digest\":{", 0);
+    if at < 0 { return ""; }
+    let key = str_concat(str_concat("\"", member), "\":\"");
+    let k = co_find(object, key, at);
+    if k < 0 { return ""; }
+    let from = k + str_len(key);
+    let mut to = from;
+    while to < str_len(object) && str_byte(object, to) != 34 { to = to + 1; }
+    str_slice(object, from, to)
+}
+
+// Where `part` first occurs in `s` from `from`, or -1.
+fn co_find(s: Str, part: Str, from: Int) -> Int {
+    let mut at = from;
+    while at + str_len(part) <= str_len(s) {
+        if str_byte(s, at) == str_byte(part, 0) && str_slice(s, at, at + str_len(part)) == part { return at; }
+        at = at + 1;
+    }
+    0 - 1
+}
+
 // Where a line's tab is; whether a value is a stop (`- REASON`).
 fn co_tab(line: Str) -> Int {
     let mut i = 0;

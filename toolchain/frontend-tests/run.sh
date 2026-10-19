@@ -3,7 +3,7 @@
 # against the Rust toolchain, on every input.
 #
 #   toolchain/frontend-tests/run.sh [MODE...]      MODE: tokens, tree, syntax, check, render, facts,
-#                                                  core, keys, units, refs, calls, provenance (default: the first three)
+#                                                  core, keys, units, refs, calls, provenance, coredigests, mir (default: the first three)
 #
 # `render` compares the diagnostics' text, as `nazm check` writes them (design D4, task 4.2), and
 # `facts` what `nazm doc` reads of each compilation with what `compiler/facts.nz` answers (D24),
@@ -61,7 +61,7 @@ for mode in $modes; do
     tree) driver=tree ;;
     # Diagnostics as `nazm check --json` objects (design D4): `syntax` compares the lexer's and the
     # parser's alone, `check` every one — which needs the checker, slice by slice.
-    syntax|check|render|facts|core|keys|units|refs|calls|provenance) driver=diagnose ;;
+    syntax|check|render|facts|core|keys|units|refs|calls|provenance|coredigests|mir) driver=diagnose ;;
     *) echo "run.sh: unknown mode $mode" >&2; exit 2 ;;
   esac
   exe="$out/bin/$driver"
@@ -70,9 +70,14 @@ for mode in $modes; do
     || { echo "run.sh: compiler/$driver.nz did not build" >&2; exit 2; }
   rm -rf "$out/$mode"
   mkdir -p "$out/$mode"
+  # The R3 pipeline, which lowers MIR from the Core IR document (the R5 hand-back, fact 4).
+  if [ "$mode" = mir ]; then
+    "$nazm" build --heap-limit "$heap" --stack-size 256M "$root/toolchain/pipeline/main.nz" -o "$out/bin/pipeline" >/dev/null 2>&1 \
+      || { echo "run.sh: toolchain/pipeline/main.nz did not build" >&2; exit 2; }
+  fi
   # One worker per input: compare, and leave a `.diff` behind when the two disagree.
   export R2_ROOT="$root" R2_REF="$ref" R2_EXE="$exe" R2_MODE="$mode" R2_DIR="$out/$mode" R2_DEADLINE="$deadline" R2_NAZM="$nazm" \
-    R2_OS="$host_os" R2_ARCH="$host_arch"
+    R2_OS="$host_os" R2_ARCH="$host_arch" R2_PIPELINE="$out/bin/pipeline"
   # shellcheck disable=SC2016
   tr '\n' '\0' < "$list" | xargs -0 -n 1 -P "$jobs" sh -c '
     f=$1
@@ -163,6 +168,24 @@ for mode in $modes; do
         "$R2_REF" provenance "$R2_ROOT/$f" > "$want" 2>/dev/null || true
         timeout "$R2_DEADLINE" "$R2_EXE" --provenance "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
+      coredigests)
+        # The Core IR digests of each function (R5 hand-back), as inspect reports them.
+        "$R2_REF" coredigests "$R2_ROOT/$f" > "$want" 2>/dev/null || true
+        timeout "$R2_DEADLINE" "$R2_EXE" --coredigests "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
+        [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
+      mir)
+        # The native digests (R5 hand-back): the MIR the R3 pipeline lowers, with the digest of each
+        # function, from the Core IR document the Rust toolchain prints and from the one the Nazm front
+        # end publishes: the front end is the difference. `.exact` marks an input whose MIR is also
+        # `nazm mir` itself, byte for byte (the pipeline is R3, and not everything it lowers is).
+        if ! "$R2_NAZM" core-ir --json "$R2_ROOT/$f" > "$R2_DIR/$name.rust.json" 2>/dev/null; then : > "$R2_DIR/$name.skip"; rm -f "$R2_DIR/$name.rust.json"; exit 0; fi
+        timeout "$R2_DEADLINE" "$R2_EXE" --coredoc "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$R2_DIR/$name.json" 2> /dev/null || true
+        if [ ! -s "$R2_DIR/$name.json" ]; then : > "$R2_DIR/$name.skip"; rm -f "$R2_DIR/$name.rust.json" "$R2_DIR/$name.json"; exit 0; fi
+        timeout 60 "$R2_PIPELINE" mir "$R2_DIR/$name.rust.json" > "$want" 2> /dev/null || true
+        timeout 60 "$R2_PIPELINE" mir "$R2_DIR/$name.json" > "$got" 2> "$R2_DIR/$name.stop" || true
+        if "$R2_NAZM" mir "$R2_ROOT/$f" 2> /dev/null | cmp -s - "$want"; then : > "$R2_DIR/$name.exact"; fi
+        rm -f "$R2_DIR/$name.json" "$R2_DIR/$name.rust.json"
+        [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
       syntax)
         "$R2_REF" syntax "$R2_ROOT/$f" > "$want" 2>&1 || true
         timeout "$R2_DEADLINE" "$R2_EXE" --syntax "$R2_ROOT/$f" > "$got" 2>&1 || true ;;
@@ -187,7 +210,13 @@ for mode in $modes; do
     counts=$(cat "$out/$mode"/*.count 2>/dev/null | awk '{ t += $1; c += $2; a += $3; p += $4; q += $5; d += $6; e += $7 } END { printf "%d %d %d %d %d %d %d", t, c, a, p, q, d, e }')
     set -- $counts
     echo "$mode: $agree agree, $differ differ; functions: $1, the lowering carries $2, of which $3 agree; the document's other parts: $4 carried, of which $5 agree; whole documents: $6 carried, of which $7 agree byte for byte"
-  elif [ "$mode" = check ] || [ "$mode" = render ] || [ "$mode" = facts ] || [ "$mode" = refs ] || [ "$mode" = calls ] || [ "$mode" = provenance ]; then
+  elif [ "$mode" = mir ]; then
+    # Inputs with no MIR to compare (a program that does not check, one the Core IR document does
+    # not carry whole) are not this comparison's.
+    skipped=$(find "$out/$mode" -name '*.skip' | wc -l | tr -d ' ')
+    exact=$(find "$out/$mode" -name '*.exact' | wc -l | tr -d ' ')
+    echo "$mode: $agree agree, $differ differ ($skipped without MIR or a whole Core IR document); of the agreements $exact are also nazm mir itself"
+  elif [ "$mode" = check ] || [ "$mode" = render ] || [ "$mode" = facts ] || [ "$mode" = refs ] || [ "$mode" = calls ] || [ "$mode" = provenance ] || [ "$mode" = coredigests ]; then
     # The inputs the checker carries whole: no `.stop` left behind; among them, a difference is a
     # defect rather than a gap.
     carried=0; carried_ok=0

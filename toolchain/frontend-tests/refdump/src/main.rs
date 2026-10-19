@@ -452,6 +452,39 @@ fn provenance(path: &str) -> String {
     out
 }
 
+/// Each function's Core IR digests as `nazm inspect` reports them (`cir::digests`), one line a
+/// function: `IDENTITY<TAB>SEMANTIC<TAB>BODY`, in the order the lowering lists the functions.
+fn coredigests(path: &str) -> String {
+    let p = std::path::Path::new(path);
+    let Ok(root) = nazm_service::root::decide(p, None) else {
+        return "refused\n".to_owned();
+    };
+    let Ok(mut loaded) = nazm_service::load::load(p, root.path()) else {
+        return "fails\n".to_owned();
+    };
+    loaded.graph = std::mem::take(&mut loaded.graph).with_config(nazm_core::sema::BuildConfig::host());
+    let built = nazm_core::on_lowered(
+        &loaded.map,
+        &loaded.graph,
+        nazm_core::Entry::Absent,
+        |core, res| {
+            let names = nazm_core::cir::Names::new(res, &loaded.graph);
+            let digests = nazm_core::cir::digests(core, res, &loaded.graph);
+            let mut out = String::new();
+            for (f, d) in core.functions.iter().zip(&digests) {
+                out.push_str(&format!(
+                    "{}\t{}\t{}\n",
+                    names.function(f.def),
+                    d.semantic_hex(),
+                    d.body_hex()
+                ));
+            }
+            Ok(out)
+        },
+    );
+    built.unwrap_or_else(|_| "fails\n".to_owned())
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("builtins") {
@@ -462,7 +495,7 @@ fn main() {
         eprintln!("usage: refdump tokens|tree FILE");
         std::process::exit(2);
     };
-    if matches!(mode.as_str(), "keys" | "refs" | "calls" | "provenance") {
+    if matches!(mode.as_str(), "keys" | "refs" | "calls" | "provenance" | "coredigests") {
         let path = path.clone();
         let mode = mode.clone();
         let out = std::thread::Builder::new()
@@ -471,6 +504,7 @@ fn main() {
                 "keys" => keys(&path),
                 "refs" => refs(&path),
                 "provenance" => provenance(&path),
+                "coredigests" => coredigests(&path),
                 _ => calls(&path),
             })
             .expect("spawn")
