@@ -6,8 +6,8 @@
 // (name, signature with the effects its declaration or its body gives, and the text of its declaration)
 // compared, and every change named `reloadable` or `restart` with its reason, as one `nazm.reload-check/1`
 // line; status 1 where any change needs a restart, each named on standard error. The records and enums
-// of the program are compared by their layout too, which needs the type of each field and payload —
-// not published by `compiler/sema.nz` — so a program that defines one is refused (design D5).
+// of the program are compared by their layout too (the type of each field and payload, `fx_record_field_ty` and
+// `fx_payload_ty`); a generic one, which the reference lists once for every instance it makes, is refused (design D5, D24).
 
 use "../../compiler/syntax.nz"
 use "../../compiler/diag.nz"
@@ -34,17 +34,21 @@ fn refuse(io: IoCap, why: Str) -> Int {
     0
 }
 
-// One program's functions: name, signature, declaration; `status` 0 where it is read, else the exit
-// status of the failure that was reported.
+// One program's functions: name, signature, declaration; its records and enums by name and layout; `status` 0 where it
+// is read, else the exit status of the failure that was reported.
 struct Shape {
     status: Ints,
     name: Strs,
     sig: Strs,
     body: Strs,
+    rec: Strs,
+    rec_layout: Strs,
+    enu: Strs,
+    enu_layout: Strs,
 }
 
 fn shape_of(io: IoCap, file: Str, library: Str) -> Shape {
-    let sh = Shape(status: ints_new(), name: strs_new(), sig: strs_new(), body: strs_new())
+    let sh = Shape(status: ints_new(), name: strs_new(), sig: strs_new(), body: strs_new(), rec: strs_new(), rec_layout: strs_new(), enu: strs_new(), enu_layout: strs_new())
     ints_push(sh.status, 0)
     let prefix = fe_prefix(io, file)
     let f = fx_check_module(prefix + file, library, fe_host_os(), fe_host_arch(), io)
@@ -86,11 +90,48 @@ fn shape_of(io: IoCap, file: Str, library: Str) -> Shape {
     }
     let c = fx_checker(f)
     let t = fx_tree(f)
+    // Layout is by name: a record's fields as `name: type`, sorted; an enum's variants as `Name(field: type, ...)`, sorted.
     for r in 0..ck_record_count(c) {
-        if ck_record_module(c, r) == 0 { refuse(io, "a program that defines a record: its layout needs the types of its fields, which compiler/ does not publish") }
+        if ck_record_module(c, r) != 0 { continue }
+        let node = ck_record_node(c, r)
+        if node < 0 { continue }
+        if ints_len(sx_items(t, sx_field(t, node, "type_params"))) > 0 { refuse(io, "a generic record: the reference lists it once for each instance it makes") }
+        let rt = fx_record_type(f, r)
+        if rt < 0 { refuse(io, "a record whose fields the facts do not publish") }
+        let fields = strs_new()
+        for k in 0..ck_record_arity(c, rt) { strs_push(fields, ck_record_field_name(c, rt, k) + ": " + fx_show(f, fx_record_field_ty(f, rt, k))) }
+        let sorted = sorted_strs(fields)
+        let mut at = 0 - 1
+        for k in 0..strs_len(sh.rec) { if strs_get(sh.rec, k) == ck_record_name(c, r) { at = k } }
+        if at >= 0 {
+            strs_set(sh.rec_layout, at, str_join(sorted, ", "))
+        } else {
+            strs_push(sh.rec, ck_record_name(c, r))
+            strs_push(sh.rec_layout, str_join(sorted, ", "))
+        }
     }
     for e in 0..ck_enum_count(c) {
-        if ck_enum_module(c, e) == 0 { refuse(io, "a program that defines an enum: its layout needs the types of its payloads, which compiler/ does not publish") }
+        if ck_enum_module(c, e) != 0 { continue }
+        let node = ck_enum_node(c, e)
+        if node < 0 { continue }
+        if ints_len(sx_items(t, sx_field(t, node, "type_params"))) > 0 { refuse(io, "a generic enum: the reference lists it once for each instance it makes") }
+        let et = fx_enum_type(f, e)
+        if et < 0 { refuse(io, "an enum whose variants the facts do not publish") }
+        let variants = strs_new()
+        for v in 0..ck_variant_count(c, et) {
+            let fields = strs_new()
+            for k in 0..ck_variant_arity(c, et, v) { strs_push(fields, ck_payload_name(c, et, v, k) + ": " + fx_show(f, fx_payload_ty(f, et, v, k))) }
+            strs_push(variants, ck_variant_name(c, et, v) + "(" + str_join(fields, ", ") + ")")
+        }
+        let sorted = sorted_strs(variants)
+        let mut at = 0 - 1
+        for k in 0..strs_len(sh.enu) { if strs_get(sh.enu, k) == ck_enum_name(c, e) { at = k } }
+        if at >= 0 {
+            strs_set(sh.enu_layout, at, str_join(sorted, " | "))
+        } else {
+            strs_push(sh.enu, ck_enum_name(c, e))
+            strs_push(sh.enu_layout, str_join(sorted, " | "))
+        }
     }
     for i in 0..ck_fn_count(c) {
         if ck_fn_module(c, i) != 0 { continue }
@@ -119,6 +160,23 @@ fn shape_of(io: IoCap, file: Str, library: Str) -> Shape {
         }
     }
     sh
+}
+
+// `Vec<String>::sort`: byte order.
+fn sorted_strs(xs: Strs) -> Strs {
+    let out = strs_new()
+    for i in 0..strs_len(xs) {
+        let mut at = 0
+        while at < strs_len(out) && ut_less(strs_get(out, at), strs_get(xs, i)) { at += 1 }
+        strs_push(out, "")
+        let mut j = strs_len(out) - 1
+        while j > at {
+            strs_set(out, j, strs_get(out, j - 1))
+            j -= 1
+        }
+        strs_set(out, at, strs_get(xs, i))
+    }
+    out
 }
 
 // One verdict: name, `reloadable` or `restart`, why.
@@ -157,6 +215,16 @@ fn index_of(sh: Shape, name: Str) -> Int {
     0 - 1
 }
 
+// The layout of the record (`pass` 0) or enum named `name`, or a byte that is no layout where there is none.
+fn layout_of(sh: Shape, pass: Int, name: Str) -> Str {
+    let names = if pass == 0 { sh.rec } else { sh.enu }
+    let layouts = if pass == 0 { sh.rec_layout } else { sh.enu_layout }
+    for i in 0..strs_len(names) {
+        if strs_get(names, i) == name { return strs_get(layouts, i) }
+    }
+    str_from_byte(0)
+}
+
 fn compare(old: Shape, new: Shape) -> Changes {
     let ch = Changes(name: strs_new(), verdict: strs_new(), why: strs_new())
     let o = sorted_names(old)
@@ -176,6 +244,25 @@ fn compare(old: Shape, new: Shape) -> Changes {
     let nn = sorted_names(new)
     for k in 0..strs_len(nn) {
         if index_of(old, strs_get(nn, k)) < 0 { push(ch, strs_get(nn, k), "reloadable", "added: nothing running calls it yet") }
+    }
+    // Records, then enums: each of the old by name, then those the new has and the old has not.
+    for pass in 0..2 {
+        let kind = if pass == 0 { "record" } else { "enum" }
+        let on = if pass == 0 { sorted_strs(old.rec) } else { sorted_strs(old.enu) }
+        let nn2 = if pass == 0 { sorted_strs(new.rec) } else { sorted_strs(new.enu) }
+        for k in 0..strs_len(on) {
+            let name = strs_get(on, k)
+            let a = layout_of(old, pass, name)
+            let b = layout_of(new, pass, name)
+            if b == str_from_byte(0) {
+                push(ch, name, "restart", "the " + kind + " was removed: live values have its layout")
+            } else if a != b {
+                push(ch, name, "restart", "the " + kind + "'s layout changed from `" + a + "` to `" + b + "`: live values have the old one")
+            }
+        }
+        for k in 0..strs_len(nn2) {
+            if layout_of(old, pass, strs_get(nn2, k)) == str_from_byte(0) { push(ch, strs_get(nn2, k), "reloadable", "the " + kind + " was added: no live value has it") }
+        }
     }
     // Stable by name.
     let order = ints_new()

@@ -1,0 +1,2 @@
+enum E { B(n: Int), A }
+fn main() -> Int { 0 }

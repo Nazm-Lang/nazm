@@ -1,0 +1,2 @@
+pub struct P { x: Int, y: Str }
+fn main() -> Int { 0 }

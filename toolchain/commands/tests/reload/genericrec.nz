@@ -1,0 +1,5 @@
+struct Box[T] { value: T }
+fn main() -> Int {
+    let b = Box[Int](value: 1);
+    b.value
+}
