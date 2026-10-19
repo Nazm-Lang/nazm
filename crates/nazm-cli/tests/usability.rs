@@ -380,6 +380,25 @@ fn unbounded_recursion_reports_n0408_instead_of_crashing() {
          fn pong(n: Int, s: Str) -> Int { helper(n + 1, s) }\n\
          fn main() -> Int { ping(0, \"a\") }\n",
     );
+    // And with nothing in a frame at all, which a recent LLVM (23) turned into a loop that
+    // never grows the stack — the call's only normal return needs the call itself to return, so
+    // the call became a tail call and the recursion a loop — and so a program that spun forever.
+    // A call in a cycle is `notail` (2026-10-19); this is the case that hung.
+    exhausts(
+        "fn down(n: Int) -> Int { down(n + 1) + 1 }\n\
+         fn main() -> Int { down(0) }\n",
+    );
+    exhausts(
+        "fn helper(n: Int) -> Int { ping(n) + 1 }\n\
+         fn ping(n: Int) -> Int { pong(n + 1) }\n\
+         fn pong(n: Int) -> Int { helper(n + 1) }\n\
+         fn main() -> Int { ping(0) }\n",
+    );
+    // A tail call in a cycle stays a call, so an unbounded tail recursion fails too.
+    exhausts(
+        "fn spin(n: Int) -> Int { spin(n + 1) }\n\
+         fn main() -> Int { spin(0) }\n",
+    );
 }
 
 #[test]

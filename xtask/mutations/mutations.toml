@@ -21162,7 +21162,7 @@ killers = [{ package = "nazm-cli", test = "cli_m_r", name = "native_cache::an_un
 
 # Binary-trees (runtime ABI 51, 2026-10-19): a box's storage is one element, made with it; a
 # release that is not the last is inlined; a program of one thread keeps its freed small blocks
-# and counts its sequences plainly.
+# and counts its sequences plainly. And a call in a cycle is never a tail call.
 
 [[mutation]]
 name = "bt-a-box-asks-for-four-elements"
@@ -21208,3 +21208,19 @@ find = '''    "nz.seq_new",
     "nz.seq_release",'''
 replace = '''    "nz.seq_release",'''
 killers = [{ package = "nazm-runtime", lib = true, name = "tests::a_program_of_one_thread_counts_without_atomics_and_any_other_with_them" }]
+
+[[mutation]]
+name = "bt-a-recursion-may-become-a-loop"
+why = "a call in a call cycle may be a tail call, so LLVM turns a recursion into a loop that never grows the stack its check measures, and an unbounded one spins instead of failing with N0408 (LLVM 23)"
+file = "crates/nazm-lir/src/op/llvm.rs"
+find = '''        notail: checks_stack(m, f),'''
+replace = '''        notail: false,'''
+killers = [{ package = "nazm-lir", lib = true, name = "op::llvm::tests::a_function_in_a_cycle_makes_no_call_a_tail_call" }]
+
+[[mutation]]
+name = "bt-a-bare-recursive-call-may-become-a-loop"
+why = "where failures unwind, a call in a cycle straight into a bare failure exit may be a tail call, so a tail recursion becomes a loop that never fails with N0408"
+file = "crates/nazm-lir/src/op/llvm.rs"
+find = '''        let kw = if p.notail { "notail call" } else { "call" };'''
+replace = '''        let kw = "call";'''
+killers = [{ package = "nazm-lir", lib = true, name = "op::llvm::tests::a_function_in_a_cycle_makes_no_call_a_tail_call" }]
