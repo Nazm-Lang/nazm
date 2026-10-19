@@ -16378,3 +16378,31 @@ pub fn ck_prov_reaches(c: Ck, g: Int) -> Ints {
 }
 // The origins the program's calls hand parameter `i`, by name in id order.
 pub fn ck_prov_receives(c: Ck, g: Int, i: Int) -> Strs { pv_origin_names(ints_get(c.rix.pvv, ints_get(c.rix.pvf, g) + i)) }
+
+// --- the types of records' fields (R5 hand-back) ----------------------------------------------
+//
+// `ck_record_type` is the type of record `r` itself (the definition with no arguments), and
+// `ck_enum_type` of enum `e`, or -1 where the checker never made it; they make none, so asking
+// changes nothing a later answer (Core IR's table of types) reads. With them a definition's fields
+// and payloads are read as `ck_record_field_name`, `ck_record_field_ty`, `ck_variant_name` and
+// `ck_payload_ty` read them of a type: a definition's as declared, naming its own parameters.
+
+pub fn ck_record_type(c: Ck, r: Int) -> Int {
+    let mut t = 0;
+    while t < strs_len(c.tykey) {
+        if ints_get(c.tytag, t) == tag_record() && ints_get(c.tya, t) == r && ints_get(c.tyargc, t) == 0 { return t; }
+        t = t + 1;
+    }
+    0 - 1
+}
+pub fn ck_enum_type(c: Ck, e: Int) -> Int {
+    let mut t = 0;
+    while t < strs_len(c.tykey) {
+        if ints_get(c.tytag, t) == tag_enum() && ints_get(c.tya, t) == e && ints_get(c.tyargc, t) == 0 { return t; }
+        t = t + 1;
+    }
+    0 - 1
+}
+// A record type's field `i`'s type, as the type has it: a definition's as declared, an
+// application's with its arguments for the parameters (`ck_payload_ty`'s counterpart).
+pub fn ck_record_field_ty(c: Ck, t: Int, i: Int) -> Int { field_ty_in(c, t, ints_get(c.rff, ta(c, t)) + i) }
