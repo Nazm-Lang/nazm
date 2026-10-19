@@ -392,7 +392,13 @@ pub fn escape(s: &str) -> String {
 /// 50 is the fan-in fix (2026-10-19): a channel's waiter is counted out of `waiting` by whoever
 /// takes its record off a list (`nz.chq_take` takes the channel), not when it runs again, so a woken
 /// task waiting for its worker no longer sends every operation on the channel through the mutex.
-pub const RUNTIME_ABI_REVISION: u32 = 50;
+/// 51 is binary-trees (2026-10-19): `nz.vec_release` is the null test and the decrement alone, which
+/// a unit inlines, and calls `nz.vec_free` — new, and called by units through that copy — for the
+/// rest after the last reference; in a program of one thread the memory report's sequence counts
+/// are plain (`nz.seq_new`, `nz.seq_release`, `nz.vec_drain`, `nz.strs_release`) and the
+/// small-block heap keeps every freed block for reuse. (A `Box`'s storage made with it, exactly one
+/// element, is generated code's, not the runtime's.)
+pub const RUNTIME_ABI_REVISION: u32 = 51;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -922,6 +928,7 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.join_one", "i32" ("ptr") "noinline", false, Tasks, "", Status, Any, "wait for one task to end, its thread joined or its record freed (N83)", "frees the pool task's record"),
     rt!("nz.format_int", "i64" ("ptr", "i64") "", false, Base, "", Never, Any, "an Int's decimal digits into a 21-byte buffer", "writes into the caller's buffer"),
     rt!("nz.vec_release", "void" ("ptr", "ptr", "i64", "ptr") "", false, Sequences, "", Never, Owner, "release a sequence, each element with its type's release at its stride, through a queue rather than recursion (R1a)", "takes a reference; null is a no-op; the queue is null outside a release"),
+    rt!("nz.vec_free", "void" ("ptr", "ptr", "i64", "ptr") "noinline nounwind", false, Sequences, "", Never, Owner, "what follows a sequence's last reference: queue it, or empty it and every sequence queued while it is emptied (binary-trees, 2026-10-19)", "takes the sequence, whose count `nz.vec_release` has taken to zero"),
     rt!("nz.vec_drain", "void" ("ptr", "ptr", "i64", "ptr") "", false, Sequences, "", Never, Owner, "empty a dead sequence: each element's release, given the queue, then its storage (R1a)", "takes the sequence's last reference"),
     rt!("nz.vec_enqueue", "i1" ("ptr", "ptr", "ptr", "i64") "", false, Sequences, "", Never, Owner, "queue a dead sequence on the release in progress; false when the queue cannot grow (R1a)", "takes the sequence's last reference when it answers true"),
     rt!("nz.read_file_to", "void" ("ptr", "ptr", "i64") "", false, Io, "io", Status, Any, "`nz.read_file`, written through a pointer", "as `nz.read_file`"),
@@ -1434,9 +1441,15 @@ mod tests {
 
     /// The body of `name`'s definition in `text`, from `define` to its closing brace.
     fn body<'a>(text: &'a str, name: &str) -> &'a str {
-        let at = text.find(&format!(" @{name}(")).unwrap();
-        let start = text[..at].rfind("define ").unwrap();
-        let end = at + text[at..].find("\n}\n").unwrap() + 3;
+        // The definition's line, not a call another function makes first.
+        let mut start = 0;
+        for line in text.split_inclusive('\n') {
+            if line.starts_with("define ") && line.contains(&format!(" @{name}(")) {
+                break;
+            }
+            start += line.len();
+        }
+        let end = start + text[start..].find("\n}\n").unwrap() + 3;
         &text[start..end]
     }
 
@@ -1468,6 +1481,17 @@ mod tests {
         );
         let ret = body(&one, "nz.str_retain");
         assert!(ret.contains("%old.plain = add i64 %old, 1"), "{ret}");
+        // The memory report's counts of sequences made and reclaimed too (binary-trees).
+        for (name, counter) in [
+            ("nz.seq_new", "@nz.seq_allocated"),
+            ("nz.vec_drain", "@nz.seq_reclaimed"),
+        ] {
+            let b = body(&one, name);
+            assert!(
+                !b.contains("atomicrmw") && b.contains(&format!("load i64, ptr {counter}")),
+                "{b}"
+            );
+        }
         // Nothing else changes: every other line is the same, in the same order, but for the
         // failure state's globals, plain there already.
         let strip = |t: &str| -> Vec<String> {
@@ -1611,9 +1635,9 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_fifty_and_reaches_the_system_only_through_its_platform_layer() {
-        // The fan-in fix: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 50);
+    fn the_runtime_is_revision_fifty_one_and_reaches_the_system_only_through_its_platform_layer() {
+        // Binary-trees: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 51);
         // The session table is the runtime's; the engine is each target's own unit, and a target
         // without one has none.
         assert!(

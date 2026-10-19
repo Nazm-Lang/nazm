@@ -170,10 +170,26 @@ fn a_program_of_tasks_keeps_its_lists_per_thread_and_one_of_one_thread_in_global
         lists(&tasks),
         "@nz.small_lists = internal thread_local global [66 x ptr] zeroinitializer"
     );
+    let one = units(CHURNS, &[]);
     assert_eq!(
-        lists(&units(CHURNS, &[])),
+        lists(&one),
         "@nz.small_lists = internal global [66 x ptr] zeroinitializer"
     );
+    // The bound is for a block one thread allocates and another frees: a program of tasks keeps
+    // 64 of each class, and one of one thread every block it frees, all asked for again
+    // (binary-trees, 2026-10-19: all but 64 of a million boxes went back to C, to be asked for
+    // again).
+    let bound = |u: &[(String, String)]| {
+        let small = &u.iter().find(|(n, _)| n == "small").unwrap().1;
+        small
+            .lines()
+            .find(|l| l.contains("%full = icmp uge i64 %k, "))
+            .unwrap()
+            .trim()
+            .to_owned()
+    };
+    assert_eq!(bound(&tasks), "%full = icmp uge i64 %k, 64");
+    assert_eq!(bound(&one), "%full = icmp uge i64 %k, -1");
 }
 
 #[test]
