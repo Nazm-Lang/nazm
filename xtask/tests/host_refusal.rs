@@ -1,5 +1,5 @@
 //! Q1-C1: every guarded heavy entry point refuses a host that declares `NAZM_CONTAINED=1` without
-//! a ceiling — exercised as the runbook allows (`docs/runbook.md`, *A second incident, recorded*):
+//! a ceiling — exercised as the runbook allows (`docs/internal/runbook.md`, *A second incident, recorded*):
 //! each runs as a **child process** whose environment this test builds, so the variable exists in
 //! that child only, never in an agent's or a developer's shell.
 //!

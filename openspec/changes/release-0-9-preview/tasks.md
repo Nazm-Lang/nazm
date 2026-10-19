@@ -6,7 +6,7 @@
 
 - [x] 2.1 Version 0.9.0 in the workspace; "1.0 draft" in the documents that claimed a released 1.0
 - [x] 2.2 `THIRD-PARTY-NOTICES.md` generated from `Cargo.lock`, and the release script ships it
-- [x] 2.3 `docs/releases/0.9.0.md`; `docs/licensing.md` item 7 and the rewrite programme updated
+- [x] 2.3 `docs/user/releases/0.9.0.md`; `docs/user/licensing.md` item 7 and the rewrite programme updated
 - [x] 2.4 Host suite, `cargo xtask check`, contained tests, selfhost, bootstrap and lifecycle on it
 - [x] 2.5 The archive built for `aarch64-apple-darwin`, ad-hoc signed, with checksums and the SBOM
 - [x] 2.6 An install of the archive on this machine, from a clean directory, runs the examples

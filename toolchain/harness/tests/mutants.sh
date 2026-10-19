@@ -12,7 +12,7 @@
 # killer that no longer catches its mutation: a finding for the catalogue, said on its line). The
 # harness is copied before the first mutation, so editing it while this runs changes nothing here.
 #
-# A mutation campaign is contained work (`docs/runbook.md`, *Mandatory containment*): this refuses to
+# A mutation campaign is contained work (`docs/internal/runbook.md`, *Mandatory containment*): this refuses to
 # start outside the contained runner, and runs `nazm-mutate` and the harness's tests there.
 #
 # Environment: HARNESS_NAZM (builds and runs the harness; default the checkout's `nazm`),

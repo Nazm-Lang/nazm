@@ -1,4 +1,4 @@
-// R1b: a trait's default method bodies (`docs/spec.md`, *Traits and methods*). A default body means
+// R1b: a trait's default method bodies (`docs/user/spec.md`, *Traits and methods*). A default body means
 // the same everywhere and is reclaimed, crosses modules to an impl in another, and is checked once,
 // held to its signature. Ported from `crates/nazm-cli/tests/default_methods.rs` (R7).
 

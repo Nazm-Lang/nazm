@@ -1,6 +1,6 @@
 //! N66: vectorisation under checked arithmetic.
 //!
-//! `docs/architecture.md` §7.68. What whole builds show: `ints_sum_from` gives the ordered checked sum —
+//! `docs/internal/architecture.md` §7.68. What whole builds show: `ints_sum_from` gives the ordered checked sum —
 //! the same value as a scalar loop for every length across the 64-element block boundaries and
 //! every magnitude either side of the fast path's bound, and the same failure, at the same place,
 //! wherever a running sum overflows, including where the total would fit — under the interpreter,

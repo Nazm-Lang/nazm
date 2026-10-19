@@ -1,6 +1,6 @@
 //! N47: restriction profiles.
 //!
-//! `docs/architecture.md` §7.49. One language, four profiles: `general` restricts nothing,
+//! `docs/internal/architecture.md` §7.49. One language, four profiles: `general` restricts nothing,
 //! `embedded` forbids the effects `io` and `spawn`, `critical` requires declared effect sets and a
 //! locked build and forbids `spawn` and `foreign`, `cyber` requires declared effect sets and a
 //! locked build and forbids `foreign`. Each rule reads a semantic fact, reports its witnesses,

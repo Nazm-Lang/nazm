@@ -437,7 +437,7 @@ impl Interpreter {
                     usize::try_from(*to).unwrap_or(0),
                 );
                 // Bytes, not characters: slicing is allowed to land inside a multi-byte
-                // sequence, and `docs/spec.md` says what that produces.
+                // sequence, and `docs/user/spec.md` says what that produces.
                 //
                 // A **view**, not a copy, and not an allocation: the result shares the
                 // backing it was cut from and keeps it alive for exactly as long as it
@@ -522,7 +522,7 @@ impl Interpreter {
                 }
                 Ok(Value::Int(sum))
             }
-            // Atomics (Gate 3): sequentially consistent, as `docs/spec.md` promises everywhere.
+            // Atomics (Gate 3): sequentially consistent, as `docs/user/spec.md` promises everywhere.
             (Intrinsic::AtomicNew, [Value::Int(v)]) => Ok(Value::Atomic(Arc::new(
                 std::sync::atomic::AtomicI64::new(*v),
             ))),

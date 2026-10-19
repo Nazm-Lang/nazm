@@ -1,7 +1,7 @@
 //! The runtime's portable core (N43): its state, its failure and reporting helpers, and each
 //! helper set a program may reach, as LLVM text defined once per executable.
 //!
-//! `docs/architecture.md` §7.45 is the contract; [`super::INVENTORY`] lists every symbol this
+//! `docs/internal/architecture.md` §7.45 is the contract; [`super::INVENTORY`] lists every symbol this
 //! text defines, with its signature, ownership, failure behaviour and thread safety, and the
 //! tests in [`super`] hold the two to each other. It reaches the operating system only through
 //! [`super::os`]'s declarations.
@@ -13,7 +13,7 @@ use super::os::declarations;
 /// The environment variable that asks a compiled program to report what it reclaimed.
 ///
 /// A diagnostic and not a language feature: it is read by `getenv` in the entry wrapper,
-/// written to standard error, and invisible to every Nazm program. `docs/spec.md` states
+/// written to standard error, and invisible to every Nazm program. `docs/user/spec.md` states
 /// *when* storage is reclaimed and deliberately not *how*, so a counter a program could
 /// read would put the how into the language.
 pub const MEMORY_VARIABLE: &str = "NAZM_MEMORY_REPORT";
@@ -304,7 +304,7 @@ pub fn emit_runtime(needs: Needs) -> String {
 
     // Not `llvm.trap`: a process killed by SIGILL is not "stops with a diagnostic".
     //
-    // **It records and returns; it does not exit.** `docs/spec.md` says a failure inside a
+    // **It records and returns; it does not exit.** `docs/user/spec.md` says a failure inside a
     // `scope` is reported at the closing brace, after every task has been joined — so the
     // thread that fails has to be able to walk back out to that brace.
     let _ = writeln!(out, "define hidden void @nz.fail(ptr %m, i64 %n) {{");
@@ -446,7 +446,7 @@ pub fn emit_runtime(needs: Needs) -> String {
     out
 }
 
-/// Closure objects (N50, `docs/architecture.md` §7.52): `{ i64 count, ptr code, ptr release,
+/// Closure objects (N50, `docs/internal/architecture.md` §7.52): `{ i64 count, ptr code, ptr release,
 /// captures… }`. `nz.closure_new` allocates one with a count of one; the caller stores the
 /// captures after the header. The count is atomic, as a string backing's is. The last release
 /// calls the object's release function — generated per closure, it releases each managed
@@ -506,7 +506,7 @@ done:
 }
 ";
 
-/// The stack guard (N49, `docs/spec.md` *Native recursion*), called first in every function in
+/// The stack guard (N49, `docs/user/spec.md` *Native recursion*), called first in every function in
 /// a call cycle.
 ///
 /// Nonzero when this frame is past the thread's limit. The limit is set on the thread's first
@@ -515,7 +515,7 @@ done:
 /// `RLIMIT_STACK`, so no thread's budget exceeds the stack it has; the quarter left over is the
 /// headroom for the non-recursive calls between two checks. It records nothing: the call site
 /// names the function entered and fails with `N0408` itself.
-/// `nz.soa_grow` (N68, `docs/architecture.md` §7.70): room for one more element of a `Vec` laid
+/// `nz.soa_grow` (N68, `docs/internal/architecture.md` §7.70): room for one more element of a `Vec` laid
 /// out one 8-byte array per field. The arrays share one allocation, field `k` at `k · cap`; a
 /// full vector moves to twice the capacity, each field's `len` elements copied to its new place.
 const SOA_RUNTIME: &str = r"
@@ -563,7 +563,7 @@ done:
 }
 ";
 
-/// `nz.ints_sum` (N66, `docs/architecture.md` §7.68): the ordered checked sum, vectorisable.
+/// `nz.ints_sum` (N66, `docs/internal/architecture.md` §7.68): the ordered checked sum, vectorisable.
 const SUM_RUNTIME: &str = r"
 
 ; `ints_sum_from(start, v)` (N66): `start` plus every element of `v`, left to right, with the checked
@@ -1176,7 +1176,7 @@ fail:
 
 /// The two sequence helpers, as generated LLVM rather than a linked runtime crate.
 ///
-/// Generated because that is the smallest thing that works: `docs/architecture.md` keeps
+/// Generated because that is the smallest thing that works: `docs/internal/architecture.md` keeps
 /// `nazm-rt` for when a runtime genuinely needs stack switching and a custom allocator,
 /// and neither of these does. They are emitted only into programs that use a sequence.
 ///
@@ -1191,7 +1191,7 @@ fail:
 ///
 /// # The reference count, and why it needs no atomic
 ///
-/// `rc` is the number of live references, as `docs/spec.md`'s *memory constitution* counts
+/// `rc` is the number of live references, as `docs/user/spec.md`'s *memory constitution* counts
 /// them: the bindings holding this handle, plus the one it is travelling in. When it
 /// reaches zero the data and the header are freed, which is the whole of reclamation.
 ///
@@ -1208,7 +1208,7 @@ fail:
 /// happened rather than infer it from resident memory, which is an allocator's opinion. The
 /// entry wrapper prints them when `NAZM_MEMORY_REPORT` is set in the environment and says
 /// nothing otherwise. They are a runtime diagnostic, not a language feature: no Nazm
-/// program can read them, and `docs/spec.md` does not mention them.
+/// program can read them, and `docs/user/spec.md` does not mention them.
 const SEQUENCE_RUNTIME: &str = r"
 define hidden ptr @nz.arr_new() {
 entry:
@@ -1357,7 +1357,7 @@ done:
 ///
 /// # Why this count is atomic and a sequence's is not
 ///
-/// `docs/spec.md` lets a `Str` cross into a task and refuses to let a sequence cross
+/// `docs/user/spec.md` lets a `Str` cross into a task and refuses to let a sequence cross
 /// (`N0321`). A task can therefore be handed a string, slice it, bind the slice — and two
 /// sibling tasks doing that to the same backing really are two threads adjusting one
 /// count. A sequence's count cannot be reached by two threads at all, which is why that
@@ -1372,7 +1372,7 @@ const STRING_RUNTIME: &str = r"
 define hidden ptr @nz.str_alloc(i64 %n) {
 entry:
   ; Checked, because a length that overflows here would allocate less than the caller is
-  ; about to write. `docs/spec.md` reports it as N0406 at the call site.
+  ; about to write. `docs/user/spec.md` reports it as N0406 at the call site.
   %r = call {i64, i1} @llvm.uadd.with.overflow.i64(i64 %n, i64 16)
   %over = extractvalue {i64, i1} %r, 1
   br i1 %over, label %fail, label %ask
@@ -1428,7 +1428,7 @@ done:
   ret void
 }
 
-; An `Atomic`'s cell (`docs/spec.md`, *Atomics*): a backing of the string's shape, so it is
+; An `Atomic`'s cell (`docs/user/spec.md`, *Atomics*): a backing of the string's shape, so it is
 ; retained and released as a `Str`'s is, holding `v` in its 8 bytes, with its length -1 so that
 ; `nz.str_release` frees it uncounted. An atomic is not a string: the memory report counts
 ; neither its allocation nor its reclamation, as the interpreter does not (runtime ABI 38).
@@ -1623,7 +1623,7 @@ done:
 /// closing is not destruction: `chan_close` changes what the channel does and frees no
 /// storage at all.
 ///
-/// The count is atomic for the reason a string backing's is: `docs/spec.md` lets a `Chan`
+/// The count is atomic for the reason a string backing's is: `docs/user/spec.md` lets a `Chan`
 /// cross into a task, so two tasks really can bind the same channel at once.
 ///
 /// # Without a lock while nobody waits (performance leadership 6.4)
@@ -1648,7 +1648,7 @@ done:
 /// one parked longest into the ring and wakes it alone, so values leave in the order they were
 /// offered. A waiter told to look again (a close, or a value queued without the lock) does.
 /// Without memory for a record a waiter waits the old way, on the channel's own condition
-/// variable, counted. `docs/spec.md` still promises no fairness; the interpreter's `Channel`
+/// variable, counted. `docs/user/spec.md` still promises no fairness; the interpreter's `Channel`
 /// keeps the same semantics.
 ///
 /// # The waits are loops
@@ -1659,7 +1659,7 @@ done:
 /// the ownership of a slot's contents is the caller's to arrange — a sender hands over a
 /// reference of its own, a receiver takes it — and the last release calls `release` on each slot
 /// still queued.
-/// Select, deadlines and the clock (N54, `docs/architecture.md` §7.56).
+/// Select, deadlines and the clock (N54, `docs/internal/architecture.md` §7.56).
 ///
 /// A select cannot wait on several channels' condition variables, so every typed channel's
 /// send and close advances one process-wide event count, `@nz.sel_gen`, and wakes whoever is
@@ -2358,7 +2358,7 @@ done:
 /// hold a NUL, which no C string can; `nz.cstr_borrow` makes the NUL-terminated copy C borrows for
 /// the call, or null out of memory, and the caller frees it after the call. Their own part,
 /// outside the string runtime the self-hosted compiler's parity gate holds.
-/// Bytes and text (Gate 2, `docs/general-purpose.md` §5–§6): UTF-8 validation, counting,
+/// Bytes and text (Gate 2, `docs/internal/general-purpose.md` §5–§6): UTF-8 validation, counting,
 /// decoding and encoding, and zeroing and moving a buffer's bytes. Its own text rather than
 /// `STRING_RUNTIME`'s, which `compiler/emit.nz` carries line by line and needs none of these.
 const TEXT_RUNTIME: &str = r"
@@ -2660,7 +2660,7 @@ entry:
 
 /// The scheduler's counters (N54): called by generated code after a task starts and before a
 /// scope joins, so the runtime's task text — under the self-hosted parity gate — is untouched.
-/// The task pool (N83, `docs/architecture.md` §7.84): an opt-in M:N scheduler beside one OS
+/// The task pool (N83, `docs/internal/architecture.md` §7.84): an opt-in M:N scheduler beside one OS
 /// thread per task. `{RESTORE_LIMIT}`, `{SAVE_LIMIT}` and `{SET_LIMIT}` become the stack limit's
 /// save, restore and first value where the stack check is reached, and nothing otherwise.
 const POOL_RUNTIME: &str = r#"
@@ -4214,7 +4214,7 @@ fail:
   ret ptr null
 ; A channel is four allocations, and a failure part-way through must not leave the earlier
 ; ones behind. One label per stage, each freeing exactly what has been taken by then —
-; which is `docs/spec.md`'s failure law applied to the runtime's own storage, not only to
+; which is `docs/user/spec.md`'s failure law applied to the runtime's own storage, not only to
 ; the program's.
 freec:
   call void @free(ptr %c)
@@ -5653,7 +5653,7 @@ nan:
 }
 "#;
 
-/// The runtime parts a board with a heap admits (Gate 3, `docs/spec.md`, *Boards*): those whose
+/// The runtime parts a board with a heap admits (Gate 3, `docs/user/spec.md`, *Boards*): those whose
 /// only outside is `malloc`, `free` and `realloc`, which the board's arena defines — sequences,
 /// strings and text, joining, closures — and their allocation counters. Nothing of files, the
 /// network, tasks, channels, numbers' formatting or C.

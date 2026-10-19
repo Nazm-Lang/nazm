@@ -1,6 +1,6 @@
 //! N13: built-in equality, derived structurally for the value types that can have it.
 //!
-//! `docs/spec.md`, *Equality is derived*, is the law. What these tests hold:
+//! `docs/user/spec.md`, *Equality is derived*, is the law. What these tests hold:
 //!
 //! * `Int`, `Bool` and `Str` keep exactly the equality they had — a `Str` by its bytes;
 //! * a record has `==` exactly when every field does, and an enum exactly when every

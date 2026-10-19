@@ -1,5 +1,5 @@
 // N56: the registry from the command line — publish, require, lock, build, yank, and the refusals
-// a build must make before it compiles anything (`docs/architecture.md` §7.58). Ported from
+// a build must make before it compiles anything (`docs/internal/architecture.md` §7.58). Ported from
 // `crates/nazm-cli/tests/registry.rs` (R7).
 
 use "@std/file"

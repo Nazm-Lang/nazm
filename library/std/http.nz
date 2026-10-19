@@ -1,7 +1,7 @@
 // `@std/http`: HTTP/1.1 over TCP, server and client, and a small router (v1 track C, C2).
 //
 // Imported with `use "@std/http";` beside `use "@std/ioerror";` and `use "@std/net";`. The wire
-// format is RFC 9112's and the semantics RFC 9110's; `docs/spec.md`, *HTTP*, states what is
+// format is RFC 9112's and the semantics RFC 9110's; `docs/user/spec.md`, *HTTP*, states what is
 // accepted and what is refused, and the design record is `openspec/changes/v1-every-domain/
 // design.md`, section C. The parsers are pure and see only bytes already received (sans-I/O), so
 // `@std/tls` (C1) supplies decrypted bytes to the same parsers without a change to them: a

@@ -1,4 +1,4 @@
-# A clean Linux host for installing a prebuilt Nazm archive (Gate 3, docs/systems-domains.md
+# A clean Linux host for installing a prebuilt Nazm archive (Gate 3, docs/internal/systems-domains.md
 # Part A): Debian with a C toolchain and nothing else — no Rust, no cargo, no Nazm. The test mounts
 # the archive and scripts/clean-install-test.sh and runs it with no network.
 #

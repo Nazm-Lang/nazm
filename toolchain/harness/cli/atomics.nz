@@ -1,4 +1,4 @@
-// Gate 3, 3D-1: atomics (`docs/spec.md`, *Atomics*). Every operation answers as specified, every
+// Gate 3, 3D-1: atomics (`docs/user/spec.md`, *Atomics*). Every operation answers as specified, every
 // copy and every task reaches one cell, a sum outside `Int` stops the program as `+` does, and an
 // atomic has no equality, is not plain data, and its names are the language's. Ported from
 // `crates/nazm-cli/tests/atomics.rs` (R7).

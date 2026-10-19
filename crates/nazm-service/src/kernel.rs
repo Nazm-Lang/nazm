@@ -1,4 +1,4 @@
-//! Accelerator kernels (N67, `docs/architecture.md` §7.69): an eligible Nazm function, written as
+//! Accelerator kernels (N67, `docs/internal/architecture.md` §7.69): an eligible Nazm function, written as
 //! an OpenCL C kernel that maps it over a sequence, carrying checked arithmetic exactly.
 //!
 //! Eligible: a pure function of `Int` and `Bool` values, calling only other eligible functions,
@@ -10,7 +10,7 @@
 //! Gate 3: a kernel may instead be of one float type, `Float32` or `Float64`, throughout — IEEE
 //! arithmetic that never fails, no fused multiply-add, and `float_sqrt` and `float_abs` — and the
 //! source carries an element function, `nz_item`, beside the OpenCL `__kernel`: one text that a
-//! device builds and that the CPU provider compiles as C (`docs/spec.md`, *Providers*).
+//! device builds and that the CPU provider compiles as C (`docs/user/spec.md`, *Providers*).
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -653,7 +653,7 @@ impl Gen {
                     }
                     ArithOp::Div | ArithOp::Rem => {
                         let sym = if *op == ArithOp::Div { "/" } else { "%" };
-                        // The interpreter's own words for both (`docs/spec.md`).
+                        // The interpreter's own words for both (`docs/user/spec.md`).
                         let z = self.site("N0401", "division by zero", e.at);
                         let _ = writeln!(out, "{pad}if ({b} == 0L) NZ_FAIL({z});");
                         if *op == ArithOp::Div {

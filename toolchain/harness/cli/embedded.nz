@@ -1,4 +1,4 @@
-// Gate 3: the embedded domain's reference workload and `@std/hal` (`docs/systems-domains.md` Part
+// Gate 3: the embedded domain's reference workload and `@std/hal` (`docs/internal/systems-domains.md` Part
 // C; `library/std/hal.nz`). Ported from `crates/nazm-cli/tests/embedded.rs` (R7): what any host
 // builds. The `#[ignore]`d boot under QEMU starts Docker and stays Rust (`design.md`).
 //

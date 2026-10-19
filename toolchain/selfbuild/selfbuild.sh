@@ -35,7 +35,7 @@
 #
 # The target is the container's own (aarch64-unknown-linux-gnu on an Apple-silicon host): the
 # containment rule needs a Linux kernel's cgroup, so the self-build is a Linux build of the
-# toolchain. Nothing here makes Linux a supported target (`docs/support.md`).
+# toolchain. Nothing here makes Linux a supported target (`docs/user/support.md`).
 
 set -u
 

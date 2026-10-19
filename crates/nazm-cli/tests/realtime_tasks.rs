@@ -1,5 +1,5 @@
 //! Gate 3: realtime — the board's fixed-priority scheduler and the strengthened `realtime` profile
-//! (`docs/spec.md`, *Boards*, *Restriction profiles*; `docs/systems-domains.md` Part D).
+//! (`docs/user/spec.md`, *Boards*, *Restriction profiles*; `docs/internal/systems-domains.md` Part D).
 //!
 //! What a build shows on any host: a task's shape, its arguments and the timer it needs are held
 //! before anything is linked, nothing but a board accepts one, and `realtime` refuses what has no

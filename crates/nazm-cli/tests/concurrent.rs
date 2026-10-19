@@ -502,7 +502,7 @@ fn a_task_that_fails_ends_the_whole_program() {
 // ---------------------------------------------------------------------------
 // A failure waits for the scope's tasks
 //
-// `docs/spec.md` promises the closing brace joins every task *including when the body
+// `docs/user/spec.md` promises the closing brace joins every task *including when the body
 // itself failed*, so a failure is reported once nothing is still running. The diagnostic
 // code cannot check that: a run that joined first and a run that exited on the spot
 // produce the same code and the same exit status. The difference is only visible in
@@ -731,7 +731,7 @@ fn when_both_the_body_and_a_task_fail_the_bodys_failure_is_reported() {
     // The task's failure strictly *precedes* the body's: the body does not begin
     // overflowing until it has received `done`, which the task sends immediately before
     // dividing by zero. So this cannot pass by reporting whichever happened first —
-    // `docs/spec.md` says the body's is the cause and the task's the consequence.
+    // `docs/user/spec.md` says the body's is the cause and the task's the consequence.
     let src = r#"
 fn bad(dead: Chan, done: Chan) -> Int {
     let buf = ints_new();

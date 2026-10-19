@@ -1,6 +1,6 @@
 //! N36: typed effects, within one module.
 //!
-//! `docs/spec.md`, *Effects*, is the law. What these tests hold:
+//! `docs/user/spec.md`, *Effects*, is the law. What these tests hold:
 //!
 //! * an effect comes only from a resolved built-in that exercises it or from a `spawn`, and
 //!   reaches every caller, through any number of calls and any recursion, as the least fixed

@@ -1,6 +1,6 @@
 //! N105: LIR's interpreter is the oracle both backends are held to.
 //!
-//! `docs/architecture.md` §7.106. Since N105 every decision a program can observe — what a value
+//! `docs/internal/architecture.md` §7.106. Since N105 every decision a program can observe — what a value
 //! costs, where a reference is taken or given back, how an operation fails — is made once, in the
 //! instruction-level LIR, and the LLVM and Cranelift backends only translate it. `nazm lir --run`
 //! runs that LIR directly. Here every program runs on the oracle, on LLVM at `-O0` and `-O2` and on
@@ -255,7 +255,7 @@ fn a_program_with_tasks_is_refused_and_not_answered() {
 
 #[test]
 fn a_remainder_never_divides_by_minus_one() {
-    // `Int::MIN % -1` is 0 (`docs/spec.md`), and the machine faults on that one pair on some
+    // `Int::MIN % -1` is 0 (`docs/user/spec.md`), and the machine faults on that one pair on some
     // targets and not on others (AArch64 does not), so no program's output on this host can say
     // whether the lowering kept the guard. The LIR can: the divisor is a select between 1 and the
     // operand, never the operand twice.

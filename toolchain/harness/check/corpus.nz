@@ -10,8 +10,8 @@ use "../lib/run.nz"
 use "../lib/scratch.nz"
 use "../lib/strings.nz"
 
-const GUIDE_BEGIN: Str = "<!-- generated from docs/grammar.ebnf: begin -->";
-const GUIDE_END: Str = "<!-- generated from docs/grammar.ebnf: end -->";
+const GUIDE_BEGIN: Str = "<!-- generated from docs/user/grammar.ebnf: begin -->";
+const GUIDE_END: Str = "<!-- generated from docs/user/grammar.ebnf: end -->";
 
 /// One allowlisted document: `manifest.rs`'s `CORPUS`, in its order.
 struct Doc {
@@ -24,7 +24,7 @@ struct Doc {
 fn corpus() -> Vec[Doc] ! {} {
     let out = vec_new[Doc]();
     let ids = words("goals master architecture spec capabilities roadmap research bootstrap diagnostics mcp performance runbook guide grammar");
-    let paths = words("docs/NAZM_LANGUAGE_GOALS.md docs/master-architecture.md docs/architecture.md docs/spec.md docs/capability-matrix.md docs/roadmap.md docs/research-register.md docs/bootstrap.md docs/diagnostics.md docs/mcp.md docs/performance.md docs/runbook.md docs/guide.md docs/grammar.ebnf");
+    let paths = words("docs/internal/NAZM_LANGUAGE_GOALS.md docs/internal/master-architecture.md docs/internal/architecture.md docs/user/spec.md docs/internal/capability-matrix.md docs/user/roadmap.md docs/internal/research-register.md docs/internal/bootstrap.md docs/user/diagnostics.md docs/user/mcp.md docs/internal/performance-log.md docs/internal/runbook.md docs/user/guide.md docs/user/grammar.ebnf");
     let mut i = 0;
     while i < strs_len(ids) {
         let id = strs_get(ids, i);

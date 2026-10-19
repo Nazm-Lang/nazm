@@ -1,5 +1,5 @@
-//! Gate 3: `@section` and the 64-bit device registers (`docs/spec.md`, *Boards*;
-//! `docs/systems-domains.md` Part B).
+//! Gate 3: `@section` and the 64-bit device registers (`docs/user/spec.md`, *Boards*;
+//! `docs/internal/systems-domains.md` Part B).
 //!
 //! What a board build shows on any host: a function and a static `@section` names reach the
 //! object in that section, and the generated `link.ld` keeps each beside the board's own sections

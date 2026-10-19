@@ -35,5 +35,5 @@ concerns rather than a line-count cap, and the reviewer reduced the original 65-
 ## Impact
 
 `crates/nazm-core`, `crates/nazm-cli`, `crates/nazm-service` (tests), `xtask`, the mutation
-catalogue (`file =` repointed for moved entries), `docs/maintainability.md`. Path-reading gates in
+catalogue (`file =` repointed for moved entries), `docs/internal/maintainability.md`. Path-reading gates in
 `xtask` and `crates/nazm-cli/tests/codes.rs` follow the moved files.

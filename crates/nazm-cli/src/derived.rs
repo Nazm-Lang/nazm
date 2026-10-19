@@ -20,7 +20,7 @@
 //! # The user cache (R1.5, D12)
 //!
 //! The runtime's and the standard library's objects are the same for every project, so they are
-//! kept once per user rather than once per `.nazm/` ([`user_objects`], `docs/architecture.md`
+//! kept once per user rather than once per `.nazm/` ([`user_objects`], `docs/internal/architecture.md`
 //! §7.113). Same format, same keys, same rules: derived data, and deleting it changes nothing.
 
 use std::ffi::OsString;

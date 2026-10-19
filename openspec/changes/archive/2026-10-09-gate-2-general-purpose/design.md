@@ -1,6 +1,6 @@
 ## Context
 
-The design record is `docs/general-purpose.md` (Gate 2A, `f29a23c`). It is not repeated here.
+The design record is `docs/internal/general-purpose.md` (Gate 2A, `f29a23c`). It is not repeated here.
 
 ## Decisions
 
@@ -12,7 +12,7 @@ The design record is `docs/general-purpose.md` (Gate 2A, `f29a23c`). It is not r
 - **Narrower is allowed, wider is not.** Where the code does less than the record, the record
   gains *As built* and the matrix says what exists; no part does more than its section.
 - **Stop discipline.** A real compiler semantic defect found mid-part stops the part and is
-  reported (`docs/agent-governance.md`, *Stop conditions*).
+  reported (`docs/internal/agent-governance.md`, *Stop conditions*).
 
 ## Risks / Trade-offs
 

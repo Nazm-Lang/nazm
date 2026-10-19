@@ -1,4 +1,4 @@
-//! Fixed-size arrays (Gate 2, `docs/spec.md`, *Arrays*), as instructions.
+//! Fixed-size arrays (Gate 2, `docs/user/spec.md`, *Arrays*), as instructions.
 //!
 //! An array is held in memory, its elements contiguous at a stride of the element's size. It
 //! holds values — numbers, `Bool`s, strings since R1a (L8), and records and enums of them — so

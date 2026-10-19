@@ -1,6 +1,6 @@
 //! Gate 2: files and handles.
 //!
-//! `docs/general-purpose.md` §8 and the spec's *Files and handles*. What only a whole run shows:
+//! `docs/internal/general-purpose.md` §8 and the spec's *Files and handles*. What only a whole run shows:
 //! that `@std/file` opens, writes, appends, seeks, reads, lists, renames, removes and replaces
 //! atomically, and reports every failure as a value of the kind the platform's number means — the
 //! same lines in the interpreter and in both native backends at both optimisation levels, with

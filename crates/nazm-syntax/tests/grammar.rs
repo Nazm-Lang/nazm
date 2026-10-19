@@ -1,4 +1,4 @@
-//! `docs/grammar.ebnf`, checked against the parser it describes.
+//! `docs/user/grammar.ebnf`, checked against the parser it describes.
 //!
 //! A grammar that can drift from the implementation is worse than no grammar: it is a
 //! document a reader trusts and a maintainer forgets. Three checks, each mechanical:
@@ -33,7 +33,7 @@ fn grammar_path() -> PathBuf {
         .parent()
         .and_then(|p| p.parent())
         .expect("workspace root")
-        .join("docs/grammar.ebnf")
+        .join("docs/user/grammar.ebnf")
 }
 
 /// Read the grammar, pairing each rule with the examples written above it.
@@ -221,7 +221,7 @@ fn every_token_the_lexer_has_is_written_in_the_grammar() {
     }
     assert!(
         missing.is_empty(),
-        "these tokens exist in the lexer and not in docs/grammar.ebnf: {missing:?}"
+        "these tokens exist in the lexer and not in docs/user/grammar.ebnf: {missing:?}"
     );
 }
 
@@ -306,7 +306,7 @@ fn the_examples_between_them_use_every_token() {
     }
     assert!(
         missing.is_empty(),
-        "no @example in docs/grammar.ebnf uses these tokens, so the grammar describes \
+        "no @example in docs/user/grammar.ebnf uses these tokens, so the grammar describes \
          forms nothing demonstrates: {missing:?}"
     );
 }

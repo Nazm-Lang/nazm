@@ -5,7 +5,7 @@
 // methods each. `hash` is a fixed function — 64-bit FNV-1a over a value's bytes, mixed by
 // SplitMix64's finaliser — so it is the same in every implementation and every run, and a map's
 // order is reproducible. A map facing keys an adversary chooses takes a seed. Floats are not
-// keys: NaN is not equal to itself. `docs/general-purpose.md` §7 is the design record.
+// keys: NaN is not equal to itself. `docs/internal/general-purpose.md` §7 is the design record.
 
 /// A key: a hash, and whether two are the same key. Two keys that are `same` must hash alike.
 pub trait Hash {

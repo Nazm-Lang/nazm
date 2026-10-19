@@ -1,4 +1,4 @@
-// R1b, L11b: impls of generic types (`docs/spec.md`, *Traits and methods*, **Impls of generic
+// R1b, L11b: impls of generic types (`docs/user/spec.md`, *Traits and methods*, **Impls of generic
 // types**). Ported from `crates/nazm-cli/tests/generic_impls.rs` (R7).
 //
 // `impl[T: Show] Show for Maybe[T]` implements a trait for every instance whose arguments meet the

@@ -1,4 +1,4 @@
-//! `nazm doc FILE|DIR [-o OUT]` (N74, `docs/architecture.md` §7.76): a program's public API, from its
+//! `nazm doc FILE|DIR [-o OUT]` (N74, `docs/internal/architecture.md` §7.76): a program's public API, from its
 //! semantic definitions.
 //!
 //! What a definition is comes from the checker — its module's durable key, its parameters' and

@@ -1,4 +1,4 @@
-//! `nazm explain-cost` and `nazm explain-flow` (N52, `docs/architecture.md` §7.54).
+//! `nazm explain-cost` and `nazm explain-flow` (N52, `docs/internal/architecture.md` §7.54).
 //!
 //! Both print facts the compiler already settled, for a reader or — with `--json` — for a tool:
 //! where each function allocates, retains, blocks, talks to a channel, calls C or starts a task,
@@ -51,7 +51,7 @@ fn shown(p: &Value) -> String {
 }
 
 /// Which scheduler a native build of the program runs its tasks on when the environment does not
-/// say, and why (N106, `docs/architecture.md` §7.107) — `null` for a program that starts none.
+/// say, and why (N106, `docs/internal/architecture.md` §7.107) — `null` for a program that starts none.
 fn scheduler(totals: &serde_json::Map<String, Value>) -> Value {
     if !totals.contains_key("task") {
         return Value::Null;

@@ -1,7 +1,7 @@
 # Nazm — an AI-native programming language.
 #
-# Direction: docs/direction.md · Roadmap: docs/roadmap.md
-# Design record: docs/architecture.md · Spec: docs/spec.md
+# Direction: docs/direction.md · Roadmap: docs/user/roadmap.md
+# Design record: docs/internal/architecture.md · Spec: docs/user/spec.md
 # Evaluation protocol (draft, not pre-registered): docs/evaluation.md
 #
 # Two tracks in one workspace. The language — span, diag, syntax, core, cli — is
@@ -47,7 +47,7 @@ publish = false
 # Shared dependency versions.
 #
 # Phase 2 only. The compiler stack (salsa, cstree, cranelift, redb, blake3,
-# postcard) is listed in docs/architecture.md with its MSRVs checked, but is
+# postcard) is listed in docs/internal/architecture.md with its MSRVs checked, but is
 # NOT depended on here: adding a dependency before the crate that needs it
 # exists is how a workspace acquires a build it cannot explain.
 # ---------------------------------------------------------------------------

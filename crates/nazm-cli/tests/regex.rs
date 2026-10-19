@@ -1,4 +1,4 @@
-//! R1e, S5: `@std/regex` (`docs/spec.md`, *The standard library*).
+//! R1e, S5: `@std/regex` (`docs/user/spec.md`, *The standard library*).
 //!
 //! A table of patterns and texts, each pattern's every match as `regex_find_all` finds them —
 //! leftmost-first, as Rust's `regex` and Perl find them. Every expectation in the first part of the

@@ -1,7 +1,7 @@
 // `@std/config`: a service's settings from a TOML file and the environment, into a typed record
 // (v1 track C, C4).
 //
-// Imported with `use "@std/config";`. `docs/spec.md`, *Configuration*, states the rules; the
+// Imported with `use "@std/config";`. `docs/user/spec.md`, *Configuration*, states the rules; the
 // design record is `openspec/changes/v1-every-domain/design.md`, section C. The record is one the
 // program declares with `@derive(json)`: its JSON Schema (`settings_json_schema()`) says which
 // members there are and what each holds, and its decoder (`settings_from_json`) makes the value,

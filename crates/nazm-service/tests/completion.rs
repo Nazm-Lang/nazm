@@ -223,7 +223,7 @@ fn a_binding_is_visible_from_where_the_checker_introduces_it_and_no_earlier() {
 
 #[test]
 fn a_for_loops_name_is_visible_in_its_body_from_its_start_and_not_after() {
-    // R1a (`docs/spec.md`, *`for` loops*): the name is the body's, as a `let` at its top is.
+    // R1a (`docs/user/spec.md`, *`for` loops*): the name is the body's, as a `let` at its top is.
     const T: &str = "fn f(xs: Ints) -> Int {\n    \
     let mut t = 0;\n    \
     for x in xs { t = t + x; }\n    \

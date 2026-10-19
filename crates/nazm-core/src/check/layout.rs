@@ -80,7 +80,7 @@ fn c_layout_type(res: &Resolution, t: Type) -> bool {
 }
 
 /// One declared field list, resolved. Shared by a record's fields and a variant's payload,
-/// because they are the same thing: `docs/spec.md` makes a payload record-shaped so that a
+/// because they are the same thing: `docs/user/spec.md` makes a payload record-shaped so that a
 /// future tuple variant is a new decision rather than a drift.
 pub(super) fn resolve_fields(
     types: &Types,
@@ -119,7 +119,7 @@ pub(super) fn resolve_fields(
 ///
 /// A record contains its fields by value and an enum contains its active payload by value,
 /// so a chain of either that returns to where it started describes a value containing
-/// itself. `docs/spec.md` refuses it as an **impossible layout** rather than as a safety
+/// itself. `docs/user/spec.md` refuses it as an **impossible layout** rather than as a safety
 /// problem, and states the rule over *inline containment* so that a future indirection can
 /// break a cycle without the rule changing.
 ///

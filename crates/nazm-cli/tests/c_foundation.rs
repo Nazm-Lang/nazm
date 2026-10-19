@@ -1,6 +1,6 @@
 //! Gate 2: the C foundation for other languages.
 //!
-//! `docs/general-purpose.md` §23. Python's `ctypes`, Swift, Kotlin/JNI, Node-API and C# P/Invoke all
+//! `docs/internal/general-purpose.md` §23. Python's `ctypes`, Swift, Kotlin/JNI, Node-API and C# P/Invoke all
 //! bind to a C ABI of scalars; since Gate 2 an export takes and returns every number Nazm has, as
 //! the C type the generated header names. What this holds: the header's declarations, and the same
 //! answers at the edges of every width and both floats from a C program linking the static archive

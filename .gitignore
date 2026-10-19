@@ -3,7 +3,7 @@
 .DS_Store
 
 # Compiler artifact store. Content-addressed and reproducible by construction,
-# so it is a cache, never a source of truth. See docs/architecture.md.
+# so it is a cache, never a source of truth. See docs/internal/architecture.md.
 .nazm/
 
 # Benchmark output: run logs, trajectories, and cost records. Large, and the
@@ -23,6 +23,6 @@
 /bench/record.json
 /target/bench-scratch/
 
-# Agent working state is local and machine-specific (docs/agent-governance.md §6).
+# Agent working state is local and machine-specific (docs/internal/agent-governance.md §6).
 /.agent/state.md
 /.agent/plans/

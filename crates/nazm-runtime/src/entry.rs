@@ -1,6 +1,6 @@
 //! The platform entry (N43): the process's `main`, which stores the arguments, mints the root
 //! capabilities, calls the program's `main`, and ends the process — the only code that prints a
-//! result or a failure. `docs/architecture.md` §7.45, *Startup and shutdown*.
+//! result or a failure. `docs/internal/architecture.md` §7.45, *Startup and shutdown*.
 
 use std::fmt::Write as _;
 
@@ -11,7 +11,7 @@ use crate::{
     SCHED_FORMAT, SCHED_VARIABLE,
 };
 
-/// The scheduler a program runs when the environment does not say (N106, `docs/architecture.md`
+/// The scheduler a program runs when the environment does not say (N106, `docs/internal/architecture.md`
 /// §7.107): 2 the pool, 1 a thread per task for a program that calls C.
 #[must_use]
 pub const fn policy(needs: Needs) -> i64 {
@@ -218,7 +218,7 @@ pub fn emit_entry_for(
         //
         // It is a runtime diagnostic, off unless asked for. It is not a built-in because
         // no Nazm program should be able to observe how its own storage is managed:
-        // `docs/spec.md` states *when* storage is reclaimed and deliberately not *how*.
+        // `docs/user/spec.md` states *when* storage is reclaimed and deliberately not *how*.
         let _ = writeln!(out, "  %want = call ptr @getenv(ptr @.memvar)");
         let _ = writeln!(out, "  %quiet = icmp eq ptr %want, null");
         let _ = writeln!(

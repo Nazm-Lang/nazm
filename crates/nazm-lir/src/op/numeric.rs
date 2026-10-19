@@ -1,4 +1,4 @@
-//! Numbers other than `Int` (Gate 2, `docs/general-purpose.md` §1–§3), as instructions.
+//! Numbers other than `Int` (Gate 2, `docs/internal/general-purpose.md` §1–§3), as instructions.
 //!
 //! Every operation here means what `nazm_sema::numeric` says, the semantics the interpreter
 //! runs: an integer of any width traps where its value leaves its type (`N0400`), divides by

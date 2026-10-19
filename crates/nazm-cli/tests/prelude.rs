@@ -3,7 +3,7 @@
 //!
 //! The prelude is one more module in every compilation: `@core/prelude`, whose identity
 //! the toolchain fixes, imported by every other module with no `use`. These tests hold the
-//! consequences `docs/spec.md` and `docs/architecture.md` §7.13 claim for that design:
+//! consequences `docs/user/spec.md` and `docs/internal/architecture.md` §7.13 claim for that design:
 //!
 //! * its durable identity and its published interface are the **same bytes** in every
 //!   project, from every directory — so `Result` in one project is `Result` in another;

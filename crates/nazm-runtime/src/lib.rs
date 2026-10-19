@@ -1,6 +1,6 @@
 //! The runtime's entry points, as one typed registry.
 //!
-//! `docs/architecture.md` §7.43: every runtime symbol a backend's generated code calls is here,
+//! `docs/internal/architecture.md` §7.43: every runtime symbol a backend's generated code calls is here,
 //! once — its symbol, its parameters and result in machine words and pointers only, and what it
 //! does with ownership. A backend that calls the runtime builds each call from this table and
 //! from nothing else, so a symbol spelled twice or a signature guessed at a call site is a
@@ -300,7 +300,7 @@ pub fn escape(s: &str) -> String {
 /// `nz_os_child_id`, `nz_os_pid`, `nz_os_signal_group`, `nz_os_nap`, `nz_os_lstat`,
 /// `nz_os_chmod`, `nz_os_realpath` and `nz_os_flock`. Also R1 (5b.3): the entry ends with
 /// `main`'s result as the exit status unless `NAZM_RESULT_REPORT` asks for it printed.
-/// 34 is 4.2's failures by unwinding (`docs/architecture.md` §7.115): on the hosted targets under
+/// 34 is 4.2's failures by unwinding (`docs/internal/architecture.md` §7.115): on the hosted targets under
 /// LLVM a Nazm function returns its result alone and a failure is a forced unwind — `nz.raise`,
 /// `nz.unwind_stop` and the exception object `nz.exc`, which each unit defines once per image —
 /// under the C personality `__gcc_personality_v0`, so an image links the system's unwinder; a plain

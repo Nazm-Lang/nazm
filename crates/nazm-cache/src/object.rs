@@ -93,7 +93,7 @@ impl LlvmInput {
 /// a real limit and it is stated rather than papered over: replacing a toolchain in place
 /// without changing what it calls itself is the case where `.nazm/native` should be
 /// deleted. The alternative — hashing the driver's own bytes — was measured and rejected
-/// in `docs/architecture.md` §7.6: on the machine this was built on it reads a 124 MB
+/// in `docs/internal/architecture.md` §7.6: on the machine this was built on it reads a 124 MB
 /// executable behind a 200 KB shim, so it would cost more per build than the objects it
 /// saves and would identify the shim rather than the compiler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -130,7 +130,7 @@ impl BackendIdentity {
 /// So this is a digest of the arguments the driver says it will actually run, with only
 /// the ones naming **this invocation's own files** removed — the input, the output, and
 /// the directories recorded for debug and coverage information. Each of those was
-/// measured not to change a single byte of the object; `docs/architecture.md` §7.6 has
+/// measured not to change a single byte of the object; `docs/internal/architecture.md` §7.6 has
 /// the measurements. Everything else is kept, including arguments this compiler has never
 /// heard of, because the safe direction is to keep.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn an_optimisation_level_and_a_target_cannot_collide() {
-        // `docs/architecture.md` §7.6: the target is not a flag this compiler passes, it
+        // `docs/internal/architecture.md` §7.6: the target is not a flag this compiler passes, it
         // is one the driver resolves — so it arrives here as a resolved argument, and the
         // key separates two targets exactly as it separates two optimisation levels.
         let o0 = key(b"ir", "v1", &["-triple", "arm64-apple-macosx27.0.0", "-O0"]);

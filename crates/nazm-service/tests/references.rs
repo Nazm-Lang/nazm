@@ -958,7 +958,7 @@ fn every_resolved_occurrence_is_in_exactly_one_entitys_set() {
             targets += index.targets();
             uses += index.use_count();
         }
-        // Descriptive, not a proof: recorded in `docs/performance.md`.
+        // Descriptive, not a proof: recorded in `docs/internal/performance-log.md`.
         eprintln!(
             "corpus: {} compilations, {occurrences} occurrences, {targets} entities, {uses} uses, {cross} cross-file uses",
             roots.len()

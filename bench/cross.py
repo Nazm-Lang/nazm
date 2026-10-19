@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gate 4 light: a small cross-language set, timed on the host (docs/performance.md).
+"""Gate 4 light: a small cross-language set, timed on the host (docs/internal/performance-log.md).
 
 Each workload is a Nazm program in bench/programs/ and its statement-for-statement references in
 bench/reference/. Every executable must print the program's .expected answer before it is timed;

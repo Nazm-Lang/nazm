@@ -255,7 +255,7 @@ fn the_nazm_lexer_agrees_with_the_reference_on_every_source_in_the_tree() {
 #[test]
 fn the_shapes_that_are_easy_to_get_wrong_are_checked_by_hand() {
     // Differential agreement is satisfied by a shared bug, and the Nazm lexer was
-    // written from the Rust one. These expectations are written from `docs/spec.md`.
+    // written from the Rust one. These expectations are written from `docs/user/spec.md`.
     let dir = tempfile::tempdir().expect("tempdir");
     let exe = build_lexer(dir.path());
 
@@ -1696,7 +1696,7 @@ const GENERIC_COMPARABLE: &[&str] = &[
 
 #[test]
 fn the_nazm_checker_agrees_with_the_reference_on_generics() {
-    // N11, `docs/spec.md`, *Generics*. Accepted programs must be accepted by both, and every
+    // N11, `docs/user/spec.md`, *Generics*. Accepted programs must be accepted by both, and every
     // refused one must be refused with the same codes at the same spans: a generic checker
     // that agreed only on the programs it accepts would agree with everything.
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1793,7 +1793,7 @@ const PROPAGATION_COMPARABLE: &[&str] = &[
 
 #[test]
 fn the_nazm_checker_agrees_with_the_reference_on_propagation() {
-    // N12, `docs/spec.md`, *The core prelude* and *Propagation*. Both checkers load the
+    // N12, `docs/user/spec.md`, *The core prelude* and *Propagation*. Both checkers load the
     // same prelude source, and must agree on every accepted program and on every refusal's
     // code and span — the `?` itself for propagation's own codes, the declaration for a
     // reserved name.
@@ -2092,7 +2092,7 @@ fn the_nazm_written_compiler_compiles_value_blocks_with_the_same_memory_semantic
 
 #[test]
 fn the_nazm_checker_agrees_with_the_reference_on_equality() {
-    // N13, `docs/spec.md`, *Equality is derived*. Both checkers derive `==` from the same
+    // N13, `docs/user/spec.md`, *Equality is derived*. Both checkers derive `==` from the same
     // table — a record when every field has it, an enum when every payload field of every
     // variant does, an instance after substitution — and must agree on every accepted
     // program and on every refusal's code and span.
@@ -2237,7 +2237,7 @@ fn the_nazm_written_compiler_compiles_equality_with_the_same_memory_semantics() 
 
 #[test]
 fn the_nazm_checker_agrees_with_the_reference_on_requirements() {
-    // N14, `docs/spec.md`, *A type parameter may require equality*. Both checkers record
+    // N14, `docs/user/spec.md`, *A type parameter may require equality*. Both checkers record
     // the same requirement on the same position, give the body `==` by it, check every
     // argument against it by N13's derivation, and refuse what they refuse with the same
     // code at the same span.
@@ -3151,7 +3151,7 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
 // `compiler/emit.nz` reads a `.nz` file and writes LLVM IR. `clang` assembles it. The
 // result is a native executable produced by a compiler written in Nazm, with the Rust
 // implementation nowhere in the pipeline except as the bootstrap that compiled the
-// compiler — which is what `docs/bootstrap.md` §4 records and a wrapper
+// compiler — which is what `docs/internal/bootstrap.md` §4 records and a wrapper
 // shelling out to Rust is not.
 // ---------------------------------------------------------------------------
 
@@ -3345,7 +3345,7 @@ fn a_compiler_written_in_nazm_produces_native_executables_that_agree_with_the_in
     let dir = tempfile::tempdir().expect("tempdir");
     let emitter = build_emitter(dir.path());
 
-    // Every arithmetic shape `docs/spec.md` pins, including all four integer boundary
+    // Every arithmetic shape `docs/user/spec.md` pins, including all four integer boundary
     // cases. Written as explicit expectations *and* compared with the interpreter:
     // an expectation can be written wrong, and differential agreement alone is
     // satisfied by a bug both share.
@@ -4711,7 +4711,7 @@ fn the_nazm_written_compiler_refuses_what_monomorphisation_cannot_do() {
 /// MIR places first in every function in a call cycle — had no counterpart in its emitter.
 /// It now emits the reference runtime's `nz.stack_check` on entry to every function in a
 /// cycle, so recursion compiles and an unbounded one fails with `N0408` at the function
-/// entered (`docs/spec.md`, *Native recursion*). This test holds both halves on six shapes:
+/// entered (`docs/user/spec.md`, *Native recursion*). This test holds both halves on six shapes:
 /// a function calling itself, a recursive function nothing calls, two functions calling
 /// each other, a cycle through a `spawn` (which closes no cycle: a task has its own stack),
 /// a cycle that only exists across two files, and a recursion with no bottom — each built
@@ -4852,7 +4852,7 @@ fn the_nazm_written_compiler_compiles_recursion_as_the_reference_does() {
 // consistently accepts a program the specification forbids reaches a fixpoint too.
 //
 // N2 settled module ownership, visibility, non-transitive imports, collision rules, the
-// root entry point and legal module cycles in the Rust front end (`docs/spec.md`). These
+// root entry point and legal module cycles in the Rust front end (`docs/user/spec.md`). These
 // run every one of those rules through **both** implementations and require the same
 // accept/refuse answer — and, where the program runs, the same value. A divergence here is
 // two languages sharing a name.

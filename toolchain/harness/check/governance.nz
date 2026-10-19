@@ -1,6 +1,6 @@
 // The agent-governance gate (R7, ported from `xtask/src/governance.rs`; M1): the repository's
 // agent-instruction and change-governance files stay structurally consistent with
-// `docs/agent-governance.md` — existence, links resolving, required fields present, forbidden
+// `docs/internal/agent-governance.md` — existence, links resolving, required fields present, forbidden
 // allowances absent.
 
 use "@std/file"
@@ -113,9 +113,9 @@ fn dirs(h: Caps, path: Str) -> Strs ! { io } {
 pub fn gate_governance(h: Caps, root: Str) -> Strs ! { io } {
     let io = h.io;
     let bad = strs_new();
-    for doc in words("docs/agent-governance.md docs/change-governance.md docs/agent-evals.md .agent/PLANS.md openspec/config.yaml") {
+    for doc in words("docs/internal/agent-governance.md docs/internal/change-governance.md docs/internal/agent-evals.md .agent/PLANS.md openspec/config.yaml") {
         if !is_file(h, f"{root}/{doc}") {
-            strs_push(bad, f"{doc} is missing (docs/agent-governance.md names it)");
+            strs_push(bad, f"{doc} is missing (docs/internal/agent-governance.md names it)");
         }
     }
     match read_rust(h, f"{root}/{ROOT}") {
@@ -179,7 +179,7 @@ pub fn gate_governance(h: Caps, root: Str) -> Strs ! { io } {
     }
     for cap in dirs(h, f"{root}/openspec/specs") {
         if cap != "repository-governance" {
-            strs_push(bad, f"openspec/specs/{cap} is not a repository-process capability: a change to the language or toolchain archives with --skip-specs, and its text belongs in docs/spec.md and the other Nazm authorities");
+            strs_push(bad, f"openspec/specs/{cap} is not a repository-process capability: a change to the language or toolchain archives with --skip-specs, and its text belongs in docs/user/spec.md and the other Nazm authorities");
         }
     }
     bad

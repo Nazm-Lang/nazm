@@ -1,6 +1,6 @@
 //! Restriction profiles (N47): rules over facts the checker already settled.
 //!
-//! `docs/architecture.md` §7.49. A profile is a named set of [`Rule`]s. Each rule reads a
+//! `docs/internal/architecture.md` §7.49. A profile is a named set of [`Rule`]s. Each rule reads a
 //! semantic fact — the effect set `main` requires (transitively, through every call, standard
 //! wrappers included), a function's declared contract, whether the build was held to its
 //! lockfile — and either passes or fails with witnesses. No rule reads a name: effects are
@@ -61,7 +61,7 @@ pub enum Rule {
     /// whose callee and so whose contract the compiler does not know — and, with `no-foreign`,
     /// no call into C. Every obligation is then proved or checked as the program runs.
     NoUnknownCalls,
-    /// No allocation site at all (Gate 3, `docs/spec.md`, *Boards*): what the program holds is
+    /// No allocation site at all (Gate 3, `docs/user/spec.md`, *Boards*): what the program holds is
     /// its statics, its stack and its devices, whatever the board's manifest gives it.
     NoHeap,
     /// The image's stack has a static bound (Gate 3): no call cycle and no call through a
@@ -180,7 +180,7 @@ pub enum Profile {
     Accounts,
     /// Authority only by holding it (N79, §7.80): no function inherits its caller's.
     Authority,
-    /// A kernel-style image (Gate 3, `docs/spec.md`, *Boards*): no tasks, no heap, no C, nothing
+    /// A kernel-style image (Gate 3, `docs/user/spec.md`, *Boards*): no tasks, no heap, no C, nothing
     /// whose latency is another task's.
     Kernel,
     /// A robot's control loop (Gate 3): `realtime`, and its device authority the one it is handed.

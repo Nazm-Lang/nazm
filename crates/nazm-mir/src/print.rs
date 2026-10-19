@@ -1,6 +1,6 @@
 //! MIR's printed form, `nazm.mir/1`: deterministic JSON for tests, debugging and regression
 //! comparison. Internal and unstable, debug-only, and never read back — a reader of it gets no
-//! promise that a later build prints the same (`docs/architecture.md` §7.42).
+//! promise that a later build prints the same (`docs/internal/architecture.md` §7.42).
 //!
 //! Statements and terminators are the canonical text [`crate::text`] also digests, so the
 //! printed program and the digest cannot disagree about what a function does. Spans are left out

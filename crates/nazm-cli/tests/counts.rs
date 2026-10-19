@@ -19,13 +19,13 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Every frozen release report under `docs/releases/`.
+/// Every frozen release report under `docs/internal/releases/`.
 ///
 /// Globbed rather than named: a release report is frozen evidence for one commit, so they
 /// accumulate, and a hard-coded path would make this test something to remember to update
 /// at exactly the moment nobody is thinking about it.
 fn release_reports() -> Vec<PathBuf> {
-    let dir = repo_root().join("docs/releases");
+    let dir = repo_root().join("docs/internal/releases");
     let mut found: Vec<PathBuf> = std::fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
         .filter_map(|e| e.ok().map(|e| e.path()))

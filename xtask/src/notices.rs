@@ -1,4 +1,4 @@
-//! `cargo xtask notices` (0.3.0 preview, `docs/licensing.md`, item 7): the third-party licence texts
+//! `cargo xtask notices` (0.3.0 preview, `docs/user/licensing.md`, item 7): the third-party licence texts
 //! and notices a shipped toolchain binary owes, generated from the lockfile it is built from.
 //!
 //! The crates are the ones `bin/nazm` and `bin/nazm-mcp` **link**: the normal dependencies of

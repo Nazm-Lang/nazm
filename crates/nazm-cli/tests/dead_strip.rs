@@ -1,4 +1,4 @@
-//! Dead-stripping (R1.5, D14; `docs/architecture.md` §7.114): a hosted executable is linked with
+//! Dead-stripping (R1.5, D14; `docs/internal/architecture.md` §7.114): a hosted executable is linked with
 //! `-dead_strip` (Mach-O) or `--gc-sections` over a section per function (ELF), so a standard
 //! function the program never calls is not in it.
 

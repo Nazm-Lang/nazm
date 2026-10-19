@@ -4,7 +4,7 @@
 //!
 //! - **Losslessness.** The leaves of the tree, concatenated, are the input — every byte,
 //!   in order, for valid and invalid text alike. Checked over every `.nz` file in the
-//!   repository, every example in `docs/grammar.ebnf`, a set of malformed fixtures, and
+//!   repository, every example in `docs/user/grammar.ebnf`, a set of malformed fixtures, and
 //!   seeded random input.
 //! - **Local recovery.** A statement that does not parse costs that statement, not the
 //!   rest of its function: what follows is still structured syntax in the tree.
@@ -168,9 +168,10 @@ fn corpus() -> Vec<(String, String)> {
         .collect()
 }
 
-/// Every `@example` in `docs/grammar.ebnf`, each a program the grammar says is valid.
+/// Every `@example` in `docs/user/grammar.ebnf`, each a program the grammar says is valid.
 fn grammar_examples() -> Vec<String> {
-    let text = std::fs::read_to_string(workspace().join("docs/grammar.ebnf")).expect("grammar");
+    let text =
+        std::fs::read_to_string(workspace().join("docs/user/grammar.ebnf")).expect("grammar");
     // Written `(* @example … *)` on a line of its own, or `* @example …` inside a longer
     // comment — the two forms `tests/grammar.rs` reads.
     text.lines()

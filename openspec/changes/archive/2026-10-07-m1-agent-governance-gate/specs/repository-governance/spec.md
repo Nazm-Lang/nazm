@@ -2,7 +2,7 @@
 
 ### Requirement: Agent instruction files stay consistent with their authorities
 `cargo xtask check` SHALL fail when the repository's agent-instruction files no longer agree with
-the structure `docs/agent-governance.md` defines, and SHALL do so by reading the tree only.
+the structure `docs/internal/agent-governance.md` defines, and SHALL do so by reading the tree only.
 
 #### Scenario: the Claude shim stops deferring
 - **WHEN** `CLAUDE.md` does not refer the reader to `AGENTS.md`

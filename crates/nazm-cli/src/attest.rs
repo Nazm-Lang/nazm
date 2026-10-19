@@ -1,4 +1,4 @@
-//! `nazm attest sign` and `nazm attest verify` (N94, `docs/architecture.md` §7.95).
+//! `nazm attest sign` and `nazm attest verify` (N94, `docs/internal/architecture.md` §7.95).
 //!
 //! A provenance record becomes an in-toto Statement v1 — one subject per artefact, with its BLAKE3
 //! digest, the record as the predicate — signed with OpenSSH's `ssh-keygen -Y sign`, the SSHSIG

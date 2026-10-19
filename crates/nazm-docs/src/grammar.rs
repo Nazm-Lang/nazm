@@ -1,4 +1,4 @@
-//! `docs/grammar.ebnf` as sections: one per production, not Markdown.
+//! `docs/user/grammar.ebnf` as sections: one per production, not Markdown.
 //!
 //! The file is a header comment and then a sequence of rules, each a production
 //! `name = … ;` with the comments written directly above it — no blank line between —

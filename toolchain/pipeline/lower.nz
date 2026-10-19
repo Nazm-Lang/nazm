@@ -1,4 +1,4 @@
-// Core IR to MIR: the one lowering, ported from the rules of `docs/architecture.md` §7.42.
+// Core IR to MIR: the one lowering, ported from the rules of `docs/internal/architecture.md` §7.42.
 //
 // One cleanup stack, in program order, of everything that must be undone when control leaves the
 // point it was created at: a managed local that owns a value, an open `scope`, and a marker where

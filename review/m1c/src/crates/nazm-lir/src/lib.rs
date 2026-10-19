@@ -2,7 +2,7 @@
 //!
 //! # Why there is one level here and not eight
 //!
-//! `docs/architecture.md` §2 describes eight IR levels. This crate is level 7 and nothing
+//! `docs/internal/architecture.md` §2 describes eight IR levels. This crate is level 7 and nothing
 //! else. The levels in between exist to carry information M1a has none of: there are no
 //! generics to monomorphise, no traits to lower to dictionaries, no regions to infer, no
 //! effects to track, and one scalar type whose layout is not selectable. Building them
@@ -21,7 +21,7 @@
 //! bindings and nesting. Everything else is rejected by name in [`lower`], after the
 //! program has passed ordinary checking — never partially compiled.
 //!
-//! The accepted/rejected table is in `docs/roadmap.md` under *M1b subset*.
+//! The accepted/rejected table is in `docs/user/roadmap.md` under *M1b subset*.
 
 pub mod emit;
 pub mod ir;

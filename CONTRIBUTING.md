@@ -1,8 +1,8 @@
 # Contributing to Nazm
 
 Thank you for looking. Nazm holds itself to a few rules that are unusual, and each exists because
-breaking it once cost something. This page is the short version; `docs/master-architecture.md`
-(the laws) and `docs/runbook.md` (operations) are the long one.
+breaking it once cost something. This page is the short version; `docs/internal/master-architecture.md`
+(the laws) and `docs/internal/runbook.md` (operations) are the long one.
 
 ## Build and test
 
@@ -38,25 +38,25 @@ too.
 
 ## The constitution comes before the code
 
-- **Semantics first.** A change to what a program means is written into `docs/spec.md` — and, if
-  architectural, `docs/architecture.md` — before it is implemented, in its own commit or at least
+- **Semantics first.** A change to what a program means is written into `docs/user/spec.md` — and, if
+  architectural, `docs/internal/architecture.md` — before it is implemented, in its own commit or at least
   its own section. A rule the checker gains bumps `SEMANTIC_EPOCH` in the same commit
   (`cargo xtask check` says so); a runtime contract change bumps the runtime ABI revision; a
-  changed machine-readable shape bumps its schema's major version (`docs/stability.md`).
+  changed machine-readable shape bumps its schema's major version (`docs/user/stability.md`).
 - **Diagnostics.** A new refusal gets a new code — codes are never reused or repurposed — a
   message that names the construct, and, where the compiler can tell, a fix. Schema changes follow
-  `docs/diagnostics.md`, *What compatibility means*, and each schema in `schema/` is documented there.
+  `docs/user/diagnostics.md`, *What compatibility means*, and each schema in `schema/` is documented there.
 - **Refuse by name.** An unsupported construct is rejected with a diagnostic that names it, never
   misparsed into something else or silently ignored.
 
 ## Compatibility within 1.x
 
 *The 0.10.0 preview is the 1.0 draft: external contributions are not accepted yet — the contributor
-licence agreement awaits legal review (`docs/licensing.md`) — and what follows is the rule 1.0 will
+licence agreement awaits legal review (`docs/user/licensing.md`) — and what follows is the rule 1.0 will
 hold, held already inside the project.*
 
 Nazm 1.x promises that a program valid under stable Nazm 1.0, using only stable public surfaces,
-does not silently change meaning ([`docs/stability.md`](docs/stability.md)). A change that would
+does not silently change meaning ([`docs/user/stability.md`](docs/user/stability.md)). A change that would
 alter what a stable program means is a 2.0 change, or the fix of a recorded defect against the
 specification. [`tests/compat/v1/`](tests/compat/v1) holds every 1.x toolchain to that: it is
 append-only, every file is pinned by its digest, and a new stable rule adds a case with its pin
@@ -65,30 +65,30 @@ append-only, every file is pinned by its digest, and a new stable rule adds a ca
 ## Licensing of contributions
 
 Nazm is under `Apache-2.0 WITH LLVM-exception` ([`LICENSE`](LICENSE), [`NOTICE`](NOTICE)). Every
-contribution needs a signed **Contributor Licence Agreement** ([`docs/CLA.md`](docs/CLA.md)) before
+contribution needs a signed **Contributor Licence Agreement** ([`docs/internal/CLA.md`](docs/internal/CLA.md)) before
 it can be merged: you keep your copyright and license it to the project, including the right to
 relicense it. You sign once, by replying to a bot on your first pull request. The agreement is a
 draft awaiting legal review, and no outside contribution is
 accepted until that review is done. If any part of a contribution was produced by a generative
 tool, say so in its description (the agreement's section 5). A change to the specification is also
 published under CC-BY-4.0, and a change to a `nazm init` template under MIT-0
-([`docs/licensing.md`](docs/licensing.md)).
+([`docs/user/licensing.md`](docs/user/licensing.md)).
 
 ## Evidence, in its own vocabulary
 
-`docs/capability-matrix.md` is the status authority. Use its words — VERIFIED, VERIFIED as scoped,
+`docs/internal/capability-matrix.md` is the status authority. Use its words — VERIFIED, VERIFIED as scoped,
 PARTIAL, DESIGNED, RESEARCH, BLOCKED, MISSING — and cite the test or recorded run behind a claim.
-Goals (`docs/NAZM_LANGUAGE_GOALS.md`) are never evidence. Report outcomes as **passed**,
+Goals (`docs/internal/NAZM_LANGUAGE_GOALS.md`) are never evidence. Report outcomes as **passed**,
 **skipped**, **refused**, **failed** or **unexecuted**, and never one as another.
 
 - **Mutation testing.** A change to compiler or runtime behaviour adds or updates entries in
   `xtask/mutations/mutations.toml`, each naming the test that kills it; a mutant no test catches is
   a gap to fix, not a number to report. Zero survivors describes a catalogue, never the absence of
   bugs.
-- **No unchecked performance claims.** A number in `docs/performance.md` comes with the command
+- **No unchecked performance claims.** A number in `docs/internal/performance-log.md` comes with the command
   that produced it and is registered in `bench/claims.toml`; "faster" without a measurement is not
   written.
-- **Limitations honestly.** What a change does not do goes into `docs/limitations.md`, naming its
+- **Limitations honestly.** What a change does not do goes into `docs/user/limitations.md`, naming its
   capability-matrix area. Narrowing a limitation says what it was before. Never describe a goal as
   a feature, or a compile-only target as run-verified.
 

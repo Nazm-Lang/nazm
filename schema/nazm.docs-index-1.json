@@ -65,7 +65,7 @@
     },
     "authority": {
       "enum": ["goal", "law", "architecture", "normative", "grammar", "guide", "interface", "evidence", "planning", "research", "operational"],
-      "description": "What the document is an authority for, as `docs/master-architecture.md` §5 assigns it. A `goal` is aspiration and never evidence of what exists; `planning` is never a rule of the language; only `normative` and `grammar` say what a program means."
+      "description": "What the document is an authority for, as `docs/internal/master-architecture.md` §5 assigns it. A `goal` is aspiration and never evidence of what exists; `planning` is never a rule of the language; only `normative` and `grammar` say what a program means."
     },
     "not_found": {
       "type": "object",

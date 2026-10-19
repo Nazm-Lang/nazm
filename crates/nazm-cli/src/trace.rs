@@ -1,5 +1,5 @@
 //! `nazm trace FILE --requirements FILE` — requirements traced to what verifies them,
-//! `nazm.trace/1` (Gate 3, `docs/systems-domains.md` Part S).
+//! `nazm.trace/1` (Gate 3, `docs/internal/systems-domains.md` Part S).
 //!
 //! A requirement is a stable identifier in a project file, `requirements.toml`: its text, the
 //! definitions it constrains — functions of the program's own module, by name — and the `@test`

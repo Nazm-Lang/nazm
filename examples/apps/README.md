@@ -1,4 +1,4 @@
-# Reference applications (Gate 2, `docs/general-purpose.md` §24)
+# Reference applications (Gate 2, `docs/internal/general-purpose.md` §24)
 
 Five programs doing ordinary work, each held by `crates/nazm-cli/tests/apps.rs`: run under the
 interpreter and built by LLVM at `-O0` and `-O2` and by Cranelift, with real arguments, files and
@@ -12,7 +12,7 @@ standard input, every one held to the output recorded beside it and to its exit 
 | `kvstore/` | a persistent log-structured store: appended and synced records, replay on open, compaction by atomic replacement | `@std/file` append, sync and `file_replace_atomic`, a second process reading what the first wrote | `script.expected`, `again.expected`; the compacted log's exact bytes and no file left beside it |
 | `kvd/` | a concurrent TCP key-value server: one task owns the table, one task per connection asks it over channels; a demonstration with four clients at once and a fifth reading what they left | `@std/net`, `scope`/`spawn`, `Chan[Request]` carrying a reply channel, the task pool | `kvd.expected`, whatever order the clients finish in |
 
-Gate 3 adds two, held by their own tests (`docs/systems-domains.md` Parts M and N):
+Gate 3 adds two, held by their own tests (`docs/internal/systems-domains.md` Parts M and N):
 
 | app | what it is | held by |
 | --- | --- | --- |
@@ -23,7 +23,7 @@ Gate 3 adds two, held by their own tests (`docs/systems-domains.md` Parts M and 
 
 One run each of the native executables on an Apple M1 Pro (macOS, aarch64), wall time and peak
 resident memory from `/usr/bin/time -l`. A measurement of this machine at this moment, not a
-comparison with any other language or a claim filed in `docs/performance.md`.
+comparison with any other language or a claim filed in `docs/internal/performance-log.md`.
 
 | workload | LLVM `-O2` | Cranelift |
 | --- | --- | --- |

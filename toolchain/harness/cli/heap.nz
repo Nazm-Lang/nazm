@@ -1,4 +1,4 @@
-// Gate 3: a board's heap, and `no-heap` (`docs/spec.md`, *Boards*; `docs/systems-domains.md`
+// Gate 3: a board's heap, and `no-heap` (`docs/user/spec.md`, *Boards*; `docs/internal/systems-domains.md`
 // Part B). A board whose manifest gives a heap builds a program that allocates, which a board
 // without one refuses, naming what it reaches and where a heap is given; the linker script bounds
 // the arena; and the `kernel` profile refuses every allocation site whatever the board. Ported

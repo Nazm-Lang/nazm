@@ -38,7 +38,7 @@ killers; the full catalogue belongs to the final v1 gate).
 6. **The LIR oracle stays independent.** `nazm-lir`'s `op/interp.rs` re-implements number rules on
    raw `u64` deliberately: it is the differential cross-check of `nazm_sema::numeric`, and sharing
    the rules would make a rule defect invisible to both. Shared are only the type inventory, the edge
-   corpus and the test vectors. `docs/maintainability.md` §6 says so.
+   corpus and the test vectors. `docs/internal/maintainability.md` §6 says so.
 
 ## Risks / Trade-offs
 

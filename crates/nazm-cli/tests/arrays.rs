@@ -1,6 +1,6 @@
 //! Gate 2: fixed-size arrays and constants.
 //!
-//! `docs/general-purpose.md` §4 and §15, and the spec's *Arrays* and *Constants*. What only a
+//! `docs/internal/general-purpose.md` §4 and §15, and the spec's *Arrays* and *Constants*. What only a
 //! whole run shows: that an array is a value — built, copied, compared, indexed and written the
 //! same way in the interpreter and in both native backends at both optimisation levels — that
 //! every index is checked against the length its type states, and that every misuse is refused

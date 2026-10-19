@@ -1,4 +1,4 @@
-# Written by nazm contract --evm (N70, docs/architecture.md §7.72): runs a compiled contract in
+# Written by nazm contract --evm (N70, docs/internal/architecture.md §7.72): runs a compiled contract in
 # py-evm (docker/evm.Dockerfile) — deploys it, sends each transaction from its caller's address,
 # and prints one line of JSON: each outcome, revert code, gas used, and the final storage.
 # python3 evm_run.py DIR TXS

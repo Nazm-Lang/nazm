@@ -24,7 +24,7 @@ use crate::checks::{module_files, source_files, workspace_root};
 ///    crate that owns identity is that boundary being crossed.
 ///
 /// `ModuleId` is *permitted* in the symbol module and appears there deliberately: a module
-/// with no durable identity gets a compilation-local symbol, which `docs/architecture.md`
+/// with no durable identity gets a compilation-local symbol, which `docs/internal/architecture.md`
 /// records as an honest limitation rather than a durable-looking guess.
 pub(crate) fn check_native_identity() -> Result<(), Vec<String>> {
     let Some(root) = workspace_root() else {
@@ -136,7 +136,7 @@ pub(crate) fn check_native_identity() -> Result<(), Vec<String>> {
 /// A cache entry says *this module checked cleanly under these inputs*. If an input stops
 /// reaching the key, the entry is found for a compilation that should not have found it,
 /// and the compiler accepts a program it would otherwise refuse — silently, reproducibly,
-/// and with an explanation that sounds right. `docs/architecture.md` §3 names it as the
+/// and with an explanation that sounds right. `docs/internal/architecture.md` §3 names it as the
 /// failure mode; this is the part of it a file read can see.
 ///
 /// Three rules, each a thing no test can notice until the day it is wrong:

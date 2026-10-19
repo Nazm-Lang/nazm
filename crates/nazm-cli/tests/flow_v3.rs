@@ -1,6 +1,6 @@
 //! N80: provenance v3 — container cells, indirect targets, local shapes, one policy engine.
 //!
-//! `docs/architecture.md` §7.81. What the commands show, each in both directions: a container
+//! `docs/internal/architecture.md` §7.81. What the commands show, each in both directions: a container
 //! carries what any container of its type was given, and nothing from another type; a receive
 //! and a select move a channel's cell, and a select's index carries nothing; generic code is the
 //! wild cell; a call through a function value or a bound carries what its candidates return, and

@@ -13,7 +13,7 @@
 //!
 //! # What is deliberately **not** in it, and why
 //!
-//! An omission is the failure mode: `docs/architecture.md` §3 has said since before there
+//! An omission is the failure mode: `docs/internal/architecture.md` §3 has said since before there
 //! was a compiler that anything left out of a cache key is a silent miscompile waiting to
 //! happen. Each of these was checked against the implementation rather than assumed.
 //!
@@ -21,7 +21,7 @@
 //! | --- | --- |
 //! | target triple, CPU features, ABI | `crates/nazm-core/src/check/` mentions none of them. `Int` is 64-bit in every configuration and no rule consults the host. **A codegen key is a different key and will need all of them** |
 //! | optimisation level, backend | `nazm build`'s subset refusals live in `nazm-lir`, after checking, and are not cached |
-//! | `--max-iterations`, `--max-depth` | interpreter budgets. `docs/spec.md` places them in the interpreter rather than in the language |
+//! | `--max-iterations`, `--max-depth` | interpreter budgets. `docs/user/spec.md` places them in the interpreter rather than in the language |
 //! | the source root, the checkout directory, the working directory | they decide what a [`ModuleKey`] *is*; once it exists they are gone, which is what lets two checkouts share an entry |
 //! | the cache's own location | a store holds entries; it does not name them |
 //! | whether the compilation is a program | `N0204` is a fact about a *compilation*, not about a module, and it is recomputed from declarations every run — never cached, never skipped |

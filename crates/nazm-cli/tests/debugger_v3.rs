@@ -1,6 +1,6 @@
 //! N91: debugger and profiler v3 — lexical scopes, Cranelift's debug information, and sampling.
 //!
-//! `docs/architecture.md` §7.92. What a real debugger and a real sampler show of a Nazm program:
+//! `docs/internal/architecture.md` §7.92. What a real debugger and a real sampler show of a Nazm program:
 //! a binding visible only in its own block (LLVM); a Cranelift build's functions and lines found
 //! by `lldb` — and, in the `nazm-debug` image, a live `gdb` session on either backend's build;
 //! a sampled run's samples attributed to Nazm functions and `.nz` lines by macOS's `sample`.
@@ -393,10 +393,10 @@ fn a_live_session_on_either_backend_shows_nazm_frames_and_lines() {
     assert!(clif.contains("No locals."), "{clif}");
 }
 
-/// For `docs/performance.md` (N91): a sampled run's wall time against the same executable alone,
+/// For `docs/internal/performance-log.md` (N91): a sampled run's wall time against the same executable alone,
 /// at two intervals, and a Cranelift build with and without `--debug`. Medians of seven and five.
 #[test]
-#[ignore = "a measurement, for docs/performance.md; run with --ignored --nocapture"]
+#[ignore = "a measurement, for docs/internal/performance-log.md; run with --ignored --nocapture"]
 fn what_debugging_and_sampling_cost() {
     if !Path::new("/usr/bin/sample").is_file() {
         eprintln!("SKIP: no sampler on this machine");

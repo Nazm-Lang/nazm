@@ -1,4 +1,4 @@
-// Gate 2: package features (`docs/spec.md`, *Package features*). Each package sees its own enabled
+// Gate 2: package features (`docs/user/spec.md`, *Package features*). Each package sees its own enabled
 // set in every implementation; a feature nobody declares is refused before anything is checked; the
 // lockfile records the enabled sets, and one with no feature anywhere stays `nazm.lock/1`. Ported
 // from `crates/nazm-cli/tests/features.rs` (R7).

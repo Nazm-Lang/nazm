@@ -1,4 +1,4 @@
-# The Wine image for the Windows target (Gate 3, docs/systems-domains.md Part A-W):
+# The Wine image for the Windows target (Gate 3, docs/internal/systems-domains.md Part A-W):
 #
 #   docker build --platform linux/amd64 -t nazm-wine:g3 -f docker/wine.Dockerfile docker
 #

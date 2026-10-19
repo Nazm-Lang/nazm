@@ -1,4 +1,4 @@
-//! Attributes and conditional compilation (Gate 2, `docs/spec.md`, *Attributes* and *Conditional
+//! Attributes and conditional compilation (Gate 2, `docs/user/spec.md`, *Attributes* and *Conditional
 //! compilation*): the closed vocabulary held, and every declaration whose `@cfg` does not hold for
 //! the build dropped before anything resolves a name.
 //!
@@ -256,7 +256,7 @@ fn admitted(
                     ));
                 }
             }
-            // Metadata-only (G2-C1, `docs/spec.md`, *Attributes*): no diagnostic marks a use,
+            // Metadata-only (G2-C1, `docs/user/spec.md`, *Attributes*): no diagnostic marks a use,
             // and `nazm doc` publishes it. So it marks only what `nazm doc` publishes — a `pub`
             // function, `struct` or `enum` — and anywhere else it would be inert, which is refused.
             "deprecated" => {
@@ -286,7 +286,7 @@ fn admitted(
                     )),
                 }
             }
-            // A board's periodic task (Gate 3, `docs/spec.md`, *Boards*): a function, its priority
+            // A board's periodic task (Gate 3, `docs/user/spec.md`, *Boards*): a function, its priority
             // (0–255) and its period in board-timer ticks (at least 1), both written.
             "task" => {
                 if target != Target::Function {
@@ -306,7 +306,7 @@ fn admitted(
                     ));
                 }
             }
-            // A board's failure hook (Gate 3, `docs/spec.md`, *Boards*): a function, no arguments.
+            // A board's failure hook (Gate 3, `docs/user/spec.md`, *Boards*): a function, no arguments.
             "on_failure" => {
                 if target != Target::Function {
                     errors.push(refuse(
@@ -326,7 +326,7 @@ fn admitted(
                     ));
                 }
             }
-            // A board's interrupt handler (Gate 3, `docs/spec.md`, *Boards*): a function, by the
+            // A board's interrupt handler (Gate 3, `docs/user/spec.md`, *Boards*): a function, by the
             // name the manifest gives the interrupt. Its shape is `handler`'s to hold.
             "interrupt" => {
                 if target != Target::Function {
@@ -350,7 +350,7 @@ fn admitted(
                     )),
                 }
             }
-            // Placement in a board's image (Gate 3, `docs/spec.md`, *Boards*): code or storage
+            // Placement in a board's image (Gate 3, `docs/user/spec.md`, *Boards*): code or storage
             // only — a constant has no address — under a name a linker script can write.
             "section" => {
                 if !matches!(target, Target::Function | Target::Static) {

@@ -1,4 +1,4 @@
-//! R1c, S1: `@std/toml` (`docs/spec.md`, *The standard library*).
+//! R1c, S1: `@std/toml` (`docs/user/spec.md`, *The standard library*).
 //!
 //! A document using every TOML 1.0 form — strings of all four kinds with escapes and a
 //! line-ending backslash, dotted and quoted keys, inline tables, nested arrays, every integer and

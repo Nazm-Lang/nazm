@@ -1,4 +1,4 @@
-//! R1e, S4: `@std/args` (`docs/spec.md`, *The standard library*).
+//! R1e, S4: `@std/args` (`docs/user/spec.md`, *The standard library*).
 //!
 //! One specification shaped like a toolchain's — global flags, sub-commands nested two deep,
 //! options with defaults, a required option, repeated options, a conflict, required, optional and

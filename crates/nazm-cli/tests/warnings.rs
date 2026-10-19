@@ -1,4 +1,4 @@
-//! R1b, L15: a warning severity (`docs/spec.md`, *Patterns*; `docs/diagnostics.md`).
+//! R1b, L15: a warning severity (`docs/user/spec.md`, *Patterns*; `docs/user/diagnostics.md`).
 //!
 //! A `_` or a name in a `match` of an enum that covers variants no arm names is a warning,
 //! `N0632`: the program is accepted, `nazm check` and `nazm build` report it, and

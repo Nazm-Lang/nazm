@@ -1,7 +1,7 @@
 // `@std/tls`: TLS over a TCP socket, client and server, verification always on (v1 track C, C1).
 //
 // Imported with `use "@std/tls";` beside `use "@std/ioerror";` and `use "@std/net";`. The engine is
-// a runtime part (`docs/spec.md`, *TLS*): it works on buffers, and this module moves the bytes
+// a runtime part (`docs/user/spec.md`, *TLS*): it works on buffers, and this module moves the bytes
 // through the socket with the parking `os_read` and `os_write`, so a wait for the peer parks the
 // task and never holds a worker. A client always verifies the server's chain and name — against
 // the platform's trust store, or only the anchors it names — and nothing here turns that off. TLS
@@ -38,7 +38,7 @@ pub enum TlsError {
     Closed,
 }
 
-// The runtime's statuses (`docs/spec.md`, *TLS*), and this module's own for a truncated stream.
+// The runtime's statuses (`docs/user/spec.md`, *TLS*), and this module's own for a truncated stream.
 fn want() -> Int ! {} { 0 - 65600 }
 fn truncated() -> Int ! {} { 0 - 65606 }
 

@@ -34,4 +34,4 @@
 --index --root absent
 --section spec --root absent
 --index --root docs
---index --root docs/spec.md
+--index --root docs/user/spec.md

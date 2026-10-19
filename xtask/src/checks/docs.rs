@@ -35,7 +35,7 @@ pub(crate) fn check_docs_corpus() -> Result<(), Vec<String>> {
 ///
 /// Named "doc claims", which over-promises: both checks below concern whether the
 /// evaluation protocol's pre-registration status is stated consistently, and both are
-/// no-ops while `docs/research/evaluation-preregistration.md` does not exist. A reader seeing
+/// no-ops while `docs/internal/research/evaluation-preregistration.md` does not exist. A reader seeing
 /// `ok doc claims` should not take it for more than that.
 ///
 /// The language's documented claims are checked by `crates/nazm-cli/tests/docs.rs`,
@@ -49,7 +49,7 @@ pub(crate) fn check_doc_claims() -> Result<(), Vec<String>> {
     };
 
     let mut problems = Vec::new();
-    let prereg = root.join("docs/research/evaluation-preregistration.md");
+    let prereg = root.join("docs/internal/research/evaluation-preregistration.md");
     let readme = match std::fs::read_to_string(root.join("README.md")) {
         Ok(s) => s,
         Err(e) => return Err(vec![format!("could not read README.md: {e}")]),
@@ -60,24 +60,26 @@ pub(crate) fn check_doc_claims() -> Result<(), Vec<String>> {
 
     if prereg.exists() && readme_says_not_registered {
         problems.push(
-            "docs/research/evaluation-preregistration.md exists, but README.md still says the \
+            "docs/internal/research/evaluation-preregistration.md exists, but README.md still says the \
              decision rule is not pre-registered. One of them is wrong."
                 .to_owned(),
         );
     }
 
     // The reverse: the evaluation protocol must keep its own status honest.
-    match std::fs::read_to_string(root.join("docs/research/evaluation.md")) {
+    match std::fs::read_to_string(root.join("docs/internal/research/evaluation.md")) {
         Ok(eval) => {
             if prereg.exists() && eval.contains("Not yet pre-registered") {
                 problems.push(
-                    "docs/research/evaluation.md still carries its draft banner although a \
+                    "docs/internal/research/evaluation.md still carries its draft banner although a \
                      pre-registration exists."
                         .to_owned(),
                 );
             }
         }
-        Err(e) => problems.push(format!("could not read docs/research/evaluation.md: {e}")),
+        Err(e) => problems.push(format!(
+            "could not read docs/internal/research/evaluation.md: {e}"
+        )),
     }
 
     // The claim that rotted in four places at once. `crates/nazm-lir` is an IR crate and
@@ -89,10 +91,10 @@ pub(crate) fn check_doc_claims() -> Result<(), Vec<String>> {
         for doc in [
             "README.md",
             "Cargo.toml",
-            "docs/architecture.md",
-            "docs/roadmap.md",
-            "docs/master-architecture.md",
-            "docs/capability-matrix.md",
+            "docs/internal/architecture.md",
+            "docs/user/roadmap.md",
+            "docs/internal/master-architecture.md",
+            "docs/internal/capability-matrix.md",
         ] {
             let Ok(text) = std::fs::read_to_string(root.join(doc)) else {
                 problems.push(format!("could not read {doc}"));
@@ -300,11 +302,11 @@ pub(crate) fn check_capability_matrix() -> Result<(), Vec<String>> {
         return Err(vec!["could not locate workspace root".to_owned()]);
     };
 
-    let text = match std::fs::read_to_string(root.join("docs/capability-matrix.md")) {
+    let text = match std::fs::read_to_string(root.join("docs/internal/capability-matrix.md")) {
         Ok(s) => s,
         Err(e) => {
             return Err(vec![format!(
-                "could not read docs/capability-matrix.md: {e}"
+                "could not read docs/internal/capability-matrix.md: {e}"
             )])
         }
     };
@@ -314,7 +316,7 @@ pub(crate) fn check_capability_matrix() -> Result<(), Vec<String>> {
         for path in cited_paths(line) {
             if !root.join(path).exists() {
                 problems.push(format!(
-                    "docs/capability-matrix.md:{} cites `{path}`, which does not exist",
+                    "docs/internal/capability-matrix.md:{} cites `{path}`, which does not exist",
                     n + 1
                 ));
             }
@@ -340,8 +342,8 @@ mod tests {
     #[test]
     fn a_path_is_cited_only_when_it_is_rooted_in_the_repository() {
         assert_eq!(
-            cited_paths("see `crates/nazm-lir/src/ir.rs` and `docs/spec.md`"),
-            ["crates/nazm-lir/src/ir.rs", "docs/spec.md"]
+            cited_paths("see `crates/nazm-lir/src/ir.rs` and `docs/user/spec.md`"),
+            ["crates/nazm-lir/src/ir.rs", "docs/user/spec.md"]
         );
         // Prose in backticks is not a path, which is the whole reason for the anchor list.
         assert!(cited_paths("`N0101`, `nazm build`, `Ints`, `let mut`").is_empty());
@@ -352,7 +354,10 @@ mod tests {
 
     #[test]
     fn a_line_reference_is_not_part_of_the_path() {
-        assert_eq!(cited_paths("`docs/spec.md:761-822`"), ["docs/spec.md"]);
+        assert_eq!(
+            cited_paths("`docs/user/spec.md:761-822`"),
+            ["docs/user/spec.md"]
+        );
         assert_eq!(
             cited_paths("`xtask/src/main.rs:292`"),
             ["xtask/src/main.rs"]
@@ -381,7 +386,7 @@ mod tests {
 
     #[test]
     fn a_sections_evidence_does_not_leak_into_the_next() {
-        let text = "### A — VERIFIED\n\n`docs/spec.md`\n\n### B — VERIFIED\n\nnothing\n";
+        let text = "### A — VERIFIED\n\n`docs/user/spec.md`\n\n### B — VERIFIED\n\nnothing\n";
         assert_eq!(verified_without_evidence(text), ["B — VERIFIED"]);
     }
 

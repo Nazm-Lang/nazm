@@ -1,5 +1,5 @@
 #!/bin/bash
-# Nazm's tasks against every installed language's concurrency model (docs/performance.md,
+# Nazm's tasks against every installed language's concurrency model (docs/internal/performance-log.md,
 # *Concurrency against every installed language*). The programs are bench/compare/<lang>/{spawn,
 # pingpong,fanin,idle,httpd}.<ext> (Go and Nazm's are the 6.1 pair; Java's are Spawn.java ...) and each
 # language's existing primes (the parallel job):

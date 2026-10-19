@@ -7,12 +7,12 @@
 //! has exactly the two the implementation can justify:
 //!
 //! - [`Effect::Io`] — the outside world: the process's arguments, files, standard output
-//!   and error, and ending the process. The eight built-ins `docs/spec.md` lists under
+//!   and error, and ending the process. The eight built-ins `docs/user/spec.md` lists under
 //!   *What the outside-world built-ins do and do not promise*, and nothing else.
 //! - [`Effect::Spawn`] — starting a task: the `spawn` statement.
 //!
 //! Allocation, mutation of a sequence, channel operations, a trap and a `Result` are not
-//! effects here; `docs/spec.md`, *Effects*, says why each is not.
+//! effects here; `docs/user/spec.md`, *Effects*, says why each is not.
 //!
 //! # Identity
 //!

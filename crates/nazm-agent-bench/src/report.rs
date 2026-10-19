@@ -627,7 +627,7 @@ fn conclusion_name(c: Conclusion) -> &'static str {
     }
 }
 
-/// The report as Markdown tables, for `docs/performance.md`.
+/// The report as Markdown tables, for `docs/internal/performance-log.md`.
 #[must_use]
 pub fn markdown(r: &Report) -> String {
     use std::fmt::Write as _;

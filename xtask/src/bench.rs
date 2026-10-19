@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 
-/// The version every `bench/*.json` carries. See `docs/performance.md`.
+/// The version every `bench/*.json` carries. See `docs/internal/performance-log.md`.
 const SCHEMA: &str = "nazm.bench/2";
 
 /// How far a median may move before `--check` calls it a change.
@@ -323,7 +323,7 @@ pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
 
     // Before any timing: both implementations must produce the recorded answer.
     //
-    // `docs/performance.md` rule 6 asks for equivalent work and results to be
+    // `docs/internal/performance-log.md` rule 6 asks for equivalent work and results to be
     // verified rather than assumed, and this is the failure it is guarding against — a
     // benchmark whose compiled form was folded away, or whose two implementations
     // quietly disagree, still produces a number, and the number is the thing people
@@ -458,7 +458,7 @@ pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
         .collect();
 
     // Peak memory, once per command rather than repeatedly: it varies far less than
-    // time does, and `docs/performance.md` rule 2 asks for it separately from
+    // time does, and `docs/internal/performance-log.md` rule 2 asks for it separately from
     // speed because they are separate questions.
     let mut memory = Vec::new();
     for path in &programs {

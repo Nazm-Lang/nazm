@@ -1,4 +1,4 @@
-//! Files and handles (Gate 2, `docs/spec.md`, *Files and handles*): the `os_` built-ins' entries,
+//! Files and handles (Gate 2, `docs/user/spec.md`, *Files and handles*): the `os_` built-ins' entries,
 //! as target-independent LLVM text over the per-target unit `crate::platform::emit_os` defines.
 //!
 //! # The handle table
@@ -1026,7 +1026,7 @@ none:
 @.nz.empty = private unnamed_addr constant [1 x i8] c"\00"
 "#;
 
-/// The file system, further (R1d, `docs/spec.md`, *The platform, further*): a path's own facts, its
+/// The file system, further (R1d, `docs/user/spec.md`, *The platform, further*): a path's own facts, its
 /// permissions, its canonical form, a new private directory, and advisory whole-file locks, over the
 /// per-target unit's `nz_os_lstat`, `nz_os_chmod`, `nz_os_realpath` and `nz_os_flock` — which WASI's
 /// unit answers with `path_filestat_get` and, for the three it has not got, ENOSYS, as it answers

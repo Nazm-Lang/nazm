@@ -1,7 +1,7 @@
 //! N58: debugger and profiler v2 — variables, a live session, and the runtime's counters as a
 //! profile.
 //!
-//! `docs/architecture.md` §7.60. The live session needs a debugger allowed to trace a process,
+//! `docs/internal/architecture.md` §7.60. The live session needs a debugger allowed to trace a process,
 //! which this host's developer mode does not grant a non-interactive run; it is the ignored test
 //! below, run in the `nazm-debug` image (the gate's image plus gdb) with `--ignored`.
 

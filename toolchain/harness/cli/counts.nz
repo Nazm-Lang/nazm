@@ -11,10 +11,10 @@ use "../lib/scratch.nz"
 use "../lib/tree.nz"
 use "../lib/differential.nz"
 
-/// Every frozen release report under `docs/releases/`, sorted.
+/// Every frozen release report under `docs/internal/releases/`, sorted.
 fn release_reports(h: Caps) -> Result[Strs, Str] ! { io } {
     let io = h.io;
-    let dir = f"{repo_root(h)}/docs/releases";
+    let dir = f"{repo_root(h)}/docs/internal/releases";
     let names = match dir_list(io, dir) {
         Result.Ok(value: ns) => ns,
         Result.Err(error: e) => { return Result[Strs, Str].Err(error: f"{dir}: {rust_io_error(e)}"); },

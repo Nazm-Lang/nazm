@@ -10,7 +10,7 @@ impl Checker<'_> {
     ///
     /// The scrutinee is checked once, each arm's pattern against its type and its body with
     /// the pattern's bindings, and exhaustiveness and reachability are decided here rather
-    /// than deferred: `docs/spec.md` gives the checker the language's meaning, and a `match`
+    /// than deferred: `docs/user/spec.md` gives the checker the language's meaning, and a `match`
     /// whose coverage were settled at lowering would have two answers to one question.
     pub(super) fn check_match(
         &mut self,
@@ -44,7 +44,7 @@ impl Checker<'_> {
         // Whether some pattern named a variant this enum does not have, or another enum's, or
         // was otherwise refused: coverage is not reported then — the checker does not know
         // what the author meant, so "does not cover `B`" would be a second diagnostic about
-        // the one mistake already reported. `docs/spec.md`, *One mistake, one error*.
+        // the one mistake already reported. `docs/user/spec.md`, *One mistake, one error*.
         let mut unresolved = false;
         let mut rows: Vec<Vec<usefulness::Pat>> = Vec::new();
         // Which arm each row is: a guarded arm adds none (R1, 5b.17).
@@ -71,14 +71,14 @@ impl Checker<'_> {
             let pat = self.check_pattern(&arm.pattern, sty, scrutinee, &mut binds, &mut aliases);
             if self.errors.len() > before {
                 // The pattern is the mistake: its arm's body would only repeat it, naming
-                // bindings that were never made (`docs/spec.md`, *One mistake, one error*).
+                // bindings that were never made (`docs/user/spec.md`, *One mistake, one error*).
                 unresolved = true;
                 self.close_scope();
                 continue;
             }
             // Bindings, each immutable: a borrowed view of what the scrutinee holds. That is
             // a statement about the *name* — a binding that names a sequence still reaches
-            // shared mutable storage, which `docs/spec.md` says in as many words.
+            // shared mutable storage, which `docs/user/spec.md` says in as many words.
             let mut slots: Vec<(String, u32)> = Vec::new();
             for (name, at, ty) in &binds {
                 if self.scopes.bound_in_frame(name) {
@@ -222,7 +222,7 @@ impl Checker<'_> {
 
     /// `N0632`, a warning (R1b, L15): a `match` on an enum whose `_`, or bare name, covers
     /// variants no arm names — so a variant added to the enum later is covered too, and the
-    /// change that should have been reported at every `match` is reported at none. `docs/spec.md`,
+    /// change that should have been reported at every `match` is reported at none. `docs/user/spec.md`,
     /// *Patterns*, which kept this voice when it admitted `_` (L3).
     fn warn_covering(&mut self, sty: Type, arms: &[MatchArm]) {
         let Type::Enum(id) = sty else { return };
@@ -699,7 +699,7 @@ impl Checker<'_> {
                 },
             );
             // `_` names nothing. The field is still resolved above, because it still exists
-            // and is still released with the value — `docs/spec.md` is explicit that a
+            // and is still released with the value — `docs/user/spec.md` is explicit that a
             // discard declines to name a payload rather than forgetting it.
             let sub = self.check_pattern(&f.pattern, fty, scrutinee, binds, aliases);
             if let Some(slot) = args.get_mut(index as usize) {
@@ -762,7 +762,7 @@ impl Checker<'_> {
     /// Exactly the operand's. The `Err` path leaves the function, which is a `return`, and
     /// a `return` inside an expression is already how a value position can transfer; the
     /// path that stays is `Value(T)`. So `?` needs no completion of its own, and
-    /// `docs/spec.md` says why that is the point.
+    /// `docs/user/spec.md` says why that is the point.
     pub(super) fn check_propagate(
         &mut self,
         operand: &Expr,
@@ -1004,7 +1004,7 @@ impl Checker<'_> {
     ///
     /// Field lookup begins at the base's **resolved type** and goes no further: there is
     /// no global field namespace, so a name that is a field of some other record is not a
-    /// field of this one. `docs/spec.md`, *Field resolution starts from the type*.
+    /// field of this one. `docs/user/spec.md`, *Field resolution starts from the type*.
     pub(super) fn check_projection(
         &mut self,
         base_ty: Type,
@@ -1039,7 +1039,7 @@ impl Checker<'_> {
             let shown = self.show(base_ty);
             let help = if base_ty.is_enum() {
                 // An enum's payload depends on its active variant, so there is nothing a
-                // projection could mean. `docs/spec.md` gives `match` as the one
+                // projection could mean. `docs/user/spec.md` gives `match` as the one
                 // elimination form, and saying so is more use than "not a record".
                 "which fields an enum value has depends on its active variant, so a \
                  payload is read by `match` and not by `.`"

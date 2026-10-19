@@ -1,6 +1,6 @@
 //! N93: the coverage-guided fuzzer's persistent corpus, replayed by the ordinary suite.
 //!
-//! `docs/architecture.md` §7.94. `fuzz/corpus/TARGET/` holds the minimised inputs a contained
+//! `docs/internal/architecture.md` §7.94. `fuzz/corpus/TARGET/` holds the minimised inputs a contained
 //! campaign kept — together they reach every edge it reached — and each regression a finding left.
 //! Every one is run here through the target's entry point, exactly as the fuzzer runs it: none may
 //! panic, and MIR lowered from any program the checker accepts must verify.

@@ -207,7 +207,7 @@ fn a_program_with_tasks_is_refused_and_not_answered(io: IoCap, p: ProcessCap, sp
 @test
 fn a_remainder_never_divides_by_minus_one(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
-    // `Int::MIN % -1` is 0 (`docs/spec.md`), and the machine faults on that one pair on some
+    // `Int::MIN % -1` is 0 (`docs/user/spec.md`), and the machine faults on that one pair on some
     // targets and not on others (AArch64 does not), so no program's output on this host can say
     // whether the lowering kept the guard. The LIR can: the divisor is a select between 1 and the
     // operand, never the operand twice.

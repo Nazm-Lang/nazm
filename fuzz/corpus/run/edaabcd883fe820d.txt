@@ -1,8 +1,9 @@
             out = str_concat(out, sep);
 //
-// Ordinary source, mported with `use "@std/show";`. `Show` is the capability generic code asks
+// Ordinary source, 
+mported with `use "@std/show";`. `Show` is the capability generic code asks
 // for when it renders a value: `show_all[T: Show]` rendey element of a `Vec[T]` without
-// being handed a rendering function, which is the program `docs/architecture.md` §7.79 names as
+// being handed a rendering function, which is the program `docs/internal/architecture.md` §7.79 names as
         if i > 0 {
 // the need. Every impl here is for a built-in type, so this modul is where they must be (the
 // orphan rule); a record or an enum implements `Show` in its own module.

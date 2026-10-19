@@ -1,6 +1,6 @@
 //! The representation itself.
 //!
-//! `docs/architecture.md` §7.41 is the law this file follows; each rule below is stated there
+//! `docs/internal/architecture.md` §7.41 is the law this file follows; each rule below is stated there
 //! first. The short version: every value is typed by what the checker established, every name
 //! is an identity, every transfer of control names what it leaves, and nothing here says how
 //! the source was written or how a backend will lay it out.
@@ -329,7 +329,7 @@ impl Temp {
 pub enum Const {
     Int(i64),
     Bool(bool),
-    /// Bytes: `docs/spec.md` makes a `Str` a byte sequence.
+    /// Bytes: `docs/user/spec.md` makes a `Str` a byte sequence.
     Str(Vec<u8>),
     /// A value of a numeric type other than `Int` (Gate 2), as its canonical bits
     /// ([`nazm_sema::numeric::NumVal`]).

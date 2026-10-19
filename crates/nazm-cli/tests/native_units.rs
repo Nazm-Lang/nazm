@@ -685,7 +685,7 @@ fn a_backend_refusal_inside_an_imported_module_names_that_module() {
     );
 
     // The machine form identifies it by an offset into the concatenation of every file in
-    // load order — `docs/diagnostics.md` fixes that shape, and a `file` field would be a
+    // load order — `docs/user/diagnostics.md` fixes that shape, and a `file` field would be a
     // schema version rather than a side effect of moving emission. What N5 must not break
     // is that the offset lands in the right file, so that is what this asserts.
     let json = Command::new(NAZM)

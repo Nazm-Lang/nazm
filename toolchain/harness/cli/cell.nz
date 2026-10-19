@@ -1,4 +1,4 @@
-// R1b: a mutable cell, `Cell[T]` (`docs/spec.md`, *A mutable cell*). Ported from
+// R1b: a mutable cell, `Cell[T]` (`docs/user/spec.md`, *A mutable cell*). Ported from
 // `crates/nazm-cli/tests/cell.rs` (R7).
 //
 // One value that can be replaced, reached through a handle, so a callee's change is its caller's.

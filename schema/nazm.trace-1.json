@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nazm.trace-1.json",
   "title": "nazm.trace/1",
-  "description": "Requirements traced to what verifies them (Gate 3, `docs/systems-domains.md` Part S): each requirement of a `requirements.toml` to the definitions it constrains — by durable identity (`DefKey`) and Core IR semantic digest, with their obligations from the census — and to the `@test` functions it names, run. A link that does not hold is in `broken`, by name, and the command fails. Written by `nazm trace` as one line. Compiler evidence for a reviewer, not certification.",
+  "description": "Requirements traced to what verifies them (Gate 3, `docs/internal/systems-domains.md` Part S): each requirement of a `requirements.toml` to the definitions it constrains — by durable identity (`DefKey`) and Core IR semantic digest, with their obligations from the census — and to the `@test` functions it names, run. A link that does not hold is in `broken`, by name, and the command fails. Written by `nazm trace` as one line. Compiler evidence for a reviewer, not certification.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "file", "requirements", "status", "broken", "evidence"],

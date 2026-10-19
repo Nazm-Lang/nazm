@@ -1,4 +1,4 @@
-//! Networking (Gate 2, `docs/spec.md`, *Networking*): the socket entries and the reactor, as
+//! Networking (Gate 2, `docs/user/spec.md`, *Networking*): the socket entries and the reactor, as
 //! target-independent LLVM text over the handle table (`crate::files`) and the per-target unit's
 //! `nz_net_*` (`crate::platform`).
 //!
@@ -816,7 +816,7 @@ ask:
 }
 "#;
 
-/// Child processes (Gate 2, `docs/spec.md`, *Process and environment*): `posix_spawnp` with three
+/// Child processes (Gate 2, `docs/user/spec.md`, *Process and environment*): `posix_spawnp` with three
 /// pipes whose parent ends are non-blocking handles that wait as sockets do. A child's handle is
 /// keyed by a descriptor it holds on `/dev/null` and names a record — its process reference (0),
 /// its status once waited for (8, -1 before), its three pipes' handles (16, 24, 32), and (R1d) its
@@ -824,7 +824,7 @@ ask:
 /// ignores `SIGPIPE` from then on, as the interpreter's host always does, so writing to a child that
 /// has gone is `BrokenPipe` and never a signal.
 ///
-/// R1d (`docs/spec.md`, *The platform, further*) adds a child's directory and environment — the
+/// R1d (`docs/user/spec.md`, *The platform, further*) adds a child's directory and environment — the
 /// environment ordered by name, so every implementation hands a child the same one — a new process
 /// group and a null standard input, bounded waits that look again at most every 10 ms, a signal to
 /// a group, and this process's id.

@@ -3,7 +3,7 @@
 //! The holdout set is the part worth encoding in types rather than documenting. Hiding
 //! acceptance tests from the agent is necessary but not sufficient: if the language, its
 //! diagnostics, and its wrappers are tuned against the same tasks for a year, the final
-//! benchmark rewards specialisation to that set. `docs/research/evaluation.md` §3 therefore splits
+//! benchmark rewards specialisation to that set. `docs/internal/research/evaluation.md` §3 therefore splits
 //! tasks three ways and gates the holdout behind an implementation freeze.
 //!
 //! # What [`Freeze`] does and does not do
@@ -23,7 +23,7 @@
 //! **Real isolation for the gate run requires the holdout corpus to live outside the
 //! agent's accessible environment entirely** — a separate host or credential-gated store,
 //! fetched by the harness after the freeze and never mounted where the agent can reach it.
-//! That is an operational requirement recorded in `docs/research/evaluation.md` §3, not something
+//! That is an operational requirement recorded in `docs/internal/research/evaluation.md` §3, not something
 //! this module can enforce.
 
 use std::fmt;
@@ -210,7 +210,7 @@ pub enum FreezeError {
 pub enum AccessError {
     #[error(
         "task {id} is in the holdout set and cannot be opened before the implementation \
-         freeze (docs/research/evaluation.md §3)"
+         freeze (docs/internal/research/evaluation.md §3)"
     )]
     HoldoutBeforeFreeze { id: String },
 }
@@ -276,7 +276,7 @@ impl TaskSpec {
     }
 }
 
-/// The task families from `docs/research/evaluation.md` §3. Each is instantiated into several
+/// The task families from `docs/internal/research/evaluation.md` §3. Each is instantiated into several
 /// concrete tasks; the family is what per-category results are grouped by, and the gate's
 /// "no category collapse" condition is checked against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

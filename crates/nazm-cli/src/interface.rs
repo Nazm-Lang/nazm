@@ -3,7 +3,7 @@
 //! # What it is for
 //!
 //! A module is checked against its dependencies' *interfaces* rather than their bodies
-//! (`docs/spec.md`). This is the command that makes that a fact about files rather than a
+//! (`docs/user/spec.md`). This is the command that makes that a fact about files rather than a
 //! fact about one process: it takes a module, and writes what that module offers in a
 //! form another run can read.
 //!

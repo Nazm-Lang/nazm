@@ -3,13 +3,13 @@
 What the rewrite needs and the language lacks (survey of 2026-10-11, `rewrite-in-nazm/design.md`):
 
 - **Trees.** `N0359` refuses every definition that reaches itself through what it owns
-  (`docs/spec.md`, *Generics* — *What may not be expressed: an ownership cycle*; *The memory
+  (`docs/user/spec.md`, *Generics* — *What may not be expressed: an ownership cycle*; *The memory
   constitution* — *Cycles*). The reason is sound: a `Vec` is a shared **mutable** handle, so a
   `Node` could be pushed into its own `children`, and counting would never reclaim it. The cost is
   that the compiler written in Nazm keeps ~45 parallel arrays in one table (`compiler/analyse.nz`),
   and `@std/json` is an index arena.
 - **Strings.** `str_concat` allocates and copies (*What this costs*); a loop that grows a string is
-  quadratic, and the self-hosted stages' memory history (`docs/bootstrap.md`) is partly this.
+  quadratic, and the self-hosted stages' memory history (`docs/internal/bootstrap.md`) is partly this.
 - **Loops.** Only `while`; every traversal is an index and a `vec_len` written out.
 - **Library.** `@std/hash` is FNV-1a, not cryptographic; no TOML; `dir_list` but no walk; no handle
   for standard output; `os_spawn` takes the process's environment and directory (*Processes*);
@@ -19,7 +19,7 @@ What the rewrite needs and the language lacks (survey of 2026-10-11, `rewrite-in
 
 ## Goals / Non-Goals
 
-**Goals:** each addition is a 1.x-compatible extension (`docs/stability.md`: new syntax that was
+**Goals:** each addition is a 1.x-compatible extension (`docs/user/stability.md`: new syntax that was
 refused before, new built-ins and library items); the reclamation claim of *Cycles* — every value
 of every type a program can write is reclaimed by counting — stays true; each addition is specified
 before it is built, and built in the interpreter, both native backends (until cut-over) and the
@@ -193,7 +193,7 @@ it. A Nazm function now returns whether it failed beside its result — a regist
 x86_64 — and its Nazm callers branch on that; the flag is still set by `nz.fail` and still read by
 everything that calls a Nazm function from outside (the platform entry, a task's trampoline, an
 export's C entry), so the runtime does not change. A function the platform calls by its symbol keeps
-it as a plain entry with its old signature (`docs/architecture.md` §7.106, *The failure bit*). Alone,
+it as a plain entry with its old signature (`docs/internal/architecture.md` §7.106, *The failure bit*). Alone,
 the bit cost time under clang, which merged the success and failure returns into one block the
 success path jumped to; branch weights that mark the failure paths cold put the return back in line
 (66.8 → 55.4 ms). The second option — a stack check on alternate levels of a self-recursive

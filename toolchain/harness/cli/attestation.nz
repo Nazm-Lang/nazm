@@ -1,5 +1,5 @@
 // N94: reproducibility v2 — the model's first two claims, an SBOM, and signed statements
-// (`docs/architecture.md` §7.95). Ported from `crates/nazm-cli/tests/attestation.rs` (R7).
+// (`docs/internal/architecture.md` §7.95). Ported from `crates/nazm-cli/tests/attestation.rs` (R7).
 //
 // Identical input gives identical artefacts, and so does the same input in another directory,
 // under either backend; the SBOM lists the build's packages, sources and runtime with their

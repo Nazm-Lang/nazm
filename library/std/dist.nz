@@ -13,7 +13,7 @@
 //   twice;
 // - failure as a `Result`, never a crash.
 //
-// `docs/systems-domains.md` Part N.
+// `docs/internal/systems-domains.md` Part N.
 
 use "@std/binary";
 use "@std/ioerror";

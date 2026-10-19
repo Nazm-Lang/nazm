@@ -1,4 +1,4 @@
-//! R1b, L13a: checked arithmetic (`docs/spec.md`, *Numbers*, **Functions**).
+//! R1b, L13a: checked arithmetic (`docs/user/spec.md`, *Numbers*, **Functions**).
 //!
 //! `checked_add`, `checked_sub` and `checked_mul` give `Some` of the exact result, or `None` where
 //! it does not fit its type. The tests ask every implementation for the edges — each bound, `-1`

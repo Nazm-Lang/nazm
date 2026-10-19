@@ -1,6 +1,6 @@
 //! The Nazm backend: each unit's LIR, printed, compiled by Nazm's own code generator.
 //!
-//! `docs/architecture.md` §7.43 is its constitution, and `openspec/changes/r9-code-generator/`
+//! `docs/internal/architecture.md` §7.43 is its constitution, and `openspec/changes/r9-code-generator/`
 //! (decision D15) its design. The generator, `nzcg`, is a program written in Nazm
 //! (`toolchain/codegen/`); this crate has no code generation of its own. Per unit it lowers and
 //! validates the LIR exactly as the Cranelift backend does, prints it as `nazm lir --ops` does,

@@ -1,4 +1,4 @@
-//! Gate 3: atomics (`docs/spec.md`, *Atomics*; `docs/systems-domains.md` Part B).
+//! Gate 3: atomics (`docs/user/spec.md`, *Atomics*; `docs/internal/systems-domains.md` Part B).
 //!
 //! What only a whole run shows: that an `Atomic` is one cell every copy and every task reaches,
 //! that its operations mean the same in the interpreter and in both native backends at both
@@ -118,7 +118,7 @@ fn every_operation_answers_as_specified() {
 
 #[test]
 fn an_atomic_is_no_string_in_the_memory_report_on_any_tier() {
-    // `docs/spec.md` (*Strings*): the interpreter and a compiled program allocate the same
+    // `docs/user/spec.md` (*Strings*): the interpreter and a compiled program allocate the same
     // strings, and `atomic_new` allocates none. Until runtime ABI 38 a compiled program counted
     // each atomic's cell as a string (R4's finding, on `http_listen`'s three).
     // Nothing printed but `main`'s result (formatting a number would make a string).

@@ -73,7 +73,7 @@ const RESERVED: &[(&str, &str)] = &[
 
 /// What the language does have, for the help text on a refused construct.
 ///
-/// The language's own summary, not a list of what one release added: `docs/spec.md` is
+/// The language's own summary, not a list of what one release added: `docs/user/spec.md` is
 /// the definition, and `nazm capabilities` is the build's answer construct by construct.
 /// It once listed the v0.1 subset — `Int`, `Bool` and `Str`, records and enums — and kept
 /// saying so through traits, generics and concurrency, which is why a test now holds it to
@@ -85,7 +85,7 @@ const SUPPORTED: &str = concat!(
     "generics and `Vec[T]`, `Result`, `Option` and `?`, function values and closures, ",
     "`trait`, `impl` and methods, declared effects, capabilities and provenance, ",
     "`scope`/`spawn` with channels, selection and deadlines, `extern \"C\"`, and modules ",
-    "and packages with `use` — see docs/spec.md, or run `nazm capabilities`"
+    "and packages with `use` — see docs/user/spec.md, or run `nazm capabilities`"
 );
 
 #[derive(Debug)]
@@ -2010,7 +2010,7 @@ impl<'a> Parser<'a> {
             self.bump();
             // `Eof()` is refused rather than read as a variant with no payload. One
             // concept gets one spelling, and the spelling for *no payload* is no
-            // brackets — `docs/spec.md` says so, and a record with no fields is
+            // brackets — `docs/user/spec.md` says so, and a record with no fields is
             // refused for the same reason.
             if self.at(&TokenKind::RParen) {
                 let close = self.peek_span();
@@ -3810,7 +3810,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// `for NAME in e { … }` or `for NAME in a..b { … }` (R1a, `docs/spec.md`, *`for` loops*).
+    /// `for NAME in e { … }` or `for NAME in a..b { … }` (R1a, `docs/user/spec.md`, *`for` loops*).
     ///
     /// A `for` in any other shape is refused by name, `N0101`, as every `for` was before R1a:
     /// `in` is a word only here, after the loop's name, and an ordinary name everywhere else.
@@ -4351,7 +4351,7 @@ impl<'a> Parser<'a> {
     /// `Enum.Variant(field: value, …)`, the `.` already seen by the caller's lookahead.
     ///
     /// The parentheses are written even when the variant has no payload, because
-    /// `Enum.Variant` alone is exactly the shape of a field projection. See `docs/spec.md`.
+    /// `Enum.Variant` alone is exactly the shape of a field projection. See `docs/user/spec.md`.
     fn variant_construction(
         &mut self,
         at: Checkpoint,
@@ -4417,7 +4417,7 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    /// A pattern: one, or several separated by `|` (R1a, `docs/spec.md`, *Patterns*).
+    /// A pattern: one, or several separated by `|` (R1a, `docs/user/spec.md`, *Patterns*).
     fn pattern(&mut self) -> Option<Pattern> {
         let at = self.checkpoint();
         let first = self.pattern_one()?;
@@ -5083,7 +5083,7 @@ impl<'a> Parser<'a> {
         // `Enum.Variant(…)` is a variant. Three tokens decide it, and the
         // decision is total: the language has no methods and no function values,
         // so a `(` can never follow a field projection and nothing else has this
-        // shape. `docs/spec.md` records why a variant is always parenthesised.
+        // shape. `docs/user/spec.md` records why a variant is always parenthesised.
         let variant = self.at(&TokenKind::Dot)
             && matches!(
                 self.tokens.get(self.pos + 1).map(|t| &t.kind),

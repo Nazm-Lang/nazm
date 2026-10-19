@@ -1,6 +1,6 @@
 //! `nazm runtime build` and `nazm runtime verify`, and what `nazm build --runtime` checks (N82).
 //!
-//! `docs/architecture.md` §7.83. A runtime artifact is the whole runtime for one target and profile
+//! `docs/internal/architecture.md` §7.83. A runtime artifact is the whole runtime for one target and profile
 //! — every service — compiled once into `libnazmrt.a`, beside `nazm-runtime.json`, a
 //! `nazm.runtime/1` manifest saying what it is: the runtime ABI revision and digest it was built
 //! from, the target, the profile, the services, the optimisation level, the toolchain, and BLAKE3

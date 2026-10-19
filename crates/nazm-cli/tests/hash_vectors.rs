@@ -1,4 +1,4 @@
-//! R1e, S1: `@std/sha256` and `@std/blake3` (`docs/spec.md`, *The standard library*).
+//! R1e, S1: `@std/sha256` and `@std/blake3` (`docs/user/spec.md`, *The standard library*).
 //!
 //! SHA-256 is held to FIPS 180-4's examples — `"abc"`, the empty message, the 448- and 896-bit
 //! messages and a million `a`s — and to messages of `i % 251` bytes on each side of the padding's

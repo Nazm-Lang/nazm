@@ -1,4 +1,4 @@
-//! R1.5 (`docs/spec.md`, *Shorter forms*): each spelling means what the longer one did.
+//! R1.5 (`docs/user/spec.md`, *Shorter forms*): each spelling means what the longer one did.
 //!
 //! D1 — a result type written after `:`, in a function, a trait method, a function type and a
 //! function expression; `->` still read beside it.

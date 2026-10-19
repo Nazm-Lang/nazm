@@ -16,7 +16,7 @@
 ## 2. The containment rule (`rewrite-in-nazm` 7.2)
 - [x] 2.1 The proposal: `design.md` decision 3 and `runbook-draft.md`
 - [x] 2.2 The copyright holder's decision (accepted 2026-10-20, as proposed); the runbook changed
-      (`docs/runbook.md`, *What may run on the host*) and the host runner written
+      (`docs/internal/runbook.md`, *What may run on the host*) and the host runner written
       (`cargo xtask host-run`, `xtask/src/host_run.rs`; refuses a binary without the counted heap or
       with a limit over 2 GiB; tests in `xtask/tests/host_run.rs`, 13 mutants `r6-host-run-*`)
 - [ ] 2.3 The first host runs of the builder on macOS, their resident peaks recorded

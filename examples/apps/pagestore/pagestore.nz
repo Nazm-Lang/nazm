@@ -1,5 +1,5 @@
 // pagestore: a page-structured store with a write-ahead log (Gate 3 reference workload,
-// `docs/systems-domains.md` Part M).
+// `docs/internal/systems-domains.md` Part M).
 //
 //     pagestore DIR SCRIPT [CRASH_AT] [recover]
 //

@@ -4,8 +4,8 @@
 // listening, connecting, binding, sending to one, resolving a name — takes the `NetCap` that
 // allows it; whatever uses a socket takes only the socket. An address is `HOST:PORT` with a literal
 // IPv4 host or a bracketed IPv6 one (`[::1]:8080`). A wait does not hold a worker: a task waiting
-// on a socket parks, and the runtime's reactor wakes it. `docs/general-purpose.md` §9–§10 is the
-// design record; `docs/spec.md`, *Networking*, the built-ins beneath.
+// on a socket parks, and the runtime's reactor wakes it. `docs/internal/general-purpose.md` §9–§10 is the
+// design record; `docs/user/spec.md`, *Networking*, the built-ins beneath.
 
 use "@std/ioerror";
 

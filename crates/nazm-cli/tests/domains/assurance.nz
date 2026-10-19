@@ -1,4 +1,4 @@
-// The high-assurance reference workload (Gate 3, `docs/systems-domains.md` Parts E–J): a heater
+// The high-assurance reference workload (Gate 3, `docs/internal/systems-domains.md` Parts E–J): a heater
 // controller on both emulated boards, held to the `assurance` profile, whose every obligation is
 // `proved` or `checked` (`nazm obligations`).
 //

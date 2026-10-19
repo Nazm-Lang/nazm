@@ -1,6 +1,6 @@
 // The whole client: start `nazm lsp` on standard input and output and let the protocol do the
 // rest. Diagnostics, definition, references, hover, completion, signature help, rename, symbols,
-// call hierarchy, quick fixes and semantic tokens are all the compiler's (`docs/architecture.md`
+// call hierarchy, quick fixes and semantic tokens are all the compiler's (`docs/internal/architecture.md`
 // §7.76); nothing here knows the language.
 const vscode = require("vscode");
 const { LanguageClient } = require("vscode-languageclient/node");

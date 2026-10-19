@@ -179,7 +179,7 @@ fn fingerprint_of_module(source: &str) -> String {
 
 #[test]
 fn the_invalidation_table_is_what_the_fingerprint_actually_does() {
-    // `docs/architecture.md` §7.3 states the model; this is the model measured. Each row
+    // `docs/internal/architecture.md` §7.3 states the model; this is the model measured. Each row
     // is an edit to one module, and the question is only ever whether that module's
     // **dependents** must be re-checked.
     let base = "pub fn shown(n: Int) -> Int { helper() + n }\nfn helper() -> Int { 1 }\n";
@@ -512,7 +512,7 @@ fn an_exported_record_is_published_with_its_fields_and_durable_identity() {
 
 #[test]
 fn moving_two_field_declarations_does_not_move_the_interface() {
-    // `docs/spec.md` says field order is not semantic. This is that claim measured: the
+    // `docs/user/spec.md` says field order is not semantic. This is that claim measured: the
     // persisted form sorts by name, so the bytes — and therefore the fingerprint — cannot
     // move for an edit the language calls meaningless.
     let one = "pub struct Point {\n    x: Int,\n    y: Str,\n}\n";
@@ -939,7 +939,7 @@ fn a_generic_interface_carries_positions_and_no_parameter_names() {
 
 #[test]
 fn the_generic_invalidation_table_is_what_the_fingerprint_actually_does() {
-    // `docs/spec.md`, *Order is semantic; names are not*, and the rest of the table the
+    // `docs/user/spec.md`, *Order is semantic; names are not*, and the rest of the table the
     // milestone asked for — measured.
     let dir = tempfile::tempdir().expect("tempdir");
     let base = generic_hash(dir.path(), GENERIC_BASE);

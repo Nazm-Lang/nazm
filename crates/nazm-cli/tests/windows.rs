@@ -1,4 +1,4 @@
-//! Gate 3: Windows x86_64 (`docs/spec.md`, *Windows x86_64*; `docs/systems-domains.md` Part A-W).
+//! Gate 3: Windows x86_64 (`docs/user/spec.md`, *Windows x86_64*; `docs/internal/systems-domains.md` Part A-W).
 //!
 //! What a whole build shows: every program in `tests/windows/` builds for `x86_64-pc-windows-gnu`
 //! to objects whose `link.txt` names MinGW-w64's libraries and Winsock's. That the executables
@@ -185,7 +185,7 @@ fn a_large_frame_is_probed_by_what_mingw_links() {
 
 /// Found on a Windows host: Windows gives an executable's main thread 1 MiB unless it asks, where
 /// macOS and Linux give 8 MiB, so a recursion that runs natively met `N0408` there. Every Windows
-/// executable asks for 8 MiB (`docs/spec.md`, *The limit*).
+/// executable asks for 8 MiB (`docs/user/spec.md`, *The limit*).
 #[test]
 fn the_main_thread_reserves_what_macos_and_linux_give_it() {
     let d = tempfile::tempdir().unwrap();

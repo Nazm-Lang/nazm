@@ -1,4 +1,4 @@
-//! The user cache (R1.5, D12; `docs/architecture.md` §7.113): the runtime's and the standard
+//! The user cache (R1.5, D12; `docs/internal/architecture.md` §7.113): the runtime's and the standard
 //! library's objects compiled once per user, under the project store's keys.
 //!
 //! Every build here names a temporary user cache through `NAZM_USER_CACHE_DIR`, or redirects

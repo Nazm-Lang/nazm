@@ -1,6 +1,6 @@
 //! N14: a generic definition may require equality of a type parameter.
 //!
-//! `docs/spec.md`, *A type parameter may require equality*, is the law. What these tests
+//! `docs/user/spec.md`, *A type parameter may require equality*, is the law. What these tests
 //! hold:
 //!
 //! * `==` on an unconstrained `T` is still refused, and on a `T` whose declaration says

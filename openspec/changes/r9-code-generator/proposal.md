@@ -38,6 +38,6 @@ None.
 ## Impact
 
 New: `toolchain/codegen/`, this change. At integration (by the coordinator): R3's LIR feeds it in
-process; `nazm build --backend` gains it; the Cranelift column of `docs/support.md` and the
-capability matrix's backend rows move to it; `docs/architecture.md` gains its section. No epoch, ABI
+process; `nazm build --backend` gains it; the Cranelift column of `docs/user/support.md` and the
+capability matrix's backend rows move to it; `docs/internal/architecture.md` gains its section. No epoch, ABI
 or schema moves: the generator reads `nazm.lir/2` and follows the runtime ABI as LLVM's objects do.

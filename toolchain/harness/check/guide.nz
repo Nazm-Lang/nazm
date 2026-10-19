@@ -1,5 +1,5 @@
-// The guide-from-grammar gate (R7, ported from `xtask/src/guide.rs`): `docs/guide.md`'s syntax
-// reference is what `docs/grammar.ebnf` produces. Only the section between the markers is
+// The guide-from-grammar gate (R7, ported from `xtask/src/guide.rs`): `docs/user/guide.md`'s syntax
+// reference is what `docs/user/grammar.ebnf` produces. Only the section between the markers is
 // generated; everything around it is prose somebody wrote.
 
 use "@std/text"
@@ -7,8 +7,8 @@ use "../lib/run.nz"
 use "../lib/scratch.nz"
 use "../lib/strings.nz"
 
-const BEGIN: Str = "<!-- generated from docs/grammar.ebnf: begin -->";
-const END: Str = "<!-- generated from docs/grammar.ebnf: end -->";
+const BEGIN: Str = "<!-- generated from docs/user/grammar.ebnf: begin -->";
+const END: Str = "<!-- generated from docs/user/grammar.ebnf: end -->";
 
 /// One rule, with the comment written above it and its examples.
 struct Rule {
@@ -126,8 +126,8 @@ fn section(text: Str) -> Str ! {} {
 
 /// The whole guide with the generated section spliced in, or `Err` as `render` words it.
 fn render(h: Caps, root: Str) -> Result[Str, Str] ! { io } {
-    let grammar = f"{root}/docs/grammar.ebnf";
-    let guide = f"{root}/docs/guide.md";
+    let grammar = f"{root}/docs/user/grammar.ebnf";
+    let guide = f"{root}/docs/user/guide.md";
     let text = match read_rust(h, grammar) {
         Result.Ok(value: t) => t,
         Result.Err(error: e) => { return Result[Str, Str].Err(error: f"{grammar}: {e}"); },
@@ -156,13 +156,13 @@ pub fn gate_guide(h: Caps, root: Str) -> Strs ! { io } {
         Result.Ok(value: w) => w,
         Result.Err(error: e) => { strs_push(problems, e); return problems; },
     };
-    let guide = f"{root}/docs/guide.md";
+    let guide = f"{root}/docs/user/guide.md";
     let have = match read_rust(h, guide) {
         Result.Ok(value: t) => t,
         Result.Err(error: e) => { strs_push(problems, f"{guide}: {e}"); return problems; },
     };
     if have != want {
-        strs_push(problems, f"{guide} is not what docs/grammar.ebnf produces. Run `cargo xtask guide` to rewrite it.");
+        strs_push(problems, f"{guide} is not what docs/user/grammar.ebnf produces. Run `cargo xtask guide` to rewrite it.");
     }
     problems
 }

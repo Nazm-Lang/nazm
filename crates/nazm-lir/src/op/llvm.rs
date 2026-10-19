@@ -1,10 +1,10 @@
-//! LIR as LLVM IR text (N105, `docs/architecture.md` §7.106): the LLVM backend's whole job.
+//! LIR as LLVM IR text (N105, `docs/internal/architecture.md` §7.106): the LLVM backend's whole job.
 //!
 //! Each LIR instruction is the LLVM instruction it names; each variable and each slot an
 //! `alloca` in the entry block, which LLVM's own promotion turns into registers. Nothing here
 //! decides anything a program can observe.
 //!
-//! How a failure crosses a call is the target's (4.2, `docs/architecture.md` §7.115): the failure
+//! How a failure crosses a call is the target's (4.2, `docs/internal/architecture.md` §7.115): the failure
 //! bit returned beside the result ([`Failures::Bit`]), or a forced unwind ([`Failures::Unwind`]).
 //! LIR is the same for both.
 
@@ -59,7 +59,7 @@ fn sig_ty(c: Class, conv: Conv, result: bool) -> String {
     }
 }
 
-/// How a Nazm function's failure reaches its caller on a target (4.2, `docs/architecture.md`
+/// How a Nazm function's failure reaches its caller on a target (4.2, `docs/internal/architecture.md`
 /// §7.115). A program cannot tell them apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Failures {
@@ -1080,7 +1080,7 @@ fn call(
     }
 }
 
-/// A Nazm call where failures unwind (4.2, `docs/architecture.md` §7.115). Straight into a bare
+/// A Nazm call where failures unwind (4.2, `docs/internal/architecture.md` §7.115). Straight into a bare
 /// failure exit it is a plain call, which an unwind passes through, and its failure edge is never
 /// taken here. Otherwise an `invoke` whose cleanup landing pad joins the normal path with the edge
 /// taken — the LIR's own branch then goes where the failure goes — or, from a call with no failure

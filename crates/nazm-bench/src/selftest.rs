@@ -1,6 +1,6 @@
 //! End-to-end known-answer tests for the measurement path.
 //!
-//! `docs/research/evaluation.md` §8 requires the harness to be validated **by construction** rather
+//! `docs/internal/research/evaluation.md` §8 requires the harness to be validated **by construction** rather
 //! than by agreeing with published results. That means feeding it attempts whose correct
 //! aggregate is known by hand, and checking the numbers that come out — acceptance counts,
 //! denominators, totals, and comparison estimates — not merely that it runs.

@@ -2,7 +2,7 @@
 //!
 //! # What it reads
 //!
-//! Core IR, verified (`docs/architecture.md` §7.41), and the checker's semantic tables — the
+//! Core IR, verified (`docs/internal/architecture.md` §7.41), and the checker's semantic tables — the
 //! user-type table, signatures, visibility, the call sites the instance planner walks. Never
 //! the syntax tree, and never a position map: every identity it needs is already in Core IR.
 //!
@@ -405,7 +405,7 @@ struct Facts {
 
 /// Which definitions are in a call cycle — a cycle of calls between definitions, generic or
 /// not, through any number of modules. `spawn` closes none: a task runs on its own stack, so a
-/// function that spawns itself grows no stack (N49, `docs/spec.md` *Native recursion*).
+/// function that spawns itself grows no stack (N49, `docs/user/spec.md` *Native recursion*).
 ///
 /// Over definitions rather than instances, so an instance of a recursive generic definition
 /// checks too; polymorphic recursion never reaches here (`N0357`). Tarjan's algorithm with an

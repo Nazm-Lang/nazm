@@ -1,4 +1,4 @@
-//! `nazm profile FILE` (N58, `docs/architecture.md` §7.60): build the program, run it once with
+//! `nazm profile FILE` (N58, `docs/internal/architecture.md` §7.60): build the program, run it once with
 //! its memory and scheduler counters on, and print `nazm.profile/2` — counts of events, and
 //! nothing the compiler measured about itself (that is `nazm.timings/1`).
 //!

@@ -5,7 +5,7 @@
 //! With `--json`, standard output is exactly one object, whatever the answer, and standard
 //! error is empty; the exit status is 0 with an answer and 1 without one. Without it, a
 //! section is printed as its own text and the index as one id and title per line — and a
-//! refusal as its object, indented. `docs/architecture.md` §7.34.
+//! refusal as its object, indented. `docs/internal/architecture.md` §7.34.
 
 use std::path::Path;
 use std::process::ExitCode;

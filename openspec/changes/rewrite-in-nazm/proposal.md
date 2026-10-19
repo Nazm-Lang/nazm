@@ -3,9 +3,9 @@
 The copyright holder decided on 2026-10-11 that the whole Nazm toolchain — the product, the harness
 and the tests — is rewritten in Nazm **before anything is published**. A language whose own tools
 are written in it is its own largest test, and a toolchain that links no third-party code owes no
-third-party notices (`docs/licensing.md`, item 7). Today the product is ~133k lines of Rust in 19
+third-party notices (`docs/user/licensing.md`, item 7). Today the product is ~133k lines of Rust in 19
 crates, the harness ~25k, the tests ~100k; the compiler written in Nazm (`compiler/*.nz`, ~16.8k
-lines) compiles a declared subset of the language (`docs/bootstrap.md`, `limitations.md`).
+lines) compiles a declared subset of the language (`docs/internal/bootstrap.md`, `limitations.md`).
 
 ## What Changes
 
@@ -39,7 +39,7 @@ None.
 ## Impact
 
 Every crate under `crates/`, `xtask/`, `fuzz/`, `compiler/`, `library/`, the tests, the runbook's
-containment rule (R6), the release path (R8), `docs/bootstrap.md`, `docs/architecture.md`,
-`docs/capability-matrix.md`, `docs/support.md` (the Cranelift column), `docs/licensing.md`. Versions
-move per phase, recorded there. The 1.0 language promises (`docs/stability.md`) are unchanged:
+containment rule (R6), the release path (R8), `docs/internal/bootstrap.md`, `docs/internal/architecture.md`,
+`docs/internal/capability-matrix.md`, `docs/user/support.md` (the Cranelift column), `docs/user/licensing.md`. Versions
+move per phase, recorded there. The 1.0 language promises (`docs/user/stability.md`) are unchanged:
 additions arrive as 1.x-compatible extensions.

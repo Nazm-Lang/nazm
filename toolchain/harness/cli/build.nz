@@ -2057,15 +2057,15 @@ fn the_spec_worker_pool_example_terminates_and_answers_ninety(io: IoCap, p: Proc
     let h = caps(io, p, sp, v, t);
     let root = repo_root(h);
     let src = read_text(h, f"{root}/examples/worker-pool.nz")?;
-    let spec = read_text(h, f"{root}/docs/spec.md")?;
+    let spec = read_text(h, f"{root}/docs/user/spec.md")?;
     let fence = "```nazm\nfn worker(jobs: Chan, results: Chan) -> Int {";
     let at = find(spec, fence);
-    check_that(at >= 0, "docs/spec.md no longer shows the worker-pool example")?;
+    check_that(at >= 0, "docs/user/spec.md no longer shows the worker-pool example")?;
     let after = str_slice(spec, at + str_len("```nazm\n"), str_len(spec));
     let close = find(after, "```");
     check_that(close >= 0, "unclosed fence")?;
     let block = str_slice(after, 0, close);
-    check_that(trim_end_ws(block) == trim_end_ws(src), "docs/spec.md and examples/worker-pool.nz have drifted. The spec is meant to show the program that is actually run.")?;
+    check_that(trim_end_ws(block) == trim_end_ws(src), "docs/user/spec.md and examples/worker-pool.nz have drifted. The spec is meant to show the program that is actually run.")?;
     // It prints 90 (R1, 5b.3); the result report the suite sets adds `main`'s 0.
     let ran = interpret(h, src)?;
     check_that(ran.code == 0, f"interpreted: {ran.stderr}")?;

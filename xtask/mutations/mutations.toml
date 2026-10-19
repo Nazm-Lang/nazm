@@ -23,7 +23,7 @@
 # `no_killer = "…"` reason.
 #
 # A killer or a profile can make a campaign faster. Neither can make it report SURVIVED:
-# only the workspace suite does that. See `docs/runbook.md`, "Mutation campaigns".
+# only the workspace suite does that. See `docs/internal/runbook.md`, "Mutation campaigns".
 
 [[mutation]]
 name = "acceptance-rate-denominator"
@@ -615,7 +615,7 @@ killers = [{ package = "nazm-bench", test = "execution_boundary", name = "eviden
 [[mutation]]
 name = "checked-add-loses-its-sign"
 why = """
-`docs/spec.md` says overflow traps. The emitter detects it with
+`docs/user/spec.md` says overflow traps. The emitter detects it with
 `llvm.sadd.with.overflow.i64`; the unsigned intrinsic is one letter away and is the
 mistake a reader would not see. `Int::MAX + 1` does not carry as an unsigned addition, so
 the guard never fires and the program prints the wrapped value instead of stopping —
@@ -732,7 +732,7 @@ Caught behaviourally by 13 tests, and the distinction between how they catch it 
 point. Nine report a **deadline**, including
 `the_condition_is_reevaluated_on_every_iteration`, which runs the compiled program under an
 explicit 10-second limit at `-O0` and `-O2` and fails if it has not finished — that test
-exists because `nazm build` emits no iteration budget (`docs/spec.md`, *The native
+exists because `nazm build` emits no iteration budget (`docs/user/spec.md`, *The native
 execution contract for loops*), so a suite without deadlines would hang rather than report.
 The other four terminate and fail on the **outcome**: their runaway bodies overflow `Int`
 within seconds, so the program exits 2 with `N0400` where 0 and a value were expected.
@@ -1259,7 +1259,7 @@ name = "the-frame-is-not-released-when-a-failure-unwinds"
 why = """
 releases nothing on the one exit source indentation would never have found: the shared
 block every failure in a function branches to. Cleanup that exists only on the path that
-succeeds is the defect `docs/spec.md` names when it says reclamation is on the semantic
+succeeds is the defect `docs/user/spec.md` names when it says reclamation is on the semantic
 event rather than at the closing brace
 Repointed by N40: the shared unwind block MIR builds drops every managed local.
 """
@@ -1360,7 +1360,7 @@ name = "a-string-read-out-of-a-sequence-is-only-borrowed"
 why = """
 hands back the stored descriptor without a reference of its own, so overwriting the
 element — or releasing the sequence — invalidates a value the program is still holding.
-`docs/spec.md` has promised since sequences existed that a `Str` already read out is
+`docs/user/spec.md` has promised since sequences existed that a `Str` already read out is
 unaffected by changing the sequence; until N8 that was true because nothing was freed
 Repointed by N40: a primitive's result is owned by its MIR destination, so `strs_get` retains.
 Repointed by N105: the rule is LIR's, made once for both backends.
@@ -1668,7 +1668,7 @@ killers = [{ package = "nazm-cli", test = "cli_c_d", name = "durable_identity::a
 name = "the-native-layout-follows-the-declaration"
 why = """
 lays a record's fields out in declaration order rather than canonically by name, so moving
-two field declarations changes the object file. `docs/spec.md` says that edit means
+two field declarations changes the object file. `docs/user/spec.md` says that edit means
 nothing; this makes the compiler and the linker disagree about whether anything happened
 Repointed by N40: layout is decided below MIR, from the canonical order MIR carries.
 """
@@ -1769,7 +1769,7 @@ name = "a-match-need-not-cover-every-variant"
 why = """
 stops reporting the variants a `match` leaves out, so a closed enum silently becomes an
 open one: a program compiles with a variant it has no arm for, and reaches a `switch` whose
-default was only ever a structural requirement. `docs/spec.md` gives the checker the
+default was only ever a structural requirement. `docs/user/spec.md` gives the checker the
 language's meaning precisely so that this cannot be deferred to the backend
 """
 file = "crates/nazm-core/src/check/pattern.rs"
@@ -1851,7 +1851,7 @@ killers = [{ package = "nazm-cli", test = "cli_c_d", name = "durable_identity::a
 name = "a-discriminant-follows-the-parser"
 why = """
 numbers variants in declaration order rather than canonically by name, so moving two
-variant declarations — an edit `docs/spec.md` says means nothing — changes the emitted
+variant declarations — an edit `docs/user/spec.md` says means nothing — changes the emitted
 representation. Two units of one build would still agree with each other, which is why
 only an edit that must change no byte can see it
 """
@@ -1867,7 +1867,7 @@ killers = [{ package = "nazm-cli", test = "cli_e_l", name = "equality::an_enum_h
 name = "a-payload-is-laid-out-in-the-order-it-was-written"
 why = """
 the same, one level down: a variant's payload fields keep their declaration order instead
-of the canonical one, so reordering two of them changes the object file. `docs/spec.md`
+of the canonical one, so reordering two of them changes the object file. `docs/user/spec.md`
 makes both orders non-semantic, and the only way either claim is true is that neither
 reaches the layout
 """
@@ -1936,7 +1936,7 @@ name = "a-match-does-not-take-over-the-value-it-matches"
 why = """
 stops the `match` taking a reference to the value it is given, while still releasing it at
 the join. A binding matched twice is freed twice, and the second `match` reads storage the
-first gave back — the ordering `docs/spec.md` states as *the scrutinee is a value the match
+first gave back — the ordering `docs/user/spec.md` states as *the scrutinee is a value the match
 owns* expressed as its absence
 Repointed by N40: a `match` evaluates its scrutinee into a temporary it owns; this moves a matched binding's own reference instead.
 """
@@ -4242,7 +4242,7 @@ killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_parser_pr
 #
 # Each observes one promise the tree makes — every byte kept, every leaf its own bytes, the
 # two trees agreeing, recovery local and bounded — and names the regression test that
-# states it. `crates/nazm-syntax/tests/cst.rs` holds the tests; `docs/capability-matrix.md`
+# states it. `crates/nazm-syntax/tests/cst.rs` holds the tests; `docs/internal/capability-matrix.md`
 # area 1 records what the campaign found.
 
 [[mutation]]
@@ -6967,9 +6967,9 @@ killers = [{ package = "nazm-docs", test = "corpus", name = "a_parents_body_is_i
 name = "n32-goals-are-evidence"
 why = "the goals document is classified as evidence of what exists"
 file = "crates/nazm-docs/src/manifest.rs"
-find = """        "docs/NAZM_LANGUAGE_GOALS.md",
+find = """        "docs/internal/NAZM_LANGUAGE_GOALS.md",
         Authority::Goal,"""
-replace = """        "docs/NAZM_LANGUAGE_GOALS.md",
+replace = """        "docs/internal/NAZM_LANGUAGE_GOALS.md",
         Authority::Evidence,"""
 killers = [{ package = "nazm-docs", test = "corpus", name = "the_real_corpus_is_sectioned_and_every_document_keeps_its_authority" }]
 
@@ -6977,9 +6977,9 @@ killers = [{ package = "nazm-docs", test = "corpus", name = "the_real_corpus_is_
 name = "n32-the-roadmap-is-normative"
 why = "the roadmap is classified as normative, a plan read as a rule of the language"
 file = "crates/nazm-docs/src/manifest.rs"
-find = """        "docs/roadmap.md",
+find = """        "docs/user/roadmap.md",
         Authority::Planning,"""
-replace = """        "docs/roadmap.md",
+replace = """        "docs/user/roadmap.md",
         Authority::Normative,"""
 killers = [{ package = "nazm-docs", test = "corpus", name = "the_real_corpus_is_sectioned_and_every_document_keeps_its_authority" }]
 
@@ -7246,7 +7246,7 @@ killers = [{ package = "xtask", bin = "xtask", name = "campaign::tests::a_packag
 
 # --- N33: the repository context map and the minimum task context -----------------------
 #
-# Each attacks one law of `docs/architecture.md` §7.35: the seed is always there, a
+# Each attacks one law of `docs/internal/architecture.md` §7.35: the seed is always there, a
 # direct dependency is selected, a goal never outranks the specification, a budget's cut is
 # never a complete answer, a stale state is refused, a path is never an id, the map is in
 # canonical order and validated, a test is related only where a mutation lands, a fan-out
@@ -7446,7 +7446,7 @@ killers = [{ package = "nazm-mcp", test = "protocol", name = "the_repository_cro
 
 # --- N34: tokenizer-independent measurement -------------------------------------------------
 #
-# Each attacks one law of `docs/architecture.md` §7.36: every tokenizer counts with its own
+# Each attacks one law of `docs/internal/architecture.md` §7.36: every tokenizer counts with its own
 # implementation, an unknown one is never another, a count is tokens and not bytes, framing is
 # not content, an altered asset is refused, an identity is its vocabulary, the exact bytes are
 # counted, the tiny case stays visible, a reduction's sign and a tokenizer's worst case are
@@ -7560,7 +7560,7 @@ killers = [{ package = "nazm-tokens", test = "benchmark", name = "every_n33_task
 
 # --- N35: the agent task benchmark ------------------------------------------------------------
 #
-# Each attacks one law of `docs/architecture.md` §7.37: two arms carry two contexts and one
+# Each attacks one law of `docs/internal/architecture.md` §7.37: two arms carry two contexts and one
 # prompt, each answer is scored by its own task's oracle, a claim the truths lack is never
 # credit and a hallucination is not a misreading, input is not output, each usage category has
 # its own price and output is billed, a zero denominator is absent, an identity has the prompt
@@ -7719,7 +7719,7 @@ killers = [{ package = "nazm-agent-bench", test = "agent", name = "the_claude_co
 
 # --- N36: typed effects ----------------------------------------------------------------------
 #
-# Each attacks one law of `docs/architecture.md` §7.38 and `docs/spec.md`, *Effects*: a set is a
+# Each attacks one law of `docs/internal/architecture.md` §7.38 and `docs/user/spec.md`, *Effects*: a set is a
 # union and is canonical, a built-in's effect is its identity's, a `spawn` is an effect, a callee's
 # effects reach its caller and a cycle reaches its fixed point, a contract holds its body, an
 # unknown or repeated name is refused, an undeclared import promises nothing, the witness points at
@@ -7886,7 +7886,7 @@ killers = [{ package = "nazm-iface", test = "persistence", name = "a_future_sche
 
 # --- N37: capabilities / authority -----------------------------------------------------------
 #
-# Each attacks one law of `docs/architecture.md` §7.39 and `docs/spec.md`, *Capabilities*: a
+# Each attacks one law of `docs/internal/architecture.md` §7.39 and `docs/user/spec.md`, *Capabilities*: a
 # built-in needs its identity's authority and a `spawn` the authority to start a task; a capability
 # kind is not interchangeable with another; nothing constructs one and nothing else is handed to
 # `main`; authority is the bindings a name reaches, never a spelling, a shadowed binding or a
@@ -8046,7 +8046,7 @@ killers = [{ package = "nazm-cli", test = "cli_c_d", name = "capabilities::a_cap
 
 # --- N38: provenance and information flow ----------------------------------------------------
 #
-# Each attacks one law of `docs/architecture.md` §7.40 and `docs/spec.md`, *Provenance*: the
+# Each attacks one law of `docs/internal/architecture.md` §7.40 and `docs/user/spec.md`, *Provenance*: the
 # sources are the built-ins that bring data in and output is not input; shared storage is not
 # followed and a channel does not drop an origin; a join is a union in any order; a binding keeps
 # everything assigned to it; a condition contributes nothing; a callee passes on only what its
@@ -8364,7 +8364,7 @@ killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_ent
 
 # --- N39: Core IR, the one lowering ------------------------------------------------------------
 #
-# Each attacks one law of `docs/architecture.md` §7.41: a call names its callee by identity, every
+# Each attacks one law of `docs/internal/architecture.md` §7.41: a call names its callee by identity, every
 # value is typed, an `if`'s branches, a `return` and a loop's back edge mean what they say, every
 # `break` and `continue` names its loop, an initialiser fills its field and a construction its
 # variant, a function's effect contract and authority survive, a digest names callees durably,
@@ -9659,7 +9659,7 @@ killers = [{ package = "nazm-cli", test = "cli_c_d", name = "debugging::inspect_
 
 # --- N49: escapes, the logical operators, native recursion -------------------------------------
 #
-# Each attacks one decision of `docs/architecture.md` §7.51. `the-recursion-check-forgets-the-call-graph`
+# Each attacks one decision of `docs/internal/architecture.md` §7.51. `the-recursion-check-forgets-the-call-graph`
 # was retired here: the cycle refusal it attacked was deleted, and the stack check that replaced it is
 # attacked below from MIR's placement to the runtime's comparison.
 
@@ -12199,7 +12199,7 @@ killers = [{ package = "nazm-cli", test = "cli_e_l", name = "ecosystem::the_capa
 
 # --- N76: incremental reparse, recovery inside lists, Unicode escapes ---------------------------
 #
-# Each attacks one law of `docs/architecture.md` §7.77: a revision equals a fresh parse, an item
+# Each attacks one law of `docs/internal/architecture.md` §7.77: a revision equals a fresh parse, an item
 # is reused only if nothing it read changed, a malformed member costs the member, a declaration
 # that needed recovery stays out of the abstract tree, `\u{…}` is a scalar value's UTF-8 bytes,
 # and the editor's buffer moves by ranges without being parsed again.
@@ -12350,7 +12350,7 @@ killers = [{ package = "nazm-cli", test = "cli_e_l", name = "lsp::ranged_changes
 
 # --- N77: resolution, persisted -------------------------------------------------------------
 #
-# Each attacks one law of `docs/architecture.md` §7.78: a resolved unit is the checker's answer by
+# Each attacks one law of `docs/internal/architecture.md` §7.78: a resolved unit is the checker's answer by
 # durable identity, stored with its check and read only for its own module and text, the same
 # bytes in any process, and the compiler written in Nazm refuses what it does not resolve.
 
@@ -12424,7 +12424,7 @@ killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_c
 
 # --- N78: traits and methods --------------------------------------------------------------
 #
-# Each attacks one law of `docs/architecture.md` §7.79: coherence, the orphan rule, an impl's
+# Each attacks one law of `docs/internal/architecture.md` §7.79: coherence, the orphan rule, an impl's
 # completeness and signatures, lookup over what is in scope, dispatch per instance and per value,
 # the bound, the interface, and the meanings that did not move.
 
@@ -12599,7 +12599,7 @@ killers = [{ package = "nazm-cli", test = "cli_s_z", name = "traits::a_method_ca
 
 # --- N79: effects and capabilities v3 ------------------------------------------------------------
 #
-# Each attacks one law of `docs/architecture.md` §7.80 as built: an `IoCap` implies an `OutCap` and
+# Each attacks one law of `docs/internal/architecture.md` §7.80 as built: an `IoCap` implies an `OutCap` and
 # nothing implies an `IoCap`; `print` asks for the narrower kind; a function value with fewer effects
 # is accepted where it is passed or returned and one with more is refused; inherited authority is
 # recorded, shown and refused by the `authority` profile; and nothing below the checker undoes
@@ -12688,7 +12688,7 @@ killers = [{ package = "nazm-cli", test = "cli_a_b", name = "authority::an_out_c
 
 # --- N80: provenance v3 --------------------------------------------------------------------------
 #
-# Each attacks one law of `docs/architecture.md` §7.81: a cell holds every write into a container of
+# Each attacks one law of `docs/internal/architecture.md` §7.81: a cell holds every write into a container of
 # its type, and generic code is every cell; a receive and a select move a channel's cell, and an index
 # carries nothing; an indirect call carries what its candidates return, and a closure's captures are
 # handed to whoever calls it; fields are apart within a body, and a field write makes the binding
@@ -12824,7 +12824,7 @@ killers = [{ package = "nazm-cli", test = "cli_e_l", name = "flow_v3::explain_fl
 
 # --- N81: the backend contract v2, stage one ------------------------------------------------------
 #
-# Each attacks one law of `docs/architecture.md` §7.82: the target's pointer width, a `Str`'s three
+# Each attacks one law of `docs/internal/architecture.md` §7.82: the target's pointer width, a `Str`'s three
 # words, natural alignment, an enum's payload area, ownership closed under containment, the
 # validator, and Cranelift reading its layouts from `nazm-lir` for its own target.
 
@@ -12888,7 +12888,7 @@ killers = [{ package = "nazm-cli", test = "cli_e_l", name = "lir::every_shape_in
 
 # --- N82: the runtime as an artifact ------------------------------------------------------------
 #
-# Each attacks one law of `docs/architecture.md` §7.83: every check `nazm build --runtime` makes
+# Each attacks one law of `docs/internal/architecture.md` §7.83: every check `nazm build --runtime` makes
 # before linking, the profile a target's runtime is, a build that links the artifact instead of — not
 # beside — a generated runtime, and the provenance record that names it.
 
@@ -12980,7 +12980,7 @@ killers = [{ package = "nazm-cli", test = "cli_m_r", name = "runtime_artifact::t
 
 # --- N83: the task pool -------------------------------------------------------------------------
 #
-# Each attacks one law of `docs/architecture.md` §7.84: choosing the pool, its worker count, tasks on
+# Each attacks one law of `docs/internal/architecture.md` §7.84: choosing the pool, its worker count, tasks on
 # the pool and not on threads, a wake that arrives while a task is parking, a select that does not
 # wait yielding, a deadline firing, the peak count, each task's own stack limit, and the switch
 # saving the registers its caller keeps. Every pool test runs its program under a deadline, so a
@@ -13061,7 +13061,7 @@ killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::eve
 
 # --- N84: the standard library 1.0 --------------------------------------------------------------
 #
-# Each attacks one documented behaviour of `docs/architecture.md` §7.85: the sort's stability, the
+# Each attacks one documented behaviour of `docs/internal/architecture.md` §7.85: the sort's stability, the
 # map's search, lexical `..`, JSON's refusal of a leading zero, a line's carriage return, a prefix
 # sorting first, and the 1.0 manifest's guard on the surface.
 
@@ -13123,7 +13123,7 @@ killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stdlib_1_0::every_p
 
 
 # --- N85: FFI v3 — handles, C structs, C strings returned, errno, callbacks, shared libraries ---
-# `mutant | responsibility | how N85 could regress it | killer`, as `docs/architecture.md` §7.86
+# `mutant | responsibility | how N85 could regress it | killer`, as `docs/internal/architecture.md` §7.86
 # and the capability matrix's area 17 record them.
 
 [[mutation]]
@@ -13553,7 +13553,7 @@ killers = [{ package = "nazm-cli", test = "cli_c_d", name = "debugger_v3::a_samp
 
 [[mutation]]
 name = "n92-a-measured-heading-goes-unfiled"
-why = "a new measured section of docs/performance.md is accepted with no entry in the claims register"
+why = "a new measured section of docs/internal/performance-log.md is accepted with no entry in the claims register"
 file = "xtask/src/claims.rs"
 find = "        match filed.get(h) {"
 replace = "        match Some(&1usize) {"
@@ -14108,7 +14108,7 @@ find = "`--json` prints `nazm.cost/2`, which since N106 also says which"
 replace = "`--json` prints `nazm.cost/1`, which since N106 also says which"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "ecosystem::every_command_has_its_own_help_naming_the_schema_it_prints" }]
 
-# Gate 1-C1: closure environments in the ownership graph (`docs/spec.md`, *Cycles*). Killers
+# Gate 1-C1: closure environments in the ownership graph (`docs/user/spec.md`, *Cycles*). Killers
 # verified with `cargo xtask contained mutate --verify-killer`.
 
 [[mutation]]
@@ -14277,7 +14277,7 @@ killers = [{ package = "nazm-cli", test = "cli_m_r", name = "numbers::numeric_mi
 
 # --- Gate 2: fixed arrays and constants -------------------------------------------------------
 #
-# Each attacks one law of `docs/spec.md`, *Arrays* and *Constants*: every index is checked in
+# Each attacks one law of `docs/user/spec.md`, *Arrays* and *Constants*: every index is checked in
 # every implementation, read and write; `[value; count]` fills every element; `==` compares every
 # element; an element owns nothing; the 64 KiB bound is exact; a constant that would trap, or is
 # exported, is refused; a constant index at the length is refused where it is written.
@@ -14366,7 +14366,7 @@ killers = [{ package = "nazm-cli", test = "cli_a_b", name = "arrays::array_and_c
 
 # --- Gate 2: bytes and text -------------------------------------------------------------------
 #
-# Each attacks one law of `docs/spec.md`, *Bytes* and *Text*: every range is checked in every
+# Each attacks one law of `docs/user/spec.md`, *Bytes* and *Text*: every range is checked in every
 # implementation; the runtime's UTF-8 validator refuses surrogates and overlong forms; a boundary
 # is never a continuation byte; byte order is the one asked for; a view keeps its buffer; `Text(s)`
 # validates; a surrogate is not a scalar value; a `Bytes` does not cross into a task; `Text` is
@@ -15035,7 +15035,7 @@ killers = [{ package = "nazm-cli", test = "cli_c_d", name = "c_foundation::the_h
 
 # --- Gate 2: attributes and conditional compilation (§16, §17) ---------------------------------
 #
-# Each attacks one law of `docs/spec.md`, *Attributes* and *Conditional compilation*: a false
+# Each attacks one law of `docs/user/spec.md`, *Attributes* and *Conditional compilation*: a false
 # condition removes its declaration, `not` and `any` mean what they say, an impl removed takes its
 # methods, the build's target and profiles decide, a check under one configuration is not reused
 # under another, the vocabulary is closed, and the formatter's layout.
@@ -15122,7 +15122,7 @@ killers = [{ package = "nazm-cli", test = "cli_a_b", name = "attributes::a_malfo
 
 # --- Gate 2: user tests and benchmarks (§18, §19) ----------------------------------------------
 #
-# Each attacks one law of `docs/spec.md`, *Tests and benchmarks*: a test passes only by ending `0`,
+# Each attacks one law of `docs/user/spec.md`, *Tests and benchmarks*: a test passes only by ending `0`,
 # an expected failure only by failing — not by not checking —, an `Err` is a failure, a fuzz target
 # gets real inputs, the filter narrows, and a marked function has its shape.
 
@@ -15176,7 +15176,7 @@ killers = [{ package = "nazm-cli", test = "cli_s_z", name = "user_tests::a_test_
 
 # --- Gate 2: package features (§22) ------------------------------------------------------------
 #
-# Each attacks one law of `docs/spec.md`, *Package features*: `default` is on, a dependent's request
+# Each attacks one law of `docs/user/spec.md`, *Package features*: `default` is on, a dependent's request
 # and a feature's own list enable more, each package sees its own set, `--features` reaches the
 # build, and the lockfile holds the sets to what was locked.
 
@@ -15306,7 +15306,7 @@ find = "                ConvOp::FToS if ty.bits() < 32 => {"
 replace = "                ConvOp::FToS if false => {"
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "cross::a_float_converted_to_a_narrow_integer_builds_for_every_target" }]
 
-# --- Gate 3D: atomics (docs/spec.md, Atomics) ---
+# --- Gate 3D: atomics (docs/user/spec.md, Atomics) ---
 
 [[mutation]]
 name = "g3-an-atomic-add-keeps-a-lost-update"
@@ -15348,7 +15348,7 @@ find = "            && !matches!(self, Self::Fn(_))"
 replace = "            && !matches!(self, Self::Fn(_) | Self::Atomic)"
 killers = [{ package = "nazm-cli", test = "cli_a_b", name = "atomics::every_copy_and_every_task_reaches_one_cell" }]
 
-# --- Gate 3D: statics (docs/spec.md, Statics) ---
+# --- Gate 3D: statics (docs/user/spec.md, Statics) ---
 
 [[mutation]]
 name = "g3-a-static-is-assigned-as-an-unknown-name"
@@ -15390,7 +15390,7 @@ find = "        if !self.unit.owns_module {\n            return;\n        }\n   
 replace = "        let statics"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "statics::a_static_atomic_is_one_cell_for_every_function_task_and_instance" }]
 
-# --- Gate 3D: sections and the 64-bit device registers (docs/spec.md, Boards) ---
+# --- Gate 3D: sections and the 64-bit device registers (docs/user/spec.md, Boards) ---
 
 [[mutation]]
 name = "g3-a-section-places-anything"
@@ -15432,7 +15432,7 @@ find = "                || f.section.is_some()\n"
 replace = ""
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "sections::a_placed_definition_reaches_its_section_and_the_linker_script_keeps_it" }]
 
-# --- Gate 3D: board manifests (docs/spec.md, Boards) ---
+# --- Gate 3D: board manifests (docs/user/spec.md, Boards) ---
 
 [[mutation]]
 name = "g3-a-manifest-takes-any-key"
@@ -15474,7 +15474,7 @@ find = "    if choice.board.is_some() && choice.runtime.is_some() {"
 replace = "    if false {"
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "manifests::board_needs_a_boards_target_and_a_file_that_is_there" }]
 
-# --- Gate 3D: interrupts (docs/spec.md, Boards) ---
+# --- Gate 3D: interrupts (docs/user/spec.md, Boards) ---
 # What only a booted image shows — the timer re-armed after each tick, a handler kept for the
 # entry to call — is interrupts.rs's ignored QEMU test, run by hand; no entry here pretends a
 # host test catches it.
@@ -15519,7 +15519,7 @@ find = "                .find(|f| f.interrupt.is_some())"
 replace = "                .find(|_| false)"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "interrupts::a_handler_is_a_boards_alone" }]
 
-# --- Gate 3D: a board's heap, and no-heap (docs/spec.md, Boards) ---
+# --- Gate 3D: a board's heap, and no-heap (docs/user/spec.md, Boards) ---
 # The arena's own behaviour — the bump, running out as N0406 — is heap.rs's ignored QEMU test.
 
 [[mutation]]
@@ -15554,7 +15554,7 @@ find = "                Rule::NoBlocking,\n                Rule::NoHeap,\n      
 replace = "                Rule::NoBlocking,\n            ],"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "heap::the_kernel_profile_refuses_every_allocation_site_whatever_the_board" }]
 
-# --- Gate 3D: the failure hook (docs/spec.md, Boards) ---
+# --- Gate 3D: the failure hook (docs/user/spec.md, Boards) ---
 # That the hook runs as code that has not failed is kernel.rs's ignored QEMU test.
 
 [[mutation]]
@@ -15589,7 +15589,7 @@ find = "            if line.trim_start().starts_with(';') {"
 replace = "            if false {"
 killers = [{ package = "nazm-cli", bin = "nazm", name = "stack::tests::a_comment_that_says_call_is_not_a_call" }]
 
-# --- Gate 3E: the Cortex-M board and its interrupts (docs/spec.md, A freestanding target; Boards) ---
+# --- Gate 3E: the Cortex-M board and its interrupts (docs/user/spec.md, A freestanding target; Boards) ---
 # That the image boots, its 64-bit arithmetic and atomics agree, the CMSDK UART is enabled and
 # SysTick and an NVIC line are taken is cortex_m.rs's ignored QEMU tests.
 
@@ -16207,7 +16207,7 @@ find = '''        &format!("type=bind,source={},target=/src,readonly", repo.disp
 replace = '''        &format!("type=bind,source={},target=/src", repo.display()),'''
 killers = [{ package = "xtask", bin = "xtask", name = "contained::tests::a_contained_run_is_isolated_by_its_arguments" }]
 
-# --- R1a: `for` loops (docs/spec.md, *`for` loops*) ---
+# --- R1a: `for` loops (docs/user/spec.md, *`for` loops*) ---
 
 [[mutation]]
 name = "r1a-for-steps-by-two"
@@ -16297,7 +16297,7 @@ find = "    if let Some(h) = hole {\n        split_dots_at(&mut lexemes, h);\n  
 replace = "    if let Some(h) = hole {\n        let _ = h;\n    }"
 killers = [{ package = "nazm-service", test = "incomplete", name = "every_member_and_variant_of_the_repository_is_among_its_holes_candidates" }]
 
-# --- R1a: immutable indirection, Box[T] and List[T] (docs/spec.md, *Immutable indirection*) ---
+# --- R1a: immutable indirection, Box[T] and List[T] (docs/user/spec.md, *Immutable indirection*) ---
 
 [[mutation]]
 name = "r1a-a-counted-edge-does-not-dominate"
@@ -16387,7 +16387,7 @@ find = "        && !types.names.contains_key(written.name.as_str())"
 replace = "        && true"
 killers = [{ package = "nazm-cli", test = "cli_a_b", name = "box_list::the_new_names_are_prelude_names_a_1_0_program_keeps" }]
 
-# --- R1a: patterns (docs/spec.md, *Patterns*) ---
+# --- R1a: patterns (docs/user/spec.md, *Patterns*) ---
 
 [[mutation]]
 name = "r1a-or-alternatives-may-bind-differently"
@@ -16469,7 +16469,7 @@ find = "            || (matches!(at(1), Some(TokenKind::Ident(n)) if n != \"_\")
 replace = "            || (false"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "tuples::a_plain_let_is_read_as_one_and_reported_as_one" }]
 
-# --- R1a: tuples (docs/spec.md, *Tuples*) ---
+# --- R1a: tuples (docs/user/spec.md, *Tuples*) ---
 
 [[mutation]]
 name = "r1a-a-tuple-element-reads-its-neighbour"
@@ -16535,7 +16535,7 @@ find = "            return matches!(previous, TokenKind::Ident(w) if w == \"for\
 replace = "            return matches!(previous, TokenKind::Ident(w) if w == \"rof\")"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "tuples::a_tuple_is_written_and_formatted_as_the_specification_spells_it" }]
 
-# --- R1a: derived ordering and hashing (docs/spec.md, *Ordering and hashing are derived*) ---
+# --- R1a: derived ordering and hashing (docs/user/spec.md, *Ordering and hashing are derived*) ---
 
 [[mutation]]
 name = "r1a-ordering-is-numeric-only"
@@ -16613,7 +16613,7 @@ find = "                .hashing(ty, |c| self.applying(trait_id, c, types).is_so
 replace = "                .hashing(ty, |_| false)"
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "order_hash::what_has_no_order_or_derived_hash_and_by_which_code" }]
 
-# --- R1a: constant tables and exported constants (docs/spec.md, *Constant tables …*) ---
+# --- R1a: constant tables and exported constants (docs/user/spec.md, *Constant tables …*) ---
 
 [[mutation]]
 name = "r1a-an-array-refuses-strings"
@@ -16693,7 +16693,7 @@ find = "                    name: format!(\"{}::{name}\", q.name),"
 replace = "                    name: name.clone(),"
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "const_tables::an_exported_constant_crosses_a_module_plainly_and_under_a_name" }]
 
-# --- R1a: multi-line and raw strings (docs/spec.md, *Multi-line and raw strings*) ---
+# --- R1a: multi-line and raw strings (docs/user/spec.md, *Multi-line and raw strings*) ---
 
 [[mutation]]
 name = "r1a-a-raw-string-ends-at-any-quote"
@@ -16739,7 +16739,7 @@ find = "    if c == b'r' && matches!(byte(i + 1), Some(b'\"' | b'#')) {"
 replace = "    if c == b'r' && byte(i + 1).is_some_and(|b| !b.is_ascii_alphanumeric() && b != b'_') {"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "string_literals::what_a_literal_refuses_and_by_which_code" }]
 
-# --- R1a: string interpolation (docs/spec.md, *String interpolation*) ---
+# --- R1a: string interpolation (docs/user/spec.md, *String interpolation*) ---
 
 [[mutation]]
 name = "r1a-f-begins-no-interpolation"
@@ -16797,7 +16797,7 @@ find = "                let wider = self.cmp(Cmp::Gt, width, ls);"
 replace = "                let wider = self.cmp(Cmp::Lt, width, ls);"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "interpolation::interpolation_means_the_same_everywhere_and_is_reclaimed" }]
 
-# --- R1b L7: a mutable cell (`docs/spec.md`, *A mutable cell*) ------------------------------------
+# --- R1b L7: a mutable cell (`docs/user/spec.md`, *A mutable cell*) ------------------------------------
 
 [[mutation]]
 name = "r1b-a-cell-owns-nothing"
@@ -16899,7 +16899,7 @@ find = "                    op: if op == nazm_sema::Intrinsic::CellGet {"
 replace = "                    op: if op != nazm_sema::Intrinsic::CellGet {"
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "cell::a_cell_means_the_same_everywhere_and_everything_in_it_is_reclaimed" }]
 
-# --- R1b L10: closures in generic functions; a shared `let mut` (`docs/spec.md`, *Function values and closures*) ---
+# --- R1b L10: closures in generic functions; a shared `let mut` (`docs/user/spec.md`, *Function values and closures*) ---
 
 [[mutation]]
 name = "r1b-a-generic-closure-is-a-plain-function"
@@ -16957,7 +16957,7 @@ find = "            self.store(cell, name_span, &v.flow);"
 replace = "            let _ = (cell, &v.flow);"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "generic_closures::what_a_shared_binding_holds_carries_its_provenance" }]
 
-# --- R1b L11a: default trait methods (`docs/spec.md`, *Traits and methods*, **Default bodies**) ---
+# --- R1b L11a: default trait methods (`docs/user/spec.md`, *Traits and methods*, **Default bodies**) ---
 
 [[mutation]]
 name = "r1b-a-default-body-is-not-one"
@@ -17018,7 +17018,7 @@ find = "                        effects: Some(m.effects.clone().unwrap_or(crate:
 replace = "                        effects: m.effects.clone().and(Some(crate::ast::EffectDecl {"
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "default_methods::a_default_body_is_checked_once_and_held_to_its_signature" }]
 
-# --- R1b L11b: impls of generic types (`docs/spec.md`, *Traits and methods*, **Impls of generic types**) ---
+# --- R1b L11b: impls of generic types (`docs/user/spec.md`, *Traits and methods*, **Impls of generic types**) ---
 
 [[mutation]]
 name = "r1b-an-instance-finds-no-generic-impl"
@@ -17076,7 +17076,7 @@ find = "        template_home(res, ty)"
 replace = "        None"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "generic_impls::an_impl_of_a_generic_type_crosses_modules" }]
 
-# --- R1b L12: `defer` (`docs/spec.md`, *Scope-exit cleanup: `defer`*) ------------------------------
+# --- R1b L12: `defer` (`docs/user/spec.md`, *Scope-exit cleanup: `defer`*) ------------------------------
 
 [[mutation]]
 name = "r1b-a-defer-is-not-registered"
@@ -17160,7 +17160,7 @@ find = '''        if matches!(self.peek(), TokenKind::Ident(w) if w == "defer")'
 replace = '''        if matches!(self.peek(), TokenKind::Ident(w) if w == "defer_")'''
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "defer::deferred_blocks_run_on_every_way_out_everywhere_and_nothing_is_live" }]
 
-# --- R1b L13a: checked arithmetic (`docs/spec.md`, *Numbers*, **Functions**) ---------------------
+# --- R1b L13a: checked arithmetic (`docs/user/spec.md`, *Numbers*, **Functions**) ---------------------
 
 [[mutation]]
 name = "r1b-a-checked-sum-never-overflows"
@@ -17202,7 +17202,7 @@ find = "                Some(o) => res.types_mut().apply_enum(o, vec![t]),"
 replace = "                Some(_) => t,"
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "checked::checked_arithmetic_finds_every_edge_everywhere" }]
 
-# --- R1b L14: `--stack-size` (`docs/spec.md`, *Native recursion, and the stack it runs on*) ---------
+# --- R1b L14: `--stack-size` (`docs/user/spec.md`, *Native recursion, and the stack it runs on*) ---------
 
 [[mutation]]
 name = "r1b-a-task-thread-ignores-the-stack"
@@ -17252,7 +17252,7 @@ find = "        Some((i, 'M' | 'm')) => (&raw[..i], 1u64 << 20),"
 replace = "        Some((i, 'M' | 'm')) => (&raw[..i], 1u64 << 10),"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stack_size::the_stack_asked_for_carries_a_recursion_the_default_does_not" }]
 
-# --- R1b L15: warnings (`docs/spec.md`, *Patterns*; `docs/diagnostics.md`) ------------------------
+# --- R1b L15: warnings (`docs/user/spec.md`, *Patterns*; `docs/user/diagnostics.md`) ------------------------
 
 [[mutation]]
 name = "r1b-a-covering-wildcard-is-silent"
@@ -17302,7 +17302,7 @@ find = "                if choice.deny_warnings {"
 replace = "                if !choice.deny_warnings && false {"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "warnings::deny_warnings_refuses_what_the_checker_warns_of" }]
 
-# --- R1b D2: linear-time string building (`docs/spec.md`, *Strings*, **Building**) ---------------
+# --- R1b D2: linear-time string building (`docs/user/spec.md`, *Strings*, **Building**) ---------------
 
 [[mutation]]
 name = "r1b-an-append-is-a-concat"
@@ -17379,7 +17379,7 @@ find = '            let _ = writeln!(out, "  store i1 %jf, ptr @nz.failed");'
 replace = ""
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stack_size::the_stack_asked_for_carries_a_recursion_the_default_does_not" }]
 
-# --- R1b L13b: `Int128`, `UInt128` and `widening_mul` (`docs/spec.md`, *Numbers*) ---------------
+# --- R1b L13b: `Int128`, `UInt128` and `widening_mul` (`docs/user/spec.md`, *Numbers*) ---------------
 
 [[mutation]]
 name = "r1b-a-wide-sum-wraps"
@@ -17469,7 +17469,7 @@ find = "        matches!(t, Type::Int | Type::Bool) || matches!(t, Type::Num(k) 
 replace = "        matches!(t, Type::Int | Type::Bool) || matches!(t, Type::Num(_))"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "wide::what_128_bits_cannot_do_is_refused" }]
 
-# --- R1c S1: `@std/toml` (`docs/spec.md`, *The standard library*) ------------------------------
+# --- R1c S1: `@std/toml` (`docs/user/spec.md`, *The standard library*) ------------------------------
 
 [[mutation]]
 name = "r1c-a-toml-table-may-be-defined-twice"
@@ -17551,7 +17551,7 @@ find = "            kind: shift_kind(&t.kind, delta),"
 replace = "            kind: t.kind.clone(),"
 killers = [{ package = "nazm-syntax", test = "incremental", name = "seeded_edit_sequences_converge_to_a_fresh_parse_over_the_whole_repository" }]
 
-# --- R1c L2a: `@derive(json)` (`docs/spec.md`, *Derived serialisation*) -------------------------
+# --- R1c L2a: `@derive(json)` (`docs/user/spec.md`, *Derived serialisation*) -------------------------
 
 [[mutation]]
 name = "r1c-a-generated-literal-keeps-its-quotes-bare"
@@ -17603,7 +17603,7 @@ find = '''                        "match try_convert[{n}](i) {{ Option.Some(valu
 replace = '''                        "match Option[{n}].Some(value: wrap_convert[{n}](i)) {{ Option.Some(value: x) => {}, Option.None() => {}, }}",'''
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "derive_json::a_derived_codec_and_schema_agree_everywhere" }]
 
-# --- R1c L2b: `@codec(…)` (`docs/spec.md`, *Derived serialisation*, **Shaping it**) -----------
+# --- R1c L2b: `@codec(…)` (`docs/user/spec.md`, *Derived serialisation*, **Shaping it**) -----------
 
 [[mutation]]
 name = "r1c-omit-none-writes-null"
@@ -17671,7 +17671,7 @@ replace = '''
             let missing = if let Some(empty) = None::<String>'''
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "derive_json::a_shaped_encoding_agrees_everywhere" }]
 
-# --- R1c L2c: `@derive(toml)` (`docs/spec.md`, *Derived serialisation*, **TOML**) ---------------
+# --- R1c L2c: `@derive(toml)` (`docs/user/spec.md`, *Derived serialisation*, **TOML**) ---------------
 
 [[mutation]]
 name = "r1c-toml-carries-an-option-in-an-array"
@@ -17760,7 +17760,7 @@ find = '''    let tls = if needs.single { "" } else { "thread_local " };'''
 replace = '''    let tls = "thread_local ";'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "single_thread::main_s_authority_decides_whether_the_state_is_thread_local" }]
 
-# --- R1e S1: `@std/sha256`, `@std/blake3`, `file_walk` (`docs/spec.md`, *The standard library*) --
+# --- R1e S1: `@std/sha256`, `@std/blake3`, `file_walk` (`docs/user/spec.md`, *The standard library*) --
 
 [[mutation]]
 name = "r1e-a-sha256-schedule-rotates-by-eight"
@@ -17818,7 +17818,7 @@ find = "    Result[Strs, IoError].Ok(value: sorted_all(found))"
 replace = "    Result[Strs, IoError].Ok(value: found)"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "file_walk::a_walk_lists_every_file_and_directory_sorted" }]
 
-# --- R1e S5: `@std/regex` (`docs/spec.md`, *The standard library*) -----------------------------
+# --- R1e S5: `@std/regex` (`docs/user/spec.md`, *The standard library*) -----------------------------
 
 [[mutation]]
 name = "r1e-a-lazy-repetition-never-stops"
@@ -17940,7 +17940,7 @@ find = '''            prev = lo + v + 1;'''
 replace = '''            prev = lo + v;'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "regex::every_pattern_finds_its_leftmost_first_matches" }]
 
-# --- R1e S4: `@std/args` (`docs/spec.md`, *The standard library*) ------------------------------
+# --- R1e S4: `@std/args` (`docs/user/spec.md`, *The standard library*) ------------------------------
 
 [[mutation]]
 name = "r1e-options-are-not-inherited"
@@ -18430,7 +18430,7 @@ find = '''        let args: Vec<Type> = args.into_iter().collect::<Option<_>>()?
 replace = '''        let args: Vec<Type> = args.into_iter().map(|a| a.unwrap_or(Type::Int)).collect();'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "short_variants::what_nothing_decides_is_still_written" }]
 
-# --- R1d D5: `--heap-limit` (`docs/spec.md`, *A bounded heap*) ----------------------------------
+# --- R1d D5: `--heap-limit` (`docs/user/spec.md`, *A bounded heap*) ----------------------------------
 
 [[mutation]]
 name = "r1d-the-heap-limit-is-never-passed"
@@ -18505,7 +18505,7 @@ find = "        } else if choice.library {"
 replace = "        } else if false {"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "heap_limit::a_limit_is_a_hosted_programs_and_a_size" }]
 
-# --- R1d P3: streaming standard input (`docs/spec.md`, *Files and handles*) -----------------------
+# --- R1d P3: streaming standard input (`docs/user/spec.md`, *Files and handles*) -----------------------
 
 [[mutation]]
 name = "r1d-a-read-of-standard-input-skips-its-buffer"
@@ -18563,7 +18563,7 @@ find = "            if bytes_get(chunk, n - 1) == 10 {"
 replace = "            if bytes_get(chunk, n - 1) == 0 {"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stdin_lines::headers_frames_and_lines_read_alike_everywhere" }]
 
-# --- R1d: the platform, further (`docs/spec.md`, *The platform, further*; D4's built-ins, P1, P2) ---
+# --- R1d: the platform, further (`docs/user/spec.md`, *The platform, further*; D4's built-ins, P1, P2) ---
 
 [[mutation]]
 name = "r1d-a-child-s-environment-is-reversed"

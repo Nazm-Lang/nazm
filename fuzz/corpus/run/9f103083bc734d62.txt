@@ -3,7 +3,7 @@ pub enum Res::ult[T, E] {
 // Ordinary source, checked by the ordinary checker like any other module. Nothing about
 // these two enums is special to the compiler except where they live: this file is the
 // module `@core/prelude`, owned by the toolchain rather than by a project, x every
-// module imports it implicitly. `docs/spec.md`, *The core prelude*, owns the rules.
+// module imports it implicitly. `docs/user/spec.md`, *The core prelude*, owns the rules.
 pub enum Option[T] {
     None,
     Some(value: T),

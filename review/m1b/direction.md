@@ -42,7 +42,7 @@ claims** — the ones that would otherwise be asserted without support:
   comparable tooling;
 - that structured diagnostics and a canonical formatter reduce rework, which is the A2
   arm's actual subject and remains worth measuring on its own;
-- eventually, the runtime claims in `docs/performance.md`, which need a backend before
+- eventually, the runtime claims in `docs/internal/performance-log.md`, which need a backend before
   they mean anything.
 
 A2 keeps its role. If improved TypeScript tooling captures most of a measured benefit,
@@ -54,11 +54,11 @@ condition for the project.
 **A long-term objective, and explicitly outside the current interpreter milestone.**
 
 Before this record, self-hosting appeared in the repository three times: once in
-`docs/spec.md` as a *non-goal for v0.1*, once in `README.md` as a caveat about what a
-reproducible bootstrap does not establish, and once in `docs/architecture.md` §8 as a
+`docs/user/spec.md` as a *non-goal for v0.1*, once in `README.md` as a caveat about what a
+reproducible bootstrap does not establish, and once in `docs/internal/architecture.md` §8 as a
 reason to prefer pure-Rust dependencies. It was never planned.
 
-It is now a stated objective with a staged path in `docs/roadmap.md` (M3). The gap is
+It is now a stated objective with a staged path in `docs/user/roadmap.md` (M3). The gap is
 large and worth naming rather than minimising: Nazm today has no collections, no
 user-defined types, no pattern matching, no string concatenation, and no I/O. A compiler
 cannot be written in it in any form, and no amount of backend work changes that. The
@@ -76,10 +76,10 @@ survives the change of direction.
 
 | Kind | Meaning | Where it lives |
 | --- | --- | --- |
-| **Implemented behaviour** | Runs today, with a test that fails if it stops | `README.md` "What is actually here"; `docs/spec.md` *Settled for v0.x*; the test suites |
-| **Accepted design** | Decided, not built. Changing one is a re-founding decision | `docs/architecture.md`; `docs/spec.md` *Settled* |
-| **Open question** | Known to need an answer, answer not chosen | `docs/spec.md` *Open*; `docs/architecture.md` where it says so |
-| **Research proposal** | Speculative, and not entitled to be described as a plan | Automatic layout selection (`docs/architecture.md` §4 — "a **proposed research direction**, pending a literature review that has not been done") |
+| **Implemented behaviour** | Runs today, with a test that fails if it stops | `README.md` "What is actually here"; `docs/user/spec.md` *Settled for v0.x*; the test suites |
+| **Accepted design** | Decided, not built. Changing one is a re-founding decision | `docs/internal/architecture.md`; `docs/user/spec.md` *Settled* |
+| **Open question** | Known to need an answer, answer not chosen | `docs/user/spec.md` *Open*; `docs/internal/architecture.md` where it says so |
+| **Research proposal** | Speculative, and not entitled to be described as a plan | Automatic layout selection (`docs/internal/architecture.md` §4 — "a **proposed research direction**, pending a literature review that has not been done") |
 
 A document, a stub, or a passing test does not by itself move a statement up this table.
 
@@ -98,10 +98,10 @@ present benefit. The decision to revisit is Stage 7's.
 
 ## Consequences
 
-1. `docs/roadmap.md` is added and is the ordering authority for language work.
-2. `docs/architecture.md` §7 and the `Cargo.toml` header, which both said "Phase 2 is
+1. `docs/user/roadmap.md` is added and is the ordering authority for language work.
+2. `docs/internal/architecture.md` §7 and the `Cargo.toml` header, which both said "Phase 2 is
    `nazm-bench` and `xtask` only — there is no compiler yet", are corrected: the Phase 4
    front-end crates exist and a `.nz` program runs.
-3. `docs/spec.md` keeps its version history rather than being rewritten. The v0.1 section
+3. `docs/user/spec.md` keeps its version history rather than being rewritten. The v0.1 section
    still records that v0.1 had no `return`; a pointer marks where that was superseded.
 4. The harness is maintained, not extended, until the claims in M1–M3 need it.

@@ -1,6 +1,6 @@
 //! N87: contracts and the obligation census.
 //!
-//! `docs/architecture.md` §7.88 and the spec section *Contracts*. What only whole programs show:
+//! `docs/internal/architecture.md` §7.88 and the spec section *Contracts*. What only whole programs show:
 //! that a `requires` and an `ensures` mean the same on the interpreter and both native backends —
 //! on every return path, a `?` included, with a `Str` result reclaimed — and fail with `N0410` and
 //! `N0411` at the clause; that a call of literals is proved or refused at compile time (`N0615`);

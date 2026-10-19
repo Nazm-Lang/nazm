@@ -107,7 +107,7 @@ fi
 # --- assemble -----------------------------------------------------------------------
 out="$target/release-candidate"
 rm -rf "$out"
-mkdir -p "$out/bin" "$out/docs" "$out/schema" "$out/examples/tour" "$out/scripts" \
+mkdir -p "$out/bin" "$out/docs/user" "$out/docs/internal" "$out/schema" "$out/examples/tour" "$out/scripts" \
          "$out/compiler/conformance" "$out/bench/programs" "$out/bench/reference"
 
 # Two different executables, named so they cannot be mistaken for one another.
@@ -136,7 +136,8 @@ if [ "$(uname -s)" = Darwin ]; then
     nzcg=yes
 fi
 cp README.md LICENSE* NOTICE THIRD-PARTY-NOTICES.md SECURITY.md CONTRIBUTING.md "$out/"
-cp docs/*.md docs/*.ebnf "$out/docs/"
+cp docs/user/*.md docs/user/*.ebnf "$out/docs/user/"
+cp docs/internal/*.md "$out/docs/internal/"
 cp schema/*.json "$out/schema/"
 cp examples/*.nz "$out/examples/"
 cp examples/tour/*.nz "$out/examples/tour/"
@@ -150,7 +151,7 @@ tar -C compiler/conformance --exclude=.nazm -cf - . | tar -C "$out/compiler/conf
 cp scripts/*.sh "$out/scripts/"
 cp bench/programs/* "$out/bench/programs/"
 # The external reference programs, so the one cross-language number in
-# docs/performance.md can be re-measured rather than taken on faith.
+# docs/internal/performance-log.md can be re-measured rather than taken on faith.
 cp bench/reference/* "$out/bench/reference/"
 
 # Every recorded baseline, not just one: the tool refuses to compare across platforms, so
@@ -158,9 +159,9 @@ cp bench/reference/* "$out/bench/reference/"
 # unverifiable. Named after their files so a reader can tell which is which.
 for b in bench/baseline*.json; do
     [ -e "$b" ] || continue
-    cp "$b" "$out/docs/performance-$(basename "$b")"
+    cp "$b" "$out/docs/internal/performance-$(basename "$b")"
 done
-cp "$target/bootstrap/record.txt" "$out/docs/bootstrap-record.txt"
+cp "$target/bootstrap/record.txt" "$out/docs/internal/bootstrap-record.txt"
 
 
 # --- provenance ---------------------------------------------------------------------
@@ -218,7 +219,7 @@ cp "$target/bootstrap/record.txt" "$out/docs/bootstrap-record.txt"
         printf '                                       sha256 %s\n' "$(sha256 "$out/libexec/nazm/nzcg")"
     fi
     printf '\n'
-    printf 'Neither binary is portable off %s. The sources are; see docs/bootstrap.md.\n' "$(uname -sm)"
+    printf 'Neither binary is portable off %s. The sources are; see docs/internal/bootstrap.md.\n' "$(uname -sm)"
     printf '\n'
     # `%s` rather than a bare format string: one of these lines begins with `--`, and
     # dash's printf reads that as an option and refuses. Caught by the release gate.
@@ -251,9 +252,9 @@ cp "$target/bootstrap/record.txt" "$out/docs/bootstrap-record.txt"
     printf 'binary-sha:  %s\n' "$(sha256 "$out/bin/nazm")"
     printf '\n'
     printf 'This is an EXPERIMENTAL candidate, built and verified on %s.\n' "$(uname -sm)"
-    printf 'Its binaries run there. What each target has shown is in docs/support.md,\n'
-    printf 'what is measured in docs/performance.md, and what is not done in\n'
-    printf 'docs/limitations.md.\n'
+    printf 'Its binaries run there. What each target has shown is in docs/user/support.md,\n'
+    printf 'what is measured in docs/internal/performance-log.md, and what is not done in\n'
+    printf 'docs/user/limitations.md.\n'
     printf '\n'
     [ "$nzcg" = yes ] && printf 'nzcg-sha:    %s (libexec/nazm/nzcg)\n\n' "$(sha256 "$out/libexec/nazm/nzcg")"
     printf 'contains: the binary, the documentation, the JSON schemas, the examples,\n'

@@ -1,6 +1,6 @@
 ## Context
 
-LIR (`docs/architecture.md` §7.106) is the level both native backends consume: every guard,
+LIR (`docs/internal/architecture.md` §7.106) is the level both native backends consume: every guard,
 failure text, offset, runtime entry, retain and release is decided before a backend sees a module.
 A backend decides instruction selection, registers, the object format and how a position becomes
 debug information — nothing a program can observe. `crates/nazm-codegen-clif` is the existing
@@ -79,7 +79,7 @@ fixed order (locals in definition order; externals and imports sorted by name).
 in `link.txt`'s order with its libraries by the system `cc`, run; standard output, standard error
 and exit status compared byte for byte. Inputs: `bench/compare/nazm/fib.nz`, then every program of
 `tests/compat/v1/run/`, then `corpus/`. A generator refusal is *refused*, a build failure of the
-reference is *skipped*, and neither is ever counted as agreeing (`docs/runbook.md`, *Status
+reference is *skipped*, and neither is ever counted as agreeing (`docs/internal/runbook.md`, *Status
 vocabulary*). A per-instruction encoder check against the system assembler (`cc -c` of the same
 instructions as text) is added with the encoder's first slice.
 
@@ -115,7 +115,7 @@ still to write, and the list says which.
 and `tests/elf.sh` stay as built and are not extended; Linux is after 1.0.
 
 **D14. The failure convention: LLVM's, by target.** On the hosted targets the LLVM backend
-unwinds on a failure (performance-leadership 4.2, `docs/architecture.md` §7.115). Until 7.5 this
+unwinds on a failure (performance-leadership 4.2, `docs/internal/architecture.md` §7.115). Until 7.5 this
 generator kept the bit beside the result (D4), as Cranelift does, so objects of the two backends
 were never linked together. Since 7.5 it unwinds where LLVM does on the targets it carries
 before 1.0 (D13: `aarch64-apple-darwin`, `x86_64-apple-darwin`), with the same tables, so a

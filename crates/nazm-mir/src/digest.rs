@@ -4,7 +4,7 @@
 //! type arguments, its parameter, local and result types, and every block — named durably, with
 //! no span, no display name, no effect metadata and no session-local number except MIR's own
 //! local and block numbering, which is a deterministic function of the program
-//! (`docs/architecture.md` §7.42).
+//! (`docs/internal/architecture.md` §7.42).
 //!
 //! What moves it and what does not, by construction: a change to what executes moves it; a
 //! change to formatting, comments, spans, names of locals or the effect contract does not; a

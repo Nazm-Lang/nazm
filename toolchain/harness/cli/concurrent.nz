@@ -202,7 +202,7 @@ fn a_task_that_fails_ends_the_whole_program(io: IoCap, p: ProcessCap, sp: SpawnC
 // ---------------------------------------------------------------------------
 // A failure waits for the scope's tasks
 //
-// `docs/spec.md` promises the closing brace joins every task *including when the body
+// `docs/user/spec.md` promises the closing brace joins every task *including when the body
 // itself failed*, so a failure is reported once nothing is still running. The diagnostic
 // code cannot check that: a run that joined first and a run that exited on the spot
 // produce the same code and the same exit status. The difference is only visible in
@@ -284,7 +284,7 @@ fn when_both_the_body_and_a_task_fail_the_bodys_failure_is_reported(io: IoCap, p
     // The task's failure strictly *precedes* the body's: the body does not begin
     // overflowing until it has received `done`, which the task sends immediately before
     // dividing by zero. So this cannot pass by reporting whichever happened first —
-    // `docs/spec.md` says the body's is the cause and the task's the consequence.
+    // `docs/user/spec.md` says the body's is the cause and the task's the consequence.
     let src = "\nfn bad(dead: Chan, done: Chan) -> Int {\n    let buf = ints_new();\n    chan_recv(dead, buf);\n    let z = ints_pop(buf);\n    chan_send(done, 1);\n    1 / z\n}\nfn main(tasks: SpawnCap) -> Int {\n    let dead = chan_new(1);\n    let done = chan_new(1);\n    let buf = ints_new();\n    let mut top = 1;\n    scope {\n        spawn bad(dead, done);\n        chan_send(dead, 0);\n        chan_recv(done, buf);\n        ints_pop(buf);\n        let mut n = 0;\n        while n < 64 { top = top + top; n = n + 1; }\n    }\n    top\n}\n";
     let l5 = strs_new();
     failure_joins(h, "both fail", src, "N0400", l5)?;

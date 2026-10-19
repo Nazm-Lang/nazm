@@ -1,6 +1,6 @@
 //! N52: resource facts, the sink registry and declassification.
 //!
-//! `docs/architecture.md` §7.54. That `nazm explain-cost` reports what MIR does — each site
+//! `docs/internal/architecture.md` §7.54. That `nazm explain-cost` reports what MIR does — each site
 //! with a count per call that is `at-most-once` or `unknown`, never a number — that every sink
 //! class is solved through helpers, closures and modules, that declassification needs its
 //! authority everywhere and is recorded, that profiles read all of it, and that the analysis

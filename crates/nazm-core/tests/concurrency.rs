@@ -10,7 +10,7 @@
 //!
 //! # What these tests assert
 //!
-//! Permitted outcomes and invariants, never a schedule. `docs/spec.md` promises no
+//! Permitted outcomes and invariants, never a schedule. `docs/user/spec.md` promises no
 //! fairness and no ordering between tasks, so a test that pinned one interleaving would
 //! be asserting something the language does not offer — and would pass or fail with the
 //! machine it ran on. Every assertion here is of the form "this total", "this many", "it
@@ -326,7 +326,7 @@ fn closing_twice_is_allowed() {
 
 #[test]
 fn a_task_that_fails_fails_the_whole_program() {
-    // `docs/spec.md`: a task has no private failure mode. The division is reported
+    // `docs/user/spec.md`: a task has no private failure mode. The division is reported
     // exactly as it would be on the main thread.
     let src = r"
         fn bad(c: Chan) -> Int {
@@ -417,7 +417,7 @@ fn a_scope_whose_body_fails_reports_the_bodys_own_failure() {
 #[test]
 fn when_both_the_body_and_a_task_fail_the_bodys_failure_is_the_one_reported() {
     // Two different codes so the answer is legible: the task divides by zero (N0401),
-    // the body overflows (N0400). `docs/spec.md` says a task that failed because the body
+    // the body overflows (N0400). `docs/user/spec.md` says a task that failed because the body
     // stopped feeding it is a consequence rather than a cause, so the body's failure wins.
     // The order does not depend on which happened first — the scope joins, then reports
     // the body's.

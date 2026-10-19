@@ -14,7 +14,7 @@
 //! # What they are not
 //!
 //! Not content. `DefKey` answers *which definition is this*; whether its body changed is a
-//! fingerprint's question, and `docs/spec.md` keeps the two apart because collapsing them
+//! fingerprint's question, and `docs/user/spec.md` keeps the two apart because collapsing them
 //! makes every edit create a new definition — the opposite of what durable identity is
 //! for.
 //!
@@ -34,7 +34,7 @@ const PRELUDE: &str = "@core/prelude";
 /// # What equality means
 ///
 /// Two `ModuleKey`s are equal when the modules occupy the same place in the same project,
-/// whatever directory that project was checked out into. `docs/spec.md`, *Durable
+/// whatever directory that project was checked out into. `docs/user/spec.md`, *Durable
 /// identity*, owns the rule; this owns its spelling:
 ///
 /// * components separated by `/`, on every platform;
@@ -205,12 +205,12 @@ impl fmt::Display for ModuleKey {
 /// changed meaning, which is what the design was for.
 ///
 /// The spelling is a word rather than a number for the same reason. `record` and not
-/// `struct`: `docs/spec.md` uses `struct` for the source keyword and *record* for the
+/// `struct`: `docs/user/spec.md` uses `struct` for the source keyword and *record* for the
 /// semantic category, and this is a semantic identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DefKind {
     Function,
-    /// A user-defined record. One namespace apart from functions — see `docs/spec.md`,
+    /// A user-defined record. One namespace apart from functions — see `docs/user/spec.md`,
     /// *Types and functions are separate namespaces* — so `a.nz::fn Point` and
     /// `a.nz::record Point` are two definitions and this is the field that says so.
     Record,
@@ -235,7 +235,7 @@ impl DefKind {
         match self {
             Self::Function => "fn",
             Self::Record => "record",
-            // The source keyword, unlike `record`: `docs/spec.md` uses `struct` in source
+            // The source keyword, unlike `record`: `docs/user/spec.md` uses `struct` in source
             // and *record* for the category, and there is no such pair for an enum — the
             // keyword and the category are one word, so the identity uses it.
             Self::Enum => "enum",
@@ -261,7 +261,7 @@ impl DefKind {
 ///
 /// # What equality means
 ///
-/// `docs/spec.md` owns the table. In short: a body edit, a signature edit, adding or
+/// `docs/user/spec.md` owns the table. In short: a body edit, a signature edit, adding or
 /// removing `pub`, and moving the declaration within its module all keep the key. A rename
 /// does not — it is a removal and an addition. Deleting a definition and later declaring
 /// one of the same name gives the same key, which is continuity of *a name in a module*

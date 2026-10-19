@@ -1,4 +1,4 @@
-// A WASI module's tour (Gate 3, `docs/spec.md` *WASI*): its arguments, strings and sequences built
+// A WASI module's tour (Gate 3, `docs/user/spec.md` *WASI*): its arguments, strings and sequences built
 // at run time on its heap, a closure, a whole file written and read back, a file through a handle
 // with a seek, its metadata, the clock, and a path outside the preopened directory refused.
 use "@std/io";

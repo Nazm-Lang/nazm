@@ -354,7 +354,7 @@ pub fn declare_unit(
         if visibility.is_exported() {
             // A public signature naming a private record would publish a type the
             // importer cannot resolve. Checked at each public item on its *direct*
-            // references, which is the recursion `docs/spec.md` asks for expressed
+            // references, which is the recursion `docs/user/spec.md` asks for expressed
             // distributively: an intermediate record must itself be public to appear
             // here, and its own declaration is checked the same way — so one mistake
             // produces exactly one diagnostic, at the place the private name is written.
@@ -438,7 +438,7 @@ pub fn declare_unit(
         let name = def.name.clone();
         let name_span = def.name_span;
         // Every payload field of every variant: a public enum's variants and their
-        // payloads are all part of the public type, because `docs/spec.md` gives it no
+        // payloads are all part of the public type, because `docs/user/spec.md` gives it no
         // per-variant visibility and an importer must be able to match every arm.
         let payloads: Vec<(Type, Span)> = def
             .variants
@@ -565,7 +565,7 @@ pub(super) fn declare_consts(
 ///
 /// `kind` and `name` describe the **public** item, so the message says what is leaking
 /// and the labels say from where to where. Records and enums both, because the closure
-/// `docs/spec.md` requires runs through both and a check that knew one kind would let a
+/// `docs/user/spec.md` requires runs through both and a check that knew one kind would let a
 /// private enum out through a public record's field.
 fn report_private_type(
     t: Type,
@@ -627,7 +627,7 @@ fn report_private_type(
 ///
 /// `deps` are the interfaces of the modules this one **directly** imports. Their bodies
 /// are not a parameter, are not reachable from one, and are not read. That sentence is the
-/// whole claim `docs/spec.md` makes about compilation units, and this signature is where
+/// whole claim `docs/user/spec.md` makes about compilation units, and this signature is where
 /// it is either true or not.
 pub fn check_unit(
     unit: &Unit<'_>,

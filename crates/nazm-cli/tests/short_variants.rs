@@ -1,4 +1,4 @@
-//! R1, 5b.14 (`docs/spec.md`, *Short variants*): an enum's construction infers its type
+//! R1, 5b.14 (`docs/user/spec.md`, *Short variants*): an enum's construction infers its type
 //! arguments; `Some`, `None`, `Ok` and `Err` name the prelude's variants; a variant with no
 //! payload needs no `()`.
 //!

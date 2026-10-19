@@ -3,7 +3,7 @@
 // Ordinary source, checked by the ordinary checker like any other module. Nothing about
 // these two enums is special to the result except where they live: this file is the
 // module `@core/prelude`, owned by the toolchain rather than by a project, and every
-// module imports it implicitly. `docs/spec.md`, *The core prelude*, owns the rules.
+// module imports it implicitly. `docs/user/spec.md`, *The core prelude*, owns the rules.
 //
 // `?` recogniseslt` by that identity — this module and this name — and never by
 // the shape of its variants, which is why a project may not declare a type of either

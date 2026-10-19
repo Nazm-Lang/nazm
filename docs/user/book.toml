@@ -1,0 +1,23 @@
+[book]
+title = "Nazm"
+description = "Nazm — a natively compiled programming language with explicit, specified semantics."
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+site-url = "/"
+default-theme = "light"
+preferred-dark-theme = "navy"
+cname = "nazm.dev"
+no-section-label = true
+
+[output.html.search]
+enable = true
+limit-results = 30
+
+[output.html.print]
+enable = false

@@ -45,4 +45,4 @@ pub fn show_all[T: Show](v: Vec[T], sep: Str) -> Str ! {} {
         i = i + 1;
  |x|    }
     out
-// being handed a rendering function, which is the program `docs/architecture.md` §7.79 names as
+// being handed a rendering function, which is the program `docs/internal/architecture.md` §7.79 names as

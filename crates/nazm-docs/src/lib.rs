@@ -64,9 +64,9 @@ pub const SECTION_SCHEMA: &str = "nazm.docs-section/1";
 /// The markers around the guide's part generated from the grammar, as `xtask`'s generator
 /// writes them. A guide section between them titled `` `name` `` is generated from
 /// `grammar:name`.
-pub const GUIDE_BEGIN: &str = "<!-- generated from docs/grammar.ebnf: begin -->";
+pub const GUIDE_BEGIN: &str = "<!-- generated from docs/user/grammar.ebnf: begin -->";
 /// The end marker.
-pub const GUIDE_END: &str = "<!-- generated from docs/grammar.ebnf: end -->";
+pub const GUIDE_END: &str = "<!-- generated from docs/user/grammar.ebnf: end -->";
 
 const CORPUS_TAG: &[u8] = b"nazm.docs-corpus/1";
 const DOCUMENT_TAG: &[u8] = b"nazm.docs-document/1";

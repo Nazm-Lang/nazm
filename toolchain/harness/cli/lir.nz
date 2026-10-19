@@ -1,5 +1,5 @@
 // N81 and N105: `nazm lir` — the target's data layout, every record's and enum's byte layout, which
-// types own anything, and every unit's instructions (`docs/architecture.md` §7.82 and §7.106).
+// types own anything, and every unit's instructions (`docs/internal/architecture.md` §7.82 and §7.106).
 // Ported from `crates/nazm-cli/tests/lir.rs` (R7).
 
 use "@std/json"

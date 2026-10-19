@@ -1,4 +1,4 @@
-//! Gate 3: the Cortex-M board (`docs/spec.md`, *A freestanding target*; `docs/systems-domains.md`
+//! Gate 3: the Cortex-M board (`docs/user/spec.md`, *A freestanding target*; `docs/internal/systems-domains.md`
 //! Part C).
 //!
 //! What a build shows on any host: a program for `thumbv7m-none-eabi` is built to objects whose

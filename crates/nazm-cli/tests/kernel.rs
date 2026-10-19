@@ -1,5 +1,5 @@
-//! Gate 3: the failure hook and the reference kernel-style workload (`docs/spec.md`, *Boards*;
-//! `docs/systems-domains.md` Part B, *Reference workload*).
+//! Gate 3: the failure hook and the reference kernel-style workload (`docs/user/spec.md`, *Boards*;
+//! `docs/internal/systems-domains.md` Part B, *Reference workload*).
 //!
 //! The workload is one AArch64 image: a timer interrupt that counts ticks into a static atomic, a
 //! UART driven by polling its flag register through MMIO, and a fault once three ticks have

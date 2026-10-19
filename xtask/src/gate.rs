@@ -225,7 +225,7 @@ mod tests {
             of(&["docker/contained.Dockerfile"]).lifecycle,
             Lifecycle::Full
         );
-        assert_eq!(of(&["docs/spec.md"]).lifecycle, Lifecycle::Invariant);
+        assert_eq!(of(&["docs/user/spec.md"]).lifecycle, Lifecycle::Invariant);
         assert_eq!(
             of(&[
                 "crates/nazm-core/src/lib.rs",
@@ -237,7 +237,7 @@ mod tests {
         );
         // One harness path among product paths is enough.
         assert_eq!(
-            of(&["docs/spec.md", "xtask/src/contained.rs"]).lifecycle,
+            of(&["docs/user/spec.md", "xtask/src/contained.rs"]).lifecycle,
             Lifecycle::Full
         );
     }
@@ -260,7 +260,7 @@ mod tests {
     #[test]
     fn benchmarks_follow_the_paths_and_an_unknown_path_brings_them_all() {
         let set = |p: &[&str]| of(p).benches.into_iter().collect::<Vec<_>>();
-        assert_eq!(set(&["docs/spec.md"]), ["docs"]);
+        assert_eq!(set(&["docs/user/spec.md"]), ["docs"]);
         assert_eq!(set(&["crates/nazm-docs/src/lib.rs"]), ["docs", "mcp"]);
         assert_eq!(set(&["crates/nazm-core/src/lib.rs"]), ["compiler"]);
         assert_eq!(set(&["xtask/src/suite.rs"]), ["harness"]);
@@ -276,8 +276,8 @@ mod tests {
     #[test]
     fn a_normal_milestone_plan_is_covered_by_the_harness_changing_plan_over_the_same_paths() {
         let normals: [&[&str]; 5] = [
-            &["docs/spec.md"],
-            &["crates/nazm-docs/src/lib.rs", "docs/spec.md"],
+            &["docs/user/spec.md"],
+            &["crates/nazm-docs/src/lib.rs", "docs/user/spec.md"],
             &["crates/nazm-mcp/src/main.rs"],
             &["crates/nazm-core/src/lib.rs", "compiler/emit.nz"],
             &["README.md"],
@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn the_invariant_set_is_named_exactly_and_the_full_set_is_not_filtered() {
-        let inv = of(&["docs/spec.md"]).lifecycle_args();
+        let inv = of(&["docs/user/spec.md"]).lifecycle_args();
         assert!(inv.contains(&"--exact".to_owned()));
         for t in INVARIANT {
             assert!(inv.contains(&(*t).to_owned()), "{t}");

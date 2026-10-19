@@ -1,6 +1,6 @@
 //! N73: front-end robustness fuzzing — no input makes the parser or the checker panic.
 //!
-//! `docs/architecture.md` §7.75. Every source of the repository's corpora is mutated by a seeded
+//! `docs/internal/architecture.md` §7.75. Every source of the repository's corpora is mutated by a seeded
 //! generator — ranges deleted, duplicated and swapped, characters replaced, tokens of the language
 //! inserted — and parsed and checked in process. A diagnostic is the right answer to any input; a
 //! panic is a defect, shrunk to the smallest input that still panics and printed. The seed is fixed,

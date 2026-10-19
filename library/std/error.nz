@@ -3,7 +3,7 @@
 // Imported with `use "@std/error";` beside `use "@std/ioerror";`. An `Error` is a message and what
 // the program was doing when it happened, innermost first: a function that cannot go on returns
 // `Err(error_new(…))`, and each caller that knows more adds it with `error_context`. An `IoError`
-// becomes one with `error_from_io`. No exceptions: failure is a value. `docs/general-purpose.md`
+// becomes one with `error_from_io`. No exceptions: failure is a value. `docs/internal/general-purpose.md`
 // §13.
 
 use "@std/ioerror";

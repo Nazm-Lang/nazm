@@ -51,7 +51,7 @@ pub mod codes {
     pub const UNKNOWN_CHARACTER: Code = Code::new("N0001");
     pub const UNTERMINATED_STRING: Code = Code::new("N0002");
     pub const INTEGER_TOO_LARGE: Code = Code::new("N0003");
-    /// A backslash in a string literal that is not one of the escapes `docs/spec.md` lists
+    /// A backslash in a string literal that is not one of the escapes `docs/user/spec.md` lists
     /// (N49): an unknown letter, `\x` without two hex digits, or `\x` above `7F`.
     pub const INVALID_ESCAPE: Code = Code::new("N0004");
     /// A line of a multi-line string that does not begin with its closing delimiter's
@@ -129,7 +129,7 @@ pub mod codes {
     // Execution
     pub const INTEGER_OVERFLOW: Code = Code::new("N0400");
     pub const DIVISION_BY_ZERO: Code = Code::new("N0401");
-    /// The interpreter's iteration guard, not a language rule. See `docs/spec.md`.
+    /// The interpreter's iteration guard, not a language rule. See `docs/user/spec.md`.
     pub const ITERATION_LIMIT: Code = Code::new("N0402");
     /// The host refused what running needs: the interpreter could not start, or — in a native
     /// build — the operating system would not start a task's thread (§7.45, *The failure
@@ -139,7 +139,7 @@ pub mod codes {
 
     /// An index outside a value's bounds: `str_byte` past the end, a slice whose range
     /// is inverted or runs off either end. A *language* rule, unlike `N0402`/`N0403`:
-    /// `docs/spec.md` specifies the failure, so every implementation must produce it.
+    /// `docs/user/spec.md` specifies the failure, so every implementation must produce it.
     pub const INDEX_OUT_OF_BOUNDS: Code = Code::new("N0405");
 
     /// The allocator refused. Reported where an implementation can detect it: a compiled
@@ -176,13 +176,13 @@ pub mod codes {
     /// boundary, or an `Int` that is not a Unicode scalar value made into one (Gate 2).
     pub const NOT_UTF8: Code = Code::new("N0413");
     /// A board's task released again before it had run: it missed its deadline, its period (Gate
-    /// 3, `docs/spec.md`, *Boards*).
+    /// 3, `docs/user/spec.md`, *Boards*).
     pub const TASK_DEADLINE: Code = Code::new("N0414");
     /// A board's watchdog expired: no task fed it within its manifest's ticks (Gate 3,
-    /// `docs/spec.md`, *Boards*).
+    /// `docs/user/spec.md`, *Boards*).
     pub const WATCHDOG_EXPIRED: Code = Code::new("N0415");
     /// `exit_with` given a status outside `0..=255`, the statuses every host reports unchanged
-    /// (v1, Q1-B-05, `docs/spec.md`, *Ending*): refused rather than truncated by the host.
+    /// (v1, Q1-B-05, `docs/user/spec.md`, *Ending*): refused rather than truncated by the host.
     pub const EXIT_STATUS: Code = Code::new("N0416");
 
     /// `spawn` outside a `scope`.
@@ -193,7 +193,7 @@ pub mod codes {
     pub const ILLEGAL_TASK_CAPTURE: Code = Code::new("N0321");
 
     // Records. N9 allocated nine codes from the unused range and renumbered none:
-    // `docs/diagnostics.md` makes a code permanent, and a shifted code is worse than an
+    // `docs/user/diagnostics.md` makes a code permanent, and a shifted code is worse than an
     // ugly one. Where a record failure is the same *semantic category* as an existing
     // one, the existing code is reused rather than duplicated under a new number —
     // assigning to an immutable binding is `N0310` whether or not a field is involved,
@@ -345,50 +345,50 @@ pub mod codes {
     /// `nazm run` was asked to run a program that calls a foreign function (N42).
     pub const FOREIGN_NOT_INTERPRETED: Code = Code::new("N0385");
 
-    // Function values and closures (N50, `docs/architecture.md` §7.52)
+    // Function values and closures (N50, `docs/internal/architecture.md` §7.52)
     /// A closure captures a `let mut` binding or a capability (N50).
     pub const CAPTURE_REFUSED: Code = Code::new("N0386");
     /// A function that cannot be a value — generic, foreign or built-in — is used as one, or
     /// a closure is written inside a generic function (N50).
     pub const NOT_A_FUNCTION_VALUE: Code = Code::new("N0387");
 
-    // Effect parameters (N51, `docs/architecture.md` §7.53)
+    // Effect parameters (N51, `docs/internal/architecture.md` §7.53)
     /// An effect parameter where none may be: a second one, one on a foreign function, on
     /// `main`, on a function that declares no effect set, or named inside a type's arguments.
     pub const EFFECT_PARAMETER: Code = Code::new("N0388");
     /// A call binds its callee's effect parameter to two different sets (N51).
     pub const CONFLICTING_EFFECT_ARGUMENT: Code = Code::new("N0389");
 
-    // Generic channels (N53, `docs/architecture.md` §7.55)
+    // Generic channels (N53, `docs/internal/architecture.md` §7.55)
     /// A `Chan[T]` whose `T` may not cross into a task (N53).
     pub const CHANNEL_ELEMENT: Code = Code::new("N0390");
     /// An export (N55) that is not public, declares an effect, is generic, or takes or returns
     /// a type other than `Int` and `Bool`.
     pub const EXPORT_SHAPE: Code = Code::new("N0391");
 
-    // A freestanding target (N62, `docs/architecture.md` §7.64)
+    // A freestanding target (N62, `docs/internal/architecture.md` §7.64)
     /// A device-register built-in (`mmio_read32`, `mmio_write32`) reached by something that
     /// has no device registers: `nazm run`, or a build for a hosted target.
     pub const MACHINE_ONLY: Code = Code::new("N0392");
 
-    // The interactive tier (N65, `docs/architecture.md` §7.67)
+    // The interactive tier (N65, `docs/internal/architecture.md` §7.67)
     /// A function `nazm comptime` will not evaluate: it has parameters, or it is not pure, so it
     /// could reach the host through authority it holds or borrows.
     pub const COMPTIME_REFUSED: Code = Code::new("N0393");
 
-    // Accelerators (N67, `docs/architecture.md` §7.69)
+    // Accelerators (N67, `docs/internal/architecture.md` §7.69)
     /// A function `nazm accel` will not run as a kernel: not a pure `(Int) -> Int` over `Int`s
     /// and `Bool`s, or reaching something with no device form.
     pub const KERNEL_INELIGIBLE: Code = Code::new("N0394");
 
-    // Contracts (N69, `docs/architecture.md` §7.71)
+    // Contracts (N69, `docs/internal/architecture.md` §7.71)
     /// A module `nazm contract` was given that does not have a contract's shape.
     pub const NOT_A_CONTRACT: Code = Code::new("N0395");
     /// A transaction that would change the contract's conserved quantity: rejected, the state
     /// unchanged.
     pub const CONSERVATION_BROKEN: Code = Code::new("N0396");
 
-    // The EVM backend (N70, `docs/architecture.md` §7.72)
+    // The EVM backend (N70, `docs/internal/architecture.md` §7.72)
     /// A sender whose address is not an `Int`, as the language's `caller` must be.
     pub const CALLER_NOT_INT: Code = Code::new("N0397");
     /// Calldata that is not a known entrypoint's selector and `int64` arguments.
@@ -396,7 +396,7 @@ pub mod codes {
     /// A contract construct the EVM backend does not emit, or a storage upgrade it refuses.
     pub const EVM_UNSUPPORTED: Code = Code::new("N0399");
 
-    // Packages (N46, `docs/architecture.md` §7.48)
+    // Packages (N46, `docs/internal/architecture.md` §7.48)
     /// A manifest that cannot be read as `nazm.package/1`: bad TOML, an unknown key, a name or
     /// version of the wrong shape, or a path that leaves nothing to build.
     pub const MANIFEST_INVALID: Code = Code::new("N0500");
@@ -419,12 +419,12 @@ pub mod codes {
     /// A package built as a program has no `main`.
     pub const NO_ENTRY: Code = Code::new("N0509");
 
-    // Restriction profiles (N47, `docs/architecture.md` §7.49)
+    // Restriction profiles (N47, `docs/internal/architecture.md` §7.49)
     /// A program that breaks a rule of a profile in force: the rule, and its witnesses.
     pub const PROFILE_VIOLATION: Code = Code::new("N0510");
     /// A profile named on the command line or in a manifest that does not exist.
     pub const UNKNOWN_PROFILE: Code = Code::new("N0511");
-    // A local registry (N56, `docs/architecture.md` §7.58)
+    // A local registry (N56, `docs/internal/architecture.md` §7.58)
     /// A registry index that is not `nazm.registry-index/1`, names another package, records a
     /// version twice or a digest of the wrong shape; or a publish of a version already there.
     pub const REGISTRY_INVALID: Code = Code::new("N0512");
@@ -480,14 +480,14 @@ pub mod codes {
     /// would fail every time it ran.
     pub const PRECONDITION_REFUTED: Code = Code::new("N0615");
 
-    // Gate 1-C1: closure environments in the ownership graph (`docs/spec.md`, *Cycles*).
+    // Gate 1-C1: closure environments in the ownership graph (`docs/user/spec.md`, *Cycles*).
     /// A closure capturing a value that can hold a function value behind a counted handle —
     /// a `Vec[fn() -> Int]`, a `Vec` of records with a function field, a record holding one.
     /// The only way a closure's environment could come to own itself, and so a value no count
     /// could reclaim; decided by the captured type, where the closure is written.
     pub const CAPTURE_CYCLE: Code = Code::new("N0616");
 
-    // Gate 2: the general-purpose foundation (`docs/general-purpose.md`).
+    // Gate 2: the general-purpose foundation (`docs/internal/general-purpose.md`).
     /// A shift whose amount is a constant outside `0..width` (Gate 2): it would stop the
     /// program every time it ran (`N0412`), so it is refused where it is written.
     pub const SHIFT_AMOUNT_REFUSED: Code = Code::new("N0617");
@@ -504,52 +504,52 @@ pub mod codes {
     /// An index that is not into an array, or a constant index outside it (Gate 2).
     pub const ARRAY_INDEX: Code = Code::new("N0624");
     /// An assignment to a static, which is read-only — changed, if an `Atomic`, only by the
-    /// atomic operations (Gate 3, `docs/spec.md`, *Statics*).
+    /// atomic operations (Gate 3, `docs/user/spec.md`, *Statics*).
     pub const STATIC_ASSIGNED: Code = Code::new("N0625");
     /// A board's manifest the build cannot honour: a key it does not know, a value of the wrong
-    /// kind or out of range (Gate 3, `docs/spec.md`, *Boards*). Reported by `nazm build`.
+    /// kind or out of range (Gate 3, `docs/user/spec.md`, *Boards*). Reported by `nazm build`.
     pub const BOARD_MANIFEST: Code = Code::new("N0626");
     /// An interrupt handler of a shape the board cannot call, two handlers for one interrupt, or
-    /// one for an interrupt the board does not have (Gate 3, `docs/spec.md`, *Boards*).
+    /// one for an interrupt the board does not have (Gate 3, `docs/user/spec.md`, *Boards*).
     pub const INTERRUPT_HANDLER: Code = Code::new("N0627");
     /// A `for` loop over something that is not an `Ints`, `Strs`, `Vec[T]` or `Bytes` (R1a,
-    /// `docs/spec.md`, *`for` loops*).
+    /// `docs/user/spec.md`, *`for` loops*).
     pub const NOT_ITERABLE: Code = Code::new("N0628");
     /// An or-pattern's alternatives that bind different names, or one name with different
-    /// types (R1a, `docs/spec.md`, *Patterns*).
+    /// types (R1a, `docs/user/spec.md`, *Patterns*).
     pub const OR_PATTERN_BINDINGS: Code = Code::new("N0629");
-    /// A `let … else` whose `else` can finish (R1a, `docs/spec.md`, *Patterns*).
+    /// A `let … else` whose `else` can finish (R1a, `docs/user/spec.md`, *Patterns*).
     pub const LET_ELSE_COMPLETES: Code = Code::new("N0630");
     /// A `defer` body that would leave it: `return`, `?`, or `break`/`continue` out of it (R1b,
-    /// `docs/spec.md`, *`defer`*).
+    /// `docs/user/spec.md`, *`defer`*).
     pub const DEFER_LEAVES: Code = Code::new("N0631");
     /// A warning (R1b, L15): a `match` on an enum whose `_` — or a bare name — covers variants
-    /// no arm names, so a variant added later is covered too, unseen (`docs/spec.md`, *Patterns*).
+    /// no arm names, so a variant added later is covered too, unseen (`docs/user/spec.md`, *Patterns*).
     pub const WILDCARD_COVERS_VARIANTS: Code = Code::new("N0632");
     /// A function whose result type cannot be left to its expression body (R1.5, D2): a `pub`
-    /// one, a method, or one whose body reaches itself (`docs/spec.md`, *Shorter forms*).
+    /// one, a method, or one whose body reaches itself (`docs/user/spec.md`, *Shorter forms*).
     pub const RESULT_TYPE_NOT_INFERRED: Code = Code::new("N0634");
     /// A short closure's parameter written without a type where no function type is expected
-    /// to take it from (R1.5, D3; `docs/spec.md`, *Shorter forms*).
+    /// to take it from (R1.5, D3; `docs/user/spec.md`, *Shorter forms*).
     pub const CLOSURE_PARAMETER_UNTYPED: Code = Code::new("N0635");
     /// A variant written without its enum where more than one enum in scope has a variant of
-    /// that name (R1.5, D4; `docs/spec.md`, *Shorter forms*).
+    /// that name (R1.5, D4; `docs/user/spec.md`, *Shorter forms*).
     pub const VARIANT_AMBIGUOUS: Code = Code::new("N0636");
     /// A call of one of R1a's `list_` built-ins, renamed `chain_` with their type, `Chain[T]`,
-    /// when `List[T]` became `Vec[T]`'s name (R1.5, D7; `docs/spec.md`, *Immutable indirection*).
+    /// when `List[T]` became `Vec[T]`'s name (R1.5, D7; `docs/user/spec.md`, *Immutable indirection*).
     pub const BUILTIN_RENAMED: Code = Code::new("N0637");
     /// A program reaching `@std/tls` built for a target with no TLS binding: a board, WebAssembly
     /// (whose host terminates TLS), or one whose binding is not yet written (v1 track C1,
-    /// `docs/spec.md`, *TLS*). Reported by `nazm build`.
+    /// `docs/user/spec.md`, *TLS*). Reported by `nazm build`.
     pub const TLS_TARGET: Code = Code::new("N0830");
     /// An attribute the language does not have, on a declaration it does not apply to, or with
-    /// arguments it does not take (Gate 2, `docs/spec.md`, *Attributes*).
+    /// arguments it does not take (Gate 2, `docs/user/spec.md`, *Attributes*).
     pub const ATTRIBUTE: Code = Code::new("N0619");
     // `N0620` is reserved, never assigned (v1, Q1-D-14): kept for a warning at each use of a
-    // deprecated item, should a warning severity ever exist. `docs/diagnostics.md`'s registry
+    // deprecated item, should a warning severity ever exist. `docs/user/diagnostics.md`'s registry
     // lists it as reserved, and `codes.rs` fails if it is ever declared with another meaning.
 
-    // Microcontrollers (M1, `docs/spec.md`, *Boards*): the block `N0850`–`N0869`.
+    // Microcontrollers (M1, `docs/user/spec.md`, *Boards*): the block `N0850`–`N0869`.
     /// An image, its data or its stack that does not fit a microcontroller board's flash or RAM,
     /// naming the region and the overflow (M1). Reported by `nazm build`, and by the linker
     /// script it writes.
@@ -585,7 +585,7 @@ pub enum Severity {
 /// previous one would be **wrong** — a field removed or renamed, or one whose meaning
 /// changed. Adding a field, adding a diagnostic code, and adding a variant to an
 /// existing enum are all compatible changes, because a consumer is required to ignore
-/// what it does not recognise. `docs/diagnostics.md` states the rule in full and is the
+/// what it does not recognise. `docs/user/diagnostics.md` states the rule in full and is the
 /// document a tool author reads.
 pub const SCHEMA: &str = "nazm.diagnostic/1";
 
@@ -830,7 +830,7 @@ impl Diagnostic {
     /// The machine-readable form. One JSON object per diagnostic, carrying the version
     /// of the shape it is in.
     ///
-    /// See `docs/diagnostics.md` for the schema and what may change inside a version.
+    /// See `docs/user/diagnostics.md` for the schema and what may change inside a version.
     pub fn to_json(&self, map: &SourceMap) -> Result<String, serde_json::Error> {
         serde_json::to_string(&Report {
             schema: SCHEMA.to_owned(),

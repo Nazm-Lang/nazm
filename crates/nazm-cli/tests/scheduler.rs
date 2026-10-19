@@ -1,6 +1,6 @@
 //! N44: structured concurrency and the scheduler contract, under load and at its edges.
 //!
-//! `docs/architecture.md` §7.46. `tests/concurrent.rs` holds the language's concurrency rules
+//! `docs/internal/architecture.md` §7.46. `tests/concurrent.rs` holds the language's concurrency rules
 //! program by program; this suite holds what the scheduler contract adds: thousands of tasks and
 //! deep nesting reclaiming everything, which failure a scope reports when several do, the
 //! authority and provenance a task receives, what may not cross into one, and `exit_with` from
@@ -350,7 +350,7 @@ fn exit_with_in_a_task_ends_the_process_with_its_status() {
     }
 }
 
-/// Measurements for `docs/performance.md`: task start-and-join, channel round trips, and
+/// Measurements for `docs/internal/performance-log.md`: task start-and-join, channel round trips, and
 /// scaling over independent CPU-bound tasks. Run with `--ignored --nocapture`.
 #[test]
 #[ignore = "a measurement, run by the benchmark gate"]

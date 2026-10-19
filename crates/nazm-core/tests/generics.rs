@@ -1,6 +1,6 @@
 //! N11: first-order generics and `Vec[T]`, as the checker and the interpreter see them.
 //!
-//! `docs/spec.md`, *Generics*, is the law. These tests hold three of its claims in
+//! `docs/user/spec.md`, *Generics*, is the law. These tests hold three of its claims in
 //! particular: a generic definition is checked **once, parametrically** — whether it is
 //! valid never depends on how it is used; type arguments come from the **arguments** and
 //! from what is written, never from the expected result; and a type that could own

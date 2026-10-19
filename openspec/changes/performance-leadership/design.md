@@ -125,7 +125,7 @@ and the stack check nothing measurable.
    which releases what the frame owns, joins every open `scope`, and ends in `Unwind`
    (`fail` in LIR). `nz.fail` still records the first failure, with its diagnostic and
    position, in the thread's flag; `defer` blocks still do not run on a failure
-   (`docs/spec.md`, *What it is not*); the process still exits 2 from the plain entry. Only how
+   (`docs/user/spec.md`, *What it is not*); the process still exits 2 from the plain entry. Only how
    a failure crosses a *call* changes. The interpreter and the LIR oracle are unchanged: the
    oracle's bit is how it models the edge, not a machine convention.
 2. **Raising.** `fail` lowers to a call of the runtime's `nz.raise`, which starts a **forced
@@ -246,7 +246,7 @@ gap: without both, `fib` is 44.3 ms — C with the same overflow and stack check
 
 ### 4.2 in the reference (2026-10-15)
 
-Implemented as designed in the Rust toolchain (`docs/architecture.md` §7.115), with these choices:
+Implemented as designed in the Rust toolchain (`docs/internal/architecture.md` §7.115), with these choices:
 `nz.raise`, its stop function and the exception object are defined `linkonce_odr hidden` by each unit
 that has a failure exit rather than in the runtime, so the runtime artifact stays target-agnostic
 (Windows and Cranelift link the same one) — runtime ABI 34 all the same, since an image now links the
@@ -269,7 +269,7 @@ Release `nazm`, `--opt-level 2`, `hyperfine -N --warmup 3 --runs 15`, same host 
 
 The failure path costs one new forced unwind per frame that owns something, and on macOS each is
 dominated by the system unwinder's lookup of the frame's unwind information: slower than the
-prototype's estimate, accepted by answer 4 and recorded in `docs/limitations.md`.
+prototype's estimate, accepted by answer 4 and recorded in `docs/user/limitations.md`.
 
 **What R3 must change in `toolchain/pipeline`** (not done here). Its LIR text is unchanged, so no
 digest moves, and it prints no LLVM of its own. It must: regenerate `rtext.nz` from the runtime crate
@@ -392,7 +392,7 @@ the four busy tasks shared two workers. Not causes: `spawn` queues and returns (
 waits for the task), `main` is not a task, and a channel or join wait parks its task and frees the
 worker.
 
-**The change** (runtime ABI 34 → 35; `docs/architecture.md` §7.107, *Amended*): the default worker
+**The change** (runtime ABI 34 → 35; `docs/internal/architecture.md` §7.107, *Amended*): the default worker
 count is `nz.os_cpus()` — a function of each target's `stack` unit, `sysconf(_SC_NPROCESSORS_ONLN)`
 (58 Darwin, 84 glibc/musl, 0x61 Bionic) or `GetSystemInfo` on Windows — at most 64, four where the
 system will not say; `NAZM_WORKERS` overrides it as before and `NAZM_WORKERS=1` stays the
@@ -402,7 +402,7 @@ Tests: `scheduler_default` asks for one worker per processor (`available_paralle
 `ten_thousand_tasks_run_on_one_worker_per_processor_by_default`), `n83-the-worker-count-is-ignored`
 and the revision pin re-run, all killed.
 
-**Measured** (`docs/performance.md`, *Multicore: …*; a shared host, load 17–81 on ten processors,
+**Measured** (`docs/internal/performance-log.md`, *Multicore: …*; a shared host, load 17–81 on ten processors,
 relative scaling only):
 
 | W | C | Rust | Go | Nazm | Nazm, the old four workers |
@@ -430,7 +430,7 @@ nothing.
 ### Concurrency engineering: the runtime half of 6.2–6.4 (2026-10-16)
 
 The copyright holder chose (2026-10-16) to do the runtime half of stage P now; compiler passes stay
-after the cut-over. What 6.1 measured (`docs/performance.md`, *Concurrency*) names the causes: every
+after the cut-over. What 6.1 measured (`docs/internal/performance-log.md`, *Concurrency*) names the causes: every
 `spawn` maps and unmaps a 256 KiB guarded stack (system time dominates `spawn`, and a blocked task
 keeps a whole 16 KiB page resident on this Mac), every wait and wake goes through one process-wide
 waiter lock, a wake broadcasts, and a worker sleeps in the kernel the moment its queue is empty.
@@ -528,7 +528,7 @@ moves into `out` (or out of `v`) in generated code after the wait returns the in
 keeps its own type. It needs: a `Select` type and five intrinsics in the Rust checker and
 `compiler/`'s checker (R2's `toolchain/frontend-tests` at 0 differ), MIR and LIR lowering and its
 mirror in `toolchain/pipeline/ops.nz`, the Rust interpreter and `toolchain/interp`, both code
-generators, `docs/spec.md` with its 1.0 classification row, `library/std/API-1.0` if `@std`
+generators, `docs/user/spec.md` with its 1.0 classification row, `library/std/API-1.0` if `@std`
 wraps it, and the semantic epoch (90 → 91: the identity doc line and `SEMANTIC_EPOCH`, the
 `stability.md` row, two pins in `incremental.rs`, `n38-the-epoch-stays`). The direct hand-off to
 a parked receiver changes the `Int` channel's text and its mirror in `compiler/emit.nz`
@@ -549,7 +549,7 @@ case waits for room). Architecture §7.84, amended twice.
 ### Binary-trees: memory and the release path (2026-10-19)
 
 Binary-trees at depth 18 (`bench/compare/nazm/bintrees.nz`, `enum Tree` with `Box[Tree]`) peaked at
-163 MiB beside C's 17.8 (*nbody and binary-trees in every language*, `docs/performance.md`). Counted,
+163 MiB beside C's 17.8 (*nbody and binary-trees in every language*, `docs/internal/performance-log.md`). Counted,
 not timed — a C `malloc`/`free` interposer and the memory report at depth 16, and the code `-O2`
 generates:
 

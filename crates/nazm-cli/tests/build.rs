@@ -37,7 +37,7 @@ const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
 ///
 /// Generous, because this is not a performance assertion — it is the thing that stops a
 /// **compiled Nazm program from hanging the test suite**. `nazm build` emits no iteration
-/// budget (see `docs/spec.md`, *The iteration and depth limits*), so a
+/// budget (see `docs/user/spec.md`, *The iteration and depth limits*), so a
 /// miscompiled loop does not fail, it runs forever; without a deadline the suite would
 /// stop reporting rather than report a defect.
 const DEADLINE: Duration = Duration::from_secs(30);
@@ -250,7 +250,7 @@ fn negative_division_and_remainder_truncate_toward_zero() {
 
 #[test]
 fn the_minimum_divided_into_by_minus_one_is_zero_for_remainder() {
-    // `docs/spec.md`: `%` has exactly one failure case, a zero divisor. `Int::MIN % -1`
+    // `docs/user/spec.md`: `%` has exactly one failure case, a zero divisor. `Int::MIN % -1`
     // is mathematically 0 and 0 is representable, so it succeeds — even though the
     // hardware instruction that computes it faults on this exact pair, because it
     // computes the quotient. A backend that reached `srem` here would die.
@@ -778,7 +778,7 @@ fn branch_local_bindings_and_shadowing() {
         "    let n = 4;\n    if n > 0 { let double = n * 2; double + 1 } else { 0 }",
         "9",
     );
-    // Shadowing an outer name inside a branch. `docs/spec.md` allows this in a nested
+    // Shadowing an outer name inside a branch. `docs/user/spec.md` allows this in a nested
     // scope and refuses it in the same one, so the branch is exactly where it is legal.
     expect_value(
         "    let x = 1;\n    if true { let x = 100; x } else { x }",
@@ -1494,7 +1494,7 @@ fn a_failing_argument_stops_the_callee_body() {
 #[test]
 fn recursion_compiles_and_agrees_with_the_interpreter() {
     // Refused by this backend until N49, for want of a stack contract; it now has one
-    // (`docs/spec.md`, *Native recursion*) and these are the three shapes it refused.
+    // (`docs/user/spec.md`, *Native recursion*) and these are the three shapes it refused.
     expect_source_value(
         "fn f(n: Int) -> Int { if n < 1 { 0 } else { f(n - 1) + 1 } }\n\
          fn main() -> Int { f(3) }\n",
@@ -1657,7 +1657,7 @@ fn the_emitted_ir_for_a_multi_function_program_is_well_formed() {
 // Every case here terminates inside the interpreter's iteration budget, which is what
 // makes differential comparison possible at all: `nazm build` emits **no** iteration
 // budget, so the two implementations agree on what a terminating program produces and do
-// not agree on what a non-terminating one does. See `docs/spec.md`, *The iteration and depth limits*. *The native
+// not agree on what a non-terminating one does. See `docs/user/spec.md`, *The iteration and depth limits*. *The native
 // execution contract for loops*. Nothing below infers a resource guarantee from a passing
 // test, and every subprocess runs under a deadline whose expiry is a failure.
 // ---------------------------------------------------------------------------
@@ -3133,7 +3133,7 @@ fn a_wrongly_typed_return_belongs_to_the_checker() {
 //
 // `Str` is `{ pointer, byte length }` by value. Slices share storage; concatenation and
 // `int_to_str` allocate from a region that is never freed. See
-// `docs/bootstrap.md` §1, *the memory model*.
+// `docs/internal/bootstrap.md` §1, *the memory model*.
 // ---------------------------------------------------------------------------
 
 /// A program returning `Int`, checked against an expectation and the interpreter, at
@@ -3584,7 +3584,7 @@ fn the_emitted_ir_for_strings_is_well_formed() {
 // B2 — sequences, natively
 //
 // A handle is a pointer to a `{ len, cap, data }` header, so growth rewrites the header
-// in place and every holder sees it. See `docs/spec.md`, *Sequences are shared, mutable,
+// in place and every holder sees it. See `docs/user/spec.md`, *Sequences are shared, mutable,
 // and never freed*.
 // ---------------------------------------------------------------------------
 
@@ -4223,7 +4223,7 @@ fn imports_resolve_relative_to_the_importing_file_not_the_working_directory() {
 /// suite rather than fail it — which is exactly what the previous version of this example
 /// did. Every run below is bounded.
 ///
-/// The first assertion is that `docs/spec.md` still shows this file. A specification whose
+/// The first assertion is that `docs/user/spec.md` still shows this file. A specification whose
 /// example is not the program anybody runs is how the old one came to deadlock unnoticed:
 /// nothing extracted it, so nothing executed it.
 #[test]
@@ -4235,17 +4235,17 @@ fn the_spec_worker_pool_example_terminates_and_answers_ninety() {
     let src = std::fs::read_to_string(root.join("examples/worker-pool.nz"))
         .expect("examples/worker-pool.nz");
 
-    let spec = std::fs::read_to_string(root.join("docs/spec.md")).expect("docs/spec.md");
+    let spec = std::fs::read_to_string(root.join("docs/user/spec.md")).expect("docs/user/spec.md");
     const FENCE: &str = "```nazm\nfn worker(jobs: Chan, results: Chan) -> Int {";
     let at = spec
         .find(FENCE)
-        .expect("docs/spec.md no longer shows the worker-pool example");
+        .expect("docs/user/spec.md no longer shows the worker-pool example");
     let after = &spec[at + "```nazm\n".len()..];
     let block = &after[..after.find("```").expect("unclosed fence")];
     assert_eq!(
         block.trim_end(),
         src.trim_end(),
-        "docs/spec.md and examples/worker-pool.nz have drifted. The spec is meant to show \
+        "docs/user/spec.md and examples/worker-pool.nz have drifted. The spec is meant to show \
          the program that is actually run."
     );
 
@@ -4414,7 +4414,7 @@ fn an_output_over_any_module_of_the_program_is_refused() {
 /// Q1-A1-06: a shared library names itself to the linker in a comma-separated `-Wl,` argument, so
 /// a comma in its file name is refused rather than read as another linker argument.
 #[test]
-#[cfg(not(windows))] // Windows has no DLL from this compiler (`docs/spec.md`, *Windows x86_64*)
+#[cfg(not(windows))] // Windows has no DLL from this compiler (`docs/user/spec.md`, *Windows x86_64*)
 fn a_shared_library_name_with_a_comma_is_refused() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(

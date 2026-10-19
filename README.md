@@ -12,27 +12,27 @@ for a declared subset of the language, compiles itself.**
 
 Nazm **0.10.0** is a preview: the toolchain, written in Rust, for **macOS on Apple Silicon**
 (`aarch64-apple-darwin`) only, and the language as a **1.0 draft**. There is **no compatibility
-promise until 1.0**: [`docs/stability.md`](docs/stability.md) states the contract 1.0 will make —
+promise until 1.0**: [`docs/user/stability.md`](docs/user/stability.md) states the contract 1.0 will make —
 what will be stable, what experimental or internal, and what a patch, minor or major release may
 change — and [`tests/compat/v1/`](tests/compat/v1) is the corpus the toolchain is held to on the way;
 a preview may still change what they say. The toolchain is being rewritten in Nazm
 ([`openspec/changes/rewrite-in-nazm`](openspec/changes/rewrite-in-nazm)); 1.0 comes after it.
 
 The preview is backed by contained bootstrap, mutation, fuzzing and artifact-verification evidence,
-and by the gates and release notes in [`docs/releases/`](docs/releases) — what was not run for it
-is named there ([`docs/releases/0.10.0.md`](docs/releases/0.10.0.md)). Optional subsystems — GPU
+and by the gates and release notes in [`docs/user/releases/`](docs/user/releases) — what was not run for it
+is named there ([`docs/user/releases/0.10.0.md`](docs/user/releases/0.10.0.md)). Optional subsystems — GPU
 kernels, smart contracts, the freestanding and WebAssembly targets, the agent and editor tooling —
 remain experimental or partial where documented, and nothing in Nazm is certified, proved correct
 or claimed free of defects. External contributions are not accepted yet: the contributor licence
-agreement awaits legal review ([`docs/licensing.md`](docs/licensing.md)).
+agreement awaits legal review ([`docs/user/licensing.md`](docs/user/licensing.md)).
 
 | | |
 | --- | --- |
-| Language | **1.0 draft** — [`docs/spec.md`](docs/spec.md) |
+| Language | **1.0 draft** — [`docs/user/spec.md`](docs/user/spec.md) |
 | Toolchain | **0.10.0** — `nazm --version` |
 | Target | macOS on Apple Silicon (`aarch64-apple-darwin`); others are unverified rather than unsupported, and not released |
 | Standard library | **1.0 draft** |
-| Licence | Apache-2.0 WITH LLVM-exception — what Nazm compiles into a program carries no obligation; the toolchain binary's third-party notices are in `THIRD-PARTY-NOTICES.md` ([`docs/licensing.md`](docs/licensing.md)) |
+| Licence | Apache-2.0 WITH LLVM-exception — what Nazm compiles into a program carries no obligation; the toolchain binary's third-party notices are in `THIRD-PARTY-NOTICES.md` ([`docs/user/licensing.md`](docs/user/licensing.md)) |
 
 ## A taste
 
@@ -84,7 +84,7 @@ brew install nazm-lang/tap/nazm
 ```
 
 or from the archive on the [release page](https://github.com/Nazm-Lang/nazm/releases/tag/v0.10.0)
-([`docs/releases/0.10.0.md`](docs/releases/0.10.0.md), *Installing*). `nazm build` also needs the
+([`docs/user/releases/0.10.0.md`](docs/user/releases/0.10.0.md), *Installing*). `nazm build` also needs the
 Xcode command-line tools.
 
 To build from source, you need the Rust toolchain pinned in `rust-toolchain.toml` (rustup installs it on first use) and
@@ -102,7 +102,7 @@ nazm --version                                # nazm 0.10.0
 On Windows x86_64 (`nazm.exe` built for `x86_64-pc-windows-gnu`; a Windows archive ships with 1.0),
 `nazm build` needs llvm-mingw — a portable clang, lld and MinGW-w64 C runtime,
 unpacked from its release zip with no installer or administrator, its `bin` on `PATH`; Microsoft's
-SDK is not used. [`docs/getting-started.md`](docs/getting-started.md), *On Windows*, has the steps,
+SDK is not used. [`docs/user/getting-started.md`](docs/user/getting-started.md), *On Windows*, has the steps,
 and `nazm doctor` says what a native build still lacks on any machine.
 
 The binary carries the standard library inside it and needs no installation directory. Nothing
@@ -120,7 +120,7 @@ else is required for the language itself. Optional tools unlock optional feature
 
 ## Try it
 
-[`docs/getting-started.md`](docs/getting-started.md) goes from nothing to a checked, tested,
+[`docs/user/getting-started.md`](docs/user/getting-started.md) goes from nothing to a checked, tested,
 formatted, natively built program and a package in about ten minutes, and the test suite runs
 every command on it. In short:
 
@@ -148,7 +148,7 @@ authority to start them — each checked, run and built under both backends by t
 - **Errors as values:** `Result`, `Option` and `?`. No exceptions, no null.
 - **Memory:** values are reclaimed deterministically without a garbage collector or lifetime
   annotations; sequences are shared handles, by specification
-  ([`docs/spec.md`](docs/spec.md), *The memory constitution*).
+  ([`docs/user/spec.md`](docs/user/spec.md), *The memory constitution*).
 - **Effects, authority, provenance:** a function may declare its effects (`! { io }`, `! {}`);
   authority to touch the outside world is a value passed down from `main`, never ambient; data
   from files and arguments is tracked to the sinks it may not reach. All checked statically —
@@ -164,7 +164,7 @@ authority to start them — each checked, run and built under both backends by t
   output under versioned schemas for every command, build provenance, SBOMs and signed
   attestations.
 
-What each of these does **not** do is in [`docs/limitations.md`](docs/limitations.md).
+What each of these does **not** do is in [`docs/user/limitations.md`](docs/user/limitations.md).
 
 ## Platforms
 
@@ -177,7 +177,7 @@ What each of these does **not** do is in [`docs/limitations.md`](docs/limitation
 | `aarch64-unknown-none`, `riscv64gc-unknown-none-elf` | emulator-verified (QEMU) | unsupported |
 | `wasm32-unknown-unknown` | run-verified (Node.js) | unsupported |
 
-Windows, 32-bit hosted and big-endian targets are not supported. [`docs/support.md`](docs/support.md)
+Windows, 32-bit hosted and big-endian targets are not supported. [`docs/user/support.md`](docs/user/support.md)
 has the full matrix — debuggers, runtime restrictions, the optional features (GPU, WebAssembly,
 EVM, sBPF, JIT, formal proof) and the evidence for each cell — and is checked against the
 compiler's own table. Every emitted LLVM module still carries the note it was first given, *"verified on
@@ -195,13 +195,13 @@ sBPF/Solana execution (no toolchain or validator), and a second GPU provider (no
 toolchain). Among the language's own boundaries: no trait objects, no effect handlers, no networking in the standard library, and **a compiled program has no iteration
 budget** — `nazm run` stops a runaway loop after `--max-iterations`, a native executable does not.
 
-[`docs/limitations.md`](docs/limitations.md) is the full list;
-[`docs/capability-matrix.md`](docs/capability-matrix.md) is the evidence, area by area.
+[`docs/user/limitations.md`](docs/user/limitations.md) is the full list;
+[`docs/internal/capability-matrix.md`](docs/internal/capability-matrix.md) is the evidence, area by area.
 
 ## Evidence
 
 Each claim above is backed by a test or a recorded run named in
-[`docs/capability-matrix.md`](docs/capability-matrix.md), and the evidence is described by what it
+[`docs/internal/capability-matrix.md`](docs/internal/capability-matrix.md), and the evidence is described by what it
 does **not** establish as carefully as by what it does:
 
 - **Differential testing:** the interpreter, both native backends and LIR's own interpreter are
@@ -212,21 +212,21 @@ does **not** establish as carefully as by what it does:
   cases and 30 refusals) and 21 parity probes. It does not cover the whole language — string
   escapes, `::` and `as`, packages, `Chan[T]`, `select`, the clock, device registers and most of
   the C boundary are outside its subset — and the Rust compiler remains the reference. A fixpoint
-  is not an independent proof of semantics ([`docs/bootstrap.md`](docs/bootstrap.md)).
+  is not an independent proof of semantics ([`docs/internal/bootstrap.md`](docs/internal/bootstrap.md)).
 - **Mutation testing:** a catalogue of deliberately injected defects, 1,285 entries, each required
   to be caught by a named test; all 1,268 it held at the core release gate were caught there, and
   the seventeen added since in their own responsibility-mapped campaigns
-  ([`docs/releases/920a2a5.md`](docs/releases/920a2a5.md),
-  [`docs/releases/996984f.md`](docs/releases/996984f.md)). Zero survivors describes the
+  ([`docs/internal/releases/920a2a5.md`](docs/internal/releases/920a2a5.md),
+  [`docs/internal/releases/996984f.md`](docs/internal/releases/996984f.md)). Zero survivors describes the
   catalogue, not the absence of bugs.
 - **Fuzzing:** coverage-guided fuzzing of five targets with a replayed corpus.
 - **Contained gates:** the heavy work runs only inside a bounded container (memory, swap, pids,
   disk and time all capped), because a runaway compiler stage once took the development machine
-  down ([`docs/runbook.md`](docs/runbook.md)).
+  down ([`docs/internal/runbook.md`](docs/internal/runbook.md)).
 - **Artifacts:** a release is assembled by `scripts/release-candidate.sh` with a SHA-256 manifest
   of every file, a provenance record, and a BLAKE3-indexed evidence bundle with an SBOM. The v0.3.0
   candidate was assembled twice from one commit, in one image on one host, and the two archives
-  were byte-identical ([`docs/releases/996984f.md`](docs/releases/996984f.md)).
+  were byte-identical ([`docs/internal/releases/996984f.md`](docs/internal/releases/996984f.md)).
 
 | Mechanism | Does **not** establish |
 | --- | --- |
@@ -248,23 +248,23 @@ does **not** establish as carefully as by what it does:
 
 | | |
 | --- | --- |
-| [`docs/getting-started.md`](docs/getting-started.md) | The first ten minutes |
-| [`docs/guide.md`](docs/guide.md) | The language, for someone writing a program in it |
-| [`docs/spec.md`](docs/spec.md) | What each construct means, and the decision behind it |
-| [`docs/stability.md`](docs/stability.md) | Version identities, and what v0.x promises |
-| [`docs/support.md`](docs/support.md) | Targets and optional features, cell by cell |
-| [`docs/limitations.md`](docs/limitations.md) | What Nazm does not do |
-| [`docs/capability-matrix.md`](docs/capability-matrix.md) | **"Does X exist?"** — every area, with evidence; the status authority |
-| [`docs/diagnostics.md`](docs/diagnostics.md) | The machine interface: schemas, fixes, exit statuses |
-| [`docs/architecture.md`](docs/architecture.md) | The compiler design record |
-| [`docs/master-architecture.md`](docs/master-architecture.md) | The durable laws and the evidence vocabulary |
-| [`docs/bootstrap.md`](docs/bootstrap.md) | Self-hosting: what it does and does not establish |
-| [`docs/performance.md`](docs/performance.md) | What has been measured, and the noise floor under it |
-| [`docs/roadmap.md`](docs/roadmap.md) | What came in which order, and what is next |
-| [`docs/runbook.md`](docs/runbook.md) | **Containment and resource safety — read before running anything heavy** |
-| [`docs/releases/`](docs/releases/) | Frozen evidence, one file per release candidate |
-| [`docs/background.md`](docs/background.md) | Why the project exists: the argument, the agent-cost experiment, and the design it was built toward |
-| [`docs/NAZM_LANGUAGE_GOALS.md`](docs/NAZM_LANGUAGE_GOALS.md) | Long-term ambitions — **goals, not evidence** |
+| [`docs/user/getting-started.md`](docs/user/getting-started.md) | The first ten minutes |
+| [`docs/user/guide.md`](docs/user/guide.md) | The language, for someone writing a program in it |
+| [`docs/user/spec.md`](docs/user/spec.md) | What each construct means, and the decision behind it |
+| [`docs/user/stability.md`](docs/user/stability.md) | Version identities, and what v0.x promises |
+| [`docs/user/support.md`](docs/user/support.md) | Targets and optional features, cell by cell |
+| [`docs/user/limitations.md`](docs/user/limitations.md) | What Nazm does not do |
+| [`docs/internal/capability-matrix.md`](docs/internal/capability-matrix.md) | **"Does X exist?"** — every area, with evidence; the status authority |
+| [`docs/user/diagnostics.md`](docs/user/diagnostics.md) | The machine interface: schemas, fixes, exit statuses |
+| [`docs/internal/architecture.md`](docs/internal/architecture.md) | The compiler design record |
+| [`docs/internal/master-architecture.md`](docs/internal/master-architecture.md) | The durable laws and the evidence vocabulary |
+| [`docs/internal/bootstrap.md`](docs/internal/bootstrap.md) | Self-hosting: what it does and does not establish |
+| [`docs/internal/performance-log.md`](docs/internal/performance-log.md) | What has been measured, and the noise floor under it |
+| [`docs/user/roadmap.md`](docs/user/roadmap.md) | What came in which order, and what is next |
+| [`docs/internal/runbook.md`](docs/internal/runbook.md) | **Containment and resource safety — read before running anything heavy** |
+| [`docs/internal/releases/`](docs/internal/releases/) | Frozen evidence, one file per release candidate |
+| [`docs/user/background.md`](docs/user/background.md) | Why the project exists: the argument, the agent-cost experiment, and the design it was built toward |
+| [`docs/internal/NAZM_LANGUAGE_GOALS.md`](docs/internal/NAZM_LANGUAGE_GOALS.md) | Long-term ambitions — **goals, not evidence** |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md) | How to contribute, and how to report a vulnerability |
 
 ## Developing Nazm
@@ -280,13 +280,13 @@ cargo xtask contained bootstrap # C1 → C2 → C3
 
 The generated compiler stages, the selfhost suite, the bootstrap, fuzzing and the mutation
 catalogue run **only** through `cargo xtask contained`; they refuse to run on a bare host.
-CI runs the host-safe subset ([`docs/runbook.md`](docs/runbook.md)).
+CI runs the host-safe subset ([`docs/internal/runbook.md`](docs/internal/runbook.md)).
 [`CONTRIBUTING.md`](CONTRIBUTING.md) has the rest.
 
 Alongside the compiler: `nazm-mcp`, a read-only Model Context Protocol server over the same
-compilation ([`docs/mcp.md`](docs/mcp.md)); `nazm-tokens`, which counts text under four pinned
+compilation ([`docs/user/mcp.md`](docs/user/mcp.md)); `nazm-tokens`, which counts text under four pinned
 tokenizers; and `nazm-bench` and `nazm-agent-bench`, the agent-cost evaluation harness
-([`docs/background.md`](docs/background.md)). Nothing that ships depends on them.
+([`docs/user/background.md`](docs/user/background.md)). Nothing that ships depends on them.
 
 ## Command reference
 
@@ -348,7 +348,7 @@ else.
 
 `--json` on any of them emits machine-readable output under a **named, versioned
 schema**; the schemas are in [`schema/`](schema) and the compatibility rules are in
-[`docs/diagnostics.md`](docs/diagnostics.md). `scripts/repair.sh` is the whole repair
+[`docs/user/diagnostics.md`](docs/user/diagnostics.md). `scripts/repair.sh` is the whole repair
 loop as one command: apply every automatic fix until a pass changes nothing, lay the
 result out, and report what is left as JSON.
 
@@ -358,6 +358,6 @@ The Apache License 2.0 with LLVM Exceptions (`Apache-2.0 WITH LLVM-exception`), 
 Alam — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). The exceptions, the ones LLVM and Cranelift
 carry, mean that what Nazm compiles into your program — the runtime, the core prelude and the
 standard library — imposes no attribution or notice requirement on it. What a compiled program
-contains, and what is still open, is [`docs/licensing.md`](docs/licensing.md). The specification
+contains, and what is still open, is [`docs/user/licensing.md`](docs/user/licensing.md). The specification
 is also under CC-BY-4.0, the `nazm init` templates are MIT-0, and contributions are made under a
-contributor licence agreement ([`docs/CLA.md`](docs/CLA.md)).
+contributor licence agreement ([`docs/internal/CLA.md`](docs/internal/CLA.md)).

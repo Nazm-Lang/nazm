@@ -1,4 +1,4 @@
-// R1d, P3: standard input read by lines, exactly and in pieces (`docs/spec.md`, *The platform,
+// R1d, P3: standard input read by lines, exactly and in pieces (`docs/user/spec.md`, *The platform,
 // further*). Headers, frames and lines read alike everywhere — the input written whole or a byte at
 // a time; a line read of another handle is a value; and a line read has `os_read`'s authority and
 // provenance. Ported from `crates/nazm-cli/tests/stdin_lines.rs` (R7).

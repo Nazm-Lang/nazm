@@ -258,7 +258,7 @@ positions, file names and those statements' spans could only be guessed.
 ## Failures by unwinding (8.1)
 
 The reference crosses a call's failure by unwinding on the hosted targets (performance-leadership
-4.2, `docs/architecture.md` §7.115). LIR's text is unchanged — a call still names its `failed`
+4.2, `docs/internal/architecture.md` §7.115). LIR's text is unchanged — a call still names its `failed`
 value, now only the condition of the branch ending its block, which `ops.nz`'s lowering already
 obeys — so no digest here moves. This pipeline prints no LLVM of its own and does not validate
 LIR (its validator is MIR's, `verify.nz`), so the validator's new rule has no place here yet; it
@@ -281,7 +281,7 @@ check on the targets this pipeline does not yet build for.
 
 ## Every target, narrowed to macOS (8.2)
 
-`rewrite-in-nazm` task 4.2 asks for every target in `docs/support.md`. The copyright holder
+`rewrite-in-nazm` task 4.2 asks for every target in `docs/user/support.md`. The copyright holder
 narrowed it (2026-10-15) to macOS: `aarch64-apple-darwin` and `x86_64-apple-darwin` (built and
 run under Rosetta on an Apple silicon host). Linux, Windows, WebAssembly, WASI, Android, iOS and
 the boards are **deferred until after 1.0**, not ported now; the pipeline refuses them by name.

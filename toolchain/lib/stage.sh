@@ -1,5 +1,5 @@
 # Sourced by every script under toolchain/ that builds a program written in Nazm and runs it
-# (R8 slice 2; `docs/runbook.md`, *What may run on the host*, and *Mandatory containment*).
+# (R8 slice 2; `docs/internal/runbook.md`, *What may run on the host*, and *Mandatory containment*).
 #
 #     . "$root/toolchain/lib/stage.sh"
 #     stage_init "$root"                  # refuses to go on where the rule would be broken
@@ -12,7 +12,7 @@
 #
 #   - a Nazm-built program is built by the checkout's `nazm` (never by a release found on the
 #     machine) with a heap limit of at most 2 GiB (`STAGE_HEAP`, default 2G: the counted heap the
-#     runtime enforces on itself, `docs/spec.md`, *A bounded heap*);
+#     runtime enforces on itself, `docs/user/spec.md`, *A bounded heap*);
 #   - it runs inside `cargo xtask contained ...` (`NAZM_CONTAINED=1` and a cgroup memory ceiling,
 #     both of which the runner provides and this file only reads), or on a macOS host through
 #     `cargo xtask host-run`, one program at a time (so `stage_jobs` answers 1 there), under a
@@ -51,7 +51,7 @@ stage_init() {
     stage_root=$1
     STAGE_HEAP=${STAGE_HEAP:-2G}
     if [ "${NAZM_ALLOW_UNCONTAINED:-}" = 1 ]; then
-        stage_fail "NAZM_ALLOW_UNCONTAINED=1 is never accepted (docs/runbook.md)"
+        stage_fail "NAZM_ALLOW_UNCONTAINED=1 is never accepted (docs/internal/runbook.md)"
     fi
     stage_bytes=$(stage_heap_bytes "$STAGE_HEAP") || stage_fail "STAGE_HEAP=$STAGE_HEAP is not a size"
     [ "$stage_bytes" -gt 0 ] && [ "$stage_bytes" -le 2147483648 ] \
@@ -74,7 +74,7 @@ stage_init() {
         stage_fail "a Nazm-built program runs contained (\`cargo xtask contained run '...'\`) or on macOS through \`cargo xtask host-run\`; neither applies here"
     fi
     if [ "${2:-}" = contained ] && [ "$STAGE_MODE" != contained ]; then
-        stage_fail "this runs contained only (\`cargo xtask contained run '...'\`, docs/runbook.md): it is not one bounded-heap stage"
+        stage_fail "this runs contained only (\`cargo xtask contained run '...'\`, docs/internal/runbook.md): it is not one bounded-heap stage"
     fi
     export STAGE_HEAP STAGE_MODE STAGE_RUN
 }

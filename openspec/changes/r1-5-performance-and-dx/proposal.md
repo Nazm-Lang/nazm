@@ -1,6 +1,6 @@
 ## Why
 
-The cross-language comparison (`docs/performance.md`, *R1, 5b.10*) puts Nazm first or tied on start-up,
+The cross-language comparison (`docs/internal/performance-log.md`, *R1, 5b.10*) puts Nazm first or tied on start-up,
 memory and binary size for small programs and among the shortest compiled programs, but not first on
 build time, on `fib` and word-frequency run time, on the word-frequency program's memory and length,
 or on the interpreter's speed. The copyright holder asked (2026-10-14) that Nazm be the best choice in
@@ -34,5 +34,5 @@ every comparison it can honestly win, as a milestone after the 0.10.0 publicatio
 ## Impact
 
 Runtime, LIR and both backends, the CLI's `run` and `build`, the standard library, the spec's prelude
-and function sections, `bench/compare/` and `docs/performance.md`. Language additions are 1.x
+and function sections, `bench/compare/` and `docs/internal/performance-log.md`. Language additions are 1.x
 additions; nothing a 0.10.0 program means changes.

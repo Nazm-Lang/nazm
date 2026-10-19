@@ -1,4 +1,4 @@
-//! The WebAssembly contract adapter (N71, `docs/architecture.md` §7.73): LLVM text appended to the
+//! The WebAssembly contract adapter (N71, `docs/internal/architecture.md` §7.73): LLVM text appended to the
 //! contract's own unit, exporting `nazm_init` and `nazm_call_<entry>` and moving the state across
 //! the host imports `nazm_host.state_get`, `state_set` and `revert`.
 //!
@@ -111,8 +111,9 @@ pub(crate) fn adapter(
         "\"wasm-import-module\"=\"nazm_host\" \"wasm-import-name\"=\"state_set\"".to_owned(),
         "\"wasm-import-module\"=\"nazm_host\" \"wasm-import-name\"=\"revert\"".to_owned(),
     ];
-    let mut out =
-        String::from("\n; The WebAssembly contract adapter (N71, docs/architecture.md §7.73).\n");
+    let mut out = String::from(
+        "\n; The WebAssembly contract adapter (N71, docs/internal/architecture.md §7.73).\n",
+    );
     let _ = writeln!(out, "declare i64 @nz.host_state_get(i64) #90");
     let _ = writeln!(out, "declare void @nz.host_state_set(i64, i64) #91");
     let _ = writeln!(out, "declare void @nz.host_revert(i64) #92");
@@ -287,7 +288,7 @@ pub(crate) fn adapter(
 
 /// The reference host for a contract module (`contract_host.mjs`), for Node: it keeps the state,
 /// runs each transaction in a fresh instance, and prints `nazm.wasm-contract-run/1`.
-pub(crate) const HOST: &str = r#"// Written by nazm contract --wasm (N71, docs/architecture.md §7.73).
+pub(crate) const HOST: &str = r#"// Written by nazm contract --wasm (N71, docs/internal/architecture.md §7.73).
 // node contract_host.mjs module.wasm contract.json txs.txt
 import { readFileSync } from 'node:fs';
 const [wasm, meta, txs] = process.argv.slice(2);

@@ -1,6 +1,6 @@
 //! N48: debugging, inspection and profiling surfaces.
 //!
-//! `docs/architecture.md` §7.50. What a build with `--debug` carries and a debugger reads —
+//! `docs/internal/architecture.md` §7.50. What a build with `--debug` carries and a debugger reads —
 //! checked with `lldb` where it is installed, statically (breakpoints resolved by function and by
 //! file and line) so no process has to be launched under a debugger; that `--debug` changes
 //! nothing a program does and nothing an ordinary build writes; that `nazm inspect` is one

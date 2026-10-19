@@ -1,4 +1,4 @@
-// R1e, S4: `@std/args` (`docs/spec.md`, *The standard library*). Ported from
+// R1e, S4: `@std/args` (`docs/user/spec.md`, *The standard library*). Ported from
 // `crates/nazm-cli/tests/args.rs` (R7).
 //
 // One specification shaped like a toolchain's, read against every form a command line takes and

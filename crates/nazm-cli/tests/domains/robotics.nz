@@ -1,4 +1,4 @@
-// The robotics reference workload (Gate 3, `docs/systems-domains.md` Parts E–J): sense, control
+// The robotics reference workload (Gate 3, `docs/internal/systems-domains.md` Parts E–J): sense, control
 // and actuate at a fixed rate on QEMU's AArch64 `virt` board, held to the `robotics` profile.
 //
 // The sensor is simulated: a task at the board timer's rate integrates the actuator's command into

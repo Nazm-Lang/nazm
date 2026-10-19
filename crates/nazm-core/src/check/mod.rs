@@ -133,7 +133,7 @@ struct Scopes {
     /// pattern `let` (`let (a, b) = e; rest`) is read as a `match` whose one arm binds the
     /// pattern's names and holds the rest of the block, so the arm and the rest are frames of
     /// their own — but to a reader they are the block the `let` is written in, and a name bound
-    /// there twice is the same-scope shadowing `docs/spec.md` refuses.
+    /// there twice is the same-scope shadowing `docs/user/spec.md` refuses.
     joined: Vec<bool>,
 }
 
@@ -191,7 +191,7 @@ impl Scopes {
     ///
     /// Only the innermost: an inner scope may shadow an outer one, because there the
     /// reader can see the boundary. Two `let`s of the same name side by side is what
-    /// makes a later mention ambiguous. See `docs/spec.md`.
+    /// makes a later mention ambiguous. See `docs/user/spec.md`.
     ///
     /// The innermost scope is a frame and every frame it continues ([`Self::joined`]): the
     /// block a pattern `let` is written in, its arm and the rest of the block are one scope.
@@ -288,11 +288,11 @@ struct Visible {
 /// What one module may name in the type namespace.
 ///
 /// Built-in type names are not in here: they are parsed by [`Type::from_name`] and cannot
-/// be shadowed, which is the rule `docs/spec.md` states as *built-ins are not a module's
+/// be shadowed, which is the rule `docs/user/spec.md` states as *built-ins are not a module's
 /// definitions*. This holds the user-defined types — this module's own, public and private
 /// alike, and the ones its direct imports export.
 ///
-/// **One map, both kinds.** `docs/spec.md` puts records and enums in the same namespace, so
+/// **One map, both kinds.** `docs/user/spec.md` puts records and enums in the same namespace, so
 /// `struct Item` and `enum Item` in one module is a collision; two maps would have made it
 /// legal by accident, which is the kind of decision nobody would have written down.
 #[derive(Debug, Default)]
@@ -444,7 +444,7 @@ pub struct Checker<'a> {
     /// What that module may name, in the **type** namespace.
     ///
     /// A second map rather than a second kind of entry in the first, because
-    /// `docs/spec.md` gives types and functions separate namespaces: a module may declare
+    /// `docs/user/spec.md` gives types and functions separate namespaces: a module may declare
     /// a record `Point` and a function `Point`, and one map could not hold both. Where
     /// the grammar puts a name decides which map is consulted, and the grammar always
     /// knows.
@@ -609,7 +609,7 @@ impl Reuse for CheckEverything {
 ///    modules it directly imports.
 ///
 /// Neither stage needs modules in a particular order, which is exactly why an import cycle
-/// remains legal — see `docs/spec.md`. It is also why this function is thin: the work is
+/// remains legal — see `docs/user/spec.md`. It is also why this function is thin: the work is
 /// in [`declare_unit`] and [`check_unit`], which are the same functions a single unit is
 /// checked with. There is no second path that resolves names differently for the
 /// whole-program case.

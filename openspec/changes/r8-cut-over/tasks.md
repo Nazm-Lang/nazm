@@ -99,8 +99,8 @@
 - [ ] 18.1 The release path builds and archives the Nazm-built binaries (`rewrite-in-nazm` 10.1)
 
 ## 19. Slice 19 — the seed frozen
-- [ ] 19.1 A gate on the seed's paths; `docs/bootstrap.md`'s chain
+- [ ] 19.1 A gate on the seed's paths; `docs/internal/bootstrap.md`'s chain
 
 ## 20. Slice 20 — the authorities (`rewrite-in-nazm` 10.2)
-- [ ] 20.1 `docs/architecture.md`, `bootstrap.md`, `capability-matrix.md`, `support.md`,
+- [ ] 20.1 `docs/internal/architecture.md`, `bootstrap.md`, `capability-matrix.md`, `support.md`,
       `licensing.md`, `runbook.md`

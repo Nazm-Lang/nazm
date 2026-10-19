@@ -40,7 +40,7 @@
 //!
 //! Every failure here is a miss, and a miss compiles. A cache whose damage could change
 //! what a program means would be a cache that is part of the compiler; this one is
-//! derived data, and `docs/architecture.md` §7.6 says so in the same words §7.4 used of
+//! derived data, and `docs/internal/architecture.md` §7.6 says so in the same words §7.4 used of
 //! the semantic store.
 
 use std::io::Write as _;

@@ -4,7 +4,7 @@
 //! Every answer is read from the repository as it is on disk at this call and dropped. With
 //! `--json`, standard output is exactly one object, whatever the answer, and standard error
 //! is empty; the exit status is 0 with a map or a context — complete or partial — and 1 with
-//! a refusal. Without it, the same object indented. `docs/architecture.md` §7.35.
+//! a refusal. Without it, the same object indented. `docs/internal/architecture.md` §7.35.
 
 use std::path::Path;
 use std::process::ExitCode;

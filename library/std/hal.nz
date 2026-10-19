@@ -5,7 +5,7 @@
 // a board supplies the impls: the boundary is library-level, made of the traits the language
 // already has (N78), and no device is the language's. Every device method takes an `MmioCap`, so
 // the authority to touch a register is held where it is used, as `mmio_*` asks; a timer reads
-// a tick count, which is the program's own memory. `docs/systems-domains.md` Part C.
+// a tick count, which is the program's own memory. `docs/internal/systems-domains.md` Part C.
 //
 // The impls are the emulated boards' devices: the PL011, NS16550A and CMSDK UARTs, the PL061 GPIO
 // of QEMU's AArch64 `virt` machine, and the MPS2's FPGA LED register, the Cortex-M board's one

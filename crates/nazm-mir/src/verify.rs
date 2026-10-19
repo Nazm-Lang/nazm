@@ -1,6 +1,6 @@
 //! MIR's invariants, checked.
 //!
-//! `docs/architecture.md` §7.42 lists them; this is the list, run. Two passes per function: a
+//! `docs/internal/architecture.md` §7.42 lists them; this is the list, run. Two passes per function: a
 //! structural and typing pass over every statement and terminator, then a forward dataflow over
 //! the locals that own something, which is what makes the cleanup law checkable rather than
 //! merely stated — no read of an empty local, no overwrite of an owned one, and nothing still

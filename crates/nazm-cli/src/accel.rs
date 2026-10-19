@@ -5,7 +5,7 @@
 //!
 //! The kernel is one source text generated from the function's Core IR (`nazm_service::kernel`):
 //! OpenCL C, with an element function beside the device kernel. A **provider** runs it (Gate 3,
-//! `docs/spec.md`, *Providers*): the OpenCL provider builds it for macOS's GPU through a small C
+//! `docs/user/spec.md`, *Providers*): the OpenCL provider builds it for macOS's GPU through a small C
 //! host program; the CPU provider compiles the same text as C behind a prelude and runs the
 //! element function over a pool of threads. Each is a process: the compiler links no GPU API and
 //! no thread pool of its own, and holds no `unsafe` code to call one. Every transfer and the one

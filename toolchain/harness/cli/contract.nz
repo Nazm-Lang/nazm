@@ -1,5 +1,5 @@
 // N69: contracts — the `web3` profile, a contract's facts, and its simulator
-// (`docs/architecture.md` §7.71). Ported from `crates/nazm-cli/tests/contract.rs` (R7).
+// (`docs/internal/architecture.md` §7.71). Ported from `crates/nazm-cli/tests/contract.rs` (R7).
 //
 // A contract's state, entrypoints and read and write sets as `nazm.contract/1`, conservative where
 // the analysis cannot see; transactions run deterministically, a revert leaving the state as it

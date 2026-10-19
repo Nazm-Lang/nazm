@@ -250,7 +250,7 @@ pub(crate) fn all() -> Vec<Scenario> {
         .map(|k| format!("compiler/{}", k.split_once("::").unwrap().0))
         .collect();
     files.insert("compiler/analyse.nz".into());
-    files.insert("docs/bootstrap.md".into());
+    files.insert("docs/internal/bootstrap.md".into());
     rows.push(scenario(
         "A understand check_program",
         texts(&files),
@@ -266,7 +266,7 @@ pub(crate) fn all() -> Vec<Scenario> {
     let mut checks = 0;
     let mut files = BTreeSet::from([
         "compiler/module.nz".to_owned(),
-        "docs/bootstrap.md".to_owned(),
+        "docs/internal/bootstrap.md".to_owned(),
     ]);
     for r in ["compiler/emit.nz", "compiler/check.nz"] {
         let p = packet(r, "module.nz::fn attach_core");
@@ -350,7 +350,7 @@ pub(crate) fn all() -> Vec<Scenario> {
         section("spec:return").body.as_str()
     );
     assert_eq!(item(&v, "doc:spec:return")["reason"], "linked_section");
-    let naive = vec![file("docs/spec.md")];
+    let naive = vec![file("docs/user/spec.md")];
     rows.push(scenario("D understand spec:returns", naive, v, size, ms, 3));
 
     let seed = "doc:guide:the-syntax/record";
@@ -362,7 +362,7 @@ pub(crate) fn all() -> Vec<Scenario> {
         section("grammar:record").body.as_str()
     );
     assert_eq!(g["authority"], "grammar");
-    let naive = vec![file("docs/guide.md"), file("docs/grammar.ebnf")];
+    let naive = vec![file("docs/user/guide.md"), file("docs/user/grammar.ebnf")];
     rows.push(scenario("D understand guide record", naive, v, size, ms, 3));
 
     // E — the tests relevant to a changed area: a package, and one definition.

@@ -1165,7 +1165,7 @@ fn many_nested_early_returns_neither_duplicate_nor_omit_cleanup() {
     agree(&s);
 }
 
-/// Representative sizes, for the record (`docs/performance.md`, N40).
+/// Representative sizes, for the record (`docs/internal/performance-log.md`, N40).
 #[test]
 #[ignore = "a measurement, not a check: run with --ignored --nocapture"]
 fn what_mir_looks_like_on_the_compiler() {

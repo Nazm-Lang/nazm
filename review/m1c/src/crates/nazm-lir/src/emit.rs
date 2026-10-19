@@ -2,7 +2,7 @@
 //!
 //! # The contract this file exists to keep
 //!
-//! `docs/spec.md` says overflow **traps, identically in every build**. The obvious way to
+//! `docs/user/spec.md` says overflow **traps, identically in every build**. The obvious way to
 //! write signed arithmetic in LLVM is `add nsw`, and it is exactly wrong: `nsw` does not
 //! check for overflow, it *promises overflow cannot happen* and makes the result poison
 //! if it does. An optimiser is then entitled to assume the promise and delete the branch
@@ -27,7 +27,7 @@
 //! | `-Int::MIN` | `ssub.with.overflow(0, x)`, the only negation without a representable result |
 //!
 //! `sdiv` and `srem` are reached only on operands already proved safe, so the guards are
-//! not belt-and-braces — they are what stops the hardware fault that `docs/spec.md`
+//! not belt-and-braces — they are what stops the hardware fault that `docs/user/spec.md`
 //! describes.
 //!
 //! # Blocks, and why the current one is tracked
@@ -185,7 +185,7 @@ impl Emitter {
                 out
             }
             Expr::Arith { op, lhs, rhs, span } => {
-                // Left, then right. `docs/spec.md` specifies the order, and here it is
+                // Left, then right. `docs/user/spec.md` specifies the order, and here it is
                 // observable: it decides which diagnostic a program with two failing
                 // operands reports.
                 let a = self.expr(lhs);
@@ -350,7 +350,7 @@ impl Emitter {
 
     /// Remainder, whose *only* failure is a zero divisor.
     ///
-    /// `Int::MIN % -1` is mathematically zero and zero is representable, so `docs/spec.md`
+    /// `Int::MIN % -1` is mathematically zero and zero is representable, so `docs/user/spec.md`
     /// specifies it as `0`. The `srem` instruction faults on that pair anyway — it
     /// computes the quotient — so the pair is answered with a constant and never reaches
     /// the instruction. Getting this wrong would give `%` a second failure case the
@@ -407,7 +407,7 @@ impl Emitter {
 
 /// Emit a complete, self-contained LLVM IR module.
 ///
-/// The result is text on purpose: `docs/architecture.md` §1 says not to link against LLVM
+/// The result is text on purpose: `docs/internal/architecture.md` §1 says not to link against LLVM
 /// in year one, and `clang` reads IR directly, so this needs no LLVM dependency at all.
 #[must_use]
 pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {

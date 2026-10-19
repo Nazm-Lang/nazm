@@ -1,5 +1,5 @@
 //! `cargo xtask evidence [--verify] DIR` — an evidence bundle's index and the compiler's bill of
-//! materials (N73, `docs/architecture.md` §7.75).
+//! materials (N73, `docs/internal/architecture.md` §7.75).
 //!
 //! A bundle is a directory someone else is meant to check: provenance records, gate logs, mutation
 //! journals, measurements, artefacts. Writing adds two files to it. `sbom.json` (`nazm.sbom/1`) lists

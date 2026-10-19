@@ -1,4 +1,4 @@
-//! R1b, D2: linear-time string building (`docs/spec.md`, *What this costs*).
+//! R1b, D2: linear-time string building (`docs/user/spec.md`, *What this costs*).
 //!
 //! `s = str_concat(s, t)` on a `let mut` binding appends in place where `s`'s storage is its own
 //! and has room, and otherwise copies into storage with room to grow. The tests ask every

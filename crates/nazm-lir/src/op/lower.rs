@@ -1,5 +1,5 @@
 //! Validated MIR to LIR, one unit at a time: the one place a native operation is decided
-//! (N105, `docs/architecture.md` §7.106).
+//! (N105, `docs/internal/architecture.md` §7.106).
 //!
 //! Every guard and its failure text, every runtime entry an operation calls, every retain and
 //! release and the helpers that do them, every offset a value is read or written at, and the

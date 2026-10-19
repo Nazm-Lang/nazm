@@ -1,6 +1,6 @@
 //! Debug information (N48): DWARF, as LLVM metadata, for a `--debug` build.
 //!
-//! `docs/architecture.md` §7.50. When asked, the emitter writes a marker comment before the
+//! `docs/internal/architecture.md` §7.50. When asked, the emitter writes a marker comment before the
 //! instructions of each MIR statement and terminator — `; nz.loc FILE LINE COLUMN`, the source
 //! position MIR recorded for it — and a `; nz.fn FILE LINE` marker for each function. This pass
 //! turns them into a compile unit, one subprogram per function, and a location on every

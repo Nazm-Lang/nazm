@@ -2,7 +2,7 @@
 // into.
 //
 // An expression, statement or block is a node of the document, read through the accessors below;
-// a function's header is decoded once into a `CirFn`. `docs/architecture.md` §7.41 is what the
+// a function's header is decoded once into a `CirFn`. `docs/internal/architecture.md` §7.41 is what the
 // format means; `openspec/changes/r3-pipeline/design.md`, *The data model*, why it stays an arena.
 
 use "@std/json"

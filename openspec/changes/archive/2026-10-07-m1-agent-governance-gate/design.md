@@ -17,7 +17,7 @@ the `openspec validate` CLI's job, run when changes are made); requiring Node or
 - **A gate in xtask, not a cargo test.** The checked files are repository text, like the other
   documentation gates, and xtask must not depend on the compiler crates.
 - **Structural rules only.** Existence, a link resolving, a field heading present, a forbidden
-  phrase absent. Each rule names the sentence of `docs/agent-governance.md` it enforces.
+  phrase absent. Each rule names the sentence of `docs/internal/agent-governance.md` it enforces.
 - **Relaxation detection is a list, not a parser:** a nested file may not contain an allowance
   for the root's forbidden actions (push, tag, publish, prune, `NAZM_ALLOW_UNCONTAINED`, …) phrased
   as permission. The list is small and explicit.

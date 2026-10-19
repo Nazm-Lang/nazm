@@ -1,4 +1,4 @@
-//! What the files part of the runtime needs to know about one target (Gate 2, `docs/spec.md`,
+//! What the files part of the runtime needs to know about one target (Gate 2, `docs/user/spec.md`,
 //! *Files and handles*), in an LLVM unit of its own as the task switch and `errno`'s location are,
 //! so the runtime's text stays the same on every target.
 //!
@@ -404,7 +404,7 @@ entry:
 }
 ";
 
-/// The file system's further calls on POSIX (R1d, `docs/spec.md`, *The platform, further*), as text
+/// The file system's further calls on POSIX (R1d, `docs/user/spec.md`, *The platform, further*), as text
 /// with holes the target fills: which symbol `lstat` is, `struct stat`'s layout — the device first
 /// (32 bits on macOS, 64 on Linux) and the inode at 8 everywhere — and `mode_t`'s width.
 ///
@@ -503,7 +503,7 @@ entry:
 }
 ";
 
-/// The network's addresses (Gate 2, `docs/spec.md`, *Networking*), as text with holes the target
+/// The network's addresses (Gate 2, `docs/user/spec.md`, *Networking*), as text with holes the target
 /// fills: socket address layouts and the resolver, the same calls on every target.
 const NET_ADDR: &str = r#"
 declare i32 @inet_pton(i32, ptr, ptr)
@@ -1286,7 +1286,7 @@ fn net_part(target: SwitchTarget) -> String {
     format!("{addr}{sock}{POSIX_NET_CALLS}{procs}{poller}")
 }
 
-/// The Windows `os` unit (Gate 3, `docs/spec.md` *Windows x86_64*): the files part's calls, the
+/// The Windows `os` unit (Gate 3, `docs/user/spec.md` *Windows x86_64*): the files part's calls, the
 /// environment and the error text, then the network's. A status is a negative **Linux** errno
 /// number on Windows too — Win32 and Winsock errors are translated at this boundary — so the
 /// library's one mapping from status to `IoErrorKind` serves every target.
@@ -3055,7 +3055,7 @@ ended:
   ret i64 %cw
 }
 
-; `TerminateProcess` with exit code 1 (`docs/spec.md` *Windows x86_64*: there are no signals); a
+; `TerminateProcess` with exit code 1 (`docs/user/spec.md` *Windows x86_64*: there are no signals); a
 ; child that has already ended is not an error, as `kill` on one not yet waited for is not.
 define hidden i32 @nz_os_terminate(i64 %pid) {
 entry:
@@ -3098,7 +3098,7 @@ entry:
   ret i64 %w
 }
 
-; There are no process groups (`docs/spec.md`, *The platform, further*): the process `pgid` itself,
+; There are no process groups (`docs/user/spec.md`, *The platform, further*): the process `pgid` itself,
 ; asked whether it exists (`sig` 0) or ended with exit code 1; ESRCH for one there is not.
 define hidden i32 @nz_os_signal_group(i64 %pgid, i64 %sig) {
 entry:
@@ -3143,7 +3143,7 @@ entry:
 }
 "#;
 
-/// Windows' further file-system calls (R1d, `docs/spec.md`, *The platform, further*, **Where**): a
+/// Windows' further file-system calls (R1d, `docs/user/spec.md`, *The platform, further*, **Where**): a
 /// path's own facts from `GetFileInformationByHandle` on a handle opened without following a
 /// reparse point — any reparse point is a symbolic link, the device the volume's serial number and
 /// the inode the file index; `_wchmod`, which keeps only the owner's write bit; the canonical path
@@ -3407,7 +3407,7 @@ pub fn args_hook(target: SwitchTarget) -> Option<&'static str> {
 
 /// What a target needs done before `main`, as a unit of its own; nothing on POSIX (Gate 3). On
 /// Windows, standard input, output and errors are put in binary mode, which the C runtime does not
-/// start them in: `docs/spec.md` *Windows x86_64* has no line-ending translation; and Winsock is
+/// start them in: `docs/user/spec.md` *Windows x86_64* has no line-ending translation; and Winsock is
 /// started (version 2.2), which a socket or the resolver needs first.
 #[must_use]
 pub fn emit_init(target: SwitchTarget) -> Option<String> {

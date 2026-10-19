@@ -1,4 +1,4 @@
-// R1.5 (`docs/spec.md`, *Shorter forms*): each spelling means what the longer one did — a result
+// R1.5 (`docs/user/spec.md`, *Shorter forms*): each spelling means what the longer one did — a result
 // type after `:` (D1), an expression body (D2), a short closure (D3), fields by position and a
 // variant without its enum (D4), map literals (D5), list literals (D6), `use std.json` and
 // `List[T]` (D7), printing without `out` (D8), the prelude's standard modules (D9), `top` and

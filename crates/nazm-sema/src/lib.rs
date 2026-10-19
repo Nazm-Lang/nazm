@@ -36,7 +36,7 @@
 //! in one process** — the same rule [`nazm_span::FileId`] states and for the same reason.
 //! None of them is derived from content, and none may be persisted, cached, or handed to
 //! a build system as a key. What durable identity would have to be is
-//! `docs/research-register.md` R2 and R3, and it is deliberately not this.
+//! `docs/internal/research-register.md` R2 and R3, and it is deliberately not this.
 
 pub mod capability;
 pub mod effect;

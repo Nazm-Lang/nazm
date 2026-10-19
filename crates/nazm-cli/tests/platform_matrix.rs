@@ -2,7 +2,7 @@
 //! Windows host (`scripts/windows-host.sh`), run-verified under Wine (Gate 3), run-verified on a
 //! Linux kernel (Android's Bionic), compile-only or unsupported, and nothing in between.
 //!
-//! `docs/architecture.md` §7.96. The matrix is one table in `nazm-lir`, printed by `nazm inspect`;
+//! `docs/internal/architecture.md` §7.96. The matrix is one table in `nazm-lir`, printed by `nazm inspect`;
 //! this holds the capability matrix's table to it cell for cell, every run-verified or
 //! compile-only cell to evidence the tree contains, every target the compiler accepts to a row,
 //! and each recorded LLVM CPU to what the C compiler driver resolves for the triple.
@@ -112,14 +112,14 @@ fn every_accepted_target_has_a_row_and_every_cell_one_of_five_answers() {
 #[test]
 fn the_capability_matrix_states_exactly_what_the_compiler_does() {
     let (cells, _) = support();
-    let text = std::fs::read_to_string(root().join("docs/capability-matrix.md")).unwrap();
+    let text = std::fs::read_to_string(root().join("docs/internal/capability-matrix.md")).unwrap();
     // The N95 table: `| triple | LLVM | Cranelift | CPU (LLVM / Cranelift) | debugger |`.
     for c in &cells {
         let triple = c["triple"].as_str().unwrap();
         let row = text
             .lines()
             .find(|l| l.starts_with(&format!("| `{triple}` |")))
-            .unwrap_or_else(|| panic!("no row for {triple} in docs/capability-matrix.md"));
+            .unwrap_or_else(|| panic!("no row for {triple} in docs/internal/capability-matrix.md"));
         let cols: Vec<&str> = row.split('|').map(str::trim).collect();
         assert_eq!(cols[2], c["llvm"]["status"].as_str().unwrap(), "{row}");
         assert_eq!(cols[3], c["cranelift"]["status"].as_str().unwrap(), "{row}");

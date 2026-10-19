@@ -400,7 +400,7 @@ pub(super) fn objects_for_target(
     None
 }
 
-/// What a microcontroller board's image needs of its flash and RAM (M1, `docs/spec.md`,
+/// What a microcontroller board's image needs of its flash and RAM (M1, `docs/user/spec.md`,
 /// *Boards*), read from its objects' section headers: code, read-only data and the
 /// initial values of writable data in flash; writable and zeroed data and the stack in RAM. Each
 /// section is aligned as it asks, in object order, so this is what the linker will need at

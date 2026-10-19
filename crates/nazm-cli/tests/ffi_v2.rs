@@ -1,6 +1,6 @@
 //! N55: FFI v2 — C strings in, exported functions out.
 //!
-//! `docs/architecture.md` §7.57 and the spec section *Foreign functions v2*. What only a whole
+//! `docs/internal/architecture.md` §7.57 and the spec section *Foreign functions v2*. What only a whole
 //! build shows: that a `Str` crosses into C as a borrowed NUL-terminated copy under both
 //! backends, with identical results and a balanced memory report, and that one holding a NUL is
 //! refused before C runs; that an export is checked by its own rules; and that `nazm build

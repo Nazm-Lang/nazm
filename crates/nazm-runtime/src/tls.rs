@@ -1,4 +1,4 @@
-//! TLS (v1 track C1, `docs/spec.md`, *TLS*): the `tls` runtime part, as target-independent LLVM
+//! TLS (v1 track C1, `docs/user/spec.md`, *TLS*): the `tls` runtime part, as target-independent LLVM
 //! text over a per-target engine unit ([`emit_tls`]).
 //!
 //! # Buffers, never the socket

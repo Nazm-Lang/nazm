@@ -3,7 +3,7 @@
 //! # Why `Ints` and `Strs` rather than `[Int]` and `[Str]`
 //!
 //! A bootstrap compiler needs growable sequences of integers and of strings, and nothing
-//! else (`docs/bootstrap.md` §1). Naming them as **ordinary type names** buys two
+//! else (`docs/internal/bootstrap.md` §1). Naming them as **ordinary type names** buys two
 //! things: the lexer needs no bracket tokens and the parser needs no type grammar, so
 //! neither acquires a shape that a future generic `[T]` would have to be compatible
 //! with. Concrete names commit to nothing about how generics will eventually look, which
@@ -115,7 +115,7 @@ impl FnSignature {
 ///
 /// A parameter is not a name: it is a **position in its owner's list**, and the owner is
 /// part of it so that one function's `T` can never be mistaken for another's while one is
-/// being inferred from the other. `docs/spec.md`, *Order is semantic; names are not*.
+/// being inferred from the other. `docs/user/spec.md`, *Order is semantic; names are not*.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ParamOwner {
     Function(FnId),
@@ -134,7 +134,7 @@ pub struct TypeParam {
     pub index: u32,
 }
 
-/// A numeric representation (Gate 2, `docs/general-purpose.md` §1–§2).
+/// A numeric representation (Gate 2, `docs/internal/general-purpose.md` §1–§2).
 ///
 /// Ten kinds, of which nine are types of their own, [`Type::Num`]; the tenth, [`NumKind::I64`],
 /// is `Int`, which keeps its own variant and its own name, so `Type::Num(NumKind::I64)` is never
@@ -284,7 +284,7 @@ pub enum ConvertMode {
 /// its variants, and that is the nominality rule expressed as a representation: two
 /// records with identical fields, or two enums with identical variants, are different
 /// types, so a type that held its shape would compare equal where the language says
-/// unequal. `docs/spec.md`, *Records are nominal* and *Enums*.
+/// unequal. `docs/user/spec.md`, *Records are nominal* and *Enums*.
 ///
 /// Everything a consumer wants to know about one — its fields, whether it needs cleanup,
 /// whether it may cross into a task, how it is laid out — is a method on
@@ -297,13 +297,13 @@ pub enum Type {
     Int,
     Bool,
     Str,
-    /// A growable sequence of `Int`, **by reference**. See `docs/spec.md`, *Sequences
+    /// A growable sequence of `Int`, **by reference**. See `docs/user/spec.md`, *Sequences
     /// are shared, mutable, and never freed*.
     Ints,
     /// A growable sequence of `Str`, by reference, with the same rules.
     Strs,
     /// A bounded channel of `Int`, by reference. The one type designed to be shared
-    /// between tasks — see `docs/spec.md`, *Structured concurrency*.
+    /// between tasks — see `docs/user/spec.md`, *Structured concurrency*.
     Chan,
     /// A user-defined record, by its session-local definition id.
     ///
@@ -320,7 +320,7 @@ pub enum Type {
     /// the language says unequal.
     ///
     /// Which variant a *value* holds is not here and could not be. That is runtime state,
-    /// and the whole of what `docs/spec.md` means by a sum type is that the fields which
+    /// and the whole of what `docs/user/spec.md` means by a sum type is that the fields which
     /// exist are decided then rather than now.
     ///
     /// Since N11 the id may also be an **applied** enum — `Maybe[Int]` — which the table
@@ -364,16 +364,16 @@ pub enum Type {
     /// Text that is valid UTF-8 by construction (Gate 2): `Str`'s representation, an
     /// immutable value like `Str`, made only by validating.
     Text,
-    /// An open file, directory or standard input (Gate 2, `docs/spec.md`, *Files and
+    /// An open file, directory or standard input (Gate 2, `docs/user/spec.md`, *Files and
     /// handles*): a word naming a descriptor and its generation, freely copied, crossing into
     /// a task, with no equality, that only the `os_` built-ins make.
     OsHandle,
-    /// One `Int` cell shared by every copy of the handle (Gate 3, `docs/spec.md`, *Atomics*):
+    /// One `Int` cell shared by every copy of the handle (Gate 3, `docs/user/spec.md`, *Atomics*):
     /// counted like a `Chan`, crossing into a task as a `Chan` does, with no equality and not
     /// plain data. Every operation on it is sequentially consistent.
     Atomic,
     /// A set of cases over channels of any element types (performance leadership 6.4,
-    /// `docs/spec.md`, *Select over channels of different types*): a counted handle holding
+    /// `docs/user/spec.md`, *Select over channels of different types*): a counted handle holding
     /// references to its channels and receive vectors, with no equality, that does not cross
     /// into a task — it holds `Vec`s, which do not.
     Select,
@@ -568,7 +568,7 @@ impl Type {
     /// cross would be a data race the language had invited.
     ///
     /// A type parameter is refused too: nothing is known about it, and a generic function
-    /// has no way to say it wants only types that may cross. `docs/spec.md`, *Generic
+    /// has no way to say it wants only types that may cross. `docs/user/spec.md`, *Generic
     /// definitions are checked once, parametrically*.
     #[must_use]
     pub fn may_cross_into_a_task(self) -> bool {

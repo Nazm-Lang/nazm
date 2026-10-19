@@ -1,4 +1,4 @@
-// Resolved units (N77, `docs/architecture.md` §7.78): a module's resolution, persisted with its
+// Resolved units (N77, `docs/internal/architecture.md` §7.78): a module's resolution, persisted with its
 // check, read back instead of checking a reused module's bodies again. Ported from
 // `crates/nazm-cli/tests/resolved_units.rs` (R7);
 // `references_agree_with_the_language_service_over_the_same_saved_compilation` holds the units to

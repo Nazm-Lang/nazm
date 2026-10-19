@@ -1,5 +1,5 @@
 //! R1.5, D11: `nazm run` compiles with Cranelift and runs the executable; `nazm run --interpret`
-//! is the interpreter (`docs/spec.md`, *`nazm run` compiles*).
+//! is the interpreter (`docs/user/spec.md`, *`nazm run` compiles*).
 //!
 //! The two are asked the same questions and must give the same answers: what the program
 //! writes to each stream, the memory report it reads from the environment, and the status it

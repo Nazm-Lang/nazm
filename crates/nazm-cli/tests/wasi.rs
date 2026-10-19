@@ -1,5 +1,5 @@
-//! Gate 3: WebAssembly with WASI preview 1, `wasm32-wasip1` (`docs/spec.md`, *WASI*;
-//! `docs/systems-domains.md` Part O).
+//! Gate 3: WebAssembly with WASI preview 1, `wasm32-wasip1` (`docs/user/spec.md`, *WASI*;
+//! `docs/internal/systems-domains.md` Part O).
 //!
 //! Without a container, on any host: the target builds its objects, the `wasm-ld` line that links
 //! them and Node's WASI host, and refuses by name what WASI preview 1 has not got — tasks,

@@ -1287,7 +1287,7 @@ fn pend_contract() -> Int { 8 }
 // Returns the index just past the `)`; the pattern text is pushed onto `out`.
 //
 // A field binds a name or is discarded with `_`, which is an ordinary identifier to the
-// lexer and a discard only here. `docs/spec.md` gives `_` its meaning inside a pattern
+// lexer and a discard only here. `docs/user/spec.md` gives `_` its meaning inside a pattern
 // and nowhere else, so nothing before this point has to know about it.
 fn read_pattern(kinds: Ints, starts: Ints, texts: Strs, i: Int, out: Strs, io: IoCap) -> Int {
     if kind_at(kinds, i) != k_ident() {

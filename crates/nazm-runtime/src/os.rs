@@ -1,7 +1,7 @@
 //! The operating-system adapter (N43): every entry point of the C library and POSIX threads the
 //! generated code and the runtime call, and nothing else of the platform.
 //!
-//! `docs/architecture.md` §7.45. The runtime's semantics are portable LLVM text
+//! `docs/internal/architecture.md` §7.45. The runtime's semantics are portable LLVM text
 //! ([`super::core`]); what it needs of the operating system is this list, which is the same on
 //! every v1 target (macOS and Linux, 64-bit ARM and x86: all POSIX with a C library whose
 //! `int64_t`-sized calls these declarations spell). A target without them is refused by

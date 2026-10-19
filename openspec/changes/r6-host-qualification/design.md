@@ -6,7 +6,7 @@ At `95793836` the toolchain written in Nazm has every piece a build needs: the f
 generator (`toolchain/codegen/`, R9) writes an object per LIR unit. Until now each was run beside
 the Rust toolchain and compared with it; none had built another, and none had built itself.
 
-Containment is in force for all of R6 (`rewrite-in-nazm` design, decision 9; `docs/runbook.md`,
+Containment is in force for all of R6 (`rewrite-in-nazm` design, decision 9; `docs/internal/runbook.md`,
 *Mandatory containment*). The contained runner is a Linux container, the only place on this host
 where a memory ceiling is enforced.
 
@@ -43,7 +43,7 @@ the counted heap where it calls C's allocator (`nazm_lir::op::count_heap`, impor
 The target is the container's own, `aarch64-unknown-linux-gnu`. The pipeline accepted only the
 macOS and Windows triples; it now also accepts the two Linux ones, for this and nothing else: the
 runtime generator already generated Linux units (`rtgen.nz`), and the code generator already wrote
-ELF (R9 6.1). Linux stays outside `docs/support.md` and the copyright holder's 1.0 narrowing is
+ELF (R9 6.1). Linux stays outside `docs/user/support.md` and the copyright holder's 1.0 narrowing is
 unchanged; what is new is only that the ELF objects are now linked and run, inside the container.
 
 ### 2. What the run checks
@@ -73,10 +73,10 @@ disagreeing only there).
 ### 3. ACCEPTED 2026-10-20 — revising the containment rule (task 7.2)
 
 **Accepted by the copyright holder on 2026-10-20, exactly as proposed below**, and applied:
-`runbook-draft.md` is now `docs/runbook.md`, *What may run on the host: one bounded-heap stage*; the
+`runbook-draft.md` is now `docs/internal/runbook.md`, *What may run on the host: one bounded-heap stage*; the
 runner is `cargo xtask host-run` (`xtask/src/host_run.rs`; tests `xtask/tests/host_run.rs`). The
 copyright holder also accepted keeping the pipeline's Linux triples **internal-only** (the container
-self-build), with no user-facing support claim: recorded in `docs/support.md` and the capability
+self-build), with no user-facing support claim: recorded in `docs/user/support.md` and the capability
 matrix. The text below is the proposal as decided; "would" reads as "does".
 
 **What it would allow on the macOS host, outside the contained runner:** running one program
@@ -96,7 +96,7 @@ host stages at once. `NAZM_CONTAINED=1` and `NAZM_ALLOW_UNCONTAINED=1` stay forb
 (`RLIMIT_AS` is advisory) and because on 2026-09-21 ten uncapped stages grew together until the
 machine panicked. The heap limit is a ceiling from *inside*: every byte the program's code and its
 runtime ask the allocator for is counted before it is allocated, and an allocation past the limit
-does not happen — the program writes `N0406` and exits (`docs/spec.md`, *A bounded heap*). The
+does not happen — the program writes `N0406` and exits (`docs/user/spec.md`, *A bounded heap*). The
 count is the bytes asked for, so it is the same on Linux and macOS; it does not depend on the
 platform enforcing anything. The evidence (*The evidence*, below):
 

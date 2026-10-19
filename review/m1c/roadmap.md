@@ -260,7 +260,7 @@ shadowing inside a branch, and arbitrary nesting in conditions and branches.
 a type from context. `BinOp` was split into `ArithOp` (five, all fallible) and `CmpOp`
 (six, none fallible) — one enum would let a `match` arm written for arithmetic silently
 start accepting comparisons. `Block { stmts, result }` is shared by `main`'s body and by
-each branch, because `docs/spec.md` has one `Block`.
+each branch, because `docs/user/spec.md` has one `Block`.
 
 **The phi-predecessor rule:** a `phi`'s incoming labels name the block each branch
 *ended* in, read after lowering that branch — not the label it started at. A branch

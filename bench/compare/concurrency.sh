@@ -1,5 +1,5 @@
 #!/bin/bash
-# Performance leadership 6.1: Nazm's tasks against Go's goroutines (docs/performance.md,
+# Performance leadership 6.1: Nazm's tasks against Go's goroutines (docs/internal/performance-log.md,
 # *Concurrency*). Builds bench/compare/{nazm,go}/{spawn,pingpong,fanin,idle,httpd,primes} and
 # go/httpload.go into OUT, checks that both languages print the same answers, then measures:
 #

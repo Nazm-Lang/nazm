@@ -1,6 +1,6 @@
 //! N51: effect parameters, captured authority and the bounded bridge.
 //!
-//! `docs/architecture.md` §7.53 and the spec section *Effect parameters and captured
+//! `docs/internal/architecture.md` §7.53 and the spec section *Effect parameters and captured
 //! authority*. That an effect-polymorphic function does what the function it is handed does
 //! — in the interpreter and both backends alike — that its callers are held to that, through
 //! a wrapper and across a module's interface, that a profile sees it, and that every refusal

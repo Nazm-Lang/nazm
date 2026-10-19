@@ -1,4 +1,4 @@
-// The medical-device-style reference workload (Gate 3, `docs/systems-domains.md` Parts E–J): an
+// The medical-device-style reference workload (Gate 3, `docs/internal/systems-domains.md` Parts E–J): an
 // infusion pump on both emulated boards, held to the `medical` profile, every state transition
 // recorded by `@std/audit`.
 //

@@ -11,7 +11,7 @@
 # `set -e` plus an explicit check after every stage, because a script that prints success
 # after a failed stage is worse than no script.
 #
-# What this does and does not establish is recorded in `docs/bootstrap.md`.
+# What this does and does not establish is recorded in `docs/internal/bootstrap.md`.
 
 set -eu
 

@@ -1,4 +1,4 @@
-//! Gate 3: board manifests (`docs/spec.md`, *Boards*; `docs/systems-domains.md` Part B).
+//! Gate 3: board manifests (`docs/user/spec.md`, *Boards*; `docs/internal/systems-domains.md` Part B).
 //!
 //! What a build shows on any host: a manifest's load address and stack reach the linker script and
 //! the stack bound; every key it does not know, every value of the wrong kind or out of range and

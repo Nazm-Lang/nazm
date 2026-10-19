@@ -1,4 +1,4 @@
-//! Vectorisation (N66, `docs/architecture.md` §7.68): one loop idiom, recognised in Core IR and
+//! Vectorisation (N66, `docs/internal/architecture.md` §7.68): one loop idiom, recognised in Core IR and
 //! replaced by `ints_sum_from`, whose runtime is vectorised and exact; every other loop is left as it
 //! is, with the reason.
 //!

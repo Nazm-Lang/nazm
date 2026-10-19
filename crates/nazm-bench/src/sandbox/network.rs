@@ -6,7 +6,7 @@
 //!
 //! # Why not just let Docker choose
 //!
-//! Measured on the development machine (see `docs/runbook.md`): fourteen of Docker's
+//! Measured on the development machine (see `docs/internal/runbook.md`): fourteen of Docker's
 //! fifteen default `172.x/16` pools are already consumed by unrelated projects, and the
 //! documented fallback pool overlaps this machine's own LAN. Whether Docker would actually
 //! hand out a conflicting subnet is **not established** — its IPAM does some host-route

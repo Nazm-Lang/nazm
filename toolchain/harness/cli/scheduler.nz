@@ -312,7 +312,7 @@ fn exit_with_in_a_task_ends_the_process_with_its_status(io: IoCap, p: ProcessCap
     ok()
 }
 
-/// Measurements for `docs/performance.md`: task start-and-join, channel round trips, and
+/// Measurements for `docs/internal/performance-log.md`: task start-and-join, channel round trips, and
 /// scaling over independent CPU-bound tasks. Run with `--ignored --nocapture`.
 // `what_tasks_and_channels_cost` is `#[ignore]`d in Rust "a measurement, run by the benchmark gate": it stays Rust (design decision 10).
 

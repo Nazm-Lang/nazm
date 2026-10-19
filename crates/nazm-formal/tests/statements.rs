@@ -1,4 +1,4 @@
-//! N97: the statement core's properties over every program of its bound (`docs/formal-core.md` §2).
+//! N97: the statement core's properties over every program of its bound (`docs/internal/formal-core.md` §2).
 //!
 //! S1 soundness — a well-formed program is never stuck; S2 determinism; S3 correspondence — for
 //! every program that finishes within the fuel, Nazm's interpreter, run on its source, gives the

@@ -42,7 +42,7 @@ through the CLI (`rewrite-in-nazm` design, decision 5).
    (`N0372`). The library declassifies with `str_vouch` at exactly its sinks — the program and
    directory `run` starts, the paths `scratch_write` and `scratch_remove` touch — and nowhere else.
    *Finding for the coordinator:* this is the language's documented rule (containers are precise
-   by type, `docs/spec.md`, *Provenance*), but it makes every tree-walking tool declassify.
+   by type, `docs/user/spec.md`, *Provenance*), but it makes every tree-walking tool declassify.
 3. **The binary under test is `$NAZM`; the tree is `$NAZM_HARNESS_ROOT`.** The Rust tests have them
    at compile time (`CARGO_BIN_EXE_nazm`, `CARGO_MANIFEST_DIR`); a Nazm harness is given them at
    run time, so one built harness runs against the 0.10.0 release, a tree-built binary, or a

@@ -22,7 +22,7 @@
 //! timestamping service — and this module does not provide one. It must not be described
 //! as if it did.
 //!
-//! What this binds, per `docs/research/evaluation.md` §6:
+//! What this binds, per `docs/internal/research/evaluation.md` §6:
 //!
 //! * the protocol and analysis rules (the content of the registration commit)
 //! * the evaluated implementation and configuration (the freeze tag)

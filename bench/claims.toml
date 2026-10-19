@@ -1,6 +1,6 @@
-# The performance claims register (N92, docs/architecture.md §7.93).
+# The performance claims register (N92, docs/internal/architecture.md §7.93).
 #
-# One entry per measured section of docs/performance.md, by its exact heading. `cargo xtask check`
+# One entry per measured section of docs/internal/performance-log.md, by its exact heading. `cargo xtask check`
 # (performance claims) refuses a measured heading with no entry, an entry for no heading, and a
 # reproducible entry whose command is not in the tree. It does not run the commands.
 #

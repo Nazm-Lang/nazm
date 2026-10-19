@@ -1,4 +1,4 @@
-//! `nazm init DIR --template T` (N74, `docs/architecture.md` §7.76): a project a fresh user can
+//! `nazm init DIR --template T` (N74, `docs/internal/architecture.md` §7.76): a project a fresh user can
 //! run at once.
 //!
 //! Six templates, each written only from what the toolchain supports and each held by its own

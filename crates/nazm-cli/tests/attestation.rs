@@ -1,6 +1,6 @@
 //! N94: reproducibility v2 — the model's first two claims, an SBOM, and signed statements.
 //!
-//! `docs/architecture.md` §7.95. Identical input gives identical artefacts, and so does the same
+//! `docs/internal/architecture.md` §7.95. Identical input gives identical artefacts, and so does the same
 //! input in another directory, under either backend; the SBOM lists the build's packages, sources
 //! and runtime with their digests; a statement signed with `ssh-keygen` verifies for its signer
 //! and for the artefacts it names, and for nothing else.

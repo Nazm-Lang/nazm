@@ -1,5 +1,5 @@
-//! Gate 3: the domain profiles (`docs/spec.md`, *Restriction profiles*, *Domain profiles*;
-//! `docs/systems-domains.md` Parts E–J).
+//! Gate 3: the domain profiles (`docs/user/spec.md`, *Restriction profiles*, *Domain profiles*;
+//! `docs/internal/systems-domains.md` Parts E–J).
 //!
 //! Each domain profile is a composition of the rules that already exist, with at most a domain rule
 //! of its own; none changes what an accepted program does, and none is a certification. These tests

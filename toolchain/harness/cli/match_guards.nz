@@ -1,4 +1,4 @@
-// R1, 5b.17 (`docs/spec.md`, *Patterns*, Guards): `P if G => E` is chosen where `P` matches and
+// R1, 5b.17 (`docs/user/spec.md`, *Patterns*, Guards): `P if G => E` is chosen where `P` matches and
 // `G`, with `P`'s names bound, is true; otherwise the arms below are tried. Ported from
 // `crates/nazm-cli/tests/match_guards.rs` (R7).
 //

@@ -1,6 +1,6 @@
 //! Each function's two digests: what it means, and what code generation reads.
 //!
-//! # The law (`docs/architecture.md` §7.41)
+//! # The law (`docs/internal/architecture.md` §7.41)
 //!
 //! BLAKE3 over a canonical encoding of the function's Core IR in which every definition and
 //! type is named durably ([`Names`]) and nothing else about the session appears: no span, no

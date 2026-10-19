@@ -1,6 +1,6 @@
 //! N81: the backend contract v2, stage one — bytes, ownership and a printed LIR.
 //!
-//! `docs/architecture.md` §7.82. What the commands show: `nazm lir` prints the target's data layout
+//! `docs/internal/architecture.md` §7.82. What the commands show: `nazm lir` prints the target's data layout
 //! and every unit's symbols, layouts and ownership, the same bytes every time; offsets follow the
 //! canonical field order at natural alignment, an enum's payload follows its tag word; a pointer is
 //! four bytes on wasm32 and eight elsewhere, and nothing else moves; ownership is closed under

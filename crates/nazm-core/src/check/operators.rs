@@ -25,7 +25,7 @@ impl Checker<'_> {
             }
             // Ordering is derived (L6): numbers, `Bool`, `Str` by its bytes, and records, enums
             // and tuples of ordered components, by the names of their fields and variants
-            // (`docs/spec.md`, *Ordering and hashing are derived*).
+            // (`docs/user/spec.md`, *Ordering and hashing are derived*).
             BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => {
                 lt == rt && self.res.types().ordering(lt).is_ok()
             }
@@ -35,7 +35,7 @@ impl Checker<'_> {
             BinOp::Shl | BinOp::Shr => lt.is_integer() && rt == Type::Int,
             // Equality needs **one** type — two records with identical fields are two
             // types, and nothing converts — and that type must have equality, which is
-            // derived rather than listed (`docs/spec.md`, *Equality is derived*, N13).
+            // derived rather than listed (`docs/user/spec.md`, *Equality is derived*, N13).
             // `Int`, `Bool` and `Str` have it. A sequence, a `Vec` and a `Chan` do not:
             // equality on a handle would have to mean either "the same storage" or "the
             // same contents", the language has chosen neither, and offering one silently
@@ -599,7 +599,7 @@ impl Checker<'_> {
     }
 
     /// A numeric conversion (Gate 2): `T(x)` exactly, or `try_convert[T](x)`,
-    /// `wrap_convert[T](x)`, `saturate_convert[T](x)`. `docs/general-purpose.md` §1–§2.
+    /// `wrap_convert[T](x)`, `saturate_convert[T](x)`. `docs/internal/general-purpose.md` §1–§2.
     fn check_conversion(
         &mut self,
         name: &str,

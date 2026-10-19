@@ -1,6 +1,6 @@
 //! N70: the EVM backend — the contract model as bytecode, held to the simulator.
 //!
-//! `docs/architecture.md` §7.72. On any host: the artefacts — selectors from the compiler's
+//! `docs/internal/architecture.md` §7.72. On any host: the artefacts — selectors from the compiler's
 //! keccak of each `int64` signature, storage slots from each field's name, a static gas bound for
 //! every loop-free entrypoint and none for one with a loop, the same bytes twice; a construct the
 //! backend does not emit refused before emission (`N0399`); the upgrade check. With

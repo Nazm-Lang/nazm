@@ -1,6 +1,6 @@
 //! N68: layout specialisation — a `Vec` of records, one array per field.
 //!
-//! `docs/architecture.md` §7.70. What whole builds show: `--layout soa` changes no answer and no
+//! `docs/internal/architecture.md` §7.70. What whole builds show: `--layout soa` changes no answer and no
 //! failure — growth through many capacities, set, pop, get, out-of-bounds and empty-pop failures —
 //! under both optimisation levels and (since N105) on Cranelift, against the interpreter and the
 //! element-by-element layout; a

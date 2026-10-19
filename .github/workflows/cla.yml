@@ -1,7 +1,7 @@
-# The contributor licence agreement, signed by a bot (decided 2026-10-11, `docs/licensing.md`).
+# The contributor licence agreement, signed by a bot (decided 2026-10-11, `docs/user/licensing.md`).
 #
 # CLA Assistant Lite: a pull request from someone who has not signed fails this check and gets a
-# comment linking `docs/CLA.md`; the contributor signs by replying with the sentence below. The
+# comment linking `docs/internal/CLA.md`; the contributor signs by replying with the sentence below. The
 # signatures are kept in this repository — `cla/signatures.json` on the `cla-signatures` branch —
 # and not with a third-party service.
 #
@@ -40,7 +40,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          path-to-document: https://github.com/Nazm-Lang/nazm/blob/main/docs/CLA.md
+          path-to-document: https://github.com/Nazm-Lang/nazm/blob/main/docs/internal/CLA.md
           path-to-signatures: cla/signatures.json
           branch: cla-signatures
           # The copyright holder needs no licence from himself; bots sign nothing.
@@ -48,7 +48,7 @@ jobs:
           custom-pr-sign-comment: I have read the Nazm Contributor Licence Agreement, version 0.1, and I agree to it.
           custom-notsigned-prcomment: >-
             Thank you for contributing to Nazm. Before it can be merged, please read the
-            [Nazm Contributor Licence Agreement](https://github.com/Nazm-Lang/nazm/blob/main/docs/CLA.md)
+            [Nazm Contributor Licence Agreement](https://github.com/Nazm-Lang/nazm/blob/main/docs/internal/CLA.md)
             and sign it by replying to this pull request with the sentence below. Signing once covers
             all your contributions. If you contribute for an employer, see the agreement's *How to sign*.
           custom-allsigned-prcomment: Every contributor to this pull request has signed the Nazm CLA.

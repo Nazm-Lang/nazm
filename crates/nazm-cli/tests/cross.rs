@@ -1,12 +1,12 @@
 //! N57: targets and cross-compilation.
 //!
-//! `docs/architecture.md` §7.59. What a whole build shows: every triple of the matrix is built by
+//! `docs/internal/architecture.md` §7.59. What a whole build shows: every triple of the matrix is built by
 //! both backends from this host — to an executable where the host's toolchain links it, to objects
 //! and a link list where it cannot — each object in the target's own format and architecture; a
 //! target the host cannot link is refused unless objects are asked for; objects for two targets are
 //! never one cache entry; and a program built for another macOS architecture runs, under Rosetta,
 //! where Rosetta is installed. Linux objects built on macOS are linked and run in the Linux
-//! container by hand (`docs/performance.md`, N57), not here: a test does not start a container.
+//! container by hand (`docs/internal/performance-log.md`, N57), not here: a test does not start a container.
 
 #![allow(
     clippy::unwrap_used,

@@ -1,4 +1,4 @@
-//! R1, 5b.15 (`docs/spec.md`, *Methods and indexes by name*): a method no trait gives is the
+//! R1, 5b.15 (`docs/user/spec.md`, *Methods and indexes by name*): a method no trait gives is the
 //! function `<prefix>_m` by name, and `xs[i]` and `xs[i] = v` on a sequence are its get and set.
 //!
 //! The same output and memory report in every implementation, nothing live; a trait's method

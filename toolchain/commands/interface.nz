@@ -26,7 +26,7 @@ pub fn interface_cli() -> Cli {
             "Write a module's published interface: what it offers, durably." + nl() + nl()
             + "The file named is the root, so the source root is its directory. Output is one `nazm.interface/1` JSON object on "
             + "stdout — the same bytes every time, for the same interface, in this process and the next one. This is not a cache "
-            + "and reuses nothing; see `docs/architecture.md` §7.3.")
+            + "and reuses nothing; see `docs/internal/architecture.md` §7.3.")
     cli_positional(c, "FILE", true, false, true, "", "")
     cli_flag(c, "", "hash", "Print the fingerprint instead of the interface: `blake3-256 <hex>`", "")
     cli_option(c, "", "source-root", "DIR", true, "", false, "Where this project begins. As `nazm check --source-root`", "")

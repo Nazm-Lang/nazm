@@ -1,4 +1,4 @@
-//! The statement core, `nazm.formal-core/2` (N97, `docs/formal-core.md` §2, `docs/architecture.md`
+//! The statement core, `nazm.formal-core/2` (N97, `docs/internal/formal-core.md` §2, `docs/internal/architecture.md`
 //! §7.98): mutable bindings, assignment, `while`, `if` as a statement, `return`, and one recursive
 //! function — over `Int`, with the expression core's arithmetic and its traps.
 //!
@@ -367,7 +367,7 @@ fn op(o: Op, a: E, b: E) -> E {
     E::Arith(o, Box::new(a), Box::new(b))
 }
 
-/// The bound (§2 of `docs/formal-core.md`): three families, every combination of each.
+/// The bound (§2 of `docs/internal/formal-core.md`): three families, every combination of each.
 ///
 /// - **Loops**: `let mut x = a; let mut y = b; while C { x = E1; y = E2; } R`, with `a` and `b` from
 ///   the edges, six conditions, eight updates of `x`, five of `y` and three results.

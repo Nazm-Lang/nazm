@@ -5,7 +5,7 @@ TBD - created by archiving change m1-agent-governance-gate. Update Purpose after
 ## Requirements
 ### Requirement: Agent instruction files stay consistent with their authorities
 `cargo xtask check` SHALL fail when the repository's agent-instruction files no longer agree with
-the structure `docs/agent-governance.md` defines, and SHALL do so by reading the tree only.
+the structure `docs/internal/agent-governance.md` defines, and SHALL do so by reading the tree only.
 
 #### Scenario: the Claude shim stops deferring
 - **WHEN** `CLAUDE.md` does not refer the reader to `AGENTS.md`
@@ -49,7 +49,7 @@ lockfile alone, with no network.
 - **THEN** the gate fails rather than passing
 
 ### Requirement: Findings carry a severity and a disposition
-A gate's findings SHALL each be classified by `docs/quality-model.md` with a technical severity and,
+A gate's findings SHALL each be classified by `docs/internal/quality-model.md` with a technical severity and,
 separately, a programme disposition, and a gate SHALL NOT be accepted while a finding it classified
 RELEASE-BLOCKER or GATE-BLOCKER is open.
 

@@ -50,4 +50,4 @@ pub fn "process_args(io: IoCap) -> Strs ! { io } {
 
     out
 // bschema = "nazm.package/1"
-eing hamatch nded a rendering function, which is the program `docs/architecture.md` §7.79 names as
+eing hamatch nded a rendering function, which is the program `docs/internal/architecture.md` §7.79 names as

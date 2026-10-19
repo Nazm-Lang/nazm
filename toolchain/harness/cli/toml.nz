@@ -1,4 +1,4 @@
-// R1e, S4: `@std/toml` (`docs/spec.md`, *The standard library*). Ported from
+// R1e, S4: `@std/toml` (`docs/user/spec.md`, *The standard library*). Ported from
 // `crates/nazm-cli/tests/toml.rs` (R7).
 //
 // Every form of a document decodes alike under the interpreter, the LIR oracle, LLVM `-O0`/`-O2`

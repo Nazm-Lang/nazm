@@ -5,7 +5,7 @@
 //! A `ModuleKey` is a module's path relative to the **source root**, and N3 derived that
 //! root from the root module's directory. So `lib/common.nz` is `lib/common.nz` when the
 //! compilation began at `app.nz` and `common.nz` when it began at `lib/common.nz` itself.
-//! Both are correct within their compilation, and `docs/spec.md` said so — but nothing
+//! Both are correct within their compilation, and `docs/user/spec.md` said so — but nothing
 //! that reuses work across compilations can rest on it, because the same module would
 //! answer to two names.
 //!
@@ -16,7 +16,7 @@
 //! enforced rather than suggested: the moment it is allowed to carry a field it becomes a
 //! manifest, and a manifest is a package system's front door — versions, dependencies, a
 //! registry, a resolver. None of those is needed to answer *where does this project
-//! begin*, and building them to answer it would be the mistake `docs/roadmap.md` has been
+//! begin*, and building them to answer it would be the mistake `docs/user/roadmap.md` has been
 //! naming since N3.
 //!
 //! `--source-root DIR` names one explicitly, for a tree that cannot be written to and for
@@ -94,7 +94,7 @@ impl How {
 /// Make `path` absolute without asking the filesystem what it points at.
 ///
 /// Lexical on purpose. `canonicalize` resolves symbolic links, and the two compiler
-/// implementations disagree about those — `docs/spec.md` settles that by declining a
+/// implementations disagree about those — `docs/user/spec.md` settles that by declining a
 /// durable identity where they could, which only works if this function does not quietly
 /// pick one of the two answers. The working directory is joined because a relative path
 /// means nothing without it, and it is removed again by the time a key exists.
@@ -160,7 +160,7 @@ pub fn decide(module: &Path, given: Option<&Path>) -> Result<SourceRoot, String>
         // `canonicalize` appears here and nowhere else, and only to decide **which
         // ancestor** the given directory is. It never decides a module's identity: that
         // stays lexical, because the compiler written in Nazm has no `realpath` and
-        // `docs/spec.md` settles the difference by declining rather than by picking one.
+        // `docs/user/spec.md` settles the difference by declining rather than by picking one.
         let want = path.canonicalize().unwrap_or_else(|_| path.clone());
         let found = module
             .ancestors()

@@ -17,7 +17,7 @@
 // work stack — which is what scoping needs, since a scope opens before the statements
 // inside it are seen.
 //
-// Neither pass recurses. See `docs/bootstrap.md` §1, *traversal is iterative,
+// Neither pass recurses. See `docs/internal/bootstrap.md` §1, *traversal is iterative,
 // always*.
 //
 // Usage: check FILE
@@ -2880,7 +2880,7 @@ fn module_at_of(rowner: Ints, rkind: Ints, r: Int) -> Int {
 // mistake still produces one diagnostic.
 //
 // A **variant** entry is transparent here. It has no module and no `pub` of its own —
-// `docs/spec.md` gives an enum no per-variant visibility — so the question is about the
+// `docs/user/spec.md` gives an enum no per-variant visibility — so the question is about the
 // types its payload names, and those are asked about instead.
 pub fn check_private_types(t: Int, at: Int, to: Int, kind: Str, who: Str, tb: Table,
         diags: Vec[Diag]) -> Int {
@@ -3191,7 +3191,7 @@ fn visible_import(vmod: Ints, vname: Strs, vfn: Ints, here: Int, name: Str) -> I
 /// imports brought in. `-1` when it means nothing here.
 ///
 /// Built-ins are not in this: they belong to no module and are resolved before it, in
-/// `check_call`, exactly as `docs/spec.md` describes.
+/// `check_call`, exactly as `docs/user/spec.md` describes.
 fn resolve_fn(fnames: Strs, fowner: Ints, vmod: Ints, vname: Strs, vfn: Ints,
         here: Int, name: Str) -> Int {
     let own = owned_index(fnames, fowner, here, name);
@@ -3528,7 +3528,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 // that an initialiser failing after an earlier one produced a heap string
                 // releases it: a value held only in a register is not reachable from the
                 // frame's cleanup. A record whose fields own nothing gets no slot and
-                // pays for none of this. `docs/spec.md`, *partial construction*.
+                // pays for none of this. `docs/user/spec.md`, *partial construction*.
                 if needs_cleanup(t, rfirst, rcount, rftype) {
                     let slot = ints_get(counter, 0);
                     ints_set(counter, 0, slot + 1);
@@ -5440,7 +5440,7 @@ pub fn check_program(src: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mcount: 
     let kid_first = ints_new();
     build_children(nk, nar, kids, kid_first);
 
-    // The built-ins share the ordinary function namespace, exactly as `docs/spec.md`
+    // The built-ins share the ordinary function namespace, exactly as `docs/user/spec.md`
     // says, so a call to one is not an undefined function — and a definition may not take
     // one of their names, which is why they are collected first.
     let bnames = strs_new();
@@ -5454,7 +5454,7 @@ pub fn check_program(src: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mcount: 
 
     // Records, in three stages before any signature. Names first, for the whole
     // compilation, because a field's type may name a record declared later or in another
-    // module; then the field types; then the layouts those fields describe. `docs/spec.md`
+    // module; then the field types; then the layouts those fields describe. `docs/user/spec.md`
     // orders them and says why declaration order is not a dependency.
     let rnames = strs_new();
     let rowner = ints_new();
@@ -6134,7 +6134,7 @@ pub fn check_contract_shapes(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Str
 
 // --- traits and impls, N102 -------------------------------------------------------------
 //
-// The reference's N78 (`docs/spec.md`, *Traits and methods*): a trait is a list of
+// The reference's N78 (`docs/user/spec.md`, *Traits and methods*): a trait is a list of
 // signatures whose first parameter is `self: Self`; an impl gives one type every method, each
 // with the trait's signature, `Self` replaced and effects included; a method call is resolved
 // here to exactly one definition — on a concrete type to the impl's, through a bound to the

@@ -63,7 +63,7 @@ answered once for the interpreter (`--max-depth`, a stack sized from the budget,
 The native answer must be chosen deliberately, and the candidates differ in what they
 promise:
 
-1. **Do nothing** — let the OS deliver `SIGSEGV`. Cheapest and wrong: `docs/spec.md`
+1. **Do nothing** — let the OS deliver `SIGSEGV`. Cheapest and wrong: `docs/user/spec.md`
    promises a program *stops with a diagnostic*, and a signal is not that. It is the same
    mistake `llvm.trap` would have been.
 2. **A depth counter** in the generated code, checked on entry, reporting `N0403`. Honest,

@@ -1,4 +1,4 @@
-//! Gate 3: the domain reference workloads (`docs/systems-domains.md` Parts E–J; `docs/spec.md`,
+//! Gate 3: the domain reference workloads (`docs/internal/systems-domains.md` Parts E–J; `docs/user/spec.md`,
 //! *Domain profiles*).
 //!
 //! Each workload in `tests/domains/` is held, as a locked package, to its domain's profile, and
@@ -192,7 +192,7 @@ fn the_profiles_tell_the_workloads_apart() {
 }
 
 /// The watchdog is a board's, counted on its scheduler's ticks and fed from a task (Gate 3,
-/// `docs/spec.md`, *Boards*); `industrial` asks that a task feed it.
+/// `docs/user/spec.md`, *Boards*); `industrial` asks that a task feed it.
 #[test]
 fn the_watchdog_is_a_boards_fed_from_a_task() {
     let src = fixture("industrial.nz");

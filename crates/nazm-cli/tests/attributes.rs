@@ -1,6 +1,6 @@
 //! Gate 2: attributes and conditional compilation.
 //!
-//! `docs/general-purpose.md` §16 and §17, `docs/spec.md` *Attributes* and *Conditional
+//! `docs/internal/general-purpose.md` §16 and §17, `docs/user/spec.md` *Attributes* and *Conditional
 //! compilation*. What this holds: a declaration whose `@cfg` does not hold is not there — not
 //! resolved, not checked, not a duplicate — in every implementation; the build's target and
 //! profiles decide, and a check filed under one configuration is not reused under another; the

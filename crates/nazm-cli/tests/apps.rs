@@ -1,4 +1,4 @@
-//! Gate 2: the reference applications (`examples/apps/`, `docs/general-purpose.md` §24).
+//! Gate 2: the reference applications (`examples/apps/`, `docs/internal/general-purpose.md` §24).
 //!
 //! Five programs that do ordinary work — a command-line counter, a concurrent server, a JSON
 //! pipeline, a numeric simulation and a persistent store — each run under the interpreter and

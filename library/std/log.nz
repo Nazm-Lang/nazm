@@ -5,7 +5,7 @@
 // collector can read it; writing needs only an `OutCap`. A span measures a piece of work: begun and
 // ended under a `TimeCap`, it writes its name and the nanoseconds between. Nothing here reads a
 // clock or a task unless asked, so a program's log is the same in every run. Records below a
-// logger's level are dropped. `docs/general-purpose.md` §20.
+// logger's level are dropped. `docs/internal/general-purpose.md` §20.
 
 use "@std/json";
 use "@std/time";

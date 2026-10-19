@@ -4,7 +4,7 @@
 //! The root is analysed from disk exactly as `nazm check` would load it, the snapshot or
 //! delta is derived from that analysis, and both are dropped: nothing is kept between runs.
 //! A baseline is a file the caller names and keeps; this command reads it, and writes
-//! nothing. `docs/architecture.md` §7.30 says what the digests are taken over.
+//! nothing. `docs/internal/architecture.md` §7.30 says what the digests are taken over.
 
 use std::path::Path;
 use std::process::ExitCode;

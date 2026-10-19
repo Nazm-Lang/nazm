@@ -3,7 +3,7 @@
 //! # What it is for
 //!
 //! One question: **must this module's dependents be re-checked?** A dependent is checked
-//! against an interface and nothing else (`docs/spec.md`), so if the interface is the
+//! against an interface and nothing else (`docs/user/spec.md`), so if the interface is the
 //! same, the answer is no. That is the whole value of the thing, and it is why a body is
 //! deliberately not an input — a module whose private helper changed publishes the same
 //! interface and its dependents are unaffected.

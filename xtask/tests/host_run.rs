@@ -1,5 +1,5 @@
 //! R6, task 7.2: `cargo xtask host-run` — the host runner for one bounded-heap stage
-//! (`docs/runbook.md`, *What may run on the host*). Each refusal is exercised by name, and a passing
+//! (`docs/internal/runbook.md`, *What may run on the host*). Each refusal is exercised by name, and a passing
 //! run, a deadline and the withdrawal condition are exercised end to end.
 //!
 //! Host-safe: the programs the runner is given are either small shell scripts that carry the two

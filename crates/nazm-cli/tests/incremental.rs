@@ -33,7 +33,7 @@ const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
 /// The core prelude: one module in every compilation, imported by every other.
 ///
 /// Counted wherever modules are counted, because it is checked, cached and reused exactly
-/// as a project module is — `docs/spec.md`, *The core prelude*. Named rather than folded
+/// as a project module is — `docs/user/spec.md`, *The core prelude*. Named rather than folded
 /// into each number, so every count below still reads as the project's modules plus it.
 const PRELUDE: u64 = 1;
 
@@ -1392,7 +1392,7 @@ fn an_exported_record_change_rechecks_the_importer() {
 
 #[test]
 fn reordering_an_exported_records_fields_reaches_nobody() {
-    // The claim `docs/spec.md` makes about field order, measured where it is easiest to
+    // The claim `docs/user/spec.md` makes about field order, measured where it is easiest to
     // get wrong: B's source moves, so B re-checks, and A does not — because the
     // interface's fields are sorted by name and the bytes did not move.
     let dir = tempfile::tempdir().expect("tempdir");

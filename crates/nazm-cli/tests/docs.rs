@@ -108,7 +108,7 @@ fn every_schema_file_is_documented_and_every_documented_schema_exists() {
     }
     assert!(files.len() >= 4, "only {files:?}");
 
-    let doc = read("docs/diagnostics.md");
+    let doc = read("docs/user/diagnostics.md");
     for f in &files {
         // `nazm.fix-1.json` is documented under its identifier, `nazm.fix/1`.
         let identifier = f
@@ -119,7 +119,7 @@ fn every_schema_file_is_documented_and_every_documented_schema_exists() {
         assert!(
             doc.contains(&identifier),
             "schema/{f} exists and `{identifier}` is not mentioned in \
-             docs/diagnostics.md"
+             docs/user/diagnostics.md"
         );
     }
 
@@ -179,7 +179,7 @@ fn the_documented_target_is_the_one_the_emitter_names() {
     let note = nazm_lir::TARGET_NOTE;
     let target = "aarch64-apple-darwin";
     assert!(note.contains(target), "the emitter's note changed: {note}");
-    for file in ["README.md", "docs/releases/4fb1554.md"] {
+    for file in ["README.md", "docs/internal/releases/4fb1554.md"] {
         let text = flowed(&read(file));
         assert!(
             text.contains(target),
@@ -195,12 +195,12 @@ fn the_documented_target_is_the_one_the_emitter_names() {
 #[test]
 #[allow(clippy::indexing_slicing)] // the row's length is asserted first
 fn the_support_page_states_the_compilers_own_matrix() {
-    // `docs/support.md` is the public answer to "does it run on X?", and the compiler carries
+    // `docs/user/support.md` is the public answer to "does it run on X?", and the compiler carries
     // the same answer in `SUPPORT` (N95). A page edited by hand drifts from a table edited in
     // code, so every cell is compared: the status under each backend — with a QEMU run
     // written `emulator-verified`, a kind of run-verified — and the debugger, word for word.
     use nazm_lir::backend::{Support, NON_GOALS, SUPPORT};
-    let page = read("docs/support.md");
+    let page = read("docs/user/support.md");
     let label = |s: Support, row: &str| -> Vec<&'static str> {
         match s {
             Support::Run(_) if row.contains("QEMU") => vec!["emulator-verified"],
@@ -232,45 +232,45 @@ fn the_support_page_states_the_compilers_own_matrix() {
         assert_eq!(
             cells.len(),
             5,
-            "docs/support.md: the row for {triple} is malformed: {line}"
+            "docs/user/support.md: the row for {triple} is malformed: {line}"
         );
         assert!(
             label(cell.llvm, line).contains(&cells[1]),
-            "docs/support.md says {triple} is `{}` under LLVM; the compiler says {}",
+            "docs/user/support.md says {triple} is `{}` under LLVM; the compiler says {}",
             cells[1],
             cell.llvm.name()
         );
         assert!(
             label(cell.cranelift, line).contains(&cells[2]),
-            "docs/support.md says {triple} is `{}` under Cranelift; the compiler says {}",
+            "docs/user/support.md says {triple} is `{}` under Cranelift; the compiler says {}",
             cells[2],
             cell.cranelift.name()
         );
         assert_eq!(
             cells[4], cell.debugger,
-            "docs/support.md: the debugger cell for {triple}"
+            "docs/user/support.md: the debugger cell for {triple}"
         );
         seen += 1;
     }
     assert_eq!(
         seen,
         SUPPORT.len(),
-        "docs/support.md must have one row per target the compiler accepts"
+        "docs/user/support.md must have one row per target the compiler accepts"
     );
     for (what, why) in NON_GOALS {
         assert!(
             page.contains(&format!("| {what} | {why} |")),
-            "docs/support.md does not state the non-goal `{what}` as the compiler does"
+            "docs/user/support.md does not state the non-goal `{what}` as the compiler does"
         );
     }
 }
 
-/// Every anchored section of `docs/spec.md` is classified for 1.0, once, in one of the six
+/// Every anchored section of `docs/user/spec.md` is classified for 1.0, once, in one of the six
 /// classes, and the table names no section that does not exist (Gate 1). A section added
 /// without a class would be a rule nobody has said is stable.
 #[test]
 fn every_spec_section_is_classified_for_1_0() {
-    let spec = read("docs/spec.md");
+    let spec = read("docs/user/spec.md");
     let ids: BTreeSet<String> = spec
         .lines()
         .filter_map(|l| l.trim().strip_prefix("<!-- id:"))
@@ -319,7 +319,7 @@ fn every_spec_section_is_classified_for_1_0() {
     }
 }
 
-/// `docs/stability.md` puts every command of this build in exactly one class, and classifies
+/// `docs/user/stability.md` puts every command of this build in exactly one class, and classifies
 /// every schema `schema/` holds (Gate 1).
 #[test]
 fn the_stability_contract_classifies_every_command_and_schema_file() {
@@ -328,7 +328,7 @@ fn the_stability_contract_classifies_every_command_and_schema_file() {
         .output()
         .expect("run");
     let inv: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
-    let stability = read("docs/stability.md");
+    let stability = read("docs/user/stability.md");
     let commands = stability
         .split("### The command line")
         .nth(1)
@@ -348,7 +348,10 @@ fn the_stability_contract_classifies_every_command_and_schema_file() {
             .iter()
             .filter(|r| r.contains(&format!("`{c}`")))
             .count();
-        assert_eq!(n, 1, "`nazm {c}` is in {n} classes of docs/stability.md");
+        assert_eq!(
+            n, 1,
+            "`nazm {c}` is in {n} classes of docs/user/stability.md"
+        );
     }
 
     let schemas = stability
@@ -368,20 +371,20 @@ fn the_stability_contract_classifies_every_command_and_schema_file() {
         let id = format!("`{name}/{major}`");
         assert!(
             schemas.contains(&id),
-            "{id} ({file}) is not classified in docs/stability.md"
+            "{id} ({file}) is not classified in docs/user/stability.md"
         );
     }
 }
 
 #[test]
 fn the_stability_contract_states_the_current_identities() {
-    // M1: `docs/stability.md` restates the identities a build carries, and every Gate 2 slice
+    // M1: `docs/user/stability.md` restates the identities a build carries, and every Gate 2 slice
     // moves one. The table is held to the constants rather than to whoever remembered.
-    let text = read("docs/stability.md");
+    let text = read("docs/user/stability.md");
     let row = |name: &str| -> String {
         text.lines()
             .find(|l| l.starts_with(&format!("| **{name}** |")))
-            .unwrap_or_else(|| panic!("docs/stability.md has no `{name}` row"))
+            .unwrap_or_else(|| panic!("docs/user/stability.md has no `{name}` row"))
             .to_owned()
     };
     let current = |line: &str| -> String {
@@ -392,24 +395,24 @@ fn the_stability_contract_states_the_current_identities() {
     assert_eq!(
         current(&epoch),
         format!("**{}**", nazm_cache::SEMANTIC_EPOCH),
-        "docs/stability.md's semantic epoch row is stale: {epoch}"
+        "docs/user/stability.md's semantic epoch row is stale: {epoch}"
     );
     let abi = row("Runtime ABI");
     assert_eq!(
         current(&abi),
         format!("**{}**", nazm_lir::runtime::RUNTIME_ABI_REVISION),
-        "docs/stability.md's runtime ABI row is stale: {abi}"
+        "docs/user/stability.md's runtime ABI row is stale: {abi}"
     );
     let iface = row("Interface schema");
     assert_eq!(
         current(&iface),
         format!("**`{}`**", nazm_iface::SCHEMA),
-        "docs/stability.md's interface schema row is stale: {iface}"
+        "docs/user/stability.md's interface schema row is stale: {iface}"
     );
     let toolchain = row("Toolchain version");
     assert_eq!(
         current(&toolchain),
         format!("**{}**", env!("CARGO_PKG_VERSION")),
-        "docs/stability.md's toolchain row is stale: {toolchain}"
+        "docs/user/stability.md's toolchain row is stale: {toolchain}"
     );
 }

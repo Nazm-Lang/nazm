@@ -1,6 +1,6 @@
 //! Files and handles (Gate 2): the `os_` built-ins, over the process's handle table.
 //!
-//! `docs/spec.md`, *Files and handles*, is the rule, and the native runtime's `nz.os_*` entries
+//! `docs/user/spec.md`, *Files and handles*, is the rule, and the native runtime's `nz.os_*` entries
 //! are the other implementation of it. A handle is a word, `generation << 32 | descriptor`; the
 //! table remembers each descriptor's current generation, so a handle whose generation has been
 //! closed answers `Closed` and never reaches whatever the system later opened on the same

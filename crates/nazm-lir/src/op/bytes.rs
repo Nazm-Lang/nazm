@@ -1,4 +1,4 @@
-//! `Bytes` and `Text` (Gate 2, `docs/general-purpose.md` §5–§6): each built-in as the
+//! `Bytes` and `Text` (Gate 2, `docs/internal/general-purpose.md` §5–§6): each built-in as the
 //! instructions and runtime calls it means.
 //!
 //! Both are `Str`'s triple, `{ptr, len, owner}`. A `Bytes` always views a heap buffer whose

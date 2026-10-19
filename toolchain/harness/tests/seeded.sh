@@ -88,7 +88,7 @@ while IFS=$'\t' read -r name file; do
     if [ $? -ne 0 ]; then differ=$((differ + 1)); echo "DIFFER  $name: $out"; continue; fi
     made=""
     if [ "$name" = readme-says-not-pre-registered ]; then
-        made=$tree/docs/research/evaluation-preregistration.md
+        made=$tree/docs/internal/research/evaluation-preregistration.md
         printf '# Pre-registration\n' >"$made"
     fi
     case $file in xtask/src/rules.rs) rebuild ;; esac
@@ -99,10 +99,10 @@ while IFS=$'\t' read -r name file; do
 done <"$log/names"
 
 # A file a gate reads, gone: the failure is worded as the Rust gate words it.
-for gone in docs/research/evaluation.md docs/capability-matrix.md docs/guide.md Cargo.lock \
-    crates/nazm-cli/src/build/mod.rs docs/mcp.md THIRD-PARTY-NOTICES.md bench/claims.toml \
-    docs/performance.md AGENTS.md CLAUDE.md compiler/AGENTS.md .agent/templates/state.md \
-    docs/agent-evals.md Cargo.toml xtask/mutations/mutations.toml crates/nazm-bench/src/selftest.rs; do
+for gone in docs/internal/research/evaluation.md docs/internal/capability-matrix.md docs/user/guide.md Cargo.lock \
+    crates/nazm-cli/src/build/mod.rs docs/user/mcp.md THIRD-PARTY-NOTICES.md bench/claims.toml \
+    docs/internal/performance-log.md AGENTS.md CLAUDE.md compiler/AGENTS.md .agent/templates/state.md \
+    docs/internal/agent-evals.md Cargo.toml xtask/mutations/mutations.toml crates/nazm-bench/src/selftest.rs; do
     mv "$tree/$gone" "$log/gone"
     compare "without $gone"
     mv "$log/gone" "$tree/$gone"
@@ -114,10 +114,10 @@ compare "an OpenSpec change without a proposal, and a language capability in ope
 rmdir "$tree/openspec/changes/seeded-change" "$tree/openspec/specs/seeded-language-capability"
 
 # A corpus document that is not UTF-8.
-cp "$tree/docs/roadmap.md" "$log/kept"
-printf '\377\n' >>"$tree/docs/roadmap.md"
-compare "docs/roadmap.md not UTF-8"
-cp "$log/kept" "$tree/docs/roadmap.md"
+cp "$tree/docs/user/roadmap.md" "$log/kept"
+printf '\377\n' >>"$tree/docs/user/roadmap.md"
+compare "docs/user/roadmap.md not UTF-8"
+cp "$log/kept" "$tree/docs/user/roadmap.md"
 
 compare "the copy restored"
 echo "$agree agree, $differ differ"

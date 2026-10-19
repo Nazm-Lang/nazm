@@ -1,7 +1,7 @@
 //! N73: build provenance — `nazm build --provenance FILE` and `--attest-with CMD`. A record of
 //! what a build read and wrote; `provenance.rs` is N38's data-flow provenance, another subject.
 //!
-//! `docs/architecture.md` §7.75. What the commands show: the record names every source module and
+//! `docs/internal/architecture.md` §7.75. What the commands show: the record names every source module and
 //! the output with digests anyone can recompute (plain BLAKE3 over the bytes), the toolchain and the
 //! options that reach the output; two builds of one program in two clean directories write the same
 //! record; a changed source changes its own digest and the output's; an attestation is the local

@@ -1,6 +1,6 @@
 //! N71: contracts on WebAssembly — the ordinary backend with a host adapter.
 //!
-//! `docs/architecture.md` §7.73. On any host: `--wasm` writes WebAssembly objects, the metadata
+//! `docs/internal/architecture.md` §7.73. On any host: `--wasm` writes WebAssembly objects, the metadata
 //! (`nazm.wasm-contract/1`: fields by declaration index, each entrypoint's export, the imports) and
 //! the reference host, the same bytes twice; the contract's object asks its host for exactly
 //! `state_get`, `state_set`, `revert` and `report`. In `nazm-wasm:n64` (the ignored test): the linked

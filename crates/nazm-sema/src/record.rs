@@ -13,7 +13,7 @@
 //! [`UserTypes`](crate::UserTypes) since N10, because a record field may now be an enum
 //! and the walk crosses both tables. The alternative — copying a field
 //! list into the type — would make two records with the same fields the same type, which
-//! `docs/spec.md` refuses (records are nominal).
+//! `docs/user/spec.md` refuses (records are nominal).
 //!
 //! # Session-local, like everything else in this crate
 //!
@@ -65,14 +65,14 @@ pub struct FieldDef {
 pub struct RecordDef {
     pub name: String,
     /// The module that declares it. Two modules may each declare `Thing`; they are two
-    /// types, and `docs/spec.md` says so in the same words it says it for functions.
+    /// types, and `docs/user/spec.md` says so in the same words it says it for functions.
     pub module: ModuleId,
     pub visibility: Visibility,
     pub name_span: Span,
     /// The fields **in declaration order**, which is what a reader wrote and what a
     /// diagnostic should show.
     ///
-    /// Not the layout order, and not part of what the type means: `docs/spec.md` makes
+    /// Not the layout order, and not part of what the type means: `docs/user/spec.md` makes
     /// construction named and declaration order non-semantic, so moving two fields is not
     /// a change to this type. [`Self::layout`] is the order the backend uses.
     pub fields: Vec<FieldDef>,
@@ -81,7 +81,7 @@ pub struct RecordDef {
     /// The **canonical** order: one deterministic sequence derived from the field names,
     /// which are what identifies a field. A backend laying fields out in this order gives
     /// two source orderings of the same record the same layout — so an edit the language
-    /// says means nothing also *does* nothing, which is the property `docs/spec.md` would
+    /// says means nothing also *does* nothing, which is the property `docs/user/spec.md` would
     /// otherwise be claiming without a mechanism.
     pub layout: Vec<u32>,
     /// This record's index in `Program::records`, so a consumer holding a [`RecordId`]
@@ -105,7 +105,7 @@ pub struct RecordDef {
     pub repr: CRepr,
 }
 
-/// How a record crosses the C boundary (N85, `docs/architecture.md` §7.86).
+/// How a record crosses the C boundary (N85, `docs/internal/architecture.md` §7.86).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum CRepr {
     /// An ordinary record: never crosses, laid out in canonical order.
@@ -208,7 +208,7 @@ impl Records {
     /// Declare a record with its name and visibility, before its fields are known.
     ///
     /// Two stages because a field's type may name a record declared later, or in another
-    /// module — `docs/spec.md` makes declaration order irrelevant, and that is only
+    /// module — `docs/user/spec.md` makes declaration order irrelevant, and that is only
     /// possible if every name exists before any field type is resolved. The same shape as
     /// N2's declare-then-check, one level earlier.
     ///
@@ -232,7 +232,7 @@ impl Records {
     /// For a record an interface carries because an exported shape mentions it, rather
     /// than because the module exports it: the importer must know the shape and must not
     /// be able to write the name. Registering it would be exactly the transitive
-    /// visibility `docs/spec.md` refuses.
+    /// visibility `docs/user/spec.md` refuses.
     pub fn declare_unnamed(&mut self, def: RecordDef) -> RecordId {
         let id = RecordId::from_index(self.defs.len());
         self.defs.push(def);

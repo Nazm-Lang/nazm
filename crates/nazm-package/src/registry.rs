@@ -1,4 +1,4 @@
-//! A local registry (N56, `docs/architecture.md` §7.58): an index per package and an immutable,
+//! A local registry (N56, `docs/internal/architecture.md` §7.58): an index per package and an immutable,
 //! digest-checked copy of every published version, in a directory a manifest names.
 //!
 //! ```text

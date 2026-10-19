@@ -12,7 +12,7 @@
 //! - no locals, no control flow, no lowering, no ownership, no effects, no layout, and no
 //!   content hash. Each of those is either a later milestone or a different question.
 //!
-//! The test it exists to make answerable is in `docs/spec.md`: *given a module's source
+//! The test it exists to make answerable is in `docs/user/spec.md`: *given a module's source
 //! and the interfaces of the modules it imports, that module can be checked with no
 //! access to those modules' bodies.* `nazm_core::check_unit` takes exactly these.
 //!
@@ -22,7 +22,7 @@
 //! built during a compilation from the modules' own declarations and dropped with it.
 //! [`Export::def`] is a session-local [`FnId`], which is precisely the field that would
 //! have to become a durable identity before an interface could be written to disk and
-//! read back by a later build — see `docs/research-register.md` R2.
+//! read back by a later build — see `docs/internal/research-register.md` R2.
 
 use nazm_span::Span;
 
@@ -35,7 +35,7 @@ use crate::udt::{TypeNode, UserTypes};
 
 /// Whether a definition leaves its module.
 ///
-/// One bit, and the language has one keyword for it. `docs/spec.md` states the default
+/// One bit, and the language has one keyword for it. `docs/user/spec.md` states the default
 /// and why there is no `private`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Visibility {
@@ -107,7 +107,7 @@ pub struct Export {
 ///
 /// # Why an interface carries records it does not export
 ///
-/// N9 records are **transparent** (`docs/spec.md`): a module that can see a record can
+/// N9 records are **transparent** (`docs/user/spec.md`): a module that can see a record can
 /// construct it and project its fields, so its field types are part of its usable shape.
 /// If an exported record has a field whose type is a record from a *third* module, an
 /// importer that never imported that module still has to know that record's shape to
@@ -117,7 +117,7 @@ pub struct Export {
 /// draws the line the visibility law draws: a name an importer may *write* versus a shape
 /// it merely has to *understand*. Closing over shapes is not transitive visibility — no
 /// extra name becomes writable — and without it an exported record could refer to a type
-/// the importer could never resolve, which `docs/spec.md` refuses as an unclosed API.
+/// the importer could never resolve, which `docs/user/spec.md` refuses as an unclosed API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordExport {
     pub def: RecordId,
@@ -339,7 +339,7 @@ impl UnitInterface {
 
     /// The user-defined type an importer names with this spelling.
     ///
-    /// One namespace: `docs/spec.md` puts records and enums both in the type namespace, so
+    /// One namespace: `docs/user/spec.md` puts records and enums both in the type namespace, so
     /// a module cannot offer both under one name and this cannot have to choose.
     #[must_use]
     pub fn user_type(&self, types: &UserTypes, name: &str) -> Option<Type> {

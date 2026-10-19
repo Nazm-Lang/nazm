@@ -51,7 +51,7 @@ use "@std/process"
 /// on an Apple silicon host), and Windows on x86_64 with MinGW (8.8); and Linux on aarch64 and
 /// x86_64 for one purpose only: the contained runner is Linux, and the toolchain builds itself
 /// there (R6, `toolchain/selfbuild/selfbuild.sh`). Linux is still not a supported target
-/// (`docs/support.md`); it, WebAssembly, WASI, Android, iOS and the boards are deferred until after
+/// (`docs/user/support.md`); it, WebAssembly, WASI, Android, iOS and the boards are deferred until after
 /// 1.0 by the copyright holder's decision (`openspec/changes/r3-pipeline/design.md`).
 fn target_supported(t: Str) -> Bool {
     t == "aarch64-apple-darwin" || t == "x86_64-apple-darwin" || t == "x86_64-pc-windows-gnu"

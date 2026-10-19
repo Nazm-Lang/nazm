@@ -1,6 +1,6 @@
 //! N64: WebAssembly — `wasm32-unknown-unknown`, its outside reached only by imports.
 //!
-//! `docs/architecture.md` §7.66. What a whole build shows: a program builds to WebAssembly objects,
+//! `docs/internal/architecture.md` §7.66. What a whole build shows: a program builds to WebAssembly objects,
 //! `link.txt` with its `wasm-ld` line, the reference host `host.mjs` and `bounds.json`, the same bytes
 //! twice; device registers, allocation, Cranelift and the board's watermark are refused for it by
 //! name; `--debug` carries DWARF. The module's import section — what it can ask of its host — is

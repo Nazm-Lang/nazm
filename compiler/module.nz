@@ -20,7 +20,7 @@
 // emitted runtime has eighteen symbols and `realpath` is not among them, so this keys by
 // a **textually normalised** path instead: `./x.nz`, `x.nz` and `a/../x.nz` are one key,
 // but two names that reach one file through a symbolic link are two keys, and that file
-// would be read twice and its functions defined twice. Recorded in `docs/bootstrap.md`
+// would be read twice and its functions defined twice. Recorded in `docs/internal/bootstrap.md`
 // rather than papered over — it is a real difference in behaviour, not a detail.
 
 use "lex.nz";
@@ -364,7 +364,7 @@ fn reserved_key(key: Str) -> Bool {
 /// module, so no project offset moves, and an ordinary import edge from each of them, so
 /// what a module may name and what it depends on treat the prelude as a module it had
 /// written `use` for. The edges point at no `use` line because none was written; a
-/// diagnostic about the prelude points at the declaration instead. `docs/spec.md`, *The core
+/// diagnostic about the prelude points at the declaration instead. `docs/user/spec.md`, *The core
 /// prelude*.
 ///
 /// **Its identity is its key**, established here and nowhere else: [`core_module`] finds

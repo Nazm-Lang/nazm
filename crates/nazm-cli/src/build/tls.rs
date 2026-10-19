@@ -1,4 +1,4 @@
-//! What a program that reaches TLS (v1 track C1, `docs/spec.md`, *TLS*) links beside the runtime:
+//! What a program that reaches TLS (v1 track C1, `docs/user/spec.md`, *TLS*) links beside the runtime:
 //! the platform's TLS library, found on the host and never bundled.
 //!
 //! On macOS that is OpenSSL 3 as Homebrew installs it (`brew install openssl@3`), linked

@@ -43,7 +43,7 @@ impl Interpreter {
     /// `match`, in either position.
     ///
     /// The scrutinee is evaluated **once**, into a value this expression owns, and the arm
-    /// runs with the payload bound into locals its region owns. `docs/spec.md` specifies
+    /// runs with the payload bound into locals its region owns. `docs/user/spec.md` specifies
     /// value evaluation rather than a borrow of the caller's storage, so `match x { … }`
     /// leaves `x` untouched and `match make() { … }` has a clear owner for the temporary.
     ///
@@ -230,7 +230,7 @@ impl Interpreter {
 
     /// `local.path = value;`.
     ///
-    /// **The new value first, always.** `docs/spec.md` requires a replacement to be secured
+    /// **The new value first, always.** `docs/user/spec.md` requires a replacement to be secured
     /// before the old one is let go, so that `p.name = p.name` and a failing right-hand side
     /// are both safe. Evaluating here rather than after the walk is what makes that true: by
     /// the time anything is overwritten, `v` already holds its own reference to whatever
@@ -532,7 +532,7 @@ impl Interpreter {
                 fields,
                 record,
             } => {
-                // **In the order written**, which `docs/spec.md` fixes as the evaluation
+                // **In the order written**, which `docs/user/spec.md` fixes as the evaluation
                 // order and which physical layout has nothing to do with. A failure part
                 // way through drops what has been built so far — the `Vec` goes with the
                 // error — and that drop is what releases a string backing or a sequence

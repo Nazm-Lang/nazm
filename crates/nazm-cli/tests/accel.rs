@@ -1,6 +1,6 @@
 //! N67: accelerator kernels — eligibility, the device's meaning, transfers, identity.
 //!
-//! `docs/architecture.md` §7.69. Without a device, on any host: the generated OpenCL C carries
+//! `docs/internal/architecture.md` §7.69. Without a device, on any host: the generated OpenCL C carries
 //! every checked operation and the lowest-index failure rule, and an ineligible function is refused
 //! by name before a device is touched. With macOS's OpenCL on Apple's GPU (the ignored tests, run
 //! by hand on such a host): a kernel's results equal the interpreter's element by element, a

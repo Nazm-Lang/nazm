@@ -25,5 +25,5 @@ nazm build ffi.nz --link add.o -o ffi
 ```
 
 Only `Int` (`int64_t`) and `Bool` (`bool`) cross. Every call needs a `ForeignCap`, and `nazm run`
-refuses the program: the interpreter cannot call C. `docs/spec.md`, *Foreign functions*, and
-`docs/limitations.md` say what is and is not promised at the boundary.
+refuses the program: the interpreter cannot call C. `docs/user/spec.md`, *Foreign functions*, and
+`docs/user/limitations.md` say what is and is not promised at the boundary.

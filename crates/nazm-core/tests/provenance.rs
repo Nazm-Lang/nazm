@@ -1,6 +1,6 @@
 //! N38: provenance — where values come from, and the one flow v1 restricts.
 //!
-//! `docs/spec.md`, *Provenance*, is the law. What these tests hold:
+//! `docs/user/spec.md`, *Provenance*, is the law. What these tests hold:
 //!
 //! * only the outside-world built-ins that bring data in are sources — the command line, a
 //!   file's contents and existence — and `main`'s capabilities are the runtime's authority;

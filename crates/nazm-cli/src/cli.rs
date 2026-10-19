@@ -47,7 +47,7 @@ pub(crate) enum RuntimeAction {
                   the same results. Trait objects and effect handlers are not in the \
                   language; a program using an absent construct is refused by name \
                   rather than misparsed. Run `nazm capabilities` for this build's own \
-                  answer. See docs/spec.md and docs/stability.md.",
+                  answer. See docs/user/spec.md and docs/user/stability.md.",
     version
 )]
 pub(crate) struct Cli {
@@ -286,7 +286,7 @@ pub(crate) enum Command {
         /// Write the edits. Without this the command reports and changes nothing.
         #[arg(long)]
         apply: bool,
-        /// One JSON object per edit, on stdout. See `docs/diagnostics.md`.
+        /// One JSON object per edit, on stdout. See `docs/user/diagnostics.md`.
         #[arg(long)]
         json: bool,
     },
@@ -295,7 +295,7 @@ pub(crate) enum Command {
     /// The function, record or enum declared or used at byte `--byte` of `--file`, a file
     /// the compilation rooted at `--root` loads: its exact source, and compact links to what
     /// it uses, what uses it, what it calls and what calls it, from the disk as it is now.
-    /// `docs/architecture.md` §7.29.
+    /// `docs/internal/architecture.md` §7.29.
     Context {
         /// The compilation's root module: every fact in the packet is of this program.
         #[arg(long)]
@@ -320,7 +320,7 @@ pub(crate) enum Command {
     /// each with one digest per semantic section the compiler records, from the disk as it
     /// is now. Keep it as the baseline of a later `nazm delta`. A digest is evidence the
     /// canonical data it was taken over is equal, not that behaviour is.
-    /// `docs/architecture.md` §7.30.
+    /// `docs/internal/architecture.md` §7.30.
     Snapshot {
         /// The compilation's root module.
         #[arg(long)]
@@ -363,7 +363,7 @@ pub(crate) enum Command {
     /// that diagnostic exactly as `nazm.diagnostic/1` publishes it, with its places in their
     /// files and, for each fix, the `nazm patch fix` selector where one exists — refused if
     /// the sources are no longer the index's state. From the disk as it is now; `nazm check
-    /// --json` is unchanged. `docs/architecture.md` §7.32.
+    /// --json` is unchanged. `docs/internal/architecture.md` §7.32.
     Diagnostics {
         /// The compilation's root module.
         #[arg(long)]
@@ -390,7 +390,7 @@ pub(crate) enum Command {
     /// digest, with no body. `--section ID` returns that section's own text byte for byte,
     /// never its subsections', and never a paraphrase; `--state` binds the request to the
     /// corpus an index described. Read from the repository's documentation as it is now;
-    /// ids are exact, with no search. `docs/architecture.md` §7.34.
+    /// ids are exact, with no search. `docs/internal/architecture.md` §7.34.
     #[command(group(clap::ArgGroup::new("ask").required(true).args(["index", "section"])))]
     Docs {
         /// Print the index.
@@ -425,7 +425,7 @@ pub(crate) enum Command {
     /// sections' exact text — within a structural budget; a budget the seeds do not fit is
     /// refused, and anything else it cuts is listed and makes the answer `partial`. `--state`
     /// refuses a repository that has changed since. Ids only; no path is read.
-    /// `docs/architecture.md` §7.35.
+    /// `docs/internal/architecture.md` §7.35.
     #[command(group(clap::ArgGroup::new("repo_ask").required(true).args(["map", "task"])))]
     Repo {
         /// Print the map.
@@ -465,7 +465,7 @@ pub(crate) enum Command {
     /// edits bound to the root's semantic snapshot, each edited file's digest and each
     /// edit's expected bytes, from the disk as it is now. Nothing is written: a patch is a
     /// proposal bound to exact source state, not permission to change a file.
-    /// `docs/architecture.md` §7.31.
+    /// `docs/internal/architecture.md` §7.31.
     Patch {
         #[command(subcommand)]
         operation: PatchOperation,
@@ -474,7 +474,7 @@ pub(crate) enum Command {
     ///
     /// Started and owned by the editor; ends when it says `exit`. Diagnostics, definition
     /// and hover, from the same loader and checker every other command uses, over the
-    /// editor's unsaved buffers. `docs/architecture.md` §7.18 says what it does and does
+    /// editor's unsaved buffers. `docs/internal/architecture.md` §7.18 says what it does and does
     /// not do.
     Lsp {
         /// Measure every module's durable identity from this directory, as
@@ -507,7 +507,7 @@ pub(crate) enum Command {
         /// without a `.expected` beside them are reported rather than ignored.
         #[arg(required = true)]
         paths: Vec<PathBuf>,
-        /// One JSON object per case, on stdout. See `docs/diagnostics.md`.
+        /// One JSON object per case, on stdout. See `docs/user/diagnostics.md`.
         #[arg(long)]
         json: bool,
         /// Skip the native leg. For a machine with no `clang`.
@@ -649,7 +649,7 @@ pub(crate) enum Command {
     /// The file named is the root, so the source root is its directory. Output is one
     /// `nazm.interface/1` JSON object on stdout — the same bytes every time, for the same
     /// interface, in this process and the next one. This is not a cache and reuses
-    /// nothing; see `docs/architecture.md` §7.3.
+    /// nothing; see `docs/internal/architecture.md` §7.3.
     Interface {
         file: PathBuf,
         /// Print the fingerprint instead of the interface: `blake3-256 <hex>`.
@@ -665,7 +665,7 @@ pub(crate) enum Command {
     /// A debugging view of the one representation `nazm run` and `nazm build` both start
     /// from, built only for a program that checks. Deterministic, and naming every
     /// definition and type by its durable key. Not user-facing syntax, and its version
-    /// promises nothing to a reader outside this build; `docs/architecture.md` §7.41.
+    /// promises nothing to a reader outside this build; `docs/internal/architecture.md` §7.41.
     CoreIr {
         file: PathBuf,
         /// The one canonical compact serialisation. Without it, the same object indented.
@@ -712,7 +712,7 @@ pub(crate) enum Command {
     },
     /// Print each concrete function of the native program as MIR, `nazm.mir/1` (N40): basic
     /// blocks with every copy, move, drop, scope join and failure edge written out, after the
-    /// validator accepted it. Debug output, internal and unstable; `docs/architecture.md` §7.42.
+    /// validator accepted it. Debug output, internal and unstable; `docs/internal/architecture.md` §7.42.
     Mir {
         file: PathBuf,
         /// One line rather than indented.
@@ -725,7 +725,7 @@ pub(crate) enum Command {
         #[arg(long, value_name = "DIR")]
         source_root: Option<PathBuf>,
     },
-    /// Build or check a runtime artifact (N82, `docs/architecture.md` §7.83): the whole runtime
+    /// Build or check a runtime artifact (N82, `docs/internal/architecture.md` §7.83): the whole runtime
     /// for one target and profile, compiled once into `libnazmrt.a` beside a `nazm.runtime/1`
     /// manifest, which `nazm build --runtime DIR` links.
     Runtime {
@@ -735,7 +735,7 @@ pub(crate) enum Command {
     /// Print what LIR decided for a checked program, `nazm.lir/2` (N81, N105): the target's data
     /// layout, every unit's symbols and linkage, every record's and enum's byte layout on that
     /// target, which types own anything, and every unit's instructions — what both backends
-    /// read, validated. `docs/architecture.md` §7.82 and §7.106.
+    /// read, validated. `docs/internal/architecture.md` §7.82 and §7.106.
     Lir {
         file: PathBuf,
         /// The target whose layout to print; the host's when absent.
@@ -800,7 +800,7 @@ pub(crate) enum Command {
     /// Read from the compiler's own tables rather than from a written list, so it cannot
     /// describe a version of itself that does not exist.
     Capabilities {
-        /// One JSON object, on stdout. See `docs/diagnostics.md`.
+        /// One JSON object, on stdout. See `docs/user/diagnostics.md`.
         #[arg(long)]
         json: bool,
     },
@@ -896,7 +896,7 @@ pub(crate) enum Command {
         /// Refuse a program the checker warns of (R1b, L15), as `nazm check --deny-warnings`.
         #[arg(long)]
         deny_warnings: bool,
-        /// A board's manifest (Gate 3, `docs/spec.md`, *Boards*): load address, stack, UART, how
+        /// A board's manifest (Gate 3, `docs/user/spec.md`, *Boards*): load address, stack, UART, how
         /// the machine stops, a heap. A board's target only; without it, the target's built-in
         /// board, which `nazm inspect` prints as a manifest.
         #[arg(long, value_name = "FILE")]

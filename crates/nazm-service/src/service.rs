@@ -56,7 +56,7 @@
 //! (`architecture.md` §7.77), so this changes what is computed, not what is answered. Every
 //! other file of the compilation is parsed in full; there is no graph maintenance, no reuse
 //! of semantic work between versions, and no persistent cache read or written (an unsaved
-//! buffer is not state the cache may record). `docs/performance.md` measures what that
+//! buffer is not state the cache may record). `docs/internal/performance-log.md` measures what that
 //! costs.
 //!
 //! # Current means current

@@ -1,6 +1,6 @@
 //! N106: the pool is the default runtime — M:N tasks on bounded workers unless asked otherwise.
 //!
-//! `docs/architecture.md` §7.107. What the programs show: with no `NAZM_SCHEDULER` a native
+//! `docs/internal/architecture.md` §7.107. What the programs show: with no `NAZM_SCHEDULER` a native
 //! program's tasks run on the pool, on both backends, ten thousand of them on one worker per
 //! processor;
 //! `threads` asks for a thread per task and gives the same output, ending and report; a value
@@ -254,7 +254,7 @@ fn one_worker_runs_a_programs_tasks_in_the_same_order_every_time() {
     }
 }
 
-/// What the default costs against threads (N106, `docs/performance.md`): spawn and join, a
+/// What the default costs against threads (N106, `docs/internal/performance-log.md`): spawn and join, a
 /// channel round trip, a blocked receive woken, and resident memory per live task — each program
 /// built once at `-O2`, five runs, median. Run with `--ignored --nocapture`; it measures, it does
 /// not judge.

@@ -2,7 +2,7 @@
 //!
 //! The root is analysed from disk exactly as `nazm check` would load it, the packet is
 //! derived from that analysis, and both are dropped: nothing is kept between runs, and a
-//! file is only ever read because the root's compilation loads it. `docs/architecture.md`
+//! file is only ever read because the root's compilation loads it. `docs/internal/architecture.md`
 //! §7.29 says what a packet holds.
 
 use std::path::Path;

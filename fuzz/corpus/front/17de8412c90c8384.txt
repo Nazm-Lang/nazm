@@ -4,7 +4,7 @@
 t
 // these two enums is special to the compiler except where they live: this file is the
 // module `@core/prelude`, owned by the toolchain rather than by a project, and every
-// module imports it implicitly. `docs/spec.md`, *The core prelude*, owns the rules.
+// module imports it implicitly. `docs/user/spec.md`, *The core prelude*, owns the rules.
 // knows whether a path exists or where a link points. `..` is resolved lexically.
 
 /// `rest` after `base` with one `/` between; `rest` itself when it is absolute or `base` is `""`.

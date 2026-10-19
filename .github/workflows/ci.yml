@@ -1,11 +1,11 @@
 # Continuous integration: the host-safe gates, on every push and pull request.
 #
-# **This is not the release gate.** `docs/runbook.md` (*Mandatory containment*) allows the
+# **This is not the release gate.** `docs/internal/runbook.md` (*Mandatory containment*) allows the
 # generated compiler stages, the selfhost suite, `compiler/bootstrap.sh`, fuzzing, the
 # mutation catalogue and heavy benchmarks to run only through the verified contained runner,
 # `cargo xtask contained`, and that runner has not been verified on GitHub's runners. So this
 # workflow runs everything that may run on a host and leaves those out by name; they run in
-# the contained release gate (`docs/releases/`, and `scripts/release-candidate.sh` through
+# the contained release gate (`docs/internal/releases/`, and `scripts/release-candidate.sh` through
 # `cargo xtask contained release`). A green run here is evidence for the host-safe subset and
 # for nothing else.
 #
@@ -33,7 +33,7 @@ jobs:
     # coverage is enforced here rather than left to whoever happens to read stderr.
     #
     # The runner is x86_64. That does not make `x86_64-unknown-linux-gnu` run-verified:
-    # `docs/support.md` names what that would take, and the target stays compile-only until a
+    # `docs/user/support.md` names what that would take, and the target stays compile-only until a
     # recorded run says otherwise.
     runs-on: ubuntu-latest
     steps:
@@ -91,7 +91,7 @@ jobs:
   #
   # A gate since 2026-10-20, when all three hosts were green together for the first time (run
   # 39308569358, 69a5f780; Windows from 844 failing tests over CI rounds 2-5). A green job here is a
-  # recorded host-safe run on that host, not a target made run-verified: `docs/support.md` names what
+  # recorded host-safe run on that host, not a target made run-verified: `docs/user/support.md` names what
   # that takes, and the release gate is unchanged.
   platforms:
     strategy:

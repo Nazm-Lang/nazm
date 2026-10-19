@@ -1,5 +1,5 @@
 //! R1e, S2 and S3: `@std/bytebuf`, `@std/ordmap`, `@std/bitset` and the in-place sorts of
-//! `@std/sort` (`docs/spec.md`, *The standard library*).
+//! `@std/sort` (`docs/user/spec.md`, *The standard library*).
 //!
 //! One program exercising each: a `ByteBuf` built in every byte order, aligned, patched, read and
 //! cleared, LEB128 at its edges and at both ends of `Int` and `UInt64`, and six hundred

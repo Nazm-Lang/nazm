@@ -110,7 +110,7 @@ pub struct Local {
 /// Statements, then the value the block produces.
 ///
 /// The same shape for a function body and for an `if` branch, because they are the same
-/// thing in the language: `docs/spec.md` has one `Block`.
+/// thing in the language: `docs/user/spec.md` has one `Block`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
     pub stmts: Vec<Stmt>,

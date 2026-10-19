@@ -1,4 +1,4 @@
-// N53: generic channels (`docs/architecture.md` §7.55, the spec's *Generic channels*). Ported
+// N53: generic channels (`docs/internal/architecture.md` §7.55, the spec's *Generic channels*). Ported
 // from `crates/nazm-cli/tests/generic_channels.rs` (R7).
 //
 // A `Chan[T]` of strings, records and enums means the same in the interpreter and the native

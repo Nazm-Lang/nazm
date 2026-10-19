@@ -56,7 +56,7 @@ impl Clock {
 /// bodies because all it needs afterwards is the interface; `nazm build` needs the
 /// *resolution* those bodies produce, because that is what lowering reads, and nothing
 /// persists a resolution. So a build checks everything, every time, and says so rather
-/// than leaving a reader to infer it from a missing field. `docs/roadmap.md` records what
+/// than leaving a reader to infer it from a missing field. `docs/user/roadmap.md` records what
 /// reusing it would require.
 ///
 /// # Why `link.performed` is always true

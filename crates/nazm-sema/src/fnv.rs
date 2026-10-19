@@ -1,5 +1,5 @@
 //! `@std/hash`'s functions, exactly (L6): a derived hash is defined in their terms
-//! (`docs/spec.md`, *Ordering and hashing are derived*), and the interpreter and the native
+//! (`docs/user/spec.md`, *Ordering and hashing are derived*), and the interpreter and the native
 //! lowering compute it without calling them — so these are the library's text in Rust, and
 //! the native lowering emits the same steps.
 

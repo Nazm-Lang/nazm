@@ -2,7 +2,7 @@
 //!
 //! # What this reads
 //!
-//! Validated MIR (`docs/architecture.md` §7.42) and nothing of the checker: not the syntax
+//! Validated MIR (`docs/internal/architecture.md` §7.42) and nothing of the checker: not the syntax
 //! tree, not a position map, not a `Resolution`. Until N40 this file lowered Core IR itself —
 //! deciding temporaries, `?`, completion, and which slot a partly built value lived in — and
 //! the emitter decided cleanup; MIR decides all of that now, once.
@@ -91,7 +91,7 @@ pub struct Native {
     /// **Separate artefacts**, never appended to a caller's unit: an instance is a function of
     /// its generic definition and its type arguments, so one instance requested by five
     /// modules is one unit and one object, and a module's own object stays a function of that
-    /// module's source and its dependencies' signatures. `docs/architecture.md` §7.12.
+    /// module's source and its dependencies' signatures. `docs/internal/architecture.md` §7.12.
     pub instances: Vec<Unit>,
     /// The root module's `main`, which the platform entry wrapper calls.
     pub entry: NativeSymbol,
@@ -129,7 +129,7 @@ fn of_declaration(canonical: &[u32], n: usize) -> Vec<u32> {
 
 /// How every record, enum and `Vec` the program's MIR mentions is laid out.
 ///
-/// One table, computed before any unit is emitted, for the reason `docs/spec.md` gives under
+/// One table, computed before any unit is emitted, for the reason `docs/user/spec.md` gives under
 /// *Separate code generation*: two objects that pass a record between them must agree about
 /// it, and the only way to be sure is that neither decided. The order is **canonical by name**,
 /// which MIR carries: moving two field or variant declarations — an edit the language says

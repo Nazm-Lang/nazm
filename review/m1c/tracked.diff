@@ -23,8 +23,8 @@ index e2fda9f..8d26974 100644
 @@ -1,12 +1,16 @@
  # Nazm — an AI-native programming language.
  #
-+# Direction: docs/direction.md · Roadmap: docs/roadmap.md
- # Design record: docs/architecture.md · Spec: docs/spec.md
++# Direction: docs/direction.md · Roadmap: docs/user/roadmap.md
+ # Design record: docs/internal/architecture.md · Spec: docs/user/spec.md
 -# Evaluation protocol and pre-registered decision rule: docs/evaluation.md
 -# Plan: ~/.claude/plans/in-my-download-folder-sparkling-minsky.md
 +# Evaluation protocol (draft, not pre-registered): docs/evaluation.md
@@ -103,7 +103,7 @@ index fc793e8..7930ada 100644
 +
 +The language is the primary track. That was decided on 2026-09-20 and recorded in
 +[`docs/direction.md`](docs/direction.md); what comes next, in dependency order, is
-+[`docs/roadmap.md`](docs/roadmap.md). The harness keeps its protocol, its thresholds and
++[`docs/user/roadmap.md`](docs/user/roadmap.md). The harness keeps its protocol, its thresholds and
 +its control arm unchanged — it is now evidence for claims rather than a gate on the
 +project's existence.
  
@@ -130,7 +130,7 @@ index fc793e8..7930ada 100644
 +compilation, and still runs under `nazm run`. The arithmetic the specification promises
 +is preserved rather than inherited from the hardware: overflow is a checked intrinsic and
 +a branch (never `nsw`, which would let the optimiser delete the check), `Int::MIN / -1`
-+fails, and `Int::MIN % -1` is `0`. See [`docs/roadmap.md`](docs/roadmap.md).
++fails, and `Int::MIN % -1` is `0`. See [`docs/user/roadmap.md`](docs/user/roadmap.md).
 +
  ```nazm
  fn first_pair_with_product(target: Int, limit: Int) -> Int {
@@ -187,9 +187,9 @@ index fc793e8..7930ada 100644
 -## The design, if it gets built
 +## The design it is being built toward
  
--Documented in [`docs/architecture.md`](docs/architecture.md). In brief: mutable value
-+Documented in [`docs/architecture.md`](docs/architecture.md), and staged in
-+[`docs/roadmap.md`](docs/roadmap.md). In brief: mutable value
+-Documented in [`docs/internal/architecture.md`](docs/internal/architecture.md). In brief: mutable value
++Documented in [`docs/internal/architecture.md`](docs/internal/architecture.md), and staged in
++[`docs/user/roadmap.md`](docs/user/roadmap.md). In brief: mutable value
  semantics so memory safety needs no lifetime annotations; effect rows, capabilities, and
  position-sensitive taint so untrusted data cannot reach a code-construction site;
  structured concurrency where data races are a compile error; and a four-tier compilation
@@ -237,7 +237,7 @@ index fc793e8..7930ada 100644
 -- **The language is an interpreter, not a compiler.** Lexer, parser, type checker and
 -  tree-walking evaluator, no IR and no backend — so nothing here says anything yet about
 -  the performance claims, which are a backend question. The subset is the one described
--  above; everything else in `docs/spec.md` under *Open* is undecided.
+-  above; everything else in `docs/user/spec.md` under *Open* is undecided.
 +- **The language is an interpreter with one narrow native path.** Lexer, parser, type
 +  checker and tree-walking evaluator, plus `nazm build` for `Int`/`Bool` expressions and
 +  value-position `if` — no functions, loops, mutation or `Str`. One
@@ -245,11 +245,11 @@ index fc793e8..7930ada 100644
 +  (`aarch64-apple-darwin`); other targets are **unverified rather than unsupported**.
 +  Nothing here says anything yet about the performance claims: `-O0` is the default, no
 +  optimisation work has been done, and no measurement has been taken. The executable language is
-+  **v0.3**; `docs/spec.md` keeps its sections versioned, so a *Settled for v0.1* entry
++  **v0.3**; `docs/user/spec.md` keeps its sections versioned, so a *Settled for v0.1* entry
 +  records what v0.1 decided rather than what is true now. Everything under *Open* is
 +  undecided.
-+- **No concurrency at all.** Not a partial implementation — nothing. `docs/spec.md` §6
-+  settles the structured-concurrency borrow region as a *design*, and `docs/roadmap.md`
++- **No concurrency at all.** Not a partial implementation — nothing. `docs/user/spec.md` §6
++  settles the structured-concurrency borrow region as a *design*, and `docs/user/roadmap.md`
 +  puts the specification work before any runtime. There is no scheduler and none is being
 +  written.
  - **The harness is partial.** Real, tested, and mutation-checked (`cargo xtask mutate`,
@@ -345,7 +345,7 @@ index a1276ee..cdb6f0b 100644
      },
 +    /// Compile to a native executable.
 +    ///
-+    /// A narrow subset for now — see `docs/roadmap.md` M1a. Anything outside it is
++    /// A narrow subset for now — see `docs/user/roadmap.md` M1a. Anything outside it is
 +    /// refused by name after ordinary checking; nothing is partially compiled.
 +    Build {
 +        file: PathBuf,
@@ -419,7 +419,7 @@ index ad9b4b6..7016320 100644
 +///
 +/// # Why the tree never leaves
 +///
-+/// `docs/spec.md` promises that the whole pipeline runs on a thread whose stack the
++/// `docs/user/spec.md` promises that the whole pipeline runs on a thread whose stack the
 +/// interpreter sets itself, because **a bound only means something against a known
 +/// stack**: macOS gives the main thread 8 MiB, a spawned thread 2 MiB, and the test
 +/// harness 2 MiB per test. Parsing, checking, lowering, emitting and *dropping* the tree
@@ -472,10 +472,10 @@ index ad9b4b6..7016320 100644
 +        )])
      })
  }
-diff --git a/docs/architecture.md b/docs/architecture.md
+diff --git a/docs/internal/architecture.md b/docs/internal/architecture.md
 index 36537f2..e370006 100644
---- a/docs/architecture.md
-+++ b/docs/architecture.md
+--- a/docs/internal/architecture.md
++++ b/docs/internal/architecture.md
 @@ -279,18 +279,29 @@ schedules, so those compare **permitted outcomes and invariants**, never identic
  
  ## 7. Crate layout
@@ -544,10 +544,10 @@ index 8797513..197822d 100644
  
  ---
  
-diff --git a/docs/runbook.md b/docs/runbook.md
+diff --git a/docs/internal/runbook.md b/docs/internal/runbook.md
 index ca6084f..37d66ad 100644
---- a/docs/runbook.md
-+++ b/docs/runbook.md
+--- a/docs/internal/runbook.md
++++ b/docs/internal/runbook.md
 @@ -75,3 +75,82 @@ $ rustc --version  → 1.98.1 (pinned in rust-toolchain.toml)
  The local `stable` was 1.93.1 (seven months behind) when this project started; the pin is
  what makes that irrelevant. `cranelift` 0.135 declares MSRV 1.95.0, so the pin is
@@ -631,10 +631,10 @@ index ca6084f..37d66ad 100644
 +usually stands down, and refuses to start if the old marker names a live process — but a
 +first-protocol runner that has already passed its own check and not yet published is not
 +covered by anything. Use one version.
-diff --git a/docs/spec.md b/docs/spec.md
+diff --git a/docs/user/spec.md b/docs/user/spec.md
 index 49e86d9..634f502 100644
---- a/docs/spec.md
-+++ b/docs/spec.md
+--- a/docs/user/spec.md
++++ b/docs/user/spec.md
 @@ -1,7 +1,12 @@
  # Nazm language specification
  
@@ -728,7 +728,7 @@ index 479da2e..e3c3bd5 100644
 +[[mutation]]
 +name = "checked-add-loses-its-sign"
 +why = """
-+`docs/spec.md` says overflow traps. The emitter detects it with
++`docs/user/spec.md` says overflow traps. The emitter detects it with
 +`llvm.sadd.with.overflow.i64`; the unsigned intrinsic is one letter away and is the
 +mistake a reader would not see. `Int::MAX + 1` does not carry as an unsigned addition, so
 +the guard never fires and the program prints the wrapped value instead of stopping —
@@ -922,7 +922,7 @@ index fb8b6ec..15e2f9f 100644
 +/// # What this establishes, and what it does not
  ///
 -/// The rule exists before either backend does, because it is cheap to state now and
--/// contentious once someone has a reason to break it. `docs/architecture.md` §1 puts
+-/// contentious once someone has a reason to break it. `docs/internal/architecture.md` §1 puts
 -/// Cranelift and LLVM behind the LIR contract; this is what keeps that true.
 +/// It reads cargo metadata, so it is a statement about the dependency graph and nothing
 +/// else. **Emitting LLVM IR as text is code generation and this check cannot see it** —
@@ -932,7 +932,7 @@ index fb8b6ec..15e2f9f 100644
 +///
 +/// The capability question — *who may emit a backend artefact, and who may invoke the
 +/// toolchain* — is [`check_emission_reach`], which looks at call sites instead. The two
-+/// together are what `docs/architecture.md` §1 means by keeping Cranelift and LLVM behind
++/// together are what `docs/internal/architecture.md` §1 means by keeping Cranelift and LLVM behind
 +/// the LIR contract; neither is sufficient alone.
  fn check_codegen_reach() -> Result<(), Vec<String>> {
      const CODEGEN_CRATES: &[&str] = &[
@@ -2251,7 +2251,7 @@ index 0202dac..bb12e33 100644
          "nazm-diag" => &["nazm-span"],
          "nazm-syntax" => &["nazm-span", "nazm-diag"],
          "nazm-core" => &["nazm-span", "nazm-diag", "nazm-syntax"],
-+        // Level 7 of the table in `docs/architecture.md` §2, and the only level built.
++        // Level 7 of the table in `docs/internal/architecture.md` §2, and the only level built.
 +        // It reads the syntax tree and produces LLVM IR *as text*, so it needs no
 +        // code-generator dependency — which is why `may_depend_on_codegen` below stays
 +        // false for it.

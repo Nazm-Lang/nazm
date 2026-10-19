@@ -14,7 +14,7 @@
 //!
 //! # The one `if`
 //!
-//! `docs/spec.md` has a single `if` whose meaning is decided by checking, not by syntax.
+//! `docs/user/spec.md` has a single `if` whose meaning is decided by checking, not by syntax.
 //! This backend compiles it **only in value position**, and the way that stays true is
 //! that a statement-position `if` never arrives here as an `if` at all — it arrives as
 //! `Stmt::Expr`, which is refused. There is no arm below that handles an `if` generically
@@ -320,7 +320,7 @@ fn lower_function(ctx: &mut Ctx, f: &AstFn) -> Option<Function> {
 /// is reachable would introduce a dead-code reachability rule as a side effect of a
 /// backend limitation — so deleting a call somewhere else would silently change whether a
 /// function is diagnosed. That is a language-visible rule arriving by accident, and this
-/// increment does not make one. See `docs/roadmap.md`, *M1c subset*.
+/// increment does not make one. See `docs/user/roadmap.md`, *M1c subset*.
 ///
 /// Direct and mutual recursion are the same condition here, found the same way, rather
 /// than one being a special case of the other.

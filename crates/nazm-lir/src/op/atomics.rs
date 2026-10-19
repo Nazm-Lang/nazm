@@ -1,4 +1,4 @@
-//! `Atomic` (Gate 3, `docs/spec.md`, *Atomics*): each built-in as the runtime calls it means.
+//! `Atomic` (Gate 3, `docs/user/spec.md`, *Atomics*): each built-in as the runtime calls it means.
 //!
 //! An atomic is `Str`'s triple, `{ptr, len, owner}`: `ptr` is the 8-byte cell, inside a backing
 //! of a string's shape that `nz.atomic_cell` allocates and the triple counts — one the memory

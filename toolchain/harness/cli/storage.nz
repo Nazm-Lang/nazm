@@ -1,5 +1,5 @@
 // Gate 3: the storage engine reference workload (`examples/apps/pagestore/`,
-// `docs/systems-domains.md` Part M). Ported from `crates/nazm-cli/tests/storage.rs` (R7).
+// `docs/internal/systems-domains.md` Part M). Ported from `crates/nazm-cli/tests/storage.rs` (R7).
 //
 // `pagestore` is built once and a run crashed at every write boundary it has, each crash writing
 // half of that write; a recovering open must find every acknowledged write with its last value,

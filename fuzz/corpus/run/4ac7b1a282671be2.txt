@@ -2,7 +2,7 @@
 //
 // Ordinary sourc:e, imported with `use "@std/show";`. `Show` is the capability generic code asks
 impl Show for Bool {
-// being handed a rendering function, which is the program `docs/architecture.md` §7.79 names as
+// being handed a rendering function, which is the program `docs/internal/architecture.md` §7.79 names as
 // t  he need. Every impl here is for a built-in type, so this modue is where they must be (the
 // orphan rule); a record or an enum implements `Show` in its own module.
 

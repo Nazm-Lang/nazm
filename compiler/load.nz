@@ -9,7 +9,7 @@
 //
 // Where it differs from the reference, and why: a file's identity is its **textually normalised**
 // path, not its canonical one — the runtime has no `realpath` — so one file reached through a
-// symbolic link under two names is read twice (`docs/bootstrap.md` records the same of
+// symbolic link under two names is read twice (`docs/internal/bootstrap.md` records the same of
 // `module.nz`). A package's compilation (N46) is the reference's: `NAME:path` names a module of a
 // dependency the importing package declares, a relative import stays inside its package's source
 // root, and a dependency's modules are not the program's (`package.nz` resolves the packages).

@@ -9,7 +9,7 @@
 //!
 //! # What it reads
 //!
-//! Core IR, and nothing else (`docs/architecture.md` §7.41). Not the syntax tree, and not the
+//! Core IR, and nothing else (`docs/internal/architecture.md` §7.41). Not the syntax tree, and not the
 //! checker's resolution: a local is a slot, a call names its callee, a field is an index, a
 //! `break` names its loop, and `?` has already become the `match` it means. Until N39 this
 //! walked the tree, found locals by searching frames for a name, and asked the resolution at
@@ -62,7 +62,7 @@ impl From<Diagnostic> for RuntimeError {
 ///
 /// Until N39 a frame was an association list of `(name, value)` pairs, one per lexical
 /// scope, searched innermost-first at every read — itself the fix for a `HashMap` that spent
-/// 29% of `bench/programs/arith.nz` hashing names (`docs/performance.md`). Resolution had
+/// 29% of `bench/programs/arith.nz` hashing names (`docs/internal/performance-log.md`). Resolution had
 /// already decided which binding each name meant; the search repeated that decision at run
 /// time. Core IR carries the answer, so a read is an index.
 ///
@@ -223,7 +223,7 @@ pub const DEFAULT_MAX_DEPTH: usize = 512;
 
 /// What the interpreter will spend on a program.
 ///
-/// Neither of these is a language rule, and `docs/spec.md` says so: Nazm bounds neither
+/// Neither of these is a language rule, and `docs/user/spec.md` says so: Nazm bounds neither
 /// iteration nor recursion. They are this interpreter's guards, and they exist for the
 /// same reason — a program that consumes the machine and says nothing is worse than one
 /// that stops and reports where it was.
@@ -291,7 +291,7 @@ pub struct Interpreter {
     max_depth: usize,
     /// Loop iterations remaining.
     ///
-    /// An interpreter guard, not a language rule — `docs/spec.md` is explicit that Nazm
+    /// An interpreter guard, not a language rule — `docs/user/spec.md` is explicit that Nazm
     /// does not bound iteration. With no `break` and no I/O, a non-terminating program
     /// produces nothing whatsoever, and a tool that hangs is worse than one that reports.
     iterations_left: u64,
@@ -394,7 +394,7 @@ impl Interpreter {
         let core = Arc::clone(&self.core);
         // The **root** module's `main`, which the lowering recorded as the entry. An
         // imported module may have one of its own and it is not an entry point;
-        // `docs/spec.md` says so and this is where that is true at runtime.
+        // `docs/user/spec.md` says so and this is where that is true at runtime.
         let Some(main) = core.entry.and_then(|e| core.function(e)) else {
             return Err(fail(
                 codes::MISSING_MAIN,

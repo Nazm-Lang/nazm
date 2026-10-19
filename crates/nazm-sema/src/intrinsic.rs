@@ -4,7 +4,7 @@
 //!
 //! A bootstrap compiler needs to measure, index, slice, join and format text. Every one
 //! of those could be an operator, a method or a piece of syntax; each of those choices
-//! would be a language decision made to serve an implementation, and `docs/spec.md` would
+//! would be a language decision made to serve an implementation, and `docs/user/spec.md` would
 //! grow a section per operation. A **built-in function** adds no syntax at all: it is an
 //! ordinary call, checked by the ordinary call rule, and the only new thing a reader has
 //! to learn is a name.
@@ -62,15 +62,15 @@ pub enum Shape {
     U32,
     /// `UInt128` (R1b, L13b): what `widening_mul` returns.
     U128,
-    /// `UInt8`, `Bytes` and `Text` (Gate 2, `docs/general-purpose.md` §5–§6).
+    /// `UInt8`, `Bytes` and `Text` (Gate 2, `docs/internal/general-purpose.md` §5–§6).
     U8,
     Bytes,
     Text,
-    /// `OsHandle` (Gate 2, `docs/general-purpose.md` §8).
+    /// `OsHandle` (Gate 2, `docs/internal/general-purpose.md` §8).
     OsHandle,
-    /// `Atomic` (Gate 3, `docs/spec.md`, *Atomics*).
+    /// `Atomic` (Gate 3, `docs/user/spec.md`, *Atomics*).
     Atomic,
-    /// `Select` (performance leadership 6.4, `docs/spec.md`, *Select over channels of
+    /// `Select` (performance leadership 6.4, `docs/user/spec.md`, *Select over channels of
     /// different types*).
     Select,
 }
@@ -177,7 +177,7 @@ impl Shape {
 
 /// A built-in operation.
 ///
-/// `Str` values are **immutable and byte-addressed**. See `docs/spec.md`, *Strings are
+/// `Str` values are **immutable and byte-addressed**. See `docs/user/spec.md`, *Strings are
 /// bytes, and what that commits to*.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Intrinsic {
@@ -282,7 +282,7 @@ pub enum Intrinsic {
     /// `time_now_ms() -> Int` (N54) — a monotonic clock in milliseconds. Needs a `TimeCap`.
     TimeNowMs,
     /// `time_now_ns() -> Int`, `time_wall_ns() -> Int`, `time_sleep_ms(ms) -> Int` (Gate 2,
-    /// `docs/general-purpose.md` §11): a monotonic clock in nanoseconds, the wall clock in
+    /// `docs/internal/general-purpose.md` §11): a monotonic clock in nanoseconds, the wall clock in
     /// nanoseconds since the Unix epoch, and a wait that parks on the pool. Behind `TimeCap`.
     TimeNowNs,
     TimeWallNs,
@@ -338,7 +338,7 @@ pub enum Intrinsic {
     // --- the outside world -------------------------------------------------------
     //
     // **Authority, since N37.** A function that declares an effect set may call these
-    // only while it holds an `IoCap` (`crate::capability`, `docs/spec.md`, *Capabilities*);
+    // only while it holds an `IoCap` (`crate::capability`, `docs/user/spec.md`, *Capabilities*);
     // one that declares none is still ambient, exercising its caller's authority — a
     // compatibility bridge, labelled as such, and bounded so that code with a contract
     // cannot reach through it. The signatures did not change: the capability changes
@@ -368,7 +368,7 @@ pub enum Intrinsic {
     //
     // The first generic built-ins. Each has one type parameter, `T`, and follows the
     // sequence law of `Ints` and `Strs` with `T`'s own copy law for the elements:
-    // `docs/spec.md`, *`Vec[T]` — a mutable handle, by the sequence law*.
+    // `docs/user/spec.md`, *`Vec[T]` — a mutable handle, by the sequence law*.
     /// `vec_new[T]() -> Vec[T]` — an empty vector. `T` is written, because nothing else
     /// could say what it is.
     VecNew,
@@ -387,7 +387,7 @@ pub enum Intrinsic {
     /// Fails with `N0405` on an empty vector.
     VecPop,
 
-    // --- numbers, Gate 2 (`docs/general-purpose.md` §1–§3) -------------------------------
+    // --- numbers, Gate 2 (`docs/internal/general-purpose.md` §1–§3) -------------------------------
     //
     // Generic over a class of numeric types ([`Intrinsic::requires`]), so one name serves
     // every width; `T` is inferred from the arguments.
@@ -466,7 +466,7 @@ pub enum Intrinsic {
     /// `float_parse_raw(s: Str) -> Float64` — the value `s` writes, or NaN when it is not one.
     FloatParseRaw,
 
-    // --- bytes and text, Gate 2 (`docs/general-purpose.md` §5–§6) ------------------------
+    // --- bytes and text, Gate 2 (`docs/internal/general-purpose.md` §5–§6) ------------------------
     //
     // A `Bytes` is a counted view of a fixed-length buffer: its built-ins read and write
     // through it, and a slice shares it. A `Text` is a `Str` known to be UTF-8: made only by
@@ -499,7 +499,7 @@ pub enum Intrinsic {
     /// `try_convert[Text](s)`'s `Some`, after `utf8_valid`: `s`, unchecked. Not callable by name.
     TextAssume,
 
-    // --- files and handles, Gate 2 (`docs/general-purpose.md` §8; `docs/spec.md`, *Files and
+    // --- files and handles, Gate 2 (`docs/internal/general-purpose.md` §8; `docs/user/spec.md`, *Files and
     // handles*) --------------------------------------------------------------------------
     //
     // Every one that can fail answers a status, `-errno`, which `@std/ioerror` turns into an
@@ -525,7 +525,7 @@ pub enum Intrinsic {
     OsFamily,
     OsErrorText,
 
-    // --- networking, Gate 2 (`docs/general-purpose.md` §9–§10; `docs/spec.md`, *Networking*) ---
+    // --- networking, Gate 2 (`docs/internal/general-purpose.md` §9–§10; `docs/user/spec.md`, *Networking*) ---
     OsTcpListen,
     OsTcpAccept,
     OsTcpConnect,
@@ -538,7 +538,7 @@ pub enum Intrinsic {
     OsPeerAddr,
     OsResolve,
 
-    // --- TLS, v1 track C1 (`docs/spec.md`, *TLS*) ------------------------------------------
+    // --- TLS, v1 track C1 (`docs/user/spec.md`, *TLS*) ------------------------------------------
     //
     // A runtime part, never user FFI: the engine works on buffers, the program moves the bytes
     // through its socket, so no wait is the engine's. Each answers a count, an id, or a status.
@@ -566,7 +566,7 @@ pub enum Intrinsic {
     /// `os_tls_info(s: Int, what: Int, out: Bytes) -> Int` — a fact about the session.
     OsTlsInfo,
 
-    // --- process and environment, Gate 2 (`docs/general-purpose.md` §12; `docs/spec.md`,
+    // --- process and environment, Gate 2 (`docs/internal/general-purpose.md` §12; `docs/user/spec.md`,
     // *Process and environment*) -----------------------------------------------------------
     OsEnvGet,
     OsEnvHas,
@@ -577,7 +577,7 @@ pub enum Intrinsic {
     OsWait,
     OsKill,
 
-    // --- the platform, further, R1d (`docs/spec.md`, *The platform, further*) --------------
+    // --- the platform, further, R1d (`docs/user/spec.md`, *The platform, further*) --------------
     //
     // Each answers a status as Gate 2's do, and each is a prelude name (R1a's rule): a module
     // that declares a function of the same name keeps its own.
@@ -620,7 +620,7 @@ pub enum Intrinsic {
     /// entropy; its length. Behind `RandomCap`, with no effect.
     OsRandomBytes,
 
-    // --- atomics, Gate 3 (`docs/spec.md`, *Atomics*) -----------------------------------------
+    // --- atomics, Gate 3 (`docs/user/spec.md`, *Atomics*) -----------------------------------------
     /// `atomic_new(v: Int) -> Atomic` — a cell holding `v`.
     AtomicNew,
     /// `atomic_load(a: Atomic) -> Int`.
@@ -636,7 +636,7 @@ pub enum Intrinsic {
     /// `true`, exactly when the cell held `expected`.
     AtomicCompareSwap,
 
-    // --- immutable indirection, R1a (`docs/spec.md`, *Immutable indirection*) -------------
+    // --- immutable indirection, R1a (`docs/user/spec.md`, *Immutable indirection*) -------------
     //
     // Prelude built-ins ([`Intrinsic::is_prelude`]): a module's own definition of one of these
     // names hides it. Core IR lowering writes each as the `Vec[T]` operations it means, so no
@@ -664,7 +664,7 @@ pub enum Intrinsic {
     /// Core IR lowering for `chain_from_vec`; no program can name it.
     ListPush,
 
-    // --- a mutable cell, R1b (`docs/spec.md`, *A mutable cell*) ------------------------------
+    // --- a mutable cell, R1b (`docs/user/spec.md`, *A mutable cell*) ------------------------------
     //
     // Prelude built-ins, as R1a's are. Core IR lowering writes each as the `Vec[T]` operation it
     // means on a vector of one element, so no layer below the checker sees one.
@@ -675,7 +675,7 @@ pub enum Intrinsic {
     /// `cell_set[T](c: Cell[T], v: T) -> Int` — `v` stored in place of what was there; 0.
     CellSet,
 
-    // --- checked arithmetic, R1b (`docs/spec.md`, *Integer arithmetic*, L13) ---------------
+    // --- checked arithmetic, R1b (`docs/user/spec.md`, *Integer arithmetic*, L13) ---------------
     //
     // Prelude built-ins over every integer type. Core IR lowering writes each from the wrapping,
     // saturating and dividing operations it means, so no layer below the checker sees one.
@@ -696,7 +696,7 @@ pub enum Intrinsic {
     /// No program can name it.
     StrConcatNum,
 
-    // --- select over channels of different types, performance leadership 6.4 (`docs/spec.md`,
+    // --- select over channels of different types, performance leadership 6.4 (`docs/user/spec.md`,
     // *Select over channels of different types*) -----------------------------------------------
     //
     // Prelude built-ins: a module's own function of the same name hides one.

@@ -1,4 +1,4 @@
-//! M1: the microcontroller targets (`docs/spec.md`, *Boards*;
+//! M1: the microcontroller targets (`docs/user/spec.md`, *Boards*;
 //! `openspec/changes/v1-every-domain/design.md`, M).
 //!
 //! What a build shows on any host: `thumbv8m.main-none-eabihf` (a Cortex-M33, the RP2350's core)

@@ -1,4 +1,4 @@
-// R1, 5b.18 (`docs/spec.md`, *Sequences are shared, mutable, and never freed*, One list type):
+// R1, 5b.18 (`docs/user/spec.md`, *Sequences are shared, mutable, and never freed*, One list type):
 // `Ints` is `Vec[Int]` and `Strs` is `Vec[Str]`, so each name is accepted where the other is wanted
 // and every family of built-ins applies to both. Ported from `crates/nazm-cli/tests/lists.rs` (R7).
 //

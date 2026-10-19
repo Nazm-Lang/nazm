@@ -1,4 +1,4 @@
-// MIR's invariants, checked (`docs/architecture.md` §7.42; `crates/nazm-mir/src/verify.rs`).
+// MIR's invariants, checked (`docs/internal/architecture.md` §7.42; `crates/nazm-mir/src/verify.rs`).
 //
 // Two passes per function: structure and typing over every statement and terminator, then a
 // forward dataflow over the locals that own something — no read of an empty local, no overwrite

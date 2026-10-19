@@ -9,7 +9,7 @@
 
 ## The inventory, and how each item closed
 
-Built from the repository — `docs/security-qualification.md`'s finding register, `limitations.md`
+Built from the repository — `docs/internal/security-qualification.md`'s finding register, `limitations.md`
 *Carried from Q1*, the Q1 audits under `target/gates/q1/`, and the tree — not from summaries. An item
 is closed only with evidence below. Statuses: **fixed** (code, with a test), **corrected**
 (documentation, with the text that now holds), **refused by name** (an unsupported operation
@@ -79,7 +79,7 @@ that ran and failed.
   a product change; fixed in `b4d80e0` (each fixture builds in its own target).
 
 **Also committed in this span:** the licence decision, `Apache-2.0 WITH LLVM-exception`, copyright
-Ferdous Alam (`b0f07b9`, `docs/licensing.md`).
+Ferdous Alam (`b0f07b9`, `docs/user/licensing.md`).
 
 ## Outstanding
 
@@ -88,7 +88,7 @@ Ferdous Alam (`b0f07b9`, `docs/licensing.md`).
 - **Decisions:** the Tier-1 platform list (`stability.md`'s three stable targets against the final
   gate's five required hosts) — or a macOS-first 0.x release, which the user is considering;
   Q1-D-13's and Q1-D-14's classification; whether the commit `191b092` prompt files are removed from
-  history; the licensing items still open in `docs/licensing.md` (contributor terms, third-party
+  history; the licensing items still open in `docs/user/licensing.md` (contributor terms, third-party
   notices in archives, templates, SPDX headers, a spec licence, a trademark policy).
 - **Machines:** a Linux x86_64 and a Windows x86_64 host for the final gate's Tier-1 runs.
 - Not FIX-BEFORE-V1 and not touched: the POST-V1 and ACCEPTED-LIMITATION rows of the register.

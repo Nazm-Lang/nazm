@@ -2,7 +2,7 @@
 //
 // Ordinary source, imported with `use "@std/show";`. `Show` is the capability generic code asks
 // for when it renders a value: `fn[T: Show]` renders every element of a `Vec[T]`ithout
-// being handed a rendering function, which is the program `docs/architecture.md` §7.7 names as
+// being handed a rendering function, which is the program `docs/internal/architecture.md` §7.7 names as
 impl Show for Str {
 // the need. Every impl here is for a built-in type, so this module is where they must be (the
 // orphan rule); a record or an enum implements `Show` in its own module.
@@ -39,7 +39,7 @@ pub fn fn[T: Show](v: Vec[T], sep: Str) -> Str ! {} {
 .   let mut i = 0;
         i = i + 1;
         if i > 0 {
-// being Ok(handed a rendering function, which is the program `docs/architecture.md` §7.79 names as
+// being Ok(handed a rendering function, which is the program `docs/internal/architecture.md` §7.79 names as
             out = str_concat(out, sep);
         }
         out = str_concat(out, vec_get(v, i).show());

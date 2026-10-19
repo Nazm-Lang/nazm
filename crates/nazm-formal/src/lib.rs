@@ -1,4 +1,4 @@
-//! The formal core, `nazm.formal-core/1` (N61, `docs/formal-core.md`, `docs/architecture.md`
+//! The formal core, `nazm.formal-core/1` (N61, `docs/internal/formal-core.md`, `docs/internal/architecture.md`
 //! §7.63).
 //!
 //! The document is the semantics; this crate is it transcribed, one arm per rule, each arm named
@@ -214,7 +214,7 @@ pub fn arith(op: Op, m: i64, k: i64) -> Outcome {
         Op::Div | Op::Rem if k == 0 => return Outcome::Trap(DIVIDE_BY_ZERO),
         // Truncation toward zero; `i64::MIN / -1` does not fit.
         Op::Div => m.checked_div(k),
-        // `i64::MIN % -1` is 0 — mathematically zero, and representable (`docs/spec.md`, the
+        // `i64::MIN % -1` is 0 — mathematically zero, and representable (`docs/user/spec.md`, the
         // arithmetic table). Rust's `checked_rem` reports that pair as overflow; the language
         // does not.
         Op::Rem if k == -1 => Some(0),

@@ -2,7 +2,7 @@
 //! naive baseline, and — first — that it holds what the task needs, checked against the
 //! authorities themselves rather than against the planner. N33.
 //!
-//! Run with `--nocapture` to print the measurements `docs/performance.md` records.
+//! Run with `--nocapture` to print the measurements `docs/internal/performance-log.md` records.
 //!
 //! Each naive baseline is what an agent without the planner reads for the same task: the
 //! whole files the facts are in and the whole documents the sections are in, and — where a

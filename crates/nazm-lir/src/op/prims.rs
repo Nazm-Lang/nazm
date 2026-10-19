@@ -372,7 +372,7 @@ impl Fx<'_, '_> {
                 let start = self.bin(BinOp::Sub, at, base);
                 // Only storage an append made grows in place: its capacity carries
                 // `GROWABLE`, which no other string's can reach, so `end + GROWABLE <= cap`
-                // is both "an append made this" and "the tail fits" (`docs/spec.md`, *Strings*).
+                // is both "an append made this" and "the tail fits" (`docs/user/spec.md`, *Strings*).
                 let end = self.bin(BinOp::Add, start, n);
                 let marked = self.add_imm(end, GROWABLE);
                 let fits = self.cmp(Cmp::Le, marked, cap);

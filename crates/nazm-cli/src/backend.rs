@@ -473,7 +473,7 @@ pub(crate) const WINDOWS_MAIN_STACK: u64 = 8 * 1024 * 1024;
 
 /// MinGW-w64 (Gate 3): Winsock and BCrypt, and the C runtime's own libraries linked in
 /// statically, so the executable needs no MinGW DLL beside it. The main thread reserves 8 MiB,
-/// as macOS and Linux give it, where Windows' default is 1 MiB (`docs/spec.md`, *The limit*):
+/// as macOS and Linux give it, where Windows' default is 1 MiB (`docs/user/spec.md`, *The limit*):
 /// the same recursion meets `N0408` at the same depth everywhere.
 pub(crate) fn windows_libraries() -> Vec<String> {
     vec![
@@ -618,7 +618,7 @@ fn runtime_abi(revision: u32) -> String {
 /// What the driver says it is, minus where it says it is installed.
 ///
 /// A path is not an identity: the same compiler reached through two paths is one
-/// compiler, and `docs/architecture.md` §7.6 keeps every path out of every key that is not
+/// compiler, and `docs/internal/architecture.md` §7.6 keeps every path out of every key that is not
 /// the toolchain's own resolved configuration.
 fn banner(report: &str) -> String {
     report

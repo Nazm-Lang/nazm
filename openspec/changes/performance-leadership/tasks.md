@@ -8,7 +8,7 @@
       I/O-bound and application kinds, one algorithm and one output check in every language
 - [ ] 1.4 The measurements: repeated runs, warm-ups, confidence intervals, host disclosed; run time,
       latency percentiles, peak memory, allocations, compile time, size, scaling, lines
-- [ ] 1.5 The baseline published in `docs/performance.md`: where Nazm leads and where it is behind
+- [ ] 1.5 The baseline published in `docs/internal/performance-log.md`: where Nazm leads and where it is behind
 
 ## Order (the copyright holder, 2026-10-15): nothing done twice
 
@@ -54,7 +54,7 @@ compile time (`N0321`), no task outliving its `scope` (`N0320`), authority only 
 - [x] 6.1 The baseline, now (on the reference, after R1.5's current task): spawn 1,000,000 tasks;
       channel ping-pong latency; fan-in throughput; memory per live task; HTTP/1.1 requests per
       second on loopback; a parallel CPU job — Nazm against Go on this Mac, quiet host, recorded in
-      `docs/performance.md` with what each side guarantees
+      `docs/internal/performance-log.md` with what each side guarantees
       — 2026-10-16: the programs, `bench/compare/{nazm,go}/` (`spawn`, `pingpong`, `fanin`, `idle`,
       `httpd`, the shared load generator `go/httpload.go`, and `primes`), and
       `bench/compare/concurrency.sh`, which checks both print the same answers and refuses to time

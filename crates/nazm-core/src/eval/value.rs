@@ -26,7 +26,7 @@ pub enum Value {
     /// `Bool`s, records and enums of them — so a clone is the copy the language specifies.
     Array(Vec<Value>),
     Bool(bool),
-    /// **Bytes, not text.** `docs/spec.md` specifies `Str` as a byte sequence, and
+    /// **Bytes, not text.** `docs/user/spec.md` specifies `Str` as a byte sequence, and
     /// `str_slice` is allowed to split a multi-byte character — so the representation
     /// cannot be a Rust `String`, which refuses to hold the result.
     ///
@@ -50,7 +50,7 @@ pub enum Value {
     /// A bounded channel of `Int`, by reference.
     ///
     /// The one value designed to be shared between tasks: its operations *are* the
-    /// synchronisation, which is why `docs/spec.md` lets it cross a `spawn` while a
+    /// synchronisation, which is why `docs/user/spec.md` lets it cross a `spawn` while a
     /// sequence may not.
     Chan(Arc<Channel>),
     /// One `Int` cell, by reference (Gate 3): every copy reaches the same cell, and every
@@ -61,7 +61,7 @@ pub enum Value {
     /// A user-defined record: an **inline aggregate**, by value.
     ///
     /// Not an `Arc`, and that is the semantic decision rather than a representation
-    /// choice. `docs/spec.md` gives a record no object identity: assignment produces
+    /// choice. `docs/user/spec.md` gives a record no object identity: assignment produces
     /// another record value whose fields are copied or shared according to **each field
     /// type's own law**, and a shared cell would have made every copy alias.
     ///
@@ -76,14 +76,14 @@ pub enum Value {
     /// The representation is the semantics. There is no slot for an inactive variant and
     /// nothing to clone for one, so "copy only the active payload" and "release only the
     /// active payload" are not rules this has to follow — they are the only things it can
-    /// do. `docs/spec.md` says an inactive variant owns nothing, and a value that carried
+    /// do. `docs/user/spec.md` says an inactive variant owns nothing, and a value that carried
     /// storage for one would have made that a promise rather than a fact.
     Enum(EnumVal),
     /// A `Vec[T]`: a handle to shared, mutable, counted storage, by the sequence law. N11. An
     /// `Ints` and a `Strs` are this too, since R1 (5b.18) made them `Vec[Int]` and `Vec[Str]`.
     ///
     /// Two bindings of the same sequence are the same storage, and a push through one is
-    /// visible through the other — `docs/spec.md`'s **owned mutable handle**, which the native
+    /// visible through the other — `docs/user/spec.md`'s **owned mutable handle**, which the native
     /// representation, a pointer to a header, behaves as by construction. What is claimed is
     /// reclamation: the storage goes when the last reference to it dies, [`Seq`]'s job here and
     /// a reference count's in a compiled program, compared case by case in
@@ -255,7 +255,7 @@ pub(super) fn seq<T>(lock: &Mutex<T>) -> Option<std::sync::MutexGuard<'_, T>> {
 
 /// What a `Str` points into, and whether reclaiming it means anything.
 ///
-/// N8's central problem, from `docs/architecture.md` §7.8: a `Str` may name a literal, a
+/// N8's central problem, from `docs/internal/architecture.md` §7.8: a `Str` may name a literal, a
 /// process argument, a buffer the program allocated, or the interior of any of those, and
 /// `{ pointer, length }` cannot tell them apart. So the *backing* is named separately from
 /// the view, here and in the compiled program, and the two implementations classify the
@@ -263,7 +263,7 @@ pub(super) fn seq<T>(lock: &Mutex<T>) -> Option<std::sync::MutexGuard<'_, T>> {
 #[derive(Debug)]
 pub enum Backing {
     /// Storage the program did not allocate and cannot reclaim: a literal, or a process
-    /// argument. Uncounted on purpose — `docs/spec.md` reclaims what a program allocated,
+    /// argument. Uncounted on purpose — `docs/user/spec.md` reclaims what a program allocated,
     /// and counting storage nobody allocated as a leak would make every program leak.
     Immortal(Vec<u8>),
     /// Storage the program allocated. Counted, and released when the last view dies.
@@ -292,7 +292,7 @@ impl Drop for Backing {
 
 /// A `Str`: a view of `len` bytes starting at `start` inside a backing allocation.
 ///
-/// This is the interpreter's half of the representation `docs/architecture.md` §7.8
+/// This is the interpreter's half of the representation `docs/internal/architecture.md` §7.8
 /// settles. The native value is `{ pointer, length, owner }` and this is
 /// `{ backing, start, length }` — the same three facts, because the same rule has to hold
 /// in both: **the backing stays valid for every live view of it**, and a slice is a view,
@@ -386,7 +386,7 @@ impl Str {
 }
 
 impl PartialEq for Str {
-    /// Bytes, never identity. `docs/spec.md`'s *Strings are bytes* makes two strings with
+    /// Bytes, never identity. `docs/user/spec.md`'s *Strings are bytes* makes two strings with
     /// the same bytes equal however they were built, and whether they share a backing is
     /// exactly the thing an implementation may decide for itself.
     fn eq(&self, other: &Self) -> bool {
@@ -461,8 +461,8 @@ impl BytesView {
 /// # Why this type exists at all
 ///
 /// The storage could be a bare `Mutex<T>`: the host reclaims it when the last `Arc` to it
-/// is dropped, which is exactly what `docs/spec.md`'s memory constitution requires. But
-/// *"the host does the right thing"* is not evidence, and `docs/architecture.md` §7.7 says
+/// is dropped, which is exactly what `docs/user/spec.md`'s memory constitution requires. But
+/// *"the host does the right thing"* is not evidence, and `docs/internal/architecture.md` §7.7 says
 /// why — a reference implementation has to model the language rather than inherit its
 /// behaviour from whatever Rust happens to do. So the allocation and the reclamation are
 /// counted here, the same two numbers a compiled program reports, and a test compares
@@ -476,7 +476,7 @@ impl BytesView {
 /// drop would recurse once per level and overflow the stack. So a sequence of values gives its
 /// elements to a worklist instead of dropping them in place, and the first release on a thread
 /// empties that worklist in a loop: a release nested inside it only adds to it. The stack a
-/// release takes is bounded by the types, never by the value (`docs/spec.md`, *Immutable
+/// release takes is bounded by the types, never by the value (`docs/user/spec.md`, *Immutable
 /// indirection*).
 #[derive(Debug, Default)]
 pub struct Seq<T: Drain>(Mutex<T>);

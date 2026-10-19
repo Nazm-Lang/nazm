@@ -1,6 +1,6 @@
 //! The v0.1 language, exercised through the public `run` entry point.
 //!
-//! Each test names the rule in `docs/spec.md` it pins. A semantic decision that is only
+//! Each test names the rule in `docs/user/spec.md` it pins. A semantic decision that is only
 //! written down is one a refactor can quietly reverse.
 
 #![allow(
@@ -1063,7 +1063,7 @@ fn depth_is_released_when_a_call_returns() {
 // ---------------------------------------------------------------------------
 // Integer boundaries
 //
-// Unary negation made these writable; it did not make them correct. `docs/spec.md` says
+// Unary negation made these writable; it did not make them correct. `docs/user/spec.md` says
 // overflow traps identically in every build, and the two's-complement asymmetry is where
 // that promise is easiest to break.
 // ---------------------------------------------------------------------------
@@ -1733,7 +1733,7 @@ fn an_expression_may_be_a_statement() {
 // ---------------------------------------------------------------------------
 // Codes that were reachable and unasserted
 //
-// A diagnostic code is part of the machine interface — `docs/diagnostics.md` says a code
+// A diagnostic code is part of the machine interface — `docs/user/diagnostics.md` says a code
 // never changes meaning and is never reused, which makes each one a promise. Checking
 // which codes any test actually asserts found four that none did. Two of them are
 // provoked by four lines of Nazm, so they are asserted here; the other two need the

@@ -1,6 +1,6 @@
 //! Gate 2: process and environment.
 //!
-//! `docs/general-purpose.md` §12 and the spec's *Process and environment*. What only a whole run
+//! `docs/internal/general-purpose.md` §12 and the spec's *Process and environment*. What only a whole run
 //! shows: that `@std/process` runs a program with input, collecting its output, errors and status —
 //! a signal's ending as 256 and the signal — even when both streams carry more than a pipe holds;
 //! that a missing program is `NotFound`; that a task reading a child's pipe parks on the pool; that

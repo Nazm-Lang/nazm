@@ -1,4 +1,4 @@
-//! The interactive tier (N65, `docs/architecture.md` §7.67): `nazm repl`, `nazm comptime` and
+//! The interactive tier (N65, `docs/internal/architecture.md` §7.67): `nazm repl`, `nazm comptime` and
 //! `nazm reload-check`, all over the interpreter and the checker — the same settled IR a build
 //! starts from, never a second meaning.
 //!

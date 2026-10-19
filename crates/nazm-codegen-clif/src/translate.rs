@@ -1,4 +1,4 @@
-//! One LIR module, as one object (N105, `docs/architecture.md` §7.106).
+//! One LIR module, as one object (N105, `docs/internal/architecture.md` §7.106).
 //!
 //! Each LIR instruction is the Cranelift instruction it names; each block a Cranelift block; each
 //! variable a Cranelift variable and each slot a stack slot. Nothing here decides anything a

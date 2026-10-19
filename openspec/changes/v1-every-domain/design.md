@@ -10,15 +10,15 @@ beside these sections.
 Both designs start from what the language already is at `3e4db897`, and are held to its
 constitution rather than bending it:
 
-- **A profile only refuses** (`docs/spec.md`, *Restriction profiles*): it never changes what an
+- **A profile only refuses** (`docs/user/spec.md`, *Restriction profiles*): it never changes what an
   accepted program does. Both domains are restrictions of ordinary Nazm plus a backend, never a
   second language with a second meaning.
-- **One meaning, many oracles** (`docs/architecture.md`, *Two backends is two sets of semantics
+- **One meaning, many oracles** (`docs/internal/architecture.md`, *Two backends is two sets of semantics
   bugs*): every new backend is held, by differential test, to the interpreter's meaning of the same
   program, and to an independent outside implementation where one exists — as the EVM backend is
   held to py-evm (§7.72) and accelerator kernels to the interpreter and the CPU provider (§7.69).
-- **Constitution before code** (`docs/stability.md`, *How a change is made*): every rule below
-  enters `docs/spec.md` first, with its diagnostic code, an epoch bump and a compatibility-corpus
+- **Constitution before code** (`docs/user/stability.md`, *How a change is made*): every rule below
+  enters `docs/user/spec.md` first, with its diagnostic code, an epoch bump and a compatibility-corpus
   case, in the same commit as the checker change.
 - **The rewrite direction**: Rust is frozen as the seed. The two new backends are written in Nazm,
   under `toolchain/`, as separate programs that read a printed IR from the compiler — the pattern
@@ -27,7 +27,7 @@ constitution rather than bending it:
 
 Diagnostic numbers below are **provisional**: H takes the unused block `N07xx` and Q the unused
 block `N08xx`, so the parallel tracks (which continue `N06xx`) cannot collide; the registry in
-`docs/diagnostics.md` assigns the final numbers when each rule is implemented. Refusals of a
+`docs/user/diagnostics.md` assigns the final numbers when each rule is implemented. Refusals of a
 profile rule keep the existing `N0510`, naming the rule.
 
 ---
@@ -678,7 +678,7 @@ provider adapter is a replaceable executable behind a versioned schema.
 ## Shared decisions between H and Q
 
 - Both backends are Nazm programs under `toolchain/` (`nzhw`, `nzq`) reading printed Mono MIR —
-  no new Rust, no MLIR or CIRCT dependency (`docs/architecture.md`, *Not MLIR, in v1*).
+  no new Rust, no MLIR or CIRCT dependency (`docs/internal/architecture.md`, *Not MLIR, in v1*).
 - Both are restrictions checked on a reachable set, with the profile machinery's verdicts and
   report, so a design or a circuit sits beside its ordinary-Nazm test in one file.
 - One path-sensitive "exactly once" analysis on MIR serves H's instance threading and Q's linearity.
@@ -705,7 +705,7 @@ provider adapter is a replaceable executable behind a versioned schema.
 
 Provisional, as H's and Q's are, and placed after Q's last code (`N0820`) so that the five tracks
 cannot collide: **C takes `N0830`–`N0849`, M `N0850`–`N0869`, D `N0870`–`N0889`**; `N0890`–`N0899`
-stay free. The registry in `docs/diagnostics.md` assigns the final numbers when each rule is
+stay free. The registry in `docs/user/diagnostics.md` assigns the final numbers when each rule is
 implemented. A manifest key unknown or out of range keeps `N0626`, a handler of the wrong shape
 `N0627`, a construct refused for its target `N0392`, and a profile refusal `N0510`, as today.
 

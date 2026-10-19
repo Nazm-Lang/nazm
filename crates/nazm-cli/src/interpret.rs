@@ -56,7 +56,7 @@ pub(crate) fn run(
     // After evaluation, so every environment frame and every value it held has been
     // dropped. The same line a compiled program writes, from the same environment
     // variable, so the two implementations can be compared on reclamation and not only on
-    // the value they produce. `docs/spec.md` says when storage is reclaimed; this is how a
+    // the value they produce. `docs/user/spec.md` says when storage is reclaimed; this is how a
     // test checks that both of them did it.
     if std::env::var_os(nazm_lir::MEMORY_VARIABLE).is_some() {
         let c = nazm_core::eval::memory_counts();

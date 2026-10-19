@@ -364,7 +364,7 @@ fn equal(fx: &mut Fx<'_, '_>, a: V, b: V, t: Ty, differ: B) {
 }
 
 /// Continue if the values of type `t` at `a` and `b` order equal; jump to `less` or `greater`
-/// if not (L6, `docs/spec.md`, *Ordering and hashing are derived*). A record's fields and an
+/// if not (L6, `docs/user/spec.md`, *Ordering and hashing are derived*). A record's fields and an
 /// enum's variants are already laid out in the canonical order, by name, which is the derived
 /// order's: a walk of the layout is the walk the specification describes.
 fn order(fx: &mut Fx<'_, '_>, a: V, b: V, t: Ty, less: B, greater: B) {
@@ -518,7 +518,7 @@ fn combine(fx: &mut Fx<'_, '_>, a: V, b: V) -> V {
     finish(fx, s)
 }
 
-/// The derived hash of the value of type `t` at `a` (L6, `docs/spec.md`, *Ordering and
+/// The derived hash of the value of type `t` at `a` (L6, `docs/user/spec.md`, *Ordering and
 /// hashing are derived*): the library's hash of an integer's 64-bit pattern, a `Bool` as 0 or
 /// 1 and a `Str`'s bytes; a record from `hash_u64(0)` and an enum value from its variant's name,
 /// each component folded in with `hash_combine` in the canonical order — the layout's.

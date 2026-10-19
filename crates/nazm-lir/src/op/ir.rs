@@ -1,4 +1,4 @@
-//! The instruction-level LIR (N105, `docs/architecture.md` §7.106).
+//! The instruction-level LIR (N105, `docs/internal/architecture.md` §7.106).
 //!
 //! One module per unit. Everything a native program means is decided by the time a module
 //! exists — which runtime entry an operation calls, every guard and its failure text, every

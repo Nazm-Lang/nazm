@@ -1,4 +1,4 @@
-// Gate 3: board manifests (`docs/spec.md`, *Boards*; `docs/systems-domains.md` Part B). A
+// Gate 3: board manifests (`docs/user/spec.md`, *Boards*; `docs/internal/systems-domains.md` Part B). A
 // manifest's load address and stack reach the linker script and the stack bound; a key it does not
 // know, a value of the wrong kind or out of range, and an instruction set that is not the target's
 // are refused by name (`N0626`). Ported from `crates/nazm-cli/tests/manifests.rs` (R7).

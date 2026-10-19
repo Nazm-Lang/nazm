@@ -1,6 +1,6 @@
 // Reclamation: that it happens, that it happens on every way out, and that both implementations
 // agree it happened — each case run under the interpreter and compiled, the memory report's
-// counts read from both and required to be the same (`docs/spec.md`, the memory constitution).
+// counts read from both and required to be the same (`docs/user/spec.md`, the memory constitution).
 // Ported from `crates/nazm-cli/tests/memory.rs` (R7).
 
 use "@std/text"
@@ -333,7 +333,7 @@ fn a_slice_of_a_slice_of_a_heap_string_is_safe(io: IoCap, p: ProcessCap, sp: Spa
 @test
 fn an_empty_slice_and_an_empty_string_are_ordinary(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
-    // `docs/spec.md` gives an empty `Str` real storage so its pointer stays valid. An
+    // `docs/user/spec.md` gives an empty `Str` real storage so its pointer stays valid. An
     // empty *slice* of an immortal string owns nothing, and an empty concatenation owns a
     // backing like any other.
     let r = strings(h, 1, "fn main() -> Int {\n    let e = str_slice(\"abc\", 1, 1);\n    let f = str_concat(\"\", \"\");\n    str_len(e) + str_len(f) + str_len(str_slice(f, 0, 0))\n}\n")?;
@@ -378,7 +378,7 @@ fn a_string_stored_in_a_sequence_outlives_the_binding_it_came_from(io: IoCap, p:
 @test
 fn a_string_read_out_of_a_sequence_survives_being_overwritten(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
-    // §15, and the behaviour `docs/spec.md` has promised since sequences existed: a `Str`
+    // §15, and the behaviour `docs/user/spec.md` has promised since sequences existed: a `Str`
     // already read out of a sequence is unaffected by changing the sequence. It used to
     // be true because nothing was ever freed. It is true now because `strs_get` hands
     // back its own reference and `strs_set` releases the old element only after taking
@@ -623,7 +623,7 @@ fn a_program_that_calls_exit_with_reclaims_nothing_and_says_nothing(io: IoCap, p
 // A record allocates nothing of its own: it has no header, no count and no storage. What
 // these cases are about is its **fields** — that copying one takes a reference per owning
 // field, that destroying one gives every reference back, and that both happen at the same
-// moment in both implementations. `docs/spec.md`, *Records are values whose fields keep
+// moment in both implementations. `docs/user/spec.md`, *Records are values whose fields keep
 // their own semantics*.
 @test
 fn a_record_of_scalars_allocates_nothing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
@@ -670,7 +670,7 @@ fn copying_a_record_takes_one_reference_per_owning_field(io: IoCap, p: ProcessCa
 @test
 fn a_record_field_is_another_reference_to_the_same_sequence(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
-    // `docs/spec.md`'s table, as a measurement: the `Ints` field is a handle, so both
+    // `docs/user/spec.md`'s table, as a measurement: the `Ints` field is a handle, so both
     // copies name one storage — one allocation for two records — and it goes when the
     // last of them does.
     let r = reclaimed(h, 1, "struct Work {\n    values: Ints,\n}\nfn main() -> Int {\n    let a = Work(values: ints_new());\n    let b = a;\n    ints_push(a.values, 7);\n    ints_get(b.values, 0) + ints_len(b.values)\n}\n")?;
@@ -779,7 +779,7 @@ fn a_record_returned_as_a_tail_and_by_return_reclaims_the_same(io: IoCap, p: Pro
 @test
 fn a_field_read_out_of_a_temporary_outlives_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
-    // The case `docs/spec.md` names: the record `make()` returned is destroyed on this
+    // The case `docs/user/spec.md` names: the record `make()` returned is destroyed on this
     // line, and the string read out of it is still valid. A projection that borrowed
     // rather than taking its own reference would leave `s` pointing at freed bytes — and
     // because the binding retains what it stores, only a shape where *nothing else* holds
@@ -1089,7 +1089,7 @@ fn a_matched_sequence_handle_is_the_one_it_names(io: IoCap, p: ProcessCap, sp: S
 fn many_short_lived_enums_keep_a_constant_live_set(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
     // §117. The count of live string backings must not grow with the number of values
-    // ever built, which is the scaling claim `docs/spec.md` makes for every heap-backed
+    // ever built, which is the scaling claim `docs/user/spec.md` makes for every heap-backed
     // type and now makes for enums composed of them.
     let r = both(h, "enum E {\n    Empty,\n    Pair(a: Str, b: Str),\n}\nfn size(e: E) -> Int { match e { E.Empty() => 0, E.Pair(a: x, b: y) => str_len(x) + str_len(y), } }\nfn main() -> Int {\n    let mut i = 0;\n    let mut n = 0;\n    while i < 500 {\n        n = n + size(E.Pair(a: int_to_str(i), b: int_to_str(i + 1)));\n        i = i + 1;\n    }\n    n\n}\n")?;
     check_that(class_is(r.strings, 1000), counted_show(r))?;
@@ -1288,7 +1288,7 @@ fn a_value_whose_every_branch_leaves_makes_nothing_after_it_run(io: IoCap, p: Pr
 
 // --- N11: `Vec[T]` and generic values ------------------------------------------------------
 //
-// `docs/spec.md`, *`Vec[T]` — a mutable handle, by the sequence law*. Every case runs in
+// `docs/user/spec.md`, *`Vec[T]` — a mutable handle, by the sequence law*. Every case runs in
 // both implementations, which must agree on the value and on what each class of storage
 // did — and the interesting half is the element: a `Vec` of `Str`, of a record, of an enum
 // and of another `Vec` each owns its elements by **the element's** law, which is the
@@ -1322,7 +1322,7 @@ fn a_vec_of_str_owns_each_string_by_the_string_law(io: IoCap, p: ProcessCap, sp:
 @test
 fn a_record_read_out_of_a_vec_survives_its_slot_being_overwritten(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
-    // `docs/spec.md`: `vec_get` returns its own copy. The element is overwritten at once,
+    // `docs/user/spec.md`: `vec_get` returns its own copy. The element is overwritten at once,
     // and then enough small allocations are made that a block the overwrite freed too
     // early would be handed back out — the churn is what makes a use-after-free show as a
     // wrong answer or a signal rather than as nothing.
@@ -1466,7 +1466,7 @@ fn many_short_lived_vectors_keep_a_constant_live_set(io: IoCap, p: ProcessCap, s
 @test
 fn only_storage_an_append_made_grows_in_place_and_it_fills_to_its_room(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
-    // R1b, D2 (`docs/spec.md`, *Strings*, **Building**). Sixteen one-byte appends to a literal:
+    // R1b, D2 (`docs/user/spec.md`, *Strings*, **Building**). Sixteen one-byte appends to a literal:
     // the first copies into sixteen bytes of room and the other fifteen fill it exactly — one
     // allocation, in both implementations. A padded string's allocation has a spare byte, but
     // no append made it, so the append after it copies: two more.

@@ -103,7 +103,7 @@ fn a_section_for_a_person_is_its_text_exactly(io: IoCap, p: ProcessCap, sp: Spaw
     let plain = nazm(h, "", words("docs --section spec:generics"));
     check_that(plain.code == 0, ran_show(plain))?;
     check_that(plain.stdout == jstr(s, "body"), "the plain section is the JSON one's body")?;
-    let file = read_text(h, f"{repo_root(h)}/docs/spec.md")?;
+    let file = read_text(h, f"{repo_root(h)}/docs/user/spec.md")?;
     check_that(text_contains(file, plain.stdout), "the section is the file's text")?;
     // The index for a person: one id and title per section.
     let index = json_of(h, words("docs --index --json"))?;
@@ -161,9 +161,9 @@ fn a_changed_document_is_a_new_state_and_a_broken_corpus_is_unavailable(io: IoCa
     let root = copy(h)?;
     let before = json_of(h, plus("docs --index --json --root", root))?;
     let state = jstr(before, "state");
-    let text = read_text(h, f"{root}/docs/spec.md")?;
+    let text = read_text(h, f"{root}/docs/user/spec.md")?;
     let reworded = "### `while` is a statement, and there is still no loop value\n";
-    scratch_write(h, root, "docs/spec.md", text_replace(text, "### `while` is a statement, and there is no loop value\n", reworded))?;
+    scratch_write(h, root, "docs/user/spec.md", text_replace(text, "### `while` is a statement, and there is no loop value\n", reworded))?;
     let r = json_run(h, plus(f"docs --section spec:while --state {state} --json --root", root))?;
     let s = jparse(r.stdout)?;
     check_that(jstr(s, "status") == "stale_state" && r.code == 1, ran_show(r))?;
@@ -171,7 +171,7 @@ fn a_changed_document_is_a_new_state_and_a_broken_corpus_is_unavailable(io: IoCa
     let s2 = json_of(h, plus("docs --section spec:while --json --root", root))?;
     check_that(jstr(s2, "title") == "`while` is a statement, and there is still no loop value", jv(s2, "title"))?;
     // Rewording the heading a link names breaks the link, and the corpus says so.
-    scratch_write(h, root, "docs/spec.md", text_replace(text, "### `return`\n", "### `return` again\n"))?;
+    scratch_write(h, root, "docs/user/spec.md", text_replace(text, "### `return`\n", "### `return` again\n"))?;
     let r3 = json_run(h, plus("docs --index --json --root", root))?;
     let broken = jparse(r3.stdout)?;
     check_that(jstr(broken, "status") == "unavailable" && r3.code == 1, ran_show(r3))?;
@@ -195,7 +195,7 @@ fn a_changed_document_is_a_new_state_and_a_broken_corpus_is_unavailable(io: IoCa
 @test
 fn an_ambiguous_request_is_refused_by_the_parser(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
-    for args in text_split("docs|docs --json|docs --index --section spec|docs --index --state x|docs --section spec --document spec|docs --section spec --path docs/spec.md", "|") {
+    for args in text_split("docs|docs --json|docs --index --section spec|docs --index --state x|docs --section spec --document spec|docs --section spec --path docs/user/spec.md", "|") {
         let r = nazm(h, "", words(args));
         check_that(r.code == 5, f"{args}: {ran_show(r)}")?;
     }

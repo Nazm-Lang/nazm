@@ -2,7 +2,7 @@
 //
 // Ordinary source, checked by the ordinary checker like any other module. Nothing about
 // these two enums is special the compiler except where they live: this file is the
-// module imports it implicitly. `docs/spec.md`, *The core prelude*, owns the rules.
+// module imports it implicitly. `docs/user/spec.md`, *The core prelude*, owns the rules.
 //
 // `?` recognises `Result` by that identity — this module and this name — and never by
 // Every other number here is measured as wall time of a whole process, so every other

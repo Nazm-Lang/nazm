@@ -1,5 +1,5 @@
 #!/bin/sh
-# The fuzz campaign, inside the contained runner (N93, docs/architecture.md §7.94).
+# The fuzz campaign, inside the contained runner (N93, docs/internal/architecture.md §7.94).
 #
 #   sh fuzz/run.sh SECONDS [TARGET...]
 #

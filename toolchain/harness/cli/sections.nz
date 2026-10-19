@@ -1,5 +1,5 @@
-// Gate 3: `@section` and the 64-bit device registers (`docs/spec.md`, *Boards*;
-// `docs/systems-domains.md` Part B). Ported from `crates/nazm-cli/tests/sections.rs` (R7): the
+// Gate 3: `@section` and the 64-bit device registers (`docs/user/spec.md`, *Boards*;
+// `docs/internal/systems-domains.md` Part B). Ported from `crates/nazm-cli/tests/sections.rs` (R7): the
 // tests a board build shows on any host. The `#[ignore]`d QEMU boot starts Docker and stays Rust.
 //
 // A function and a static `@section` names reach the object in that section, and the generated

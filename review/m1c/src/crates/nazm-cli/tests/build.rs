@@ -214,7 +214,7 @@ fn negative_division_and_remainder_truncate_toward_zero() {
 
 #[test]
 fn the_minimum_divided_into_by_minus_one_is_zero_for_remainder() {
-    // `docs/spec.md`: `%` has exactly one failure case, a zero divisor. `Int::MIN % -1`
+    // `docs/user/spec.md`: `%` has exactly one failure case, a zero divisor. `Int::MIN % -1`
     // is mathematically 0 and 0 is representable, so it succeeds — even though the
     // hardware instruction that computes it faults on this exact pair, because it
     // computes the quotient. A backend that reached `srem` here would die.
@@ -754,7 +754,7 @@ fn branch_local_bindings_and_shadowing() {
         "    let n = 4;\n    if n > 0 { let double = n * 2; double + 1 } else { 0 }",
         "9",
     );
-    // Shadowing an outer name inside a branch. `docs/spec.md` allows this in a nested
+    // Shadowing an outer name inside a branch. `docs/user/spec.md` allows this in a nested
     // scope and refuses it in the same one, so the branch is exactly where it is legal.
     expect_value(
         "    let x = 1;\n    if true { let x = 100; x } else { x }",

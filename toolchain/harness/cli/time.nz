@@ -1,4 +1,4 @@
-// Gate 2: time (`docs/general-purpose.md` §11 and the spec's *Time*). The monotonic clock advances
+// Gate 2: time (`docs/internal/general-purpose.md` §11 and the spec's *Time*). The monotonic clock advances
 // by at least what a sleep waited, the wall clock is after 2023, `@std/time`'s types compose, a
 // sleep on the task pool parks its task, and every clock and the sleep need a `TimeCap` and are
 // what `critical` refuses. Ported from `crates/nazm-cli/tests/time.rs` (R7).

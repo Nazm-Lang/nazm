@@ -1,5 +1,5 @@
 // N60: restriction profiles v2 — stack and determinism rules, and the `unknown` verdict
-// (`docs/architecture.md` §7.62). Ported from `crates/nazm-cli/tests/profiles_v2.rs` (R7).
+// (`docs/internal/architecture.md` §7.62). Ported from `crates/nazm-cli/tests/profiles_v2.rs` (R7).
 //
 // The Rust test of every command's `--profile` help lists the profiles from
 // `nazm_service::profile::Profile::ALL`; the binary prints the same list (N0511's help, built from

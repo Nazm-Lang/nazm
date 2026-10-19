@@ -7,7 +7,7 @@ use super::*;
 /// Stage 0a for the whole compilation: declare every user-defined type's **name**.
 ///
 /// Names before field types, for every module, because a field type may name a type
-/// declared later in the file or in another module — `docs/spec.md` makes declaration
+/// declared later in the file or in another module — `docs/user/spec.md` makes declaration
 /// order irrelevant, and that is only true if every name exists before any type is
 /// resolved. It is N2's declare-then-check, one stage earlier, and the returned interfaces
 /// are the *type* half of what a dependent needs.
@@ -385,7 +385,7 @@ pub fn resolve_type_fields(
         // A record with no fields. Refused rather than allowed, and the reason is the
         // grammar: `Marker()` is exactly what a call to a function named `Marker` looks
         // like, and types and functions are separate namespaces, so the two forms would
-        // be genuinely ambiguous. `docs/spec.md` records the decision and what would make
+        // be genuinely ambiguous. `docs/user/spec.md` records the decision and what would make
         // it reversible.
         if fields.is_empty() && r.fields.is_empty() {
             errors.push(
@@ -416,7 +416,7 @@ pub fn resolve_type_fields(
         done.push(&e.name);
         // An enum with no variants is a type with no values, which raises `Never`
         // semantics the language has not settled. Refused deliberately rather than
-        // allowed as a side effect. `docs/spec.md` says what a future milestone would
+        // allowed as a side effect. `docs/user/spec.md` says what a future milestone would
         // have to decide.
         if e.variants.is_empty() {
             errors.push(

@@ -1,6 +1,6 @@
 //! `nazm inspect` — one program's facts in one deterministic document, `nazm.inspect/2` (N48; `/2` since N104, which dropped `inherits`).
 //!
-//! `docs/architecture.md` §7.50. For every definition of a checked program: its durable identity,
+//! `docs/internal/architecture.md` §7.50. For every definition of a checked program: its durable identity,
 //! signature, declared and required effects, the capabilities it takes, its provenance summary,
 //! its Core IR digests, and for each concrete function MIR has for it the executable digest, size
 //! and the validator's verdict; and for the build, the toolchain's identities — compiler, semantic

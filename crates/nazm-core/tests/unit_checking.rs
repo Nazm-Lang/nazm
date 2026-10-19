@@ -2,7 +2,7 @@
 //!
 //! # What this file is for
 //!
-//! `docs/spec.md` claims that a module is a compilation unit in a sense stronger than
+//! `docs/user/spec.md` claims that a module is a compilation unit in a sense stronger than
 //! having an id: *given module A's source and the interfaces of the modules A imports, A
 //! can be checked with no access to those modules' bodies.*
 //!

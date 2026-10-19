@@ -1,6 +1,6 @@
 //! v1 track C, C2: `@std/http`, HTTP/1.1 over TCP.
 //!
-//! `docs/spec.md`, *HTTP*. What the programs show, on the interpreter and every backend: a corpus
+//! `docs/user/spec.md`, *HTTP*. What the programs show, on the interpreter and every backend: a corpus
 //! of tricky requests and responses, each parsed or refused with the status RFC 9112 asks for and
 //! none crashing; seeded random damage to valid requests refused, never a trap; the writers'
 //! framing; URLs; the router's parameters, wildcard, 404 and 405 with `Allow`; and a server and a

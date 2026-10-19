@@ -1,4 +1,4 @@
-//! Exhaustiveness and reachability of patterns (R1a, `docs/spec.md`, *Patterns*).
+//! Exhaustiveness and reachability of patterns (R1a, `docs/user/spec.md`, *Patterns*).
 //!
 //! The usefulness question — *does this row of patterns match a value no earlier row matches?* —
 //! answered over a matrix of patterns by specialising on constructors, the standard algorithm.

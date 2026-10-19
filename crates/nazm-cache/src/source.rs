@@ -23,12 +23,12 @@ use crate::digest::{self, Framed};
 /// **And it costs nothing at the boundary that matters.** A module whose comment changed
 /// is re-checked and publishes the same interface, so its `InterfaceHash` does not move
 /// and none of its importers is affected. The conservatism stops at the module it
-/// belongs to, which is `docs/architecture.md` §7.4's whole point.
+/// belongs to, which is `docs/internal/architecture.md` §7.4's whole point.
 ///
 /// # What it is not
 ///
 /// Not a semantic hash, not a body hash and not a definition hash. It says *these bytes*,
-/// and nothing about what they mean; `docs/research-register.md` R2 is the hypothesis
+/// and nothing about what they mean; `docs/internal/research-register.md` R2 is the hypothesis
 /// about a normalised form of a definition, and this is deliberately not a down payment
 /// on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -1,4 +1,4 @@
-//! R1, 5b.17 (`docs/spec.md`, *Patterns*, Guards): `P if G => E` is chosen where `P` matches and
+//! R1, 5b.17 (`docs/user/spec.md`, *Patterns*, Guards): `P if G => E` is chosen where `P` matches and
 //! `G`, with `P`'s names bound, is true; otherwise the arms below are tried.
 //!
 //! The same output and memory report in every implementation, nothing live — a guard binds a

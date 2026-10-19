@@ -1,7 +1,7 @@
 //! The N34 benchmark: the seven N33 tasks, their unchanged naive baselines and their N33
 //! contexts, counted under every tokenizer; fixtures of source, JSON, Markdown and three
 //! scripts; where a tiny context's overhead goes; how far one byte budget's selection varies in
-//! tokens. Run with `--nocapture` for the report `docs/performance.md` records.
+//! tokens. Run with `--nocapture` for the report `docs/internal/performance-log.md` records.
 //!
 //! Reductions are integer basis points of the naive count — `10000 − 10000·N33/naive`, rounded
 //! half away from zero — so a report is the same on every machine. Nothing here chooses what a

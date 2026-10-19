@@ -1,4 +1,4 @@
-//! `nazm build --provenance FILE` and `--attest-with CMD` (N73, `docs/architecture.md` §7.75).
+//! `nazm build --provenance FILE` and `--attest-with CMD` (N73, `docs/internal/architecture.md` §7.75).
 //!
 //! Written after a build has succeeded, never instead of one: `nazm.provenance/1` names every
 //! source module and package with its digest, the target, the compiler's version, the C compiler's

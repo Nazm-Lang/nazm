@@ -365,7 +365,7 @@ pub(super) struct Artefact {
     ///
     /// Derived from the module's position in load order rather than from its source path:
     /// a path is not a filename — it has separators, it may not be relative, and it is
-    /// **not this compiler's to trust**. `docs/architecture.md` records it as build
+    /// **not this compiler's to trust**. `docs/internal/architecture.md` records it as build
     /// plumbing, deliberately not as an identity.
     pub(super) name: String,
     /// LLVM text for clang, or an object a backend produced itself.
@@ -434,7 +434,7 @@ fn emit_artefacts(
     // One artefact per module and one per generic function instance, never folded into a
     // caller's: the object cache then reuses each by its own identity, one instance
     // requested by two modules is one object, and a module's object does not change when
-    // another module starts instantiating something. `docs/architecture.md` §7.12.
+    // another module starts instantiating something. `docs/internal/architecture.md` §7.12.
     //
     // The units the object store does not have are generated side by side: each is generated
     // from the program alone (performance leadership, a cold build generated them one after
@@ -803,7 +803,7 @@ fn emit_artefacts(
 /// unit and not the board's runtime defines, apart from LLVM's intrinsics and the program's own
 /// foreign functions, which `--link` supplies. Read from the generated text, so it is exactly
 /// what the link would leave unresolved — a static string printed is a C library call there.
-/// Every `@task` of the program (Gate 3, `docs/spec.md`, *Boards*), and the board timer handed to
+/// Every `@task` of the program (Gate 3, `docs/user/spec.md`, *Boards*), and the board timer handed to
 /// the scheduler's tick: a board whose manifest gives the timer no period has no ticks to schedule
 /// by, and a program that handles the timer itself would take them from it — both `N0627`.
 fn board_tasks(
@@ -869,7 +869,7 @@ fn board_tasks(
         .collect())
 }
 
-/// The board's watchdog and its feeds (Gate 3, `docs/spec.md`, *Boards*): a program that feeds a
+/// The board's watchdog and its feeds (Gate 3, `docs/user/spec.md`, *Boards*): a program that feeds a
 /// watchdog needs a board with one, and a watchdog needs the scheduler, whose ticks it counts and
 /// whose tasks feed it. `N0626`, naming the board.
 fn board_watchdog(
@@ -986,7 +986,7 @@ fn checked_option_of(
     }
 }
 
-/// What a Cortex-M3 cannot do, at the first place the program asks it (Gate 3, `docs/spec.md`,
+/// What a Cortex-M3 cannot do, at the first place the program asks it (Gate 3, `docs/user/spec.md`,
 /// *Boards*): a `Float32` or `Float64` anywhere — the M3 has no FPU, and a board no soft-float
 /// library — or a 64-bit device register, which the core splits into two accesses. `N0392`.
 fn cortex_m3_refusal(
@@ -1032,7 +1032,7 @@ fn cortex_m3_refusal(
     None
 }
 
-/// A float a microcontroller target cannot compute with (M1, `docs/spec.md`, *Boards*):
+/// A float a microcontroller target cannot compute with (M1, `docs/user/spec.md`, *Boards*):
 /// `Float64` on `thumbv8m.main-none-eabihf`, whose FPU is single-precision, and either float on
 /// `riscv32imc-unknown-none-elf`, which has none — `N0854` at the first value of that type in the
 /// program's MIR, which holds every parameter, binding and temporary. A board has no library to
@@ -1083,7 +1083,7 @@ fn microcontroller_float_refusal(
     None
 }
 
-/// The board's `init` (M1, `docs/spec.md`, *Boards*): the one function of the program
+/// The board's `init` (M1, `docs/user/spec.md`, *Boards*): the one function of the program
 /// its manifest names, of the shape `fn NAME() -> Int ! {}` or `fn NAME(m: MmioCap) -> Int ! {}`,
 /// marked so that it is kept and entered by `_start`. No such function, more than one, or one of
 /// another shape is `N0851`.
@@ -1160,7 +1160,7 @@ fn board_init(
 }
 
 /// Every `@interrupt` handler of the program, matched to the interrupt the board's manifest
-/// names (Gate 3, `docs/spec.md`, *Boards*): `timer` is the board timer's, which needs a period,
+/// names (Gate 3, `docs/user/spec.md`, *Boards*): `timer` is the board timer's, which needs a period,
 /// and every other name is one of `[interrupts.lines]`. A board without `[interrupts]`, or a name
 /// it does not have, is `N0627` at the handler.
 fn interrupt_handlers(

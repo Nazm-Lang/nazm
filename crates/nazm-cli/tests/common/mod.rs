@@ -249,7 +249,7 @@ pub(crate) fn run_within_stdin(
 
 /// Whether a test that needs a host tool must stop here, having found it absent (Q1-D-02).
 ///
-/// A test that returns early passes, and a pass on no evidence is a defect (`docs/runbook.md`,
+/// A test that returns early passes, and a pass on no evidence is a defect (`docs/internal/runbook.md`,
 /// *Status vocabulary*). So a test bound to a platform is `#[ignore]`d elsewhere by `cfg_attr`,
 /// and counted as ignored there; on its own platform a missing tool still skips — printing `SKIP`
 /// — unless `NAZM_REQUIRE_HOST_TOOLS=1`, which the named host pass sets, turns the skip into a

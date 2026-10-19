@@ -1,6 +1,6 @@
 ## 1. Constitution
 
-- [x] 1.1 `docs/systems-domains.md`, `docs/v1-domain-matrix.md`, this change (3A)
+- [x] 1.1 `docs/internal/systems-domains.md`, `docs/internal/v1-domain-matrix.md`, this change (3A)
 
 ## 2. Hosts
 

@@ -1,6 +1,6 @@
 //! Gate 2: networking.
 //!
-//! `docs/general-purpose.md` §9 and §10 and the spec's *Networking*. What only a whole run shows:
+//! `docs/internal/general-purpose.md` §9 and §10 and the spec's *Networking*. What only a whole run shows:
 //! that `@std/net` listens, accepts, connects, reads and writes TCP and sends and receives UDP over
 //! loopback; that refusals, deadlines, an address in use and a malformed address are values of the
 //! kind they are; that a close wakes a task waiting on the socket; that a peer that has gone is an

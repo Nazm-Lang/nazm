@@ -1,4 +1,4 @@
-//! Which object store a unit is filed in (R1.5, D12, `docs/architecture.md` §7.113).
+//! Which object store a unit is filed in (R1.5, D12, `docs/internal/architecture.md` §7.113).
 
 use nazm_cache::ObjectStore;
 

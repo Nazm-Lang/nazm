@@ -1,4 +1,4 @@
-//! Result types left to an expression body (R1.5, D2; `docs/spec.md`, *Shorter forms*).
+//! Result types left to an expression body (R1.5, D2; `docs/user/spec.md`, *Shorter forms*).
 //!
 //! `fn add(a: Int, b: Int) = a + b` has the type of `a + b`. A caller must see that type when it
 //! is checked, so these bodies are checked first, each after the inferred functions it calls by

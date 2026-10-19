@@ -9,8 +9,8 @@
 name = "readme-claims-no-backend"
 why = "doc claims: README.md says the workspace has no IR and no backend"
 file = "README.md"
-find = "contributor licence agreement ([`docs/CLA.md`](docs/CLA.md))."
-replace = "contributor licence agreement ([`docs/CLA.md`](docs/CLA.md)).\n\nIt is an interpreter: no IR and no backend."
+find = "contributor licence agreement ([`docs/internal/CLA.md`](docs/internal/CLA.md))."
+replace = "contributor licence agreement ([`docs/internal/CLA.md`](docs/internal/CLA.md)).\n\nIt is an interpreter: no IR and no backend."
 
 [[mutation]]
 name = "cargo-toml-claim-wraps-across-comments"
@@ -23,29 +23,29 @@ replace = "# Nazm — an AI-native programming language.\n#\n# an interpreter: l
 name = "a-quoted-claim-is-history"
 why = "doc claims: a claim inside double quotes is a quotation, and passes"
 file = "README.md"
-find = "contributor licence agreement ([`docs/CLA.md`](docs/CLA.md))."
-replace = "contributor licence agreement ([`docs/CLA.md`](docs/CLA.md)).\n\nThis read \"Phase 2 is bench only — there is no\ncompiler yet, deliberately\", and that is no longer the case."
+find = "contributor licence agreement ([`docs/internal/CLA.md`](docs/internal/CLA.md))."
+replace = "contributor licence agreement ([`docs/internal/CLA.md`](docs/internal/CLA.md)).\n\nThis read \"Phase 2 is bench only — there is no\ncompiler yet, deliberately\", and that is no longer the case."
 
 [[mutation]]
 name = "readme-says-not-pre-registered"
 why = "doc claims, with the pre-registration created by the script: both draft claims are stale"
 file = "README.md"
-find = "contributor licence agreement ([`docs/CLA.md`](docs/CLA.md))."
-replace = "contributor licence agreement ([`docs/CLA.md`](docs/CLA.md)). The decision rule is not pre-registered."
+find = "contributor licence agreement ([`docs/internal/CLA.md`](docs/internal/CLA.md))."
+replace = "contributor licence agreement ([`docs/internal/CLA.md`](docs/internal/CLA.md)). The decision rule is not pre-registered."
 
 # --- capability matrix -----------------------------------------------------------------------
 
 [[mutation]]
 name = "matrix-cites-a-missing-file"
 why = "capability matrix: a cited path that does not exist"
-file = "docs/capability-matrix.md"
+file = "docs/internal/capability-matrix.md"
 find = "reported by name and failing the trace (`trace.rs`, `examples/requirements`). No certification."
-replace = "reported by name and failing the trace (`trace.rs`, `examples/requirements`). No certification.\nSee `crates/nazm-gone/src/lib.rs:12` and `docs/spec.md:4-9`."
+replace = "reported by name and failing the trace (`trace.rs`, `examples/requirements`). No certification.\nSee `crates/nazm-gone/src/lib.rs:12` and `docs/user/spec.md:4-9`."
 
 [[mutation]]
 name = "matrix-verified-without-evidence"
 why = "capability matrix: a VERIFIED section that cites nothing"
-file = "docs/capability-matrix.md"
+file = "docs/internal/capability-matrix.md"
 find = "reported by name and failing the trace (`trace.rs`, `examples/requirements`). No certification."
 replace = "reported by name and failing the trace (`trace.rs`, `examples/requirements`). No certification.\n\n### 99. Seeded — VERIFIED\n\nIt works, trust me.\n\n### 100. Seeded — MISSING\n\nNothing exists."
 
@@ -54,15 +54,15 @@ replace = "reported by name and failing the trace (`trace.rs`, `examples/require
 [[mutation]]
 name = "grammar-gains-a-rule"
 why = "guide from grammar: the grammar changed and the guide was not regenerated"
-file = "docs/grammar.ebnf"
+file = "docs/user/grammar.ebnf"
 find = "program = { use_item }"
 replace = "(* A seeded rule, with prose. *)\nseeded = \"x\" | \"y\" ;\n\nprogram = { use_item }"
 
 [[mutation]]
 name = "guide-loses-a-marker"
 why = "guide from grammar: the guide's end marker is gone"
-file = "docs/guide.md"
-find = "<!-- generated from docs/grammar.ebnf: end -->"
+file = "docs/user/guide.md"
+find = "<!-- generated from docs/user/grammar.ebnf: end -->"
 replace = "<!-- the end marker, removed -->"
 
 # --- dependency sources ----------------------------------------------------------------------
@@ -132,63 +132,63 @@ replace = "file = \"crates/nazm-bench/src/gone.rs\"\nfind = \"accepted as f64 / 
 [[mutation]]
 name = "corpus-duplicate-anchor"
 why = "docs corpus: an anchor used twice in one document"
-file = "docs/mcp.md"
+file = "docs/user/mcp.md"
 find = "## The root\n"
 replace = "## The root\n<!-- id: std -->\n\n## Another root\n<!-- id: std -->\n"
 
 [[mutation]]
 name = "corpus-broken-links"
 why = "docs corpus: a link to a heading that is not there, one to a document outside the corpus, one outside the repository, one that climbs out"
-file = "docs/runbook.md"
+file = "docs/internal/runbook.md"
 find = "  providers' whole responses. It refuses to grow past 256 MiB. Commit the report, not the raw\n  replies.\n"
 replace = "  providers' whole responses. It refuses to grow past 256 MiB. Commit the report, not the raw\n  replies.\n\nSee [the spec](spec.md#no-such-heading), [`code`](spec.md#also-not-there) in code, [the matrix](./capability-matrix.md#nothing-here), [a release](releases/x.md#y), [outside](https://example.com/a#b), [up](../../x.md#z) and [ok](spec.md).\n"
 
 [[mutation]]
 name = "corpus-guide-names-a-rule-the-grammar-lacks"
 why = "docs corpus: a generated guide heading naming no production (the guide gate fails too)"
-file = "docs/guide.md"
+file = "docs/user/guide.md"
 find = "### `program`\n"
 replace = "### `programme`\n"
 
 [[mutation]]
 name = "corpus-grammar-undefined-reference"
 why = "docs corpus: a production naming an undefined nonterminal (the guide gate fails too)"
-file = "docs/grammar.ebnf"
+file = "docs/user/grammar.ebnf"
 find = "program = { use_item }"
 replace = "program = { use_itemz }"
 
 [[mutation]]
 name = "corpus-grammar-detached-comment"
 why = "docs corpus: a comment a blank line separates from every rule"
-file = "docs/grammar.ebnf"
+file = "docs/user/grammar.ebnf"
 find = "program = { use_item }"
 replace = "(* a stray comment *)\n\nprogram = { use_item }"
 
 [[mutation]]
 name = "corpus-unclosed-fence"
 why = "docs corpus: a code fence that never closes"
-file = "docs/roadmap.md"
+file = "docs/user/roadmap.md"
 find = "which is the argument for doing the small thing first.\n"
 replace = "which is the argument for doing the small thing first.\n\n```text\nnever closed\n"
 
 [[mutation]]
 name = "corpus-headings-the-reader-refuses"
 why = "docs corpus: a misplaced anchor, a heading with no identity, a setext heading, an HTML heading"
-file = "docs/roadmap.md"
+file = "docs/user/roadmap.md"
 find = "which is the argument for doing the small thing first.\n"
 replace = "which is the argument for doing the small thing first.\n\n<!-- id: stray -->\n\n## — · —\n\nA paragraph\n===\n\n<h2>Old style</h2>\n"
 
 [[mutation]]
 name = "corpus-no-title"
 why = "docs corpus: a document that does not open with its title"
-file = "docs/bootstrap.md"
+file = "docs/internal/bootstrap.md"
 find = "# The bootstrap: how it was designed, what it does, and what it establishes\n"
 replace = "The bootstrap\n\n# The bootstrap: how it was designed, what it does, and what it establishes\n"
 
 [[mutation]]
 name = "corpus-numbered-and-lettered-headings"
 why = "docs corpus: numbered and lettered headings take their numbers as identities, so two `7.2`s collide"
-file = "docs/mcp.md"
+file = "docs/user/mcp.md"
 find = "## The root\n"
 replace = "## The root\n\n### 7.2. First — one\n\n### 7.2 Second\n\n### A3.1 — lettered\n\n### A3.1 — again\n"
 
@@ -241,7 +241,7 @@ replace = "[[claim]]\nheading = \"Separate code generation — measured 2026-09-
 [[mutation]]
 name = "performance-measures-something-unfiled"
 why = "performance claims: a measured heading with no entry, and an entry whose heading changed"
-file = "docs/performance.md"
+file = "docs/internal/performance-log.md"
 find = "### Native object reuse — measured 2026-09-22, and it pays for the section above\n"
 replace = "### Native object reuse — measured 2026-09-23, and it pays for the section above\n\n## A new section — frozen today\n"
 
@@ -251,8 +251,8 @@ replace = "### Native object reuse — measured 2026-09-23, and it pays for the 
 name = "agents-map-links-to-nothing"
 why = "agent governance: the root map links to a path that does not exist, and names an authority that does not"
 file = "AGENTS.md"
-find = "| What a program means | `docs/spec.md` |"
-replace = "| What a program means | `docs/spec.md`, [the old one](docs/spec-v0.md#top) and `docs/semantics.md` |"
+find = "| What a program means | `docs/user/spec.md` |"
+replace = "| What a program means | `docs/user/spec.md`, [the old one](docs/spec-v0.md#top) and `docs/semantics.md` |"
 
 [[mutation]]
 name = "nested-agents-relaxes-the-root"

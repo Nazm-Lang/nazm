@@ -1,6 +1,6 @@
 //! N84: the standard library 1.0.
 //!
-//! `docs/architecture.md` §7.85. What the programs show, on the interpreter, LLVM at `-O0` and
+//! `docs/internal/architecture.md` §7.85. What the programs show, on the interpreter, LLVM at `-O0` and
 //! `-O2` and Cranelift, with everything reclaimed: every new function behaves as documented at its
 //! edges; the stable sort keeps equal elements in order and does what its function does; a JSON
 //! round trip, and every malformed input an `Err` naming where; the four representative programs

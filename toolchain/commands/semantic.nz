@@ -56,7 +56,7 @@ pub fn snapshot_cli() -> Cli {
             + "Every durable function, record and enum the compilation rooted at `--root` declares, each with one digest per "
             + "semantic section the compiler records, from the disk as it is now. Keep it as the baseline of a later `nazm "
             + "delta`. A digest is evidence the canonical data it was taken over is equal, not that behaviour is. "
-            + "`docs/architecture.md` §7.30.")
+            + "`docs/internal/architecture.md` §7.30.")
     cli_required_option(c, "root", "ROOT", true, "The compilation's root module")
     cli_flag(c, "", "json", "The one canonical compact serialisation. Without it, the same object indented", "")
     cli_option(c, "", "source-root", "SOURCE_ROOT", true, "", false, "Measure every module's durable identity from this directory, as `nazm check "
@@ -508,7 +508,7 @@ pub fn diagnostics_cli() -> Cli {
             + "Without `--detail`: every diagnostic's id, code, severity, place, owning definition and fix counts — no message, help or "
             + "label text. With `--detail ID --state DIGEST`: that diagnostic exactly as `nazm.diagnostic/1` publishes it, with its places "
             + "in their files and, for each fix, the `nazm patch fix` selector where one exists — refused if the sources are no longer "
-            + "the index's state. From the disk as it is now; `nazm check --json` is unchanged. `docs/architecture.md` §7.32.")
+            + "the index's state. From the disk as it is now; `nazm check --json` is unchanged. `docs/internal/architecture.md` §7.32.")
     cli_required_option(c, "root", "ROOT", true, "The compilation's root module")
     let detail = cli_option(c, "", "detail", "DETAIL", false, "", false, "A diagnostic's id, from an index", "")
     let state = cli_option(c, "", "state", "STATE", false, "", false, "The index's `state.source`: the sources the id is of", "")

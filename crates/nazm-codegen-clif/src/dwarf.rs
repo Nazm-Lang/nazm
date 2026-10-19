@@ -1,4 +1,4 @@
-//! Debug information for a Cranelift object (N91, `docs/architecture.md` §7.92).
+//! Debug information for a Cranelift object (N91, `docs/internal/architecture.md` §7.92).
 //!
 //! What N48 gives an LLVM `--debug` build, from the same facts: a compile unit, a subprogram per
 //! MIR function with its file and line, and a line table mapping each instruction to the

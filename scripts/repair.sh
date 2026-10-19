@@ -14,7 +14,7 @@
 #
 # What it will not do is guess. `nazm fix --apply` applies only fixes marked `automatic`;
 # anything marked `needs_review` is printed with the condition it rests on and left
-# alone. See `docs/diagnostics.md`.
+# alone. See `docs/user/diagnostics.md`.
 #
 # Exit status: 0 when nothing is left to report, 1 when something is. Both are ordinary
 # outcomes — a file this cannot fully repair is the common case, and the diagnostics on

@@ -1,5 +1,5 @@
 // N103: re-exports — `pub use "PATH";` and `pub use "PATH" { a, b as c };`
-// (`docs/architecture.md` §7.104). A re-export offers another module's definition under this
+// (`docs/internal/architecture.md` §7.104). A re-export offers another module's definition under this
 // module's name, and is the same definition. Ported from `crates/nazm-cli/tests/reexports.rs`
 // (R7); `the_persisted_interface_names_the_defining_identity_and_suffices_alone` checks against a
 // deserialised interface with the checker as a library, and stays Rust (`tests/stays-rust.txt`).

@@ -1,4 +1,4 @@
-//! R1b, L13b: `Int128`, `UInt128` and `widening_mul` (`docs/spec.md`, *Numbers*).
+//! R1b, L13b: `Int128`, `UInt128` and `widening_mul` (`docs/user/spec.md`, *Numbers*).
 //!
 //! Every operation at 128 bits — arithmetic at each bound, shifts, rotations, bit counts, the
 //! conversions by every mode, comparisons past `i128`, a `Vec` and an `Option` of one, `Bytes` at

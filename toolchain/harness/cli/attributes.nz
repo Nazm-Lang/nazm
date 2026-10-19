@@ -1,5 +1,5 @@
-// Gate 2: attributes and conditional compilation (`docs/general-purpose.md` §16 and §17,
-// `docs/spec.md` *Attributes* and *Conditional compilation*). Ported from
+// Gate 2: attributes and conditional compilation (`docs/internal/general-purpose.md` §16 and §17,
+// `docs/user/spec.md` *Attributes* and *Conditional compilation*). Ported from
 // `crates/nazm-cli/tests/attributes.rs` (R7).
 //
 // A declaration whose `@cfg` does not hold is not there — not resolved, not checked, not a

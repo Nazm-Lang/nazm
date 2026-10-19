@@ -1,9 +1,9 @@
 # Nazm — an AI-native programming language.
 #
-# Constitution: docs/master-architecture.md · What exists: docs/capability-matrix.md
-# Roadmap: docs/roadmap.md · Long-term goals: docs/NAZM_LANGUAGE_GOALS.md
-# Design record: docs/architecture.md · Spec: docs/spec.md
-# Evaluation protocol (draft, not pre-registered): docs/research/evaluation.md
+# Constitution: docs/internal/master-architecture.md · What exists: docs/internal/capability-matrix.md
+# Roadmap: docs/user/roadmap.md · Long-term goals: docs/internal/NAZM_LANGUAGE_GOALS.md
+# Design record: docs/internal/architecture.md · Spec: docs/user/spec.md
+# Evaluation protocol (draft, not pre-registered): docs/internal/research/evaluation.md
 #
 # Two tracks in one workspace. The language — span, diag, syntax, sema, cir, core, lir, cli —
 # is an interpreter and a native compiler: lexer, parser, checker, one lowering to Core IR
@@ -71,7 +71,7 @@ publish = false
 # Shared dependency versions.
 #
 # Phase 2 only. The compiler stack (salsa, cstree, cranelift, redb, blake3,
-# postcard) is listed in docs/architecture.md with its MSRVs checked, and each
+# postcard) is listed in docs/internal/architecture.md with its MSRVs checked, and each
 # is depended on only once the crate that needs it exists: adding a dependency
 # before then is how a workspace acquires a build it cannot explain. blake3
 # arrived with the cache, cstree with the lossless syntax tree (N15).

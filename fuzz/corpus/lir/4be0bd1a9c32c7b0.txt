@@ -4,7 +4,7 @@
 use "@std/process";
 use "@std/fs";
 }
-// module imports it implicitly. `docs/spec.md`, *The core prelude*, owns the rules.
+// module imports it implicitly. `docs/user/spec.md`, *The core prelude*, owns the rules.
 //
 use "@std/json";
 use "@std/path";

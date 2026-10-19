@@ -29,7 +29,7 @@
 //! read at most once keyed by its **canonical path** — so a file reached by two different
 //! spellings is one file, and the map's contents depend on the import graph rather than on
 //! the filesystem's iteration order. A cycle terminates because the second visit finds the
-//! file already loaded; it is not an error, and `docs/spec.md` says why.
+//! file already loaded; it is not an error, and `docs/user/spec.md` says why.
 //!
 //! # Where the bytes come from
 //!
@@ -54,7 +54,7 @@ use nazm_span::{FileId, SourceMap, Span};
 /// Lexical, deliberately: `ModuleKey` is a position in a project, and asking the
 /// filesystem here would make the answer depend on where the project was checked out.
 /// `None` when the module sits outside the root, which is not an error — see
-/// `docs/spec.md`, *Durable identity*.
+/// `docs/user/spec.md`, *Durable identity*.
 ///
 /// Both sides are made absolute first, so the answer does not depend on the shell's
 /// working directory: `nazm check lib/util.nz` and `nazm check ../p/lib/util.nz` are the
@@ -255,7 +255,7 @@ pub fn load_packaged(
 ) -> Result<Loaded, (Loaded, Vec<Diagnostic>)> {
     // Every module's durable identity is its path relative to this, so a checkout moved
     // from one directory to another keeps its identities — which is the property
-    // `docs/spec.md` asks for and the reason the absolute path never reaches one. Whether
+    // `docs/user/spec.md` asks for and the reason the absolute path never reaches one. Whether
     // the root was declared or derived is `crate::root`'s decision, made before any file
     // was read.
     let root_path = source_root;
@@ -525,7 +525,7 @@ pub fn load_packaged(
 
     // The core prelude, last: it is part of every compilation, and putting it after every
     // project module means no project file's id — and no span in one — depends on it.
-    // `docs/spec.md`, *The core prelude*.
+    // `docs/user/spec.md`, *The core prelude*.
     let core = parts.len();
     parts.push((
         nazm_core::sema::prelude::FILE_NAME.to_owned(),

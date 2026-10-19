@@ -1,6 +1,6 @@
 //! The Cranelift backend: LIR to native object code, in process.
 //!
-//! `docs/architecture.md` §7.43 is its constitution, and §7.106 (N105) what it consumes: each
+//! `docs/internal/architecture.md` §7.43 is its constitution, and §7.106 (N105) what it consumes: each
 //! unit's instruction-level LIR, lowered and validated by `nazm-lir`, which has decided every
 //! guard, failure text, offset, runtime entry and retain or release already. This crate
 //! translates instructions into Cranelift IR and produces one object per unit with

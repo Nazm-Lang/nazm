@@ -1,4 +1,4 @@
-//! R1d, D5: `nazm build --heap-limit` and the manifest's `heap-limit` (`docs/spec.md`, *A bounded
+//! R1d, D5: `nazm build --heap-limit` and the manifest's `heap-limit` (`docs/user/spec.md`, *A bounded
 //! heap*).
 //!
 //! What a whole run shows: a program well within its limit prints what the interpreter, the LIR

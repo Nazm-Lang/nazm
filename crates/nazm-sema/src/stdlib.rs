@@ -7,8 +7,8 @@
 //! special is only where each comes from and what it is called: `use "@std/text";` names the
 //! module keyed [`ModuleKey::std`]`("text")`, whose bytes this compiler carries, so a
 //! compilation needs no installation directory. Unlike the prelude, none is imported unless a
-//! module writes the `use`. `docs/spec.md`, *The standard library*, owns the rules;
-//! `docs/architecture.md` §7.47 says why the boundary is here.
+//! module writes the `use`. `docs/user/spec.md`, *The standard library*, owns the rules;
+//! `docs/internal/architecture.md` §7.47 says why the boundary is here.
 //!
 //! # The bytes
 //!

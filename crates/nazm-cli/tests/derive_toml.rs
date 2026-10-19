@@ -1,4 +1,4 @@
-//! R1c, L2c: `@derive(toml)` (`docs/spec.md`, *Derived serialisation*, **TOML**).
+//! R1c, L2c: `@derive(toml)` (`docs/user/spec.md`, *Derived serialisation*, **TOML**).
 //!
 //! A deployment of nested records — an array of tables, an internally tagged enum, an externally
 //! tagged one beside JSON, an absent `Option`, `rename_all`, a `default` — written as TOML, read

@@ -1,5 +1,5 @@
 // N54: select, deadlines, cooperative cancellation and the scheduler's counters
-// (`docs/architecture.md` §7.56). A select takes the lowest ready channel, a closed one included,
+// (`docs/internal/architecture.md` §7.56). A select takes the lowest ready channel, a closed one included,
 // under the interpreter and both native backends alike; a waiting select is woken by another
 // task's send and by a close; a deadline is a lower bound; a clock needs a `TimeCap`; and a wall
 // clock stepped back an hour — a C shim preloaded into the program — moves no deadline. Ported from

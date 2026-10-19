@@ -1,4 +1,4 @@
-//! Resolved units (N77, `docs/architecture.md` §7.78): a module's resolution, persisted with
+//! Resolved units (N77, `docs/internal/architecture.md` §7.78): a module's resolution, persisted with
 //! its check, read back instead of checking a reused module's bodies again.
 
 #![allow(

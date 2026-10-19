@@ -1,5 +1,5 @@
 //! R1b, L10: closures in generic functions, and a `let mut` binding a closure shares
-//! (`docs/spec.md`, *Function values and closures*).
+//! (`docs/user/spec.md`, *Function values and closures*).
 //!
 //! A closure written in a generic function is instantiated with it, and so is a named function's
 //! value made there; a captured `let mut` binding is one variable the function and the closure

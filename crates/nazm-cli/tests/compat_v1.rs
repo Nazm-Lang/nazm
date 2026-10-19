@@ -1,6 +1,6 @@
 //! The Nazm 1.0 compatibility corpus, `tests/compat/v1/` (Gate 1).
 //!
-//! `docs/stability.md` promises that a program valid under stable Nazm 1.0, using only stable
+//! `docs/user/stability.md` promises that a program valid under stable Nazm 1.0, using only stable
 //! public surfaces, does not silently change meaning under a later 1.x toolchain. This is what
 //! holds a later toolchain to that: representative stable programs with what they print,
 //! programs that must trap with the code they trap with, programs that must be refused with the
@@ -18,7 +18,7 @@
 //! | `refuse/` | `NAME.nz`, first line `// expect: CODE` | `nazm check` exits 1 and its first error is `CODE`; `nazm build` refuses too |
 //! | `check/` | `NAME.nz` | `nazm check` exits 0 |
 //!
-//! A refusal case whose construct a later 1.x added — `docs/stability.md` makes adding a
+//! A refusal case whose construct a later 1.x added — `docs/user/stability.md` makes adding a
 //! construct 1.0 refused by name a minor addition, because no valid program changes meaning —
 //! is listed in `SUPERSEDED` with the addition that superseded it. It stays in the corpus,
 //! unedited and pinned, and is held to the opposite: it must now check.

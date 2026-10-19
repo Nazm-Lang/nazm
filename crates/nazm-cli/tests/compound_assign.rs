@@ -1,4 +1,4 @@
-//! R1, 5b.12 (`docs/spec.md`, *Mutation is opt-in and visible at the binding*): `place op= e`
+//! R1, 5b.12 (`docs/user/spec.md`, *Mutation is opt-in and visible at the binding*): `place op= e`
 //! is `place = place op e`, for each of the ten operators, on a binding, a field and an element.
 //!
 //! The same values, failures and memory report in every implementation; what it cannot mean is

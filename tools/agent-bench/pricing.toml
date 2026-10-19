@@ -1,4 +1,4 @@
-# The price list N35's agent benchmark applies to recorded usage (docs/architecture.md §7.37).
+# The price list N35's agent benchmark applies to recorded usage (docs/internal/architecture.md §7.37).
 #
 # Dated, with the page each rate was read from; rates are US dollars per million tokens,
 # standard tier, as written there. A result's identity never includes a price, so a later

@@ -4,7 +4,7 @@ Specialises the root `AGENTS.md` for this subtree; it relaxes nothing there.
 
 - **Nothing here runs on the host as a stage.** `nzlex`, `nzparse`, `nzcheck`, `nzemit`, `nazmc`,
   the selfhost suite and `bootstrap.sh` run only through `cargo xtask contained selfhost` or
-  `cargo xtask contained bootstrap` (`docs/runbook.md`, *Mandatory containment*). The stage builders
+  `cargo xtask contained bootstrap` (`docs/internal/runbook.md`, *Mandatory containment*). The stage builders
   refuse to start uncontained; never work around that.
 - **`emit.nz` carries runtime text derived from `crates/nazm-runtime/src/core.rs`.** The
   `runtime parity` gate in `cargo xtask check` re-derives it; change the Rust constant and then this

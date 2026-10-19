@@ -21,7 +21,7 @@
 ## 4. Guard and documents
 
 - [x] 4.1 Module boundaries gate, with unit tests that break each rule
-- [x] 4.2 `docs/maintainability.md`: layout, the LIR oracle as a deliberate cross-check, §14
+- [x] 4.2 `docs/internal/maintainability.md`: layout, the LIR oracle as a deliberate cross-check, §14
 
 ## 5. Evidence and close
 

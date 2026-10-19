@@ -1,5 +1,5 @@
 //! What the interpreter's `os_` built-ins need of the host that differs between POSIX and Windows
-//! (W1, `docs/spec.md`, *Windows x86_64*): the family of error numbers and the statuses in it, the
+//! (W1, `docs/user/spec.md`, *Windows x86_64*): the family of error numbers and the statuses in it, the
 //! key a handle's object is filed under, names as bytes, entropy, and error text. Everything else
 //! in `eval::os`, `eval::net` and `eval::process` is portable `std`.
 //!
@@ -133,7 +133,7 @@ pub(super) fn null_device() -> std::io::Result<std::fs::File> {
 }
 
 /// A name from the system as the bytes a program sees: exactly on POSIX; UTF-8 on Windows, `None`
-/// for one that is not valid UTF-16 (`docs/spec.md`, *Windows x86_64*, **Text and paths**).
+/// for one that is not valid UTF-16 (`docs/user/spec.md`, *Windows x86_64*, **Text and paths**).
 pub(super) fn bytes_of(s: &std::ffi::OsStr) -> Option<Vec<u8>> {
     #[cfg(unix)]
     {

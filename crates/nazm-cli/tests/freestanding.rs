@@ -1,6 +1,6 @@
 //! N62: a freestanding target — `aarch64-unknown-none`, no OS, no libc, no heap.
 //!
-//! `docs/architecture.md` §7.64. What a whole build shows: a program for the board is built to
+//! `docs/internal/architecture.md` §7.64. What a whole build shows: a program for the board is built to
 //! three objects, `link.txt` and `link.ld`; the board's runtime has no thread-local storage and
 //! calls nothing of a C library; a program that reaches allocation, input and output or tasks is
 //! refused by naming what it reaches; a device register is refused by `nazm run` and by a hosted
@@ -320,7 +320,7 @@ fn a_board_image_needs_objects() {
 }
 
 /// Boots the image on QEMU's `virt` machine. Needs Docker and the `nazm-qemu:n62` image
-/// (`docs/performance.md`, N62): `cargo test -p nazm-cli --test cli_e_l -- --ignored freestanding::`.
+/// (`docs/internal/performance-log.md`, N62): `cargo test -p nazm-cli --test cli_e_l -- --ignored freestanding::`.
 #[test]
 #[ignore = "starts a container"]
 fn the_image_boots_on_qemu_and_reports_on_the_uart() {

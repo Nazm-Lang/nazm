@@ -1,6 +1,6 @@
 //! N50: function values and closures.
 //!
-//! `docs/architecture.md` §7.52 and the spec section *Function values and closures*. What only
+//! `docs/internal/architecture.md` §7.52 and the spec section *Function values and closures*. What only
 //! a whole run shows: that a closure, a named function as a value and a call through one mean
 //! the same in the interpreter and in both native backends — the same stdout, exit status and
 //! memory report, closure objects included — that what a closure captures is reclaimed exactly
@@ -547,7 +547,7 @@ fn the_formatter_keeps_function_types_and_closures() {
 
 // --- Gate 1-C1: a closure's environment in the ownership graph --------------------------
 //
-// `docs/spec.md`, *Cycles*: a closure owns what it captures, so capturing a value that can hold
+// `docs/user/spec.md`, *Cycles*: a closure owns what it captures, so capturing a value that can hold
 // a function value behind a counted handle is the one way an environment could come to own
 // itself. Refused by the captured type (`N0616`), where the closure is written.
 
