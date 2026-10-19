@@ -392,3 +392,54 @@ pub fn fd_calls(f: Facts) -> Str {
     }
     str_join(out, "")
 }
+
+// The provenance summaries, one line per function that has one: `FUNCTION<TAB>RESULT<TAB>PASSES ON<TAB>
+// REACHES<TAB>RECEIVES` (what `refdump provenance` prints from the reference's summaries): the
+// function by its number, the origins its result carries and the positions it passes on and that
+// reach the path sink, each joined by commas, and the origins each parameter is handed, joined by
+// commas and the parameters by semicolons; `-` for none.
+pub fn fd_provenance(f: Facts) -> Str {
+    if fx_carried(f) == false { return str_concat("stops", nl()); }
+    if fx_refusal(f) != "" { return str_concat("refused", nl()); }
+    if fx_loaded(f) == false || fx_failed(f) { return str_concat("fails", nl()); }
+    let out = strs_new();
+    let c = fx_checker(f);
+    let mut i = 0;
+    while i < ck_fn_count(c) {
+        if fx_prov_has(f, i) {
+            let received = strs_new();
+            let mut k = 0;
+            while k < ck_fn_param_count(c, i) {
+                strs_push(received, dash(str_join(fx_prov_receives(f, i, k), ",")));
+                k = k + 1;
+            }
+            strs_push(out, int_to_str(i));
+            strs_push(out, tab());
+            strs_push(out, dash(str_join(fx_prov_origins(f, i), ",")));
+            strs_push(out, tab());
+            strs_push(out, dash(join_ints(fx_prov_passes_on(f, i))));
+            strs_push(out, tab());
+            strs_push(out, dash(join_ints(fx_prov_reaches(f, i))));
+            strs_push(out, tab());
+            strs_push(out, dash(str_join(received, ";")));
+            strs_push(out, nl());
+        }
+        i = i + 1;
+    }
+    str_join(out, "")
+}
+
+fn dash(s: Str) -> Str {
+    if s == "" { return "-"; }
+    s
+}
+
+fn join_ints(xs: Ints) -> Str {
+    let parts = strs_new();
+    let mut i = 0;
+    while i < ints_len(xs) {
+        strs_push(parts, int_to_str(ints_get(xs, i)));
+        i = i + 1;
+    }
+    str_join(parts, ",")
+}
