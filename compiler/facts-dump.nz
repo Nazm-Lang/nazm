@@ -352,3 +352,43 @@ pub fn fd_refs(f: Facts) -> Str {
     }
     str_join(out, "")
 }
+
+// The call graph, one line per call: `FUNCTION<TAB>SPAN<TAB>CALLEE<TAB>SPAWNED<TAB>TYPE ARGUMENTS`
+// (what `refdump calls` prints from the reference's call sites): the function by its number, the
+// span `start-end` over the whole compilation's text, the callee `fn:N`, `builtin:NAME`, `indirect`
+// or `trait:T.M`, `1` for a `spawn`, the type arguments joined by commas, `-` for none.
+pub fn fd_calls(f: Facts) -> Str {
+    if fx_carried(f) == false { return str_concat("stops", nl()); }
+    if fx_refusal(f) != "" { return str_concat("refused", nl()); }
+    if fx_loaded(f) == false || fx_failed(f) { return str_concat("fails", nl()); }
+    let out = strs_new();
+    let c = fx_checker(f);
+    let mut i = 0;
+    while i < ck_fn_count(c) {
+        let mut k = 0;
+        while k < fx_call_count(f, i) {
+            let kind = fx_call_kind(f, i, k);
+            let mut callee = "indirect";
+            if kind == "function" { callee = str_concat("fn:", int_to_str(fx_call_function(f, i, k))); }
+            if kind == "builtin" { callee = str_concat("builtin:", fx_call_builtin(f, i, k)); }
+            if kind == "trait method" { callee = cat5("trait:", int_to_str(fx_call_trait(f, i, k)), ".", int_to_str(fx_call_method(f, i, k)), ""); }
+            let mut spawned = "0";
+            if fx_call_spawned(f, i, k) { spawned = "1"; }
+            let mut targs = "-";
+            if strs_len(fx_call_type_args(f, i, k)) > 0 { targs = str_join(fx_call_type_args(f, i, k), ","); }
+            strs_push(out, int_to_str(i));
+            strs_push(out, tab());
+            strs_push(out, cat3(int_to_str(fx_call_start(f, i, k)), "-", int_to_str(fx_call_end(f, i, k))));
+            strs_push(out, tab());
+            strs_push(out, callee);
+            strs_push(out, tab());
+            strs_push(out, spawned);
+            strs_push(out, tab());
+            strs_push(out, targs);
+            strs_push(out, nl());
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    str_join(out, "")
+}

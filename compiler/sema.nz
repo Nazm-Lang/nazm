@@ -6946,7 +6946,12 @@ fn check_binary(c: Ck, e: Int, expected: Int) -> Int {
         rt = value_type(c, rhs, h);
     }
     // `s + t` on two `Str`s (R1, 5b.6): `str_concat(s, t)`, a `Str`, its operands checked once.
-    if op == "Add" && lt == t_str() && rt == t_str() && dg_len(c.d) == before { return t_str(); }
+    if op == "Add" && lt == t_str() && rt == t_str() && dg_len(c.d) == before {
+        // A call of it, keyed by the `+`, as the reference records the call it is read as.
+        let target = callee_of(c, "str_concat");
+        if target != 0 - 1 { record_site(c, op_span, target); }
+        return t_str();
+    }
     let mut ok = false;
     if op == "Add" || op == "Sub" || op == "Mul" || op == "Div" || op == "Rem" { ok = lt == rt && is_num(c, lt); }
     if is_order(op) { ok = lt == rt && ordering(c, lt) == ""; }
@@ -7588,12 +7593,14 @@ fn check_method_call(c: Ck, e: Int, recv: Int, known: Int, method: Str, at: Int,
         if ints_len(c.sfn) > sites { ints_set(c.stm, sites, tm); }
     } else {
         let mut target = 0 - 1;
+        let mut by_default = false;
         if satisfies(c, tr, recv_ty) {
             let im = applying(c, tr, recv_ty);
             target = ints_get(c.imfn, ints_get(c.imff, im) + tm - ints_get(c.trmf, tr));
             // Where the impl leaves the method to its default, the default (L11a).
             if target < 0 && ints_get(c.tmdef, tm) == 1 {
                 target = defined_fn(c, ints_get(c.trmod, tr), cat4(tname, "/default/", method, ""));
+                by_default = true;
             }
         }
         if target < 0 {
@@ -7602,7 +7609,25 @@ fn check_method_call(c: Ck, e: Int, recv: Int, known: Int, method: Str, at: Int,
             check_args_from(c, args, first);
             return ret;
         }
+        let sites = ints_len(c.sfn);
         record_site(c, at, target);
+        // A default body is called with the receiver's type as its type argument, an impl of a
+        // generic type with that type's arguments (L11).
+        if ints_len(c.sfn) > sites {
+            if by_default {
+                ints_push(c.sargs, recv_ty);
+                ints_set(c.sargc, sites, 1);
+            } else {
+                if ints_get(c.fntpc, target) > 0 && targc(c, recv_ty) == ints_get(c.fntpc, target) {
+                    let mut a = 0;
+                    while a < targc(c, recv_ty) {
+                        ints_push(c.sargs, targ(c, recv_ty, a));
+                        a = a + 1;
+                    }
+                    ints_set(c.sargc, sites, targc(c, recv_ty));
+                }
+            }
+        }
     }
     let given = ints_len(args) - first;
     let n = ints_len(params);
@@ -15734,10 +15759,17 @@ pub struct Rix {
     uc: Ints,
     us: Ints,
     ue: Ints,
+    // The call graph, once asked for: per function the call sites of its body (a run of `cgl`,
+    // in the order they were recorded); `cgn` is 1 once built.
+    cgn: Ints,
+    cgf: Ints,
+    cgc: Ints,
+    cgl: Ints,
 }
 
 fn rix_new() -> Rix {
-    Rix(ok: ints_new(), k: ints_new(), ds: ints_new(), de: ints_new(), uf: ints_new(), uc: ints_new(), us: ints_new(), ue: ints_new())
+    Rix(ok: ints_new(), k: ints_new(), ds: ints_new(), de: ints_new(), uf: ints_new(), uc: ints_new(), us: ints_new(), ue: ints_new(),
+            cgn: ints_new(), cgf: ints_new(), cgc: ints_new(), cgl: ints_new())
 }
 
 // A declaration: where the entity is declared, unless that is no width or no place; the span is
@@ -16167,3 +16199,61 @@ pub fn ck_ref_decl_end(c: Ck, i: Int) -> Int { ints_get(c.rix.de, i) }
 pub fn ck_ref_use_count(c: Ck, i: Int) -> Int { ints_get(c.rix.uc, i) }
 pub fn ck_ref_use_start(c: Ck, i: Int, k: Int) -> Int { ints_get(c.rix.us, ints_get(c.rix.uf, i) + k) }
 pub fn ck_ref_use_end(c: Ck, i: Int, k: Int) -> Int { ints_get(c.rix.ue, ints_get(c.rix.uf, i) + k) }
+
+// --- the call graph (R5 hand-back; `FnDef::call_sites`, `TraitCall`) -------------------------
+//
+// What each function's body calls: every call the checker recorded in it, in the order it recorded
+// them. A site is a call of one of the compilation's functions, of a built-in, through a value of
+// function type, or through a trait's method on a type parameter (`stm`: its place in the pool of
+// methods, `ck_site_trait_method`), and a `spawn` is one too.
+
+fn cg_build(c: Ck) -> Int {
+    if ints_len(c.rix.cgn) > 0 { return 0; }
+    ints_push(c.rix.cgn, 1);
+    let n = strs_len(c.fnname);
+    let r = c.rix;
+    let mut i = 0;
+    while i < n {
+        ints_push(r.cgc, 0);
+        i = i + 1;
+    }
+    i = 0;
+    while i < ints_len(c.sfn) {
+        let g = ints_get(c.sfn, i);
+        ints_set(r.cgc, g, ints_get(r.cgc, g) + 1);
+        i = i + 1;
+    }
+    let mut off = 0;
+    i = 0;
+    while i < n {
+        ints_push(r.cgf, off);
+        off = off + ints_get(r.cgc, i);
+        ints_set(r.cgc, i, 0);
+        i = i + 1;
+    }
+    i = 0;
+    while i < off {
+        ints_push(r.cgl, 0);
+        i = i + 1;
+    }
+    i = 0;
+    while i < ints_len(c.sfn) {
+        let g = ints_get(c.sfn, i);
+        ints_set(r.cgl, ints_get(r.cgf, g) + ints_get(r.cgc, g), i);
+        ints_set(r.cgc, g, ints_get(r.cgc, g) + 1);
+        i = i + 1;
+    }
+    0
+}
+
+// How many calls function `i`'s body makes, and call `k` of them as a site (an index for the
+// `ck_site_*` accessors).
+pub fn ck_call_count(c: Ck, i: Int) -> Int {
+    cg_build(c);
+    ints_get(c.rix.cgc, i)
+}
+pub fn ck_call_site(c: Ck, i: Int, k: Int) -> Int { ints_get(c.rix.cgl, ints_get(c.rix.cgf, i) + k) }
+// Where the callee is written (absolute), and whether the call is a `spawn`.
+pub fn ck_site_start(c: Ck, site: Int) -> Int { ints_get(c.sstart, site) }
+pub fn ck_site_end(c: Ck, site: Int) -> Int { ints_get(c.send, site) }
+pub fn ck_site_spawned(c: Ck, site: Int) -> Bool { ints_get(c.sspawn, site) == 1 }

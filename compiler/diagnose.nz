@@ -1,12 +1,12 @@
 // The front end's diagnostics driver (R2, `openspec/changes/r2-front-end/design.md`, D4).
 //
-// Usage: diagnose [--syntax | --text | --facts | --core | --refs] FILE [LIBRARY [OS ARCH]]
+// Usage: diagnose [--syntax | --text | --facts | --core | --refs | --calls] FILE [LIBRARY [OS ARCH]]
 // Output: every diagnostic of the compilation rooted at FILE as one `nazm.diagnostic/1` line, as
 // `nazm check --json` writes them. With `--syntax`, the lexer's and the parser's of FILE alone;
 // with `--text`, every diagnostic rendered as `nazm check` writes them to standard error (without
 // its summary line); with `--facts`, what `nazm doc` would read of the compilation, as
 // `facts-dump.nz` prints it (design D24); with `--core`, each function's Core IR as `core.nz`
-// lowers it (D25); with `--refs`, the reference index as `facts-dump.nz` prints it (R5 hand-back).
+// lowers it (D25); with `--refs`, the reference index as `facts-dump.nz` prints it (R5 hand-back); with `--calls`, the call graph likewise.
 // Otherwise the loader's (`load.nz`, the standard modules and the core prelude from LIBRARY,
 // `library` by default), then every file's lexer and parser diagnostics at their offsets in the
 // whole compilation, then the checker's (`sema.nz`) — over what the parser recovered, after a
@@ -33,7 +33,7 @@ fn main(io: IoCap) -> Int {
     let mut at = 0;
     let mut mode = "";
     if args_count() > 1 {
-        if arg(0) == "--syntax" || arg(0) == "--text" || arg(0) == "--facts" || arg(0) == "--core" || arg(0) == "--keys" || arg(0) == "--units" || arg(0) == "--refs" {
+        if arg(0) == "--syntax" || arg(0) == "--text" || arg(0) == "--facts" || arg(0) == "--core" || arg(0) == "--keys" || arg(0) == "--units" || arg(0) == "--refs" || arg(0) == "--calls" {
             at = 1;
             mode = arg(0);
         }
@@ -60,7 +60,7 @@ fn main(io: IoCap) -> Int {
         let t = sx_tree();
         sx_parse_source(ld_with_newline(read_file(path)), t, d);
     } else {
-        let f = checked(path, library, os, arch, mode == "--facts" || mode == "--core" || mode == "--units" || mode == "--refs", io);
+        let f = checked(path, library, os, arch, mode == "--facts" || mode == "--core" || mode == "--units" || mode == "--refs" || mode == "--calls", io);
         // Where the front end stopped, standard error says at what (design D13).
         if fx_why(f) != "" { eprint(str_concat(str_concat("diagnose: ", fx_why(f)), nl())); }
         if mode == "--text" {
@@ -112,6 +112,10 @@ fn main(io: IoCap) -> Int {
                 return 0;
             }
             print(cr_core(f));
+            return 0;
+        }
+        if mode == "--calls" {
+            print(fd_calls(f));
             return 0;
         }
         if mode == "--refs" {
