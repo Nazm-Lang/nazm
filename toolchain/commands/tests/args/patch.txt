@@ -1,0 +1,65 @@
+# `nazm patch`'s command lines, run in the fixture of run.sh (`fixture patch`): mut.nz, plan.json (the
+# reference's `patch fix --json` plan for it) and variants of the plan.
+--help
+-h
+help
+help fix
+help apply
+help rename
+help help
+help bogus
+help fix bogus
+help help x
+bogus
+fx
+appy
+--bogus
+--hel
+--help=x
+-x
+-- fix
+-- bogus
+fix
+fix --root mut.nz
+fix --root mut.nz --file mut.nz
+fix --root mut.nz --file mut.nz --byte x
+fix --root mut.nz --file mut.nz --byte 38 --fix y
+fix --root mut.nz --file mut.nz --byte 5000000000
+fix --root mut.nz --file mut.nz --byte 38 --fix 18446744073709551616
+fix --root mut.nz --file mut.nz --byte 38 --fix
+fix --root mut.nz --file mut.nz --byte 38 --json --json
+fix --help
+fix -h
+fix --hel
+rename
+rename --root mut.nz --file mut.nz --byte 38
+rename --root mut.nz --file mut.nz --byte 38 --new-name
+rename --help
+apply
+apply --help
+apply -h
+apply --bogus plan.json
+apply plan.json
+apply plan.json --base .
+apply --base sub plan.json
+apply plan.json --base
+apply absent.json
+apply sub
+apply bad.json
+apply tamper.json
+apply escape.json
+apply abs.json
+apply dot.json
+apply stale.json
+apply malformed.json
+apply negative.json
+apply float.json
+apply backwards.json
+apply twice.json
+apply empty.json
+apply array.json
+apply plan.json plan.json
+apply plan.json extra
+fix --root absent.nz --file absent.nz --byte 0
+fix --root sub --file sub --byte 0
+rename --root absent.nz --file mut.nz --byte 0 --new-name y

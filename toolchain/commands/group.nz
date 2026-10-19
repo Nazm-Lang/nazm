@@ -1,0 +1,180 @@
+// A command with commands of its own (`nazm patch`, `nazm attest`, `nazm runtime`): what clap does
+// with a `#[command(subcommand)]` before a command sees its own arguments (R5, design D8). A port,
+// as `nazm.nz`'s top level is, of `clap_builder`'s handling of `--help`, `-h`, `help`, a missing
+// command, an unknown option and an unrecognized command (with the similar one `strsim::jaro`
+// finds above 0.7), under the group's usage `nazm GROUP <COMMAND>`.
+
+use "cli.nz"
+
+// The group's name after `nazm`, its `about` and `long_about` ("" for none), and its commands as
+// `Cli`s named `GROUP SUB`; `help` is added last, as clap adds it.
+pub struct Group {
+    name: Str,
+    about: Str,
+    long_about: Str,
+    kids: Vec[Cli],
+}
+
+pub fn grp_new(name: Str, about: Str, long_about: Str) -> Group {
+    Group(name: name, about: about, long_about: long_about, kids: vec_new[Cli]())
+}
+
+pub fn grp_add(g: Group, c: Cli) -> Int {
+    vec_push(g.kids, c)
+    0
+}
+
+pub fn grp_kid(g: Group, i: Int) -> Cli { vec_get(g.kids, i) }
+
+fn short_name(c: Cli) -> Str {
+    let mut at = 0
+    for i in 0..str_len(c.name) {
+        if str_byte(c.name, i) == 32 { at = i + 1 }
+    }
+    str_slice(c.name, at, str_len(c.name))
+}
+
+fn names_of(g: Group) -> Strs {
+    let out = strs_new()
+    for i in 0..vec_len(g.kids) { strs_push(out, short_name(vec_get(g.kids, i))) }
+    strs_push(out, "help")
+    out
+}
+
+fn about_of(g: Group, i: Int) -> Str {
+    if i >= vec_len(g.kids) { "Print this message or the help of the given subcommand(s)" } else { vec_get(g.kids, i).about }
+}
+
+// The group's help: long for `--help` and `help`, short for `-h` and a missing command.
+pub fn grp_help(g: Group, use_long: Bool) -> Str {
+    let names = names_of(g)
+    let mut longest = 0
+    for i in 0..strs_len(names) {
+        if str_len(strs_get(names, i)) > longest { longest = str_len(strs_get(names, i)) }
+    }
+    let long = use_long && g.long_about != ""
+    let out = strs_new()
+    strs_push(out, (if long { g.long_about } else { g.about }) + cli_nl() + cli_nl())
+    strs_push(out, "Usage: nazm " + g.name + " <COMMAND>" + cli_nl() + cli_nl() + "Commands:" + cli_nl())
+    for i in 0..strs_len(names) {
+        let name = strs_get(names, i)
+        strs_push(out, "  " + name + cli_spaces(longest + 2 - str_len(name)) + about_of(g, i) + cli_nl())
+    }
+    strs_push(out, cli_nl() + "Options:" + cli_nl())
+    if long {
+        strs_push(out, "  -h, --help" + cli_nl() + "          Print help (see a summary with '-h')" + cli_nl())
+    } else if g.long_about != "" {
+        strs_push(out, "  -h, --help  Print help (see more with '--help')" + cli_nl())
+    } else {
+        strs_push(out, "  -h, --help  Print help" + cli_nl())
+    }
+    str_join(out, "")
+}
+
+fn show(io: IoCap, text: Str) -> Int {
+    print(text)
+    exit_with(0)
+    0
+}
+
+fn fail(io: IoCap, g: Group, text: Str, used: Str) -> Int {
+    let shown = if used == "" { "" } else { used + " " }
+    cli_fail(io, text + cli_nl() + cli_nl() + "Usage: nazm " + g.name + " " + shown + "<COMMAND>")
+}
+
+fn unrecognized(io: IoCap, g: Group, name: Str, suggest: Bool) -> Int {
+    let mut text = "unrecognized subcommand '" + name + "'"
+    if suggest {
+        let names = names_of(g)
+        let mut best = ""
+        let mut best_score = 0.0
+        for i in 0..strs_len(names) {
+            let score = cli_jaro(name, strs_get(names, i))
+            if score > 0.7 && (best == "" || score >= best_score) {
+                best = strs_get(names, i)
+                best_score = score
+            }
+        }
+        if best != "" { text = text + cli_nl() + cli_nl() + "  tip: a similar subcommand exists: '" + best + "'" }
+    }
+    fail(io, g, text, "")
+}
+
+fn missing(io: IoCap, g: Group) -> Int {
+    eprint(grp_help(g, false))
+    exit_with(5)
+    0
+}
+
+fn index_of(g: Group, name: Str) -> Int {
+    let names = names_of(g)
+    for i in 0..strs_len(names) {
+        if strs_get(names, i) == name { return i }
+    }
+    0 - 1
+}
+
+// `nazm GROUP help [COMMAND]...`, its names from argument `k`.
+pub fn grp_help_command(io: IoCap, g: Group, k: Int) -> Int {
+    if k >= args_count() { show(io, grp_help(g, true)) }
+    let name = arg(k)
+    let i = index_of(g, name)
+    if i < 0 { unrecognized(io, g, name, false) }
+    if name == "help" {
+        if k + 1 < args_count() {
+            eprint("error: unrecognized subcommand '" + arg(k + 1) + "'" + cli_nl() + cli_nl() + "Usage: nazm " + g.name + " help [COMMAND]..." + cli_nl())
+            exit_with(5)
+        }
+        show(io, "Print this message or the help of the given subcommand(s)" + cli_nl() + cli_nl() + "Usage: nazm " + g.name
+                + " help [COMMAND]..." + cli_nl() + cli_nl() + "Arguments:" + cli_nl() + "  [COMMAND]...  Print help for the subcommand(s)" + cli_nl())
+    }
+    let c = vec_get(g.kids, i)
+    if k + 1 < args_count() {
+        cli_fail(io, "unrecognized subcommand '" + arg(k + 1) + "'" + cli_nl() + cli_nl() + "Usage: " + cli_usage_no_title(c, ints_new()))
+    }
+    show(io, cli_help(c, true))
+}
+
+// Read the group's own commands from argument `k` on: the index of the one to run (its arguments
+// begin after it), or help or a usage error and the exit that goes with it.
+pub fn grp_route(io: IoCap, g: Group, k: Int) -> Int {
+    let n = args_count()
+    if k >= n { missing(io, g) }
+    let s = arg(k)
+    if s == "--" {
+        if k + 1 >= n { missing(io, g) }
+        if index_of(g, arg(k + 1)) >= 0 {
+            fail(io, g, "unexpected argument '" + arg(k + 1) + "' found" + cli_nl() + cli_nl() + "  tip: subcommand '" + arg(k + 1)
+                    + "' exists; to use it, remove the '--' before it", "")
+        }
+        unrecognized(io, g, arg(k + 1), true)
+    } else if str_len(s) > 2 && cli_starts(s, "--") {
+        let body = str_slice(s, 2, str_len(s))
+        let mut eq = 0 - 1
+        for j in 0..str_len(body) {
+            if eq < 0 && str_byte(body, j) == 61 { eq = j }
+        }
+        let name = if eq >= 0 { str_slice(body, 0, eq) } else { body }
+        if name == "help" {
+            if eq >= 0 {
+                fail(io, g, "unexpected value '" + str_slice(body, eq + 1, str_len(body)) + "' for '--help' found; no more were expected", "--help")
+            }
+            show(io, grp_help(g, true))
+        }
+        let similar = if cli_jaro(name, "help") > 0.7 { "--help" } else { "" }
+        let mut text = "unexpected argument '--" + name + "' found"
+        if similar != "" { text = text + cli_nl() + cli_nl() + "  tip: a similar argument exists: '" + similar + "'" }
+        fail(io, g, text, similar)
+    } else if str_len(s) > 1 && cli_starts(s, "-") && !cli_starts(s, "--") {
+        let ch = str_slice(s, 1, 2)
+        if ch == "h" { show(io, grp_help(g, false)) }
+        let mut w = 1
+        let b = str_byte(s, 1)
+        if b >= 240 { w = 4 } else if b >= 224 { w = 3 } else if b >= 192 { w = 2 }
+        fail(io, g, "unexpected argument '-" + str_slice(s, 1, 1 + w) + "' found", "")
+    }
+    let i = index_of(g, s)
+    if i < 0 { unrecognized(io, g, s, true) }
+    if s == "help" { grp_help_command(io, g, k + 1) }
+    i
+}

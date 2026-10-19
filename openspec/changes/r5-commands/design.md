@@ -182,7 +182,7 @@ options: none is the long help, a command its `--help`, `help help` its own text
 a command that has no commands of its own is `unrecognized subcommand` under that command's usage
 (under `help`'s own, without the closing line). The commands and their `about`s are a table in
 `nazm.nz`, in `cli.rs`'s order with `help` last; a doc comment changed in `cli.rs` shows as a
-difference in `tests/args/nazm.txt`'s lines. `fmt`, `init`, `check`, `doc`, `fix`, `lsp` and `test` are carried; any other
+difference in `tests/args/nazm.txt`'s lines. `fmt`, `init`, `check`, `doc`, `fix`, `lsp`, `test` and `patch` are carried; any other
 command, or `help` of one, is `nazm: not carried: nazm CMD`, status 6.
 
 **D13 — `doc` is `apidoc.rs` over R2's facts; `check` runs on the same interface.**
@@ -354,6 +354,31 @@ the exit statuses. An `@cfg` that names a feature, a package or a profile (it as
 refused. `run.sh test` runs every tracked recorded case (`--interpret-only`, text and `--json`),
 the conformance corpus and a fixture whole (compiled legs included, `--summary-json`, `--filter`,
 `--fuzz`), and `tests/args/test.txt` the command lines.
+
+**D18 — `patch` carries `apply` and the command line; a plan waits for the snapshot (task 7.2,
+2026-10-19).** `toolchain/commands/patch.nz` is `patch.rs` for `nazm patch apply PLAN [--base DIR]`:
+the plan read through `jsonin.nz` (the JSON reader `lsp.nz` already had, moved out and shared; it
+also writes a value back as `to_string_pretty` does, keys sorted), checked as `apply` checks it —
+`schema` and `status`, each file's path inside the base (no `..`, no root, no leading `.`), readable,
+its BLAKE3 digest the plan's, UTF-8, each edit's four fields, and its bytes at `start..end` the
+`expected` ones — all before any file is written, then each file written through
+`PATH.nz.nazm-apply` and a rename, `N file(s) written` last. A plan that is not JSON (the reason is
+serde's, word for word), and edits that overlap so that `replace_range` would panic, are refused
+with status 6. The group's own command line is clap's, ported once for every command with commands
+of its own (`toolchain/commands/group.nz`: `help` and `-h` in short and long form, a missing or
+unknown command with its similar one, `help CMD`, `--` before a command), and `cli.nz` gained the
+required option and `usize`.
+
+`patch rename` and `patch fix` read their arguments and the root as `open_from_disk` reads it (a
+root that cannot be read is `nazm patch: ROOT: REASON`, status 4) and then refuse: every plan
+`nazm.patch/1` prints is bound to the root's `nazm.snapshot/3` — a BLAKE3 over digests of each
+definition's dependencies, related types, references, callers, callees, effects and provenance —
+and `compiler/facts.nz` publishes neither the reference index of every occurrence of a
+definition, nor the call graph, nor the provenance summaries. Until R2 publishes them the plan,
+and with it the `unavailable` reasons the service gives after binding (`not_in_compilation`,
+`incomplete_compilation`, `out_of_range`, `no_such_fix`), cannot be said exactly, so none is guessed.
+`tests/args/patch.txt` runs the command lines and the plans `apply` carries out or refuses, in a
+fixture whose plan is the reference's own.
 
 ## Risks / Trade-offs
 

@@ -71,6 +71,11 @@
       the checker's stops, 1 not UTF-8), 17 of them applied on a copy; `tests/args/fix.txt` 22 of 23
       agree, 1 refused (a directory as the root, which `compiler/load.nz` traps on)
 - [ ] 7.2 The plan form, `nazm patch fix` (`--root`, `--file`, `--byte`, `--fix`), with `patch`
+      (design D18, 2026-10-19), part done: `patch.nz` carries the whole command line (`group.nz`) and
+      `patch apply` (plan read, digests, expected bytes, all-or-nothing writes); `tests/args/patch.txt`
+      63 command lines, 63 agree. `patch fix` and `patch rename` read the root and refuse (status 6):
+      their plans are bound to `nazm.snapshot/3`, whose reference index, call graph and provenance
+      summaries `compiler/facts.nz` does not publish (hand-back to R2)
 
 ## 8. `lsp`
 - [x] 8.1 The Language Server over stdin/stdout, compared by scripted sessions (design D16,

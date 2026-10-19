@@ -39,6 +39,8 @@
 #         `--filter` and `--fuzz`. Both sides start the reference as the legs' driver
 #         (NAZM_TEST_DRIVER; design D17).
 #
+#   (`patch` has no part of its own: its command lines, with the plans it applies, are tests/args/patch.txt.)
+#
 # NAZM_PORT names a port already built from this checkout, instead of building one.
 #
 # Prints one summary line per part, after the names of the first differences. Exits 1 when
@@ -272,6 +274,29 @@ fixture() {
       printf 'fn main() -> Int { 0 }\n' > "$dir/sub/inner.nz"
       printf '0\n' > "$dir/sub/inner.expected"
       ;;
+    patch)
+      # mut.nz has one fix; plan.json is the reference's plan for it, and the others are variants of
+      # it that `apply` must refuse (or, for plan.json, twice.json and dot.json, carry out).
+      printf 'fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x\n}\n' > "$dir/mut.nz"
+      mkdir -p "$dir/sub"
+      printf 'fn main() -> Int { 0 }\n' > "$dir/sub/b.nz"
+      (cd "$dir" && "$ref" patch fix --root mut.nz --file mut.nz --byte 38 --json > plan.json)
+      (cd "$dir" && {
+        sed 's/"status":"available"/"status":"unavailable"/' plan.json > bad.json
+        sed 's/"digest":"./"digest":"z/' plan.json > tamper.json
+        sed 's|"path":"mut.nz"|"path":"../mut.nz"|' plan.json > escape.json
+        sed 's|"path":"mut.nz"|"path":"/etc/hosts"|' plan.json > abs.json
+        sed 's|"path":"mut.nz"|"path":"./mut.nz"|' plan.json > dot.json
+        sed 's/"expected":"x"/"expected":"y"/' plan.json > stale.json
+        sed 's/"replacement"/"replacemen"/' plan.json > malformed.json
+        sed 's/"start":27/"start":-1/' plan.json > negative.json
+        sed 's/"start":27/"start":27.0/' plan.json > float.json
+        sed 's/"end":28/"end":20/' plan.json > backwards.json
+        sed 's/"files":\[\(.*\)\],"validation"/"files":[\1,\1],"validation"/' plan.json > twice.json
+        printf '{}\n' > empty.json
+        printf '[1,2]\n' > array.json
+      })
+      ;;
     init)
       mkdir -p "$dir/empty" "$dir/full/sub"
       printf 'kept\n' > "$dir/full/keep.txt"
@@ -300,7 +325,7 @@ record() {
 
 part_args() {
   n=0 agree=0 differ=0 refused=0
-  for cmd in fmt init check doc fix lsp test nazm; do
+  for cmd in fmt init check doc fix lsp test patch nazm; do
     file="$root/toolchain/commands/tests/args/$cmd.txt"
     [ -f "$file" ] || continue
     while IFS= read -r line; do
