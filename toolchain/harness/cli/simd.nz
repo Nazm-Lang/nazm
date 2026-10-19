@@ -1,4 +1,4 @@
-// N66: vectorisation under checked arithmetic (`docs/architecture.md` §7.68). Ported from
+// N66: vectorisation under checked arithmetic (`docs/internal/architecture.md` §7.68). Ported from
 // `crates/nazm-cli/tests/simd.rs` (R7).
 //
 // `ints_sum_from` gives the ordered checked sum — the same value as a scalar loop for every length

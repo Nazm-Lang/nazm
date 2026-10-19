@@ -1,4 +1,4 @@
-//! R1e, S1: `file_walk` in `@std/file` (`docs/spec.md`, *The standard library*).
+//! R1e, S1: `file_walk` in `@std/file` (`docs/user/spec.md`, *The standard library*).
 //!
 //! A tree with nested and empty directories, names whose byte order differs from a depth-first
 //! listing's (`a.txt` sorts before `a/x`) and a capital letter,

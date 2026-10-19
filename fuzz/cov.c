@@ -1,4 +1,4 @@
-/* Edge coverage for the Nazm fuzzer (N93, docs/architecture.md §7.94).
+/* Edge coverage for the Nazm fuzzer (N93, docs/internal/architecture.md §7.94).
  *
  * The Rust code under test is compiled with LLVM's SanitizerCoverage in trace-pc-guard mode:
  * every edge calls `__sanitizer_cov_trace_pc_guard` with a pointer to its own guard. These are

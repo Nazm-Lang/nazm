@@ -1,6 +1,6 @@
 //! N43: the native runtime, tested directly.
 //!
-//! `docs/architecture.md` §7.45. The runtime's text (`nazm_lir::emit_runtime`, every part) is
+//! `docs/internal/architecture.md` §7.45. The runtime's text (`nazm_lir::emit_runtime`, every part) is
 //! compiled by clang with a C harness and nothing else — no Nazm program, no entry — and the
 //! harness calls its entry points one by one: string backings, sequences, sequences of strings
 //! and of records, channels across threads, the thread-local failure state, and integer

@@ -71,4 +71,4 @@ They do **not** establish that any branch survived optimisation. Every program i
 subset has constant inputs — there are no parameters and no I/O — so `-O2` may evaluate
 the whole program at compile time, comparisons and branches included. An earlier
 suggestion that comparisons would defeat folding was wrong and has been corrected in
-`docs/roadmap.md`. A value unknown at compile time arrives with function parameters.
+`docs/user/roadmap.md`. A value unknown at compile time arrives with function parameters.

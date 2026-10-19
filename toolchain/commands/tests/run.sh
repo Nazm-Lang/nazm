@@ -6,7 +6,7 @@
 #
 # The Nazm `nazm` (toolchain/commands/nazm.nz, which dispatches to CMD.nz) is built by the checkout's
 # `nazm` ($NAZM, with a heap limit of at most 2 GiB) and run as the reference is run, `nazm CMD
-# ARGS`. It runs thousands of times, in parallel, so this is contained work (R6, `docs/runbook.md`):
+# ARGS`. It runs thousands of times, in parallel, so this is contained work (R6, `docs/internal/runbook.md`):
 #
 #   cargo xtask contained run 'cargo build --locked -p nazm-cli && NAZM=target/debug/nazm sh toolchain/commands/tests/run.sh'
 #
@@ -1152,22 +1152,23 @@ part_docs() {
   for variant in missing nonutf8 duplicate broken-link fence setext anchor no-title grammar generated empty-identity detached lettered; do
     n=$((n + 1))
     d="$work/dv/$variant"
-    mkdir -p "$d/docs"
-    cp "$root"/docs/*.md "$root/docs/grammar.ebnf" "$d/docs/"
+    mkdir -p "$d/docs/user" "$d/docs/internal"
+    cp "$root"/docs/user/*.md "$root/docs/user/grammar.ebnf" "$d/docs/user/"
+    cp "$root"/docs/internal/*.md "$d/docs/internal/"
     case $variant in
-      missing) rm "$d/docs/mcp.md" ;;
-      nonutf8) printf '\377\n' >> "$d/docs/runbook.md" ;;
-      duplicate) printf '\n## Settled\n\ntext\n' >> "$d/docs/spec.md" ;;
-      broken-link) printf '\n[x](spec.md#nope-nothing)\n' >> "$d/docs/runbook.md" ;;
-      fence) printf '\n```\ncode\n' >> "$d/docs/mcp.md" ;;
-      setext) printf '\nsome text\nTitle\n=====\n' >> "$d/docs/bootstrap.md" ;;
-      anchor) printf '\n<!-- id: foo -->\n' >> "$d/docs/mcp.md" ;;
-      no-title) { printf 'x\n'; cat "$root/docs/runbook.md"; } > "$d/docs/runbook.md" ;;
-      grammar) printf '\nbad line\n' >> "$d/docs/grammar.ebnf" ;;
-      generated) sed 's/generated from docs\/grammar.ebnf: begin/generated: begin/' "$root/docs/guide.md" > "$d/docs/guide.md" ;;
-      empty-identity) printf '\n## —\n\ntext\n' >> "$d/docs/mcp.md" ;;
-      detached) printf '\n(* a comment\n   alone *)\n\n(* another *)\nzz = "a" ;\n' >> "$d/docs/grammar.ebnf" ;;
-      lettered) printf '\n## A1 — a lettered label\n\ntext\n\n## A1 — the same again\n\ntext\n' >> "$d/docs/mcp.md" ;;
+      missing) rm "$d/docs/user/mcp.md" ;;
+      nonutf8) printf '\377\n' >> "$d/docs/internal/runbook.md" ;;
+      duplicate) printf '\n## Settled\n\ntext\n' >> "$d/docs/user/spec.md" ;;
+      broken-link) printf '\n[x](spec.md#nope-nothing)\n' >> "$d/docs/internal/runbook.md" ;;
+      fence) printf '\n```\ncode\n' >> "$d/docs/user/mcp.md" ;;
+      setext) printf '\nsome text\nTitle\n=====\n' >> "$d/docs/internal/bootstrap.md" ;;
+      anchor) printf '\n<!-- id: foo -->\n' >> "$d/docs/user/mcp.md" ;;
+      no-title) { printf 'x\n'; cat "$root/docs/internal/runbook.md"; } > "$d/docs/internal/runbook.md" ;;
+      grammar) printf '\nbad line\n' >> "$d/docs/user/grammar.ebnf" ;;
+      generated) sed 's/generated from docs\/user\/grammar.ebnf: begin/generated: begin/' "$root/docs/user/guide.md" > "$d/docs/user/guide.md" ;;
+      empty-identity) printf '\n## —\n\ntext\n' >> "$d/docs/user/mcp.md" ;;
+      detached) printf '\n(* a comment\n   alone *)\n\n(* another *)\nzz = "a" ;\n' >> "$d/docs/user/grammar.ebnf" ;;
+      lettered) printf '\n## A1 — a lettered label\n\ntext\n\n## A1 — the same again\n\ntext\n' >> "$d/docs/user/mcp.md" ;;
     esac
     for form in "--index --json" "--section spec" "--section mcp:x --json"; do
       # shellcheck disable=SC2086

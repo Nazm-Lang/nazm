@@ -1,4 +1,4 @@
-//! Restriction profiles on the command line (N47, `docs/architecture.md` §7.49).
+//! Restriction profiles on the command line (N47, `docs/internal/architecture.md` §7.49).
 //!
 //! The profiles in force are the one `--profile` names and every one a package manifest in the
 //! build requires; their rules are evaluated over the facts a full check settles

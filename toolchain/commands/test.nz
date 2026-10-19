@@ -31,7 +31,7 @@ pub fn test_cli() -> Cli {
             + "existed. Each case runs interpreted **and** compiled, and both must produce the recorded output.")
     cli_positional(c, "PATHS", true, true, true, "Files or directories. A directory is scanned for `.nz` files, and any without a "
             + "`.expected` beside them are reported rather than ignored", "")
-    let json = cli_flag(c, "", "json", "One JSON object per case, on stdout. See `docs/diagnostics.md`", "")
+    let json = cli_flag(c, "", "json", "One JSON object per case, on stdout. See `docs/user/diagnostics.md`", "")
     cli_flag(c, "", "interpret-only", "Skip the native leg. For a machine with no `clang`", "")
     let summary = cli_flag(c, "", "summary-json", "One `nazm.test-summary/1` object on stdout, and nothing else on either stream: "
             + "counts, and every case that did not pass — no passed names, no output. The exit status is unchanged. `--json` still "

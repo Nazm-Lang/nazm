@@ -1,4 +1,4 @@
-//! R1a: ordering and hashing are derived (`docs/spec.md`, *Ordering and hashing are derived*),
+//! R1a: ordering and hashing are derived (`docs/user/spec.md`, *Ordering and hashing are derived*),
 //! and a `Box` or `Chain` compares by what it holds.
 //!
 //! Every implementation — the interpreter, the LIR oracle, LLVM at `-O0` and `-O2`, and Cranelift

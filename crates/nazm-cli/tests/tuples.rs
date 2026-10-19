@@ -1,5 +1,5 @@
 //! R1a: tuples — `(A, B)` types, `(a, b)` values, `t.0` and patterns that take them apart
-//! (`docs/spec.md`, *Tuples*).
+//! (`docs/user/spec.md`, *Tuples*).
 //!
 //! Every implementation — the interpreter, the LIR oracle, LLVM at `-O0` and `-O2`, and Cranelift
 //! — is asked for what the section's rules work out by hand, with every allocation reclaimed;

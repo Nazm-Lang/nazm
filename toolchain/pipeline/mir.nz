@@ -1,5 +1,5 @@
 // MIR: each concrete function as basic blocks whose copies, moves, drops, scope joins and failure
-// edges are written out. `docs/architecture.md` §7.42 is the law; this is the representation the
+// edges are written out. `docs/internal/architecture.md` §7.42 is the law; this is the representation the
 // lowering (`lower.nz`) builds and the text (`text.nz`), the validator and LIR read.
 
 /// A literal. A string's bytes are its `Str`; any other numeric type's value is its canonical

@@ -136,7 +136,7 @@ fn main() -> ExitCode {
         }
         Some("guide") => match guide::write() {
             Ok(()) => {
-                println!("docs/guide.md rewritten from docs/grammar.ebnf");
+                println!("docs/user/guide.md rewritten from docs/user/grammar.ebnf");
                 ExitCode::SUCCESS
             }
             Err(e) => {
@@ -172,7 +172,7 @@ fn main() -> ExitCode {
             let rest: Vec<String> = args.collect();
             run_contained(&rest)
         }
-        // One bounded-heap stage on the macOS host (docs/runbook.md, R6): checked, not declared.
+        // One bounded-heap stage on the macOS host (docs/internal/runbook.md, R6): checked, not declared.
         Some("host-run") => {
             let rest: Vec<String> = args.collect();
             host_run::host_run(&rest)
@@ -214,12 +214,12 @@ fn help() {
            check-sema      no session-local id can reach a persistent interface\n  \
            check-cache     a check key still covers everything checking reads\n  \
            check-symbols   a native symbol comes from identity, not from position\n  \
-           check-guide     docs/guide.md is what docs/grammar.ebnf produces\n  \
+           check-guide     docs/user/guide.md is what docs/user/grammar.ebnf produces\n  \
            gate-plan PATHS which MILESTONE lifecycle evidence the changed paths call for;\n  \
                            an unknown path, or none, calls for all of it\n  \
            check-corpus    the documentation corpus sections: every document there, every\n  \
                            id unique, every link resolved, the grammar parsed\n  \
-           guide           rewrite docs/guide.md from docs/grammar.ebnf\n  \
+           guide           rewrite docs/user/guide.md from docs/user/grammar.ebnf\n  \
            evidence DIR    write DIR/sbom.json and DIR/index.json (every file's BLAKE3); --verify checks them\n  \
            workspace-tests every test binary of the workspace, scheduled; --host-safe leaves\n  \
                            out, by name, each that builds compiler stages (CI's subset)\n  \

@@ -1,5 +1,5 @@
 // R1.5, D11: `nazm run` compiles with Cranelift and runs the executable; `nazm run --interpret`
-// is the interpreter (`docs/spec.md`, *`nazm run` compiles*). Ported from
+// is the interpreter (`docs/user/spec.md`, *`nazm run` compiles*). Ported from
 // `crates/nazm-cli/tests/run_compiled.rs` (R7).
 //
 // The two are asked the same questions and must give the same answers: each stream, the memory

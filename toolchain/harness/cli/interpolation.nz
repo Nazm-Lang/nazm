@@ -1,4 +1,4 @@
-// R1a, L4: string interpolation (`docs/spec.md`, *String interpolation*). It means the same in every
+// R1a, L4: string interpolation (`docs/user/spec.md`, *String interpolation*). It means the same in every
 // implementation and is reclaimed; a built-in outside its range stops the program everywhere; and
 // what an interpolation refuses, by which code, once. Ported from
 // `crates/nazm-cli/tests/interpolation.rs` (R7).

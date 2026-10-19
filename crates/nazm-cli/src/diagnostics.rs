@@ -4,7 +4,7 @@
 //! The root is analysed from disk exactly as `nazm check` would load it — as a module, as the
 //! language server analyses it — the answer is derived and everything is dropped. `nazm
 //! check --json` and its `nazm.diagnostic/1` stream are untouched by this command.
-//! `docs/architecture.md` §7.32 says what an index and a detail hold.
+//! `docs/internal/architecture.md` §7.32 says what an index and a detail hold.
 
 use std::path::Path;
 use std::process::ExitCode;

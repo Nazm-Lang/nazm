@@ -1,4 +1,4 @@
-//! R1d, P3: streaming standard input (`docs/spec.md`, *Files and handles*, **Lines of standard
+//! R1d, P3: streaming standard input (`docs/user/spec.md`, *Files and handles*, **Lines of standard
 //! input**; `@std/io`).
 //!
 //! What a whole run shows: a header's lines, the frame they announce, a line longer than the

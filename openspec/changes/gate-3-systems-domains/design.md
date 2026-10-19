@@ -1,6 +1,6 @@
 ## Context
 
-`docs/systems-domains.md` is the design: what Gate 3 starts from at `3a2e3ba`, the rules every part
+`docs/internal/systems-domains.md` is the design: what Gate 3 starts from at `3a2e3ba`, the rules every part
 follows (one semantic language, platform behaviour only in the runtime's platform layer, evidence
 labelled by where it ran), and a decision per part with the reason it is not a second mechanism.
 
@@ -13,7 +13,7 @@ frameworks, chain host interfaces); Microsoft's CRT/SDK in Gate 3.
 
 ## Decisions
 
-As `docs/systems-domains.md` records, including the user's of 2026-10-10: Windows through Wine in
+As `docs/internal/systems-domains.md` records, including the user's of 2026-10-10: Windows through Wine in
 Docker, never called Windows-host evidence; the Android NDK in `target/`; iOS after Xcode.
 
 ## Risks / Trade-offs

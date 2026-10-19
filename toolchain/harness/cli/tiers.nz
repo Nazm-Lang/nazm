@@ -1,5 +1,5 @@
 // N99: the execution tiers agree — the REPL, `nazm run`, and native builds by LLVM and Cranelift
-// (`docs/architecture.md` §7.100). A REPL session defines functions and evaluates expressions; each
+// (`docs/internal/architecture.md` §7.100). A REPL session defines functions and evaluates expressions; each
 // expression, with the session's definitions, is then a program run by the interpreter and built
 // natively by both backends. Every tier gives the same value, or fails with the same code. Ported
 // from `crates/nazm-cli/tests/tiers.rs` (R7).

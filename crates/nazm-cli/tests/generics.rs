@@ -1,7 +1,7 @@
 //! N11, natively: what monomorphisation may and may not do.
 //!
 //! `nazm run` is parametric and `nazm build` specialises — one native function per
-//! concrete list of type arguments (`docs/architecture.md` §7.12). These tests hold the
+//! concrete list of type arguments (`docs/internal/architecture.md` §7.12). These tests hold the
 //! places where that is visible: the recursion rule applies to instances as it does to
 //! every function, an instance family that would never end is refused rather than
 //! discovered by running out of memory, and a failure inside an instance is reported at the

@@ -1,4 +1,4 @@
-// N68: layout specialisation — a `Vec` of records, one array per field (`docs/architecture.md`
+// N68: layout specialisation — a `Vec` of records, one array per field (`docs/internal/architecture.md`
 // §7.70). Ported from `crates/nazm-cli/tests/layout.rs` (R7).
 //
 // `--layout soa` changes no answer and no failure under both optimisation levels and on

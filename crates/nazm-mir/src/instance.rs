@@ -6,7 +6,7 @@
 //! interpreted as itself. The LLVM backend **monomorphises** — one native function per
 //! concrete type-argument list — because its values have concrete layouts and its copy and
 //! release code is type-specific. That is a decision about this backend, not about the
-//! language (`docs/architecture.md` §7.12), and this module is where it is made.
+//! language (`docs/internal/architecture.md` §7.12), and this module is where it is made.
 //!
 //! # The plan is global, deterministic, and finite by construction
 //!
@@ -21,7 +21,7 @@
 //! instances, their names and their order are functions of the program alone.
 //!
 //! Moved here from `nazm-lir` by N40, unchanged in what it plans: MIR is post-instantiation
-//! (`docs/architecture.md` §7.42), so the decision of which instances exist belongs to the
+//! (`docs/internal/architecture.md` §7.42), so the decision of which instances exist belongs to the
 //! level that creates them, and a backend reads the result.
 //!
 //! Finite because the only way an instance family grows without bound is a generic

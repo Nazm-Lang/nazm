@@ -1,5 +1,5 @@
-//! Gate 3: accelerator providers and float kernels (`docs/spec.md`, *Accelerator kernels*,
-//! *Providers*; `docs/systems-domains.md` Part L).
+//! Gate 3: accelerator providers and float kernels (`docs/user/spec.md`, *Accelerator kernels*,
+//! *Providers*; `docs/internal/systems-domains.md` Part L).
 //!
 //! The CPU provider runs on any host with `clang` and threads, so these tests need no device: a
 //! kernel's one source text, compiled as C and run on a thread pool, agrees with the interpreter for

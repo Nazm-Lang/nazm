@@ -4,7 +4,7 @@
 //! native build contains — every generic instance included — as basic blocks with its copies,
 //! moves, drops, scope joins and failure edges written out, and the validator's verdict on it.
 //! Only for a program that checks, reached the way `nazm build` reaches it. Debug output, not an
-//! interchange format; `docs/architecture.md` §7.42 says what the version promises.
+//! interchange format; `docs/internal/architecture.md` §7.42 says what the version promises.
 
 use std::path::Path;
 use std::process::ExitCode;

@@ -1,4 +1,4 @@
-//! N39: Core IR, the one lowering of a checked program (`docs/architecture.md` §7.41).
+//! N39: Core IR, the one lowering of a checked program (`docs/internal/architecture.md` §7.41).
 //!
 //! The claims held here, each against the representation itself rather than against what a
 //! backend later does with it:
@@ -880,7 +880,7 @@ fn large_program(n: usize) -> String {
 
 /// What lowering to Core IR and verifying it add to parsing and checking, best of three of
 /// each. Checking is timed separately and subtracted: its own cost grows faster than linearly
-/// in the number of bindings one function has (`docs/performance.md`, N39), which is the
+/// in the number of bindings one function has (`docs/internal/performance-log.md`, N39), which is the
 /// checker's, predates Core IR, and is not what these tests are about.
 fn lowering_time(src: &str) -> std::time::Duration {
     let best = |f: &dyn Fn()| {

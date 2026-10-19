@@ -33,7 +33,7 @@ Rust toolchain's, byte for byte.
 ### New Capabilities
 - `native-pipeline-in-nazm`: the observable requirements of the stage — what it reads, what it
   writes, and how it is held to the Rust toolchain. Archived with `--skip-specs`; the normative text
-  lands in `docs/architecture.md` §7.42/§7.82/§7.106 when the coordinator folds this change in.
+  lands in `docs/internal/architecture.md` §7.42/§7.82/§7.106 when the coordinator folds this change in.
 
 ### Modified Capabilities
 None.

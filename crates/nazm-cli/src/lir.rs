@@ -1,6 +1,6 @@
 //! `nazm lir` — print what LIR decided for a checked program, `nazm.lir/2` (N81, N105).
 //!
-//! `docs/architecture.md` §7.82. One deterministic line of JSON: the target's data layout, and
+//! `docs/internal/architecture.md` §7.82. One deterministic line of JSON: the target's data layout, and
 //! for every unit its functions' symbols and linkage, what it declares from elsewhere, every
 //! record's and enum's byte layout on that target, and which types own anything. The tables are
 //! the ones both backends read, validated as every native build validates them. What LIR does not

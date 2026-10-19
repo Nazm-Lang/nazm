@@ -1,4 +1,4 @@
-// The cybersecurity reference workload (Gate 3, `docs/systems-domains.md` Part K): a TCP service
+// The cybersecurity reference workload (Gate 3, `docs/internal/systems-domains.md` Part K): a TCP service
 // held to the `cyber` profile, as a locked package whose build is recorded, reproduced and attested
 // (`domains.rs`).
 //

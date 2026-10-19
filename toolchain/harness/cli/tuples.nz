@@ -1,4 +1,4 @@
-// R1a: tuples (`docs/spec.md`, *Tuples*). Ported from `crates/nazm-cli/tests/tuples.rs` (R7).
+// R1a: tuples (`docs/user/spec.md`, *Tuples*). Ported from `crates/nazm-cli/tests/tuples.rs` (R7).
 //
 // Every implementation answers what the section's rules work out by hand, with every allocation
 // reclaimed; what a tuple refuses, by which code, one mistake one error; a parenthesised type,

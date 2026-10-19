@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Every v1 domain claim has executable evidence
-Every domain `docs/v1-domain-matrix.md` marks VERIFIED SHALL have a reference workload that was
+Every domain `docs/internal/v1-domain-matrix.md` marks VERIFIED SHALL have a reference workload that was
 built and executed — natively, under Rosetta, in an emulated container, under Wine or under QEMU —
 and the row SHALL name which.
 

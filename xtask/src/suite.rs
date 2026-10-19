@@ -84,7 +84,7 @@ pub(crate) fn binaries(stdout: &str) -> Vec<Binary> {
 }
 
 /// Whether this binary builds and runs generated compiler stages, which only the contained
-/// runner may do (`docs/runbook.md`, *Mandatory containment*).
+/// runner may do (`docs/internal/runbook.md`, *Mandatory containment*).
 ///
 /// Read from the guard itself rather than from a list: a target whose own source calls
 /// `require_containment(` is one, so a new stage-building test is recognised the day it is

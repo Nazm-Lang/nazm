@@ -1,4 +1,4 @@
-//! Files and handles (Gate 2, `docs/spec.md`, *Files and handles*): each `os_` built-in as the
+//! Files and handles (Gate 2, `docs/user/spec.md`, *Files and handles*): each `os_` built-in as the
 //! runtime call it means. A handle is a word, a path a `Str`'s pointer and length, a buffer a
 //! `Bytes`'s; every failure the system reports comes back as a status, so nothing here traps
 //! but `os_stat` or `os_lstat` handed a buffer too short for its answer (`N0405`).

@@ -1,4 +1,4 @@
-//! The dependency-source policy (Q1, `docs/security-qualification.md`, *Supply chain*): every
+//! The dependency-source policy (Q1, `docs/internal/security-qualification.md`, *Supply chain*): every
 //! crate the compiler is built from is either this workspace's own or comes from crates.io with
 //! the checksum Cargo verifies, read off `Cargo.lock`. `deny.toml` states the same policy for
 //! `cargo deny`, which needs a network for its advisory database; this check needs nothing, so it

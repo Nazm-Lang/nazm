@@ -162,11 +162,16 @@ pub fn target_name(s: &str) -> String {
     s.rsplit([':', '/', ' ']).next().unwrap_or(s).to_owned()
 }
 
-/// A citation as `document:id`: `spec.md#return` and `docs/spec.md:return` are `spec:return`.
+/// A citation as `document:id`: `spec.md#return` and `docs/user/spec.md:return` are `spec:return`.
 #[must_use]
 pub fn citation(s: &str) -> String {
     let s = s.trim().trim_matches('`').trim().to_lowercase();
-    let s = s.strip_prefix("docs/").unwrap_or(&s).to_owned();
+    let s = s.strip_prefix("docs/").unwrap_or(&s);
+    let s = s
+        .strip_prefix("user/")
+        .or_else(|| s.strip_prefix("internal/"))
+        .unwrap_or(s)
+        .to_owned();
     s.replace(".md#", ":")
         .replace(".ebnf#", ":")
         .replace(".md:", ":")

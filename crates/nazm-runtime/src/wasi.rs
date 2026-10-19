@@ -1,4 +1,4 @@
-//! The WASI runtime and entry (Gate 3, `docs/spec.md`, *WASI*): `wasm32-wasip1` — WebAssembly with
+//! The WASI runtime and entry (Gate 3, `docs/user/spec.md`, *WASI*): `wasm32-wasip1` — WebAssembly with
 //! the WASI preview-1 system interface, one thread, and the outside reached only through its
 //! imports from `wasi_snapshot_preview1`.
 //!
@@ -1152,7 +1152,7 @@ bad_status:
 /// The reference host for Node's WASI (`DIR/wasi.mjs`): `node wasi.mjs module.wasm DIR [ARGS…]`
 /// runs the module with DIR preopened as `.` — the only directory it may reach — and the
 /// arguments after it; the module's own status is the process's.
-pub const HOST: &str = r#"// Written by nazm build for wasm32-wasip1 (Gate 3, docs/spec.md *WASI*).
+pub const HOST: &str = r#"// Written by nazm build for wasm32-wasip1 (Gate 3, docs/user/spec.md *WASI*).
 // The reference host: `node wasi.mjs module.wasm DIR [ARGS...]`. It preopens DIR as `.`, and
 // grants nothing else: no environment, no other directory.
 import { readFileSync } from 'node:fs';

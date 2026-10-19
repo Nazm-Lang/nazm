@@ -1,9 +1,9 @@
 //! `cargo xtask host-run`: the one thing besides the contained runner that may start a program
-//! written in Nazm on the macOS host (`docs/runbook.md`, *What may run on the host: one
+//! written in Nazm on the macOS host (`docs/internal/runbook.md`, *What may run on the host: one
 //! bounded-heap stage*; `openspec/changes/r6-host-qualification`, design decision 3).
 //!
 //! The rule it enforces is a ceiling from *inside*: a program built with `--heap-limit` counts
-//! every byte it asks for and ends with `N0406` past its limit (`docs/spec.md`, *A bounded
+//! every byte it asks for and ends with `N0406` past its limit (`docs/user/spec.md`, *A bounded
 //! heap*). So the runner does not trust a declaration; it reads the executable:
 //!
 //! - the counted heap is linked: the symbol `nz.heap_malloc` is in the file;

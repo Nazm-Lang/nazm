@@ -1,4 +1,4 @@
-// N96: the contract simulator on generated transaction sequences (`docs/architecture.md` §7.97).
+// N96: the contract simulator on generated transaction sequences (`docs/internal/architecture.md` §7.97).
 // Ported from `crates/nazm-cli/tests/contract_property.rs` (R7): the test that needs no VM. The
 // `#[ignore]`d comparisons with the EVM and WebAssembly start Docker and stay Rust (`design.md`).
 //

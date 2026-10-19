@@ -19,7 +19,7 @@
 //! answer or a signal would show it. Counters alone would not.
 //!
 //! Every case runs interpreted and compiled, and the two must agree on the value **and**
-//! on every counter — `docs/spec.md`'s memory constitution is about the language.
+//! on every counter — `docs/user/spec.md`'s memory constitution is about the language.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

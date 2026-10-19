@@ -1,4 +1,4 @@
-// R1, 5b.1, 5b.3 and 5b.5 (`docs/spec.md`, *What `main` holds, and how it ends*): hello world is
+// R1, 5b.1, 5b.3 and 5b.5 (`docs/user/spec.md`, *What `main` holds, and how it ends*): hello world is
 // one line and prints only what it prints; `main`'s result is the exit status everywhere; a function
 // with no result type returns nothing; what `main` holds is checked; a private function declares no
 // effects; and a build and `inspect` say what the program may touch. Ported from

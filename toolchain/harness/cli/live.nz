@@ -1,5 +1,5 @@
 // N65: the interactive tier — `nazm repl`, `nazm comptime`, `nazm reload-check`
-// (`docs/architecture.md` §7.67). Ported from `crates/nazm-cli/tests/live.rs` (R7).
+// (`docs/internal/architecture.md` §7.67). Ported from `crates/nazm-cli/tests/live.rs` (R7).
 //
 // A REPL session checks every edit as one program, so a redefinition reaches its callers and one
 // that breaks a caller is refused by the caller's name; comptime evaluates a parameterless pure

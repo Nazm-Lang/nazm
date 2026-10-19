@@ -32,7 +32,7 @@ pub enum TokenKind {
     IntTooLarge(String),
     /// A floating-point literal (Gate 2): digits, a `.` and digits, and/or an exponent, kept as
     /// written with any `_` removed. Its value — `Float64` or `Float32` — is decided where its
-    /// type is, so the lexer does not round it. `docs/general-purpose.md` §1.
+    /// type is, so the lexer does not round it. `docs/internal/general-purpose.md` §1.
     Float(String),
     Str(String),
     /// An interpolated string (R1a, L4): its text and holes, in order.
@@ -47,7 +47,7 @@ pub enum TokenKind {
     True,
     False,
     Mut,
-    /// `pub` — the one visibility keyword. See `docs/spec.md`.
+    /// `pub` — the one visibility keyword. See `docs/user/spec.md`.
     Pub,
     While,
     Break,
@@ -56,7 +56,7 @@ pub enum TokenKind {
     Use,
     Scope,
     Spawn,
-    /// `struct` — the declaration keyword for a record. `docs/spec.md` explains why the
+    /// `struct` — the declaration keyword for a record. `docs/user/spec.md` explains why the
     /// keyword and the semantic category are spelled differently.
     Struct,
     /// `enum` — the declaration keyword for a closed sum type. Reserved by name since
@@ -84,7 +84,7 @@ pub enum TokenKind {
     Comma,
     Colon,
     /// `.` — field projection, and the separator between an enum and one of its
-    /// variants. Never part of a number: `docs/spec.md` has no float.
+    /// variants. Never part of a number: `docs/user/spec.md` has no float.
     Dot,
     /// `..` — only between a `for` loop's bounds, `for i in a..b` (R1a). Before R1a two dots
     /// were two `Dot`s and always an error, so the token changes no valid program.
@@ -143,7 +143,7 @@ pub enum TokenKind {
     CaretEq,
     ShlEq,
     ShrEq,
-    /// `@` — the start of a declaration's attribute (Gate 2, `docs/general-purpose.md` §16).
+    /// `@` — the start of a declaration's attribute (Gate 2, `docs/internal/general-purpose.md` §16).
     At,
 
     Eof,
@@ -153,7 +153,7 @@ impl TokenKind {
     /// Every token the language has, one value per variant, with a placeholder payload
     /// for the three that carry one.
     ///
-    /// The single list. `docs/grammar.ebnf` is checked against it, so a keyword or
+    /// The single list. `docs/user/grammar.ebnf` is checked against it, so a keyword or
     /// operator added to the lexer and not to the grammar is a test failure rather than
     /// a grammar that quietly describes an older language. [`TokenKind::written`] is
     /// what keeps the list honest: it is an exhaustive `match`, so a new variant does
@@ -409,7 +409,7 @@ pub struct Token {
     pub span: Span,
 }
 
-/// A literal's bytes with its escapes decoded (`docs/spec.md`, *String escapes*, N49).
+/// A literal's bytes with its escapes decoded (`docs/user/spec.md`, *String escapes*, N49).
 ///
 /// `span(a, b)` is the source span of `raw[a..b]`, so a refused escape is reported at the bytes
 /// written. A refused escape contributes nothing to the value and the rest of the literal is
@@ -1445,7 +1445,7 @@ pub(crate) fn scan_one(
         return multi_line_string(file, text, start, errors);
     }
 
-    // Strings, with the escapes `docs/spec.md` lists (N49). The scan skips the byte
+    // Strings, with the escapes `docs/user/spec.md` lists (N49). The scan skips the byte
     // after a backslash, so `\"` does not end the literal; decoding is below, once the
     // literal's extent is known.
     if c == b'"' {

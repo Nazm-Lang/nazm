@@ -1,6 +1,6 @@
 //! Gate 2: `Bytes` and `Text`.
 //!
-//! `docs/general-purpose.md` §5 and §6, and the spec's *Bytes* and *Text*. What only a whole run
+//! `docs/internal/general-purpose.md` §5 and §6, and the spec's *Bytes* and *Text*. What only a whole run
 //! shows: that a `Bytes` is one buffer every view of which sees every write, read and written in
 //! either byte order at every width; that a `Text` is UTF-8 by every way of making one, the
 //! validation table agreeing byte for byte; that scalar values iterate the same way; that every

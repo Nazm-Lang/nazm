@@ -1,5 +1,5 @@
 // R1b, L10: closures in generic functions, and a `let mut` binding a closure shares
-// (`docs/spec.md`, *Function values and closures*). Ported from
+// (`docs/user/spec.md`, *Function values and closures*). Ported from
 // `crates/nazm-cli/tests/generic_closures.rs` (R7).
 //
 // A closure written in a generic function is instantiated with it, and so is a named function's

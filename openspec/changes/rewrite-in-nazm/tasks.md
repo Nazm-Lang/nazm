@@ -23,7 +23,7 @@
 ## 4. R3 — the native pipeline
 
 - [ ] 4.1 Ownership and cleanup (MIR), LIR, the runtime generator, the object cache, debug info
-- [ ] 4.2 Every target in `docs/support.md`, with its tests — narrowed by the copyright holder (2026-10-15)
+- [ ] 4.2 Every target in `docs/user/support.md`, with its tests — narrowed by the copyright holder (2026-10-15)
       to macOS (aarch64 and x86_64-apple-darwin), done in R3 8.2; the other targets after 1.0
 
 ## 5. R4 — the interpreter
@@ -39,7 +39,7 @@
       (2026-10-20, `r6-host-qualification`: contained, Linux aarch64, 2 GiB heap; stages 1–3
       identical; the interpreter and `nazm-check` wait on their move off 0.10.0)
 - [x] 7.2 A recorded decision revising the runbook's containment rule (accepted by the copyright
-      holder 2026-10-20, as proposed in `r6-host-qualification` design decision 3; `docs/runbook.md`
+      holder 2026-10-20, as proposed in `r6-host-qualification` design decision 3; `docs/internal/runbook.md`
       changed and the host runner written: `cargo xtask host-run`)
 
 ## 8. R7 — harness and tests

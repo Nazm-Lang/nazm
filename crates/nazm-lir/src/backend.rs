@@ -1,7 +1,7 @@
 //! The backend boundary (N41): what a code generator is handed, what it hands back, and the
 //! target it was asked for.
 //!
-//! `docs/architecture.md` §7.43. A backend reads a [`Native`] — validated MIR, and the units,
+//! `docs/internal/architecture.md` §7.43. A backend reads a [`Native`] — validated MIR, and the units,
 //! symbols, linkage and layout tables `crate::lower` settled from it for every backend alike —
 //! and returns one artefact per unit: LLVM text for clang to compile, or object bytes. Nothing
 //! of any code generator's own types appears here, so no crate above a backend's can depend on
@@ -54,11 +54,11 @@ pub enum Arch {
     Wasm32,
     /// RISC-V, RV64GC (N86, §7.87): a board only.
     Riscv64,
-    /// Arm Cortex-M, ARMv7-M Thumb-2 (Gate 3, `docs/spec.md`, *Boards*): a microcontroller board
+    /// Arm Cortex-M, ARMv7-M Thumb-2 (Gate 3, `docs/user/spec.md`, *Boards*): a microcontroller board
     /// only, with 32-bit pointers and a 64-bit `Int`, as wasm32 has.
     Thumbv7m,
     /// Arm Cortex-M33, ARMv8-M Mainline with a single-precision FPU and the hard-float calling
-    /// convention (M1, `docs/spec.md`, *Boards*): a microcontroller board only, with
+    /// convention (M1, `docs/user/spec.md`, *Boards*): a microcontroller board only, with
     /// 32-bit pointers and a 64-bit `Int`. `Float64` is refused (`N0854`).
     Thumbv8m,
     /// RISC-V RV32IMC with Zicsr, and no atomic or floating-point instructions (M1): a
@@ -72,17 +72,17 @@ pub enum Arch {
 pub enum Os {
     Macos,
     Linux,
-    /// Windows, through MinGW-w64's C runtime (Gate 3, `docs/spec.md` *Windows x86_64*): its
+    /// Windows, through MinGW-w64's C runtime (Gate 3, `docs/user/spec.md` *Windows x86_64*): its
     /// programs are run on a Windows 10 host by `scripts/windows-host.sh`, and under Wine.
     Windows,
     /// No operating system and no C library (N62, §7.64): a freestanding image.
     None,
-    /// WASI preview 1 (Gate 3, `docs/spec.md` *WASI*): WebAssembly whose outside is the
+    /// WASI preview 1 (Gate 3, `docs/user/spec.md` *WASI*): WebAssembly whose outside is the
     /// `wasi_snapshot_preview1` imports, with a heap and no threads.
     Wasi,
-    /// Android (Gate 3, `docs/spec.md` *Mobile*): Linux's kernel with Bionic, built with the NDK.
+    /// Android (Gate 3, `docs/user/spec.md` *Mobile*): Linux's kernel with Bionic, built with the NDK.
     Android,
-    /// iOS (Gate 3, `docs/spec.md` *Mobile*): Darwin, built against Xcode's iOS SDK.
+    /// iOS (Gate 3, `docs/user/spec.md` *Mobile*): Darwin, built against Xcode's iOS SDK.
     Ios,
 }
 
@@ -146,7 +146,7 @@ impl Target {
     }
 
     /// How a Nazm function's failure crosses a call in the LLVM backend's code for this target
-    /// (4.2, `docs/architecture.md` §7.115): a forced unwind on the hosted targets, whose system
+    /// (4.2, `docs/internal/architecture.md` §7.115): a forced unwind on the hosted targets, whose system
     /// has an unwinder and the C personality; the failure bit on WebAssembly, WASI and the boards,
     /// which have none, and on Windows until its unwinding is verified under Wine.
     #[must_use]
@@ -609,7 +609,7 @@ mod tests {
     }
 }
 
-/// What this compiler has shown of a target under one backend (N95, `docs/architecture.md` §7.96).
+/// What this compiler has shown of a target under one backend (N95, `docs/internal/architecture.md` §7.96).
 /// A cell is run, run on a Windows host, run under Wine, run on a Linux kernel as Bionic,
 /// compiled only, or refused; there is no seventh answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -618,7 +618,7 @@ pub enum Support {
     /// and agreed with the interpreter. The evidence: a test, or a contained command.
     Run(&'static str),
     /// Programs built for Windows ran under Wine in a Linux container and agreed with the
-    /// interpreter (Gate 3, `docs/systems-domains.md` Part A-W). Never evidence from a Windows
+    /// interpreter (Gate 3, `docs/internal/systems-domains.md` Part A-W). Never evidence from a Windows
     /// host, and never reported as plain run-verified.
     Wine(&'static str),
     /// Programs built for Windows ran on a real Windows x86_64 host and agreed with the same
@@ -626,7 +626,7 @@ pub enum Support {
     /// hand against the host, which a test cannot reach. The Wine runs stand beside it.
     WindowsHost(&'static str),
     /// Programs built for Android ran as static Bionic executables on an aarch64 Linux kernel in a
-    /// container and agreed with what they should print (Gate 3, `docs/spec.md` *Mobile*): Android's
+    /// container and agreed with what they should print (Gate 3, `docs/user/spec.md` *Mobile*): Android's
     /// C library on Linux, never an Android device or emulator, and never reported as plain
     /// run-verified.
     Bionic(&'static str),

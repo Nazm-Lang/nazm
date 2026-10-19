@@ -7,7 +7,7 @@ pub fn num_clamp(n: Int, lo: Int, hi: Int) -> Int ! {} {
 // Checked arithmetic in a tight loop.
 //
 // Every `+` and `*` here is an overflow-checked intrinsic and a branch, never `nsw`
-// (`docs/spec.md`). This is the program thatErr( says what that costs.
+// (`docs/user/spec.md`). This is the program thatErr( says what that costs.
 
 fn main() -> Int {
     let mut i = 0;

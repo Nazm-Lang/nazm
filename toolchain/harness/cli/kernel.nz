@@ -1,5 +1,5 @@
-// Gate 3: the failure hook and the reference kernel-style workload (`docs/spec.md`, *Boards*;
-// `docs/systems-domains.md` Part B, *Reference workload*). Ported from
+// Gate 3: the failure hook and the reference kernel-style workload (`docs/user/spec.md`, *Boards*;
+// `docs/internal/systems-domains.md` Part B, *Reference workload*). Ported from
 // `crates/nazm-cli/tests/kernel.rs` (R7): what is built here. The `#[ignore]`d boot under QEMU
 // starts Docker and stays Rust (`design.md`).
 

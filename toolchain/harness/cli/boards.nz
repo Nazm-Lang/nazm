@@ -1,4 +1,4 @@
-// N86: boards as data, a second architecture, device registers by width (`docs/architecture.md`
+// N86: boards as data, a second architecture, device registers by width (`docs/internal/architecture.md`
 // §7.87). Ported from `crates/nazm-cli/tests/boards.rs` (R7).
 //
 // `every_board_s_texts_are_generated_from_its_description_and_differ_where_it_does` reads the

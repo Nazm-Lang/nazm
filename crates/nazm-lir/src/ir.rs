@@ -35,7 +35,7 @@ pub enum Ty {
     Bool,
     /// An immutable byte sequence, as `{ pointer, byte length, owner }` by value.
     ///
-    /// Not NUL-terminated: `docs/spec.md` makes an embedded zero an ordinary byte, so
+    /// Not NUL-terminated: `docs/user/spec.md` makes an embedded zero an ordinary byte, so
     /// the length is the length. The pointer is always valid to read `length` bytes
     /// from, and for an empty string it still points at real storage — which is what
     /// lets `memcmp` be called without a special case.
@@ -48,16 +48,16 @@ pub enum Ty {
     /// those — `str_slice` is a `getelementptr` and produces no copy — and
     /// `{ pointer, length }` cannot tell them apart. Any rule for reclaiming a string
     /// written over two fields would have had to guess from the pointer, which is the
-    /// class of heuristic `docs/architecture.md` §7.8 rules out.
+    /// class of heuristic `docs/internal/architecture.md` §7.8 rules out.
     ///
-    /// It is not language-visible. No Nazm expression can read it, and `docs/spec.md`
+    /// It is not language-visible. No Nazm expression can read it, and `docs/user/spec.md`
     /// still specifies a `Str` as its bytes.
     Str,
     /// A growable sequence of `Int`: a **pointer to a header**, `{ len, cap, data }`.
     ///
     /// The handle is the header's address and never changes, which is what gives these
     /// reference semantics: growth reallocates `data` and rewrites the header in place,
-    /// so every holder of the handle sees it. See `docs/spec.md`, *Sequences are shared,
+    /// so every holder of the handle sees it. See `docs/user/spec.md`, *Sequences are shared,
     /// mutable, and never freed*.
     Ints,
     /// The same, with 24-byte `{ ptr, i64, ptr }` elements, each owning its backing.
@@ -66,12 +66,12 @@ pub enum Ty {
     ///
     /// Reference semantics like a sequence, and for a stronger reason: a channel exists
     /// to be shared between tasks, and every one of its operations is a
-    /// synchronisation point. See `docs/spec.md`, *Structured concurrency*.
+    /// synchronisation point. See `docs/user/spec.md`, *Structured concurrency*.
     Chan,
     /// A user-defined record: an **LLVM aggregate, by value**.
     ///
     /// Not a pointer, and that is the semantic decision rather than a representation
-    /// choice: `docs/spec.md` gives a record no object identity, so two bindings of one
+    /// choice: `docs/user/spec.md` gives a record no object identity, so two bindings of one
     /// record are two values and nothing may be visible through both. A pointer would have
     /// made every assignment an alias.
     ///
@@ -190,17 +190,17 @@ pub struct VariantLayout {
 ///
 /// This is larger than the union it stands for: an enum of three `Str` payloads is
 /// 8 + 24 × 3 bytes where an ideal tagged union is 8 + 24. That is a real cost and
-/// `docs/performance.md` measures it. It was chosen over a `[N x i64]` payload area with
+/// `docs/internal/performance-log.md` measures it. It was chosen over a `[N x i64]` payload area with
 /// typed loads and stores through it because that needs the compiler to compute each
 /// variant's size exactly right — an arithmetic mistake there is a buffer overflow rather
 /// than a compile error — and because this form needs no memory at all: a variant is built
 /// with `insertvalue` and a payload read with `extractvalue`, entirely in registers.
-/// `docs/spec.md` promises nothing about an enum's size or layout, so the representation
+/// `docs/user/spec.md` promises nothing about an enum's size or layout, so the representation
 /// can change without the language moving.
 ///
 /// # Why the order is by name
 ///
-/// The same rule the field order follows: `docs/spec.md` makes variant declaration order
+/// The same rule the field order follows: `docs/user/spec.md` makes variant declaration order
 /// non-semantic, so the discriminant is derived from the **names**. Moving two variant
 /// declarations therefore changes no byte of the object, where taking the parser's order
 /// would have created an ABI difference from an edit with no meaning.
@@ -242,14 +242,14 @@ impl RecordTy {
 ///
 /// # The layout boundary, on this side of it
 ///
-/// The front end knows a record identity and a field identity — `docs/architecture.md`
+/// The front end knows a record identity and a field identity — `docs/internal/architecture.md`
 /// requires field access to stay symbolic until here — and this is where that becomes a
 /// position. [`Self::of_declaration`] is the map, and it is the only place a field's index
 /// is decided.
 ///
 /// # Why the order is by name
 ///
-/// `docs/spec.md` makes declaration order non-semantic: moving two field declarations is
+/// `docs/user/spec.md` makes declaration order non-semantic: moving two field declarations is
 /// not a change to the type. Laying fields out in **canonical field-name order** makes
 /// that true of the object file as well — an edit the language says means nothing also
 /// changes no byte of the emitted code. Laying them out in declaration order would have
@@ -277,7 +277,7 @@ pub struct RecordLayout {
 /// takes one on or lets one go.
 ///
 /// One classification for the whole backend, rather than a test of the type at each place
-/// cleanup is emitted. That is the shape `docs/architecture.md` §7.9 asks for: adding a
+/// cleanup is emitted. That is the shape `docs/internal/architecture.md` §7.9 asks for: adding a
 /// type to the language means answering this enum once, and every exit edge, every
 /// binding and every container follows from the answer. It is deliberately **not** a
 /// destructor system — Nazm has no user-defined destruction, and each variant names a
@@ -302,7 +302,7 @@ pub enum Owns {
     /// does not own a thing of its own — it has no header, no count and no allocation —
     /// and what happens when one is taken on or let go is entirely its fields' rules,
     /// applied in turn. Adding a record type to a program therefore adds no case here,
-    /// which is the property `docs/architecture.md` §7.9 asked for before records existed.
+    /// which is the property `docs/internal/architecture.md` §7.9 asked for before records existed.
     Record(RecordTy),
     /// Whatever the **active variant's** fields own, recursively.
     ///
@@ -332,7 +332,7 @@ impl Ty {
     /// What a value of this type owns, if anything.
     ///
     /// `Int` and `Bool` own nothing and never will. Everything else does, since N8:
-    /// `docs/spec.md`'s memory constitution reclaims storage when the last reference to
+    /// `docs/user/spec.md`'s memory constitution reclaims storage when the last reference to
     /// it dies, and this is the list of things that have a reference to count.
     #[must_use]
     pub fn owns(self) -> Option<Owns> {
@@ -362,7 +362,7 @@ impl Ty {
 
     /// Whether a value of this type is a **handle** to storage with a reference count.
     ///
-    /// `docs/spec.md`'s memory constitution calls these *owned mutable handles*: two
+    /// `docs/user/spec.md`'s memory constitution calls these *owned mutable handles*: two
     /// bindings on one are two references to one storage, and a mutation through either
     /// is visible through both. Narrower than [`Self::owns`] on purpose — a `Str` owns a
     /// backing and is still a value, and a `Chan` is runtime-managed — and used only
@@ -548,7 +548,7 @@ impl Ty {
             nazm_sema::Type::OsHandle => Self::Int,
             // The id carries across unchanged: both sides index the same session's
             // records, and the backend's table is built from the checker's rather than
-            // being a second one. `docs/architecture.md`'s single-resolution rule.
+            // being a second one. `docs/internal/architecture.md`'s single-resolution rule.
             // Not `const` since N9: a record carries an id, and converting one without
             // an `as` cast needs `try_from`. Saturating is the answer every other id
             // conversion gives, and a compilation with four billion record declarations

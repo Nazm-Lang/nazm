@@ -1,6 +1,6 @@
 //! Gate 2: user tests, fuzz targets and benchmarks.
 //!
-//! `docs/general-purpose.md` §18–§19, `docs/spec.md` *Tests and benchmarks*. What this holds: `nazm
+//! `docs/internal/general-purpose.md` §18–§19, `docs/user/spec.md` *Tests and benchmarks*. What this holds: `nazm
 //! test` runs every `@test` function of a file under the interpreter and as a native build, by
 //! name, each in its own process; `Ok` passes, `Err` fails with its message, a trap fails, and
 //! `@test(fails)` inverts; `--filter` narrows; a `@fuzz` target is driven with deterministic inputs;

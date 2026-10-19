@@ -1,5 +1,5 @@
-// Gate 3: WebAssembly with WASI preview 1, `wasm32-wasip1` (`docs/spec.md`, *WASI*;
-// `docs/systems-domains.md` Part O). Ported from `crates/nazm-cli/tests/wasi.rs` (R7): the two
+// Gate 3: WebAssembly with WASI preview 1, `wasm32-wasip1` (`docs/user/spec.md`, *WASI*;
+// `docs/internal/systems-domains.md` Part O). Ported from `crates/nazm-cli/tests/wasi.rs` (R7): the two
 // tests that need no container. The `#[ignore]`d ones start Docker, which stays Rust (`design.md`).
 //
 // On any host the target builds its objects, the `wasm-ld` line that links them and Node's WASI

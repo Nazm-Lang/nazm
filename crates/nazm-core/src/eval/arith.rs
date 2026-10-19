@@ -41,7 +41,7 @@ pub(super) fn no_such_place(at: Span) -> RuntimeError {
     )
 }
 
-/// Checked `Int` arithmetic, failing exactly where `docs/spec.md` says it does.
+/// Checked `Int` arithmetic, failing exactly where `docs/user/spec.md` says it does.
 pub(super) fn arith(
     op: cir::ArithOp,
     l: &Value,
@@ -225,7 +225,7 @@ pub(super) fn compare(
     }
 }
 
-/// The derived order (L6, `docs/spec.md`, *Ordering and hashing are derived*): integers by
+/// The derived order (L6, `docs/user/spec.md`, *Ordering and hashing are derived*): integers by
 /// value, `false` before `true`, a `Str` by its bytes, a record by its fields in the canonical
 /// order — by name, which for a tuple is its positions — and an enum by its variants in the
 /// canonical order, then that variant's payload likewise. `None` for what has none, which
@@ -274,7 +274,7 @@ fn order(a: &Value, b: &Value, orders: &cir::Orders) -> Option<std::cmp::Orderin
     }
 }
 
-/// The derived hash (L6, `docs/spec.md`, *Ordering and hashing are derived*): an integer's
+/// The derived hash (L6, `docs/user/spec.md`, *Ordering and hashing are derived*): an integer's
 /// 64-bit pattern, a `Bool` as 0 or 1, a `Str`'s bytes — the library's impls — and a record or
 /// tuple from `hash_u64(0)`, an enum value from its variant's name, folding each component in
 /// the canonical order with `hash_combine`. `None` for what has none, which checking refuses.

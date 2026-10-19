@@ -479,7 +479,7 @@ fn every_real_markdown_document_is_its_sections_byte_for_byte() {
         );
     }
     // A production is exactly its lines of the grammar.
-    let grammar = std::fs::read_to_string(root.join("docs/grammar.ebnf")).unwrap();
+    let grammar = std::fs::read_to_string(root.join("docs/user/grammar.ebnf")).unwrap();
     let f = section(&c, "grammar:function");
     assert!(grammar.contains(&f.body));
     assert!(f

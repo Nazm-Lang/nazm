@@ -159,7 +159,7 @@ impl Checker<'_> {
     ///
     /// The arguments are **written** or **inferred from the arguments**; only a parameter the
     /// arguments leave unsettled is settled by the type the result is wanted as (R1, 5b.16),
-    /// so the arguments still decide first (`docs/spec.md`, *Calling a generic function*). Left to
+    /// so the arguments still decide first (`docs/user/spec.md`, *Calling a generic function*). Left to
     /// right: an argument whose declared type is already fully known is checked against
     /// it, exactly as a monomorphic call's is, and one whose declared type still mentions
     /// an unsettled parameter is unified with it.

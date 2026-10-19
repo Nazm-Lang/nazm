@@ -5,7 +5,7 @@
 //! half of the evidence; `crates/nazm-cli/tests/memory.rs` is the back end's, and
 //! `crates/nazm-cli/tests/visibility.rs` the module system's.
 //!
-//! Each test names the rule in `docs/spec.md` it pins.
+//! Each test names the rule in `docs/user/spec.md` it pins.
 
 #![allow(
     clippy::unwrap_used,
@@ -88,7 +88,7 @@ fn moving_two_field_declarations_changes_nothing() {
 
 #[test]
 fn initialisers_evaluate_in_the_order_written() {
-    // `docs/spec.md` fixes the order, and the layout has nothing to do with it. The
+    // `docs/user/spec.md` fixes the order, and the layout has nothing to do with it. The
     // sequence records which initialiser ran first; `b` is declared first and evaluated
     // second.
     let src = r"
@@ -176,7 +176,7 @@ fn mutating_a_field_and_mutating_what_it_refers_to_are_different_things() {
 
 #[test]
 fn a_copy_gives_independent_scalars_and_shares_the_handles() {
-    // `docs/spec.md`'s table, run: `count` is two `Int`s, `values` is one sequence.
+    // `docs/user/spec.md`'s table, run: `count` is two `Int`s, `values` is one sequence.
     let src = r"
         struct Box { count: Int, values: Ints, }
         fn main() -> Int {
@@ -328,7 +328,7 @@ fn a_built_in_type_name_may_not_be_redefined() {
 
 #[test]
 fn a_record_with_no_fields_is_refused_by_name() {
-    // `docs/spec.md` records why: `Marker()` is exactly how a call is written, and types
+    // `docs/user/spec.md` records why: `Marker()` is exactly how a call is written, and types
     // and functions are separate namespaces, so neither reading could be preferred.
     let src = r"
         struct Marker { }
@@ -473,7 +473,7 @@ fn wrapping_a_sequence_two_levels_deep_does_not_launder_it() {
 
 #[test]
 fn records_nested_past_the_bound_are_refused_by_name() {
-    // `docs/spec.md` states the bound rather than letting it be discovered: each level
+    // `docs/user/spec.md` states the bound rather than letting it be discovered: each level
     // multiplies the copy and cleanup code generated for the outer record, so the limit
     // is on the emitted program. A chain longer than it is refused, with a diagnostic,
     // rather than met as a stack overflow in whichever consumer recursed first.

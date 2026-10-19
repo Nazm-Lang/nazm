@@ -1,6 +1,6 @@
-//! The performance claims register (N92, `docs/architecture.md` §7.93).
+//! The performance claims register (N92, `docs/internal/architecture.md` §7.93).
 //!
-//! `bench/claims.toml` files every measured section of `docs/performance.md` — every `##` or `###`
+//! `bench/claims.toml` files every measured section of `docs/internal/performance-log.md` — every `##` or `###`
 //! heading that says *measured* or *frozen* — as **reproducible** (a command the tree contains
 //! regenerates its numbers), **dated** (a record of the tree on that date, not a claim about this
 //! one), or **unreproduced** (a current claim no command regenerates). This gate keeps the register
@@ -70,8 +70,12 @@ fn command_problem(root: &Path, how: &str) -> Option<String> {
 }
 
 pub(crate) fn check(root: &Path) -> Result<(), Vec<String>> {
-    let doc = std::fs::read_to_string(root.join("docs/performance.md"))
-        .map_err(|e| vec![format!("could not read docs/performance.md: {e}")])?;
+    let doc =
+        std::fs::read_to_string(root.join("docs/internal/performance-log.md")).map_err(|e| {
+            vec![format!(
+                "could not read docs/internal/performance-log.md: {e}"
+            )]
+        })?;
     let register = std::fs::read_to_string(root.join("bench/claims.toml"))
         .map_err(|e| vec![format!("could not read bench/claims.toml: {e}")])?;
     let value: toml::Value = toml::from_str(&register)
@@ -113,7 +117,7 @@ pub(crate) fn check(root: &Path) -> Result<(), Vec<String>> {
     for h in &headings {
         match filed.get(h) {
             None => problems.push(format!(
-                "docs/performance.md measures `{h}`, and bench/claims.toml does not file it"
+                "docs/internal/performance-log.md measures `{h}`, and bench/claims.toml does not file it"
             )),
             Some(n) if *n > 1 => problems.push(format!("`{h}` is filed {n} times")),
             Some(_) => {}
@@ -122,7 +126,7 @@ pub(crate) fn check(root: &Path) -> Result<(), Vec<String>> {
     for h in filed.keys() {
         if !headings.contains(h) {
             problems.push(format!(
-                "bench/claims.toml files `{h}`, which docs/performance.md does not measure"
+                "bench/claims.toml files `{h}`, which docs/internal/performance-log.md does not measure"
             ));
         }
     }
@@ -178,9 +182,9 @@ mod tests {
             doc.len() * 31 + register.len()
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("docs")).unwrap_or(());
+        std::fs::create_dir_all(dir.join("docs/internal")).unwrap_or(());
         std::fs::create_dir_all(dir.join("bench")).unwrap_or(());
-        std::fs::write(dir.join("docs/performance.md"), doc).unwrap_or(());
+        std::fs::write(dir.join("docs/internal/performance-log.md"), doc).unwrap_or(());
         std::fs::write(dir.join("bench/claims.toml"), register).unwrap_or(());
         dir
     }

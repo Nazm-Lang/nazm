@@ -8,7 +8,7 @@ use super::*;
 ///
 /// One mutex and one condition variable. Both senders and receivers wait on the same
 /// variable and every change notifies all of them — which is not the fastest arrangement
-/// and is the obviously correct one, and `docs/spec.md` promises no fairness anyway.
+/// and is the obviously correct one, and `docs/user/spec.md` promises no fairness anyway.
 #[derive(Debug)]
 pub struct Channel {
     state: Mutex<ChannelState>,
@@ -35,7 +35,7 @@ impl Channel {
     }
 
     /// Queue a value, or report that the channel is closed — in which case **the value
-    /// was not sent**, which is what `docs/spec.md` promises.
+    /// was not sent**, which is what `docs/user/spec.md` promises.
     pub(super) fn send(&self, value: Value) -> Option<bool> {
         let mut state = self.state.lock().ok()?;
         while !state.closed && state.queue.len() >= self.capacity {
@@ -211,7 +211,7 @@ enum Case {
     },
 }
 
-/// A select over channels of different types (performance leadership 6.4, `docs/spec.md`,
+/// A select over channels of different types (performance leadership 6.4, `docs/user/spec.md`,
 /// *Select over channels of different types*): its cases, in the order they were added. It
 /// holds a reference to each channel and each receive vector, as the native select does.
 #[derive(Debug, Default)]

@@ -1,6 +1,6 @@
 //! N73: semantic differential fuzzing — generated programs, one answer from every tier.
 //!
-//! `docs/architecture.md` §7.75. A seeded generator writes well-typed programs that terminate by
+//! `docs/internal/architecture.md` §7.75. A seeded generator writes well-typed programs that terminate by
 //! construction: `Int` arithmetic of every operator (overflow and division by zero included, from
 //! edge literals), comparisons in conditions, `let`, `if`, bounded `while`, calls between generated
 //! functions (only to earlier ones, so no recursion), and a record. Each is run by the interpreter

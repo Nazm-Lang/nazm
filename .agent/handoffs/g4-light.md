@@ -65,7 +65,7 @@ Evidence: `target/gates/v1/bench/cross.json`, `cross.md`.
 
 ## 4. Publication items
 
-- **Licence.** `LICENSE` is Apache-2.0 and in the tree; `docs/licensing.md` records an open decision —
+- **Licence.** `LICENSE` is Apache-2.0 and in the tree; `docs/user/licensing.md` records an open decision —
   whether Apache-2.0 is intended for the runtime and standard-library code inside every compiled
   program. Not absent; undecided.
 - **Security reporting.** `SECURITY.md` exists: private reporting by email; GitHub's private

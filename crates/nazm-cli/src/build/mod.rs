@@ -4,7 +4,7 @@
 //! (`nazm_mir`, N40), then `nazm_lir::lower` laying MIR out into one unit per module and per
 //! generic instance, `nazm_lir::emit_unit` writing each as LLVM IR text, and `clang` turning
 //! that into a binary. No LLVM is linked into `nazm` —
-//! `docs/architecture.md` §1 says not to in year one, and `clang` reads IR from a file.
+//! `docs/internal/architecture.md` §1 says not to in year one, and `clang` reads IR from a file.
 //!
 //! # Publishing the result
 //!
@@ -26,7 +26,7 @@
 //! `crate::backend` owns the first three and `nazm_cache::object` owns the key.
 //!
 //! The link runs on every build too. There is no executable cache, no link-result cache
-//! and no incremental linker, and `docs/capability-matrix.md` says so in those words.
+//! and no incremental linker, and `docs/internal/capability-matrix.md` says so in those words.
 //!
 //! # Why the reuse cannot skip anything it must not
 //!

@@ -1,4 +1,4 @@
-//! R1a: string interpolation and fixed-point floats (`docs/spec.md`, *String interpolation*).
+//! R1a: string interpolation and fixed-point floats (`docs/user/spec.md`, *String interpolation*).
 //!
 //! Every implementation — the interpreter, the LIR oracle, LLVM at `-O0` and `-O2`, and Cranelift
 //! — is asked for what the rules work out by hand, with every string reclaimed; then what is

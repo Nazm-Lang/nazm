@@ -1,4 +1,4 @@
-//! `nazm resolve` and `nazm references` (N77, `docs/architecture.md` §7.78): a compilation's
+//! `nazm resolve` and `nazm references` (N77, `docs/internal/architecture.md` §7.78): a compilation's
 //! resolved units, and every occurrence of one entity read from them.
 //!
 //! Both run the cached check `nazm check` runs — the same store, the same keys — and read the

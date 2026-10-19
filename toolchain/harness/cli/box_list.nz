@@ -90,7 +90,7 @@ const DEEP: Str = "enum Chain { End, Link(v: Int, next: Box[Chain]), }\nfn lengt
 @test
 fn a_million_deep_value_is_released_without_a_million_frames(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
-    // Release is a worklist, not recursion (`docs/spec.md`, *Release is not recursion*): before
+    // Release is a worklist, not recursion (`docs/user/spec.md`, *Release is not recursion*): before
     // R1a's queue, the interpreter overflowed its stack and a compiled program died releasing
     // this, its memory report never written.
     let d = scratch_new(h);

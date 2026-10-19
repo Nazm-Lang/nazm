@@ -78,10 +78,10 @@ fn verified_without_evidence(text: Str) -> Strs ! {} {
 pub fn gate_capability_matrix(h: Caps, root: Str) -> Strs ! { io } {
     let io = h.io;
     let problems = strs_new();
-    let text = match read_rust(h, f"{root}/docs/capability-matrix.md") {
+    let text = match read_rust(h, f"{root}/docs/internal/capability-matrix.md") {
         Result.Ok(value: t) => t,
         Result.Err(error: e) => {
-            strs_push(problems, f"could not read docs/capability-matrix.md: {e}");
+            strs_push(problems, f"could not read docs/internal/capability-matrix.md: {e}");
             return problems;
         },
     };
@@ -90,7 +90,7 @@ pub fn gate_capability_matrix(h: Caps, root: Str) -> Strs ! { io } {
         n = n + 1;
         for path in cited_paths(line) {
             if !file_exists_at(io, f"{root}/{path}") {
-                strs_push(problems, f"docs/capability-matrix.md:{n} cites `{path}`, which does not exist");
+                strs_push(problems, f"docs/internal/capability-matrix.md:{n} cites `{path}`, which does not exist");
             }
         }
     }
@@ -208,7 +208,7 @@ fn absence_claims(text: Str) -> Ints ! {} {
 pub fn gate_doc_claims(h: Caps, root: Str) -> Strs ! { io } {
     let io = h.io;
     let problems = strs_new();
-    let prereg = file_exists_at(io, f"{root}/docs/research/evaluation-preregistration.md");
+    let prereg = file_exists_at(io, f"{root}/docs/internal/research/evaluation-preregistration.md");
     let readme = match read_rust(h, f"{root}/README.md") {
         Result.Ok(value: t) => t,
         Result.Err(error: e) => {
@@ -218,19 +218,19 @@ pub fn gate_doc_claims(h: Caps, root: Str) -> Strs ! { io } {
     };
     let says_not_registered = text_contains(readme, "decision rule is not pre-registered") || text_contains(readme, "not binding before then");
     if prereg && says_not_registered {
-        strs_push(problems, "docs/research/evaluation-preregistration.md exists, but README.md still says the decision rule is not pre-registered. One of them is wrong.");
+        strs_push(problems, "docs/internal/research/evaluation-preregistration.md exists, but README.md still says the decision rule is not pre-registered. One of them is wrong.");
     }
-    match read_rust(h, f"{root}/docs/research/evaluation.md") {
+    match read_rust(h, f"{root}/docs/internal/research/evaluation.md") {
         Result.Ok(value: eval) => {
             if prereg && text_contains(eval, "Not yet pre-registered") {
-                strs_push(problems, "docs/research/evaluation.md still carries its draft banner although a pre-registration exists.");
+                strs_push(problems, "docs/internal/research/evaluation.md still carries its draft banner although a pre-registration exists.");
             }
             0
         },
-        Result.Err(error: e) => strs_push(problems, f"could not read docs/research/evaluation.md: {e}"),
+        Result.Err(error: e) => strs_push(problems, f"could not read docs/internal/research/evaluation.md: {e}"),
     };
     if file_exists_at(io, f"{root}/crates/nazm-lir") {
-        for doc in words("README.md Cargo.toml docs/architecture.md docs/roadmap.md docs/master-architecture.md docs/capability-matrix.md") {
+        for doc in words("README.md Cargo.toml docs/internal/architecture.md docs/user/roadmap.md docs/internal/master-architecture.md docs/internal/capability-matrix.md") {
             let text = match read_rust(h, f"{root}/{doc}") {
                 Result.Ok(value: t) => t,
                 Result.Err(error: e) => {

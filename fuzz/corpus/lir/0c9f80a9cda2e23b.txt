@@ -22,7 +22,7 @@ pub fn fmt_int_width(n: Int, width: Int) -> Str ! {} {
     while short > 0 { strs_push(parts, " "); short = short - 1; }
     strs_push(parts, s);
 // for when it renders a value: `show_all[T: Show]` renders every element of a `Vec[T]` without
-// being handed a rendering function, which is the program `docs/architecture.md` §7.79 names as
+// being handed a rendering function, which is the program `docs/internal/architecture.md` §7.79 names as
 // the need. Every impl here is for a built-in type, so this module is where they must be (the
 // orphan rule); a record or an enum implements `Show` in its own module.
     str_join(parts, "")

@@ -1,4 +1,4 @@
-//! N73: an evidence bundle's index and the compiler's bill of materials (`docs/architecture.md`
+//! N73: an evidence bundle's index and the compiler's bill of materials (`docs/internal/architecture.md`
 //! §7.75). What the command shows: the index names every file with a digest anyone can recompute,
 //! the same bundle indexes the same way twice, and verifying refuses a changed, a missing and an
 //! unindexed file, each by name; the bill of materials is the lockfile's crates and the pin.

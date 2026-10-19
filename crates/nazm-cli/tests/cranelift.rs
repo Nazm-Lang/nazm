@@ -297,7 +297,7 @@ fn main() -> Int {
 #[test]
 fn recursion_compiles_under_both_backends_and_agrees() {
     // Refused by both until N49; both now emit the stack check MIR places first in each
-    // function of a call cycle (`docs/spec.md`, *Native recursion*).
+    // function of a call cycle (`docs/user/spec.md`, *Native recursion*).
     agree_src(
         "fn f(n: Int) -> Int { if n == 0 { 0 } else { f(n - 1) + 1 } }\n\
          fn even(n: Int) -> Bool { if n == 0 { true } else { odd(n - 1) } }\n\

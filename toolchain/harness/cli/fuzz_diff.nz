@@ -1,5 +1,5 @@
 // N73: semantic differential fuzzing — generated programs, one answer from every tier
-// (`docs/architecture.md` §7.75). A seeded generator writes well-typed programs that terminate by
+// (`docs/internal/architecture.md` §7.75). A seeded generator writes well-typed programs that terminate by
 // construction; each is run by the interpreter, built by LLVM at `-O0` and `-O2` and by
 // Cranelift, and run on LIR's interpreter; every tier must print the same value or fail with the
 // same code at the same place. A disagreement is shrunk and printed for the regression corpus

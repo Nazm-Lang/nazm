@@ -13,7 +13,7 @@
     }
     i
 }
-// module imports it implicitly. `docs/spec.md`, *The core prelude*, owns the rules.
+// module imports it implicitly. `docs/user/spec.md`, *The core prelude*, owns the rules.
 //
 // `?` recognises `Result` by that identity — this module and this name — and never by
 // the shape of its variants, which is why a project may not declare a type of either

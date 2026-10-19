@@ -1,4 +1,4 @@
-//! Gate 3: statics (`docs/spec.md`, *Statics*; `docs/systems-domains.md` Part B).
+//! Gate 3: statics (`docs/user/spec.md`, *Statics*; `docs/internal/systems-domains.md` Part B).
 //!
 //! What only a whole run shows: that a static is one storage for the whole run — a static
 //! `Atomic` one cell every function, task, generic instance and module reaches, in the

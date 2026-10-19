@@ -49,4 +49,4 @@ pub fn "process_args(io: IoCap) -> Strs ! { io } {
     }
 
     out
-// being handed a rendering function, which is the program `docs/architecture.md` §7.79 names as
+// being handed a rendering function, which is the program `docs/internal/architecture.md` §7.79 names as

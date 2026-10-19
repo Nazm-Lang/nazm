@@ -33,7 +33,7 @@ pub fn patch_group() -> Group {
             + "A validated rename (`rename`) or a compiler-owned fix (`fix`), as minimal exact-byte edits bound to the root's "
             + "semantic snapshot, each edited file's digest and each edit's expected bytes, from the disk as it is now. Nothing "
             + "is written: a patch is a proposal bound to exact source state, not permission to change a file. "
-            + "`docs/architecture.md` §7.31.")
+            + "`docs/internal/architecture.md` §7.31.")
     let r = cli_command("patch rename", "Rename the entity declared or used at `--byte` of `--file`, by the language service's "
             + "validated rename: locals and private definitions, and — within a declared workspace (N89) — exported ones, across "
             + "every module under the source root",

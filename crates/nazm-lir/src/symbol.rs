@@ -21,7 +21,7 @@
 //! ```
 //!
 //! The direction matters. `DefKey` knows nothing about LLVM, so a second backend
-//! consumes the same identity and spells it its own way; `docs/architecture.md` keeps
+//! consumes the same identity and spells it its own way; `docs/internal/architecture.md` keeps
 //! that boundary because the alternative — a semantic identity carrying an LLVM string —
 //! is how a backend's spelling becomes a language's problem.
 //!
@@ -64,7 +64,7 @@
 //!
 //! # A module with no durable identity
 //!
-//! `docs/spec.md` refuses a `ModuleKey` to a module outside the source root, and to one a
+//! `docs/user/spec.md` refuses a `ModuleKey` to a module outside the source root, and to one a
 //! symbolic link gave two names. Such a program still compiles — N4's rule, that a limit
 //! on reuse may never become a refusal to compile — so its definitions still need
 //! symbols. They get a **compilation-local** form instead, discriminated by its own
@@ -90,7 +90,7 @@ use nazm_sema::{ModuleId, Type};
 /// Nothing outside one build of this compiler may depend on this string. It is not a C
 /// symbol, not a shared-library export and not a stable interface; `pub` in Nazm source
 /// says which *Nazm modules* may name a definition and makes no promise about a binary.
-/// `docs/spec.md` says so in the language's own terms, and every symbol here is emitted
+/// `docs/user/spec.md` says so in the language's own terms, and every symbol here is emitted
 /// with hidden or internal linkage so that the final image exports none of them.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NativeSymbol(String);
@@ -177,7 +177,7 @@ impl std::fmt::Display for NativeSymbol {
 ///
 /// # Derived from the durable identity, like a symbol
 ///
-/// Two independently generated objects must agree on a record's layout (`docs/spec.md`,
+/// Two independently generated objects must agree on a record's layout (`docs/user/spec.md`,
 /// *Separate code generation*), so they must first agree on its **name** — and the only
 /// thing about a record that means the same in two compilations is its [`DefKey`]. A name
 /// derived from a session `RecordId`, a declaration order or a load index would differ
@@ -197,7 +197,7 @@ impl std::fmt::Display for NativeSymbol {
 ///
 /// # Not an ABI
 ///
-/// Nothing outside one build depends on this. `docs/spec.md` is explicit that `pub` on a
+/// Nothing outside one build depends on this. `docs/user/spec.md` is explicit that `pub` on a
 /// record says which Nazm modules may name it and promises nothing about a layout, a field
 /// offset or a binary interface.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -258,7 +258,7 @@ impl std::fmt::Display for NativeTypeName {
 /// How much of the program may bind to a symbol.
 ///
 /// Derived from the language's own visibility rule and nothing else, which is what makes
-/// it a per-module decision: `docs/spec.md` says a private definition is nameable only
+/// it a per-module decision: `docs/user/spec.md` says a private definition is nameable only
 /// inside its module, so nothing in another object can possibly refer to one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Linkage {

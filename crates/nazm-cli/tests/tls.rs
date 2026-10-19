@@ -1,6 +1,6 @@
 //! v1 track C, C1: `@std/tls` over the runtime's `tls` part.
 //!
-//! `docs/spec.md`, *TLS*. A test CA, server certificates and a stranger's are made for each test
+//! `docs/user/spec.md`, *TLS*. A test CA, server certificates and a stranger's are made for each test
 //! by the `openssl` command line (OpenSSL 3, the engine's own toolkit), never checked in. What the
 //! programs show, built by every backend — LLVM at `-O0` and `-O2`, Cranelift, and Nazm's own code
 //! generator on macOS: a server and a client over loopback agreeing a version and an ALPN name,

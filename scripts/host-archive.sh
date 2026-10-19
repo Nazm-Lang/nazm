@@ -1,5 +1,5 @@
 #!/bin/sh
-# Package a prebuilt Nazm toolchain for one host (Gate 3, docs/systems-domains.md Part A).
+# Package a prebuilt Nazm toolchain for one host (Gate 3, docs/internal/systems-domains.md Part A).
 #
 #   scripts/host-archive.sh TRIPLE BINARY OUTDIR
 #
@@ -16,7 +16,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 dir="$stage/nazm-$triple"
-mkdir -p "$dir/bin" "$dir/docs" "$outdir"
+mkdir -p "$dir/bin" "$dir/docs/user" "$outdir"
 cp "$binary" "$dir/bin/nazm"
 # The MCP server, where it was built beside it (0.9.0): THIRD-PARTY-NOTICES.md covers both.
 mcp="$(dirname -- "$binary")/nazm-mcp"
@@ -37,7 +37,7 @@ libexec/nazm/nzcg, which must stay where it is beside bin/."
         ;;
 esac
 cp "$root/README.md" "$root"/LICENSE* "$root/NOTICE" "$root/THIRD-PARTY-NOTICES.md" "$dir/"
-cp "$root/docs/getting-started.md" "$root/docs/support.md" "$dir/docs/"
+cp "$root/docs/user/getting-started.md" "$root/docs/user/support.md" "$dir/docs/user/"
 version=$("$dir/bin/nazm" --version 2>/dev/null || echo unknown)
 cat > "$dir/INSTALL.txt" <<TXT
 $version, prebuilt for $triple.
@@ -49,7 +49,7 @@ runtime are inside bin/nazm.
 writes native code through clang, which must be on PATH (Xcode's command-line tools on macOS, the
 clang package on Linux). Rust is never needed.$nzcg_note
 
-What this host has shown is in docs/support.md.
+What this host has shown is in docs/user/support.md.
 TXT
 # The archive is the same bytes for the same files (R1.5 7.2, scripts/reproducible-check.sh):
 # entries sorted by name, every time SOURCE_DATE_EPOCH (0 when unset), owner 0, permissions as

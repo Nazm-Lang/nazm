@@ -231,7 +231,7 @@ pub const RESERVED_C_SYMBOLS: &[&str] = &[
     "flock",
 ];
 
-/// The rules a foreign declaration must meet (N42, `docs/architecture.md` §7.44).
+/// The rules a foreign declaration must meet (N42, `docs/internal/architecture.md` §7.44).
 /// The ABI and the symbol of a foreign declaration or an export (N42, N55): `"C"`, a C
 /// identifier, and none the runtime declares itself.
 fn c_abi_and_symbol(d: &nazm_syntax::ForeignDecl, errors: &mut Vec<Diagnostic>) {
@@ -456,7 +456,7 @@ pub(super) fn declared_effect_param<'f>(
     Some(first.name.as_str())
 }
 
-/// The rules an export meets (N55, `docs/architecture.md` §7.57): the foreign declaration's ABI
+/// The rules an export meets (N55, `docs/internal/architecture.md` §7.57): the foreign declaration's ABI
 /// and symbol rules, and — since C can hand Nazm no capability and has no cleanup Nazm knows of —
 /// public, `! {}`, not generic, and only numbers and `Bool` across (every number since Gate 2).
 pub(super) fn check_export(

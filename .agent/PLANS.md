@@ -2,13 +2,13 @@
 
 An ExecPlan is the written plan for a material change, kept beside the work so a later session —
 or another agent — can resume it without the conversation that produced it. Governed by
-`docs/agent-governance.md` §5; the template is `.agent/templates/exec-plan.md`.
+`docs/internal/agent-governance.md` §5; the template is `.agent/templates/exec-plan.md`.
 
 ## When one is required
 
 A task needs an ExecPlan when it:
 
-- changes stable semantics (anything `docs/spec.md` or `docs/stability.md` owns);
+- changes stable semantics (anything `docs/user/spec.md` or `docs/user/stability.md` owns);
 - spans several crates or subsystems;
 - introduces a new runtime or platform responsibility;
 - requires a migration;

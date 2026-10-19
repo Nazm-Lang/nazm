@@ -1,6 +1,6 @@
 //! The representation itself.
 //!
-//! `docs/architecture.md` §7.42 is the law this file follows. The short version: every concrete
+//! `docs/internal/architecture.md` §7.42 is the law this file follows. The short version: every concrete
 //! function is a graph of basic blocks; every block ends in exactly one terminator; every value
 //! of a managed type is moved, copied or dropped by a statement that says so; and every
 //! operation that can fail names the block its failure goes to.
@@ -105,7 +105,7 @@ pub struct Function {
     pub on_failure: bool,
     /// `@task`'s priority and period (Gate 3): a board's periodic task.
     pub task: Option<(u32, u64)>,
-    /// Whether a board's manifest names it the board's `init` (M1, `docs/spec.md`,
+    /// Whether a board's manifest names it the board's `init` (M1, `docs/user/spec.md`,
     /// *Boards*), which `_start` calls before `main`. Set by the build for that board,
     /// never by the source: MIR's lowering leaves it `false`.
     pub board_init: bool,
@@ -280,7 +280,7 @@ pub enum StatementKind {
     /// If this thread has failed — a callee, a task adopted by a join — leave along `unwind`.
     CheckFailed { unwind: BlockId },
     /// If this thread's stack is nearly exhausted, fail with `N0408` and leave along `unwind`
-    /// (N49, `docs/spec.md` *Native recursion*). First in every function in a call cycle.
+    /// (N49, `docs/user/spec.md` *Native recursion*). First in every function in a call cycle.
     StackCheck { unwind: BlockId },
 }
 
@@ -566,7 +566,7 @@ pub enum Rvalue {
         rhs: Operand,
     },
     /// The derived hash of a value of type `operand` (L6), a `UInt64`: total, the value
-    /// borrowed. `docs/spec.md`, *Ordering and hashing are derived*.
+    /// borrowed. `docs/user/spec.md`, *Ordering and hashing are derived*.
     Hash { operand: Type, value: Operand },
     /// A call. The arguments are borrowed; the result is owned. The callee may have failed.
     Call { callee: FuncId, args: Vec<Operand> },

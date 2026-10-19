@@ -159,7 +159,7 @@ Sizes: **S** under ~300 changed lines, **M** under ~2k, **L** under ~6k, **XL** 
 | 16 | The fixpoint on macOS, aarch64 and x86_64 (Rosetta), per question 2 | M | **Opus** | 10.1's fixpoint |
 | 17 | Windows x86_64 executables built by Nazm; the host-safe suite on the Windows host (`ssh win-dell`); `windows-toolchain` W3 | M | Sonnet | the third release target |
 | 18 | The release path switched to the Nazm-built binaries; third-party notices of the shipped binary | M | Sonnet | **the cut-over** (10.1) |
-| 19 | The seed frozen: a gate on `crates/` and `xtask/`'s seed part; `docs/bootstrap.md`'s chain | S | Sonnet | 10.1 closed |
+| 19 | The seed frozen: a gate on `crates/` and `xtask/`'s seed part; `docs/internal/bootstrap.md`'s chain | S | Sonnet | 10.1 closed |
 | 20 | The authorities (10.2): architecture, bootstrap, capability matrix, support, licensing, runbook | M | Sonnet | 10.2 closed |
 
 Slices 8–12 depend only on 4 (and 7 for `trace`/`profile`); they can run in any order between 7
@@ -171,7 +171,7 @@ All four recommendations below were **accepted on 2026-10-20**. On the first, on
 wording: the removed targets are not after-1.0 work. 0.11.0 ships macOS and Windows only, and each
 removed target returns with its domain track (`v1-every-domain`) before 1.0, which waits for every
 domain. The second extends the R6 rule: the macOS self-build may run on the host as serial
-`cargo xtask host-run` steps, recorded in `docs/runbook.md` when slice 16 lands.
+`cargo xtask host-run` steps, recorded in `docs/internal/runbook.md` when slice 16 lands.
 
 The questions as they were put:
 
@@ -179,7 +179,7 @@ The questions as they were put:
    WebAssembly, WASI, Android, iOS and five boards, and `contract` compiles to EVM and WebAssembly.
    The 2026-10-15 narrowing defers all of them in the Nazm pipeline until after 1.0. A cut-over
    before they are ported takes them away. **Recommended:** cut over without them and record each as
-   removed for 1.0 in `docs/support.md` and `docs/stability.md` (their port is after-1.0 work already
+   removed for 1.0 in `docs/user/support.md` and `docs/user/stability.md` (their port is after-1.0 work already
    decided), rather than holding the cut-over for R3 8.3 and an EVM back end.
 2. **The macOS fixpoint.** The runbook keeps the self-build contained, and the container is Linux:
    a macOS fixpoint runs macOS executables, stage after stage. **Recommended:** a *serial host

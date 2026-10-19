@@ -1,5 +1,5 @@
 //! Gate 3: the storage engine reference workload (`examples/apps/pagestore/`,
-//! `docs/systems-domains.md` Part M).
+//! `docs/internal/systems-domains.md` Part M).
 //!
 //! `pagestore` is a Nazm program: fixed 256-byte checksummed pages written in place, behind a redo
 //! log of whole page images. These tests build it once and then crash a run at **every** write

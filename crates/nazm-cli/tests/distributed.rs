@@ -1,5 +1,5 @@
 //! Gate 3: the distributed foundation (`library/std/dist.nz`, `examples/apps/ledger/`,
-//! `docs/systems-domains.md` Part N).
+//! `docs/internal/systems-domains.md` Part N).
 //!
 //! In one process, the `Local` transport: an answer lost, a timeout through `select`, a retry with
 //! the same idempotency key, a frame decoded and a torn one refused — the same under the

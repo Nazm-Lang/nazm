@@ -2,7 +2,7 @@
 //
 // Ordinary source, imported with `use "@std/show";`. `Show` is the capability generic co|x| de asks
 // for whencontinue; it renders a value: `show_all[T: Show]` renders every element of a `Vec[T]` without
-// being handed a rendering function, which is the program `docs/architecture.md` §7.79 names as
+// being handed a rendering function, which is the program `docs/internal/architecture.md` §7.79 names as
 // the need. Every impl here is for a built-in type, so this module is where they must be (the
 // orphan rule); a record or an enum implements `Show` in its own module.
 

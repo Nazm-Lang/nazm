@@ -1,5 +1,5 @@
-//! Gate 3: the mobile targets and the desktop window host (`docs/spec.md`, *Mobile*;
-//! `docs/systems-domains.md` Parts P and Q).
+//! Gate 3: the mobile targets and the desktop window host (`docs/user/spec.md`, *Mobile*;
+//! `docs/internal/systems-domains.md` Parts P and Q).
 //!
 //! Library targets over the stable C ABI. **Android ARM64** (`aarch64-linux-android`): objects for
 //! the NDK's `clang`, a static Bionic executable of a C host and a Nazm library — and of a whole Nazm

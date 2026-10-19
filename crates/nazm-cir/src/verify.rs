@@ -1,4 +1,4 @@
-//! The invariants of `docs/architecture.md` §7.41, checked.
+//! The invariants of `docs/internal/architecture.md` §7.41, checked.
 //!
 //! Run on every lowering. A violation is a compiler defect — the checker accepted the program
 //! and the lowering produced something no consumer may assume — so it is reported as one, by

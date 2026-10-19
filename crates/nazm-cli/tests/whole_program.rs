@@ -1,4 +1,4 @@
-//! R1.5 3.4 (design D13): whole-program optimisation (`docs/architecture.md` §7.120).
+//! R1.5 3.4 (design D13): whole-program optimisation (`docs/internal/architecture.md` §7.120).
 //!
 //! What a whole build shows: an executable the LLVM backend builds at `-O2` on macOS is linked
 //! from LLVM bitcode — the program's units, the standard library's and the runtime's, every one

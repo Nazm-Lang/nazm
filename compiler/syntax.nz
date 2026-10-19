@@ -653,7 +653,7 @@ fn recover_to_item(p: Px, start: Int) -> Int {
 }
 
 fn supported() -> Str {
-    "Nazm (the 1.0 draft) has functions and `let`/`let mut`, `while` with `break` and `continue`, `return`, `if`/`else`, `Int`, `Bool` and `Str`, fixed-width integers, `Float32` and `Float64` with bit operators, `struct` records, `enum` and `match`, generics and `Vec[T]`, `Result`, `Option` and `?`, function values and closures, `trait`, `impl` and methods, declared effects, capabilities and provenance, `scope`/`spawn` with channels, selection and deadlines, `extern \"C\"`, and modules and packages with `use` — see docs/spec.md, or run `nazm capabilities`"
+    "Nazm (the 1.0 draft) has functions and `let`/`let mut`, `while` with `break` and `continue`, `return`, `if`/`else`, `Int`, `Bool` and `Str`, fixed-width integers, `Float32` and `Float64` with bit operators, `struct` records, `enum` and `match`, generics and `Vec[T]`, `Result`, `Option` and `?`, function values and closures, `trait`, `impl` and methods, declared effects, capabilities and provenance, `scope`/`spawn` with channels, selection and deadlines, `extern \"C\"`, and modules and packages with `use` — see docs/user/spec.md, or run `nazm capabilities`"
 }
 
 fn reserved(p: Px, name: Str, span: Int) -> Bool {

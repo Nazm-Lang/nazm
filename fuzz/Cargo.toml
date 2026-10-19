@@ -1,4 +1,4 @@
-# The coverage-guided fuzzer (N93, docs/architecture.md §7.94).
+# The coverage-guided fuzzer (N93, docs/internal/architecture.md §7.94).
 #
 # Its own workspace, as cargo-fuzz's are: it is built with SanitizerCoverage flags the main
 # workspace never sees, and its one `unsafe` — calling the C coverage callbacks' counters — stays

@@ -5,7 +5,7 @@
 (interpreter) and R5 (commands) can be fed by a front end written in Nazm. Today it compiles itself
 (C2 ≡ C3) and agrees with the reference on 21 parity probes (`compiler/parity.json`), but that is
 parity on the probes, not on the language: it refuses string escapes, `::`, `as`, packages, every
-Gate 2 type and built-in, and every R1 form (`docs/limitations.md`, *Self-hosted compiler*;
+Gate 2 type and built-in, and every R1 form (`docs/user/limitations.md`, *Self-hosted compiler*;
 `crates/nazm-cli/tests/selfhost.rs`, `NOT_CARRIED`).
 
 ## What Changes
@@ -78,7 +78,7 @@ payloads: after the coordinator declares them final.
 
 ### New Capabilities
 - `front-end-in-nazm`: what the Nazm front end must agree with the Rust one on. Archived with
-  `--skip-specs`; the normative text lands in `docs/bootstrap.md` and `docs/limitations.md` when R2
+  `--skip-specs`; the normative text lands in `docs/internal/bootstrap.md` and `docs/user/limitations.md` when R2
   closes.
 
 ### Modified Capabilities
@@ -90,5 +90,5 @@ None.
 comparison harness, extracted inputs, and a small Rust reference dumper outside the workspace),
 `compiler/parity.json` when the probes change. Asked of the coordinator, not changed here:
 `crates/nazm-cli/tests/selfhost.rs` (its token mapping and tree dump name the old subset),
-`docs/limitations.md`, `docs/bootstrap.md`, and the runbook's containment rule for running the
+`docs/user/limitations.md`, `docs/internal/bootstrap.md`, and the runbook's containment rule for running the
 comparison (see `design.md`, D6).

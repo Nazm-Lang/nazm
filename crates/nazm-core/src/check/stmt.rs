@@ -219,7 +219,7 @@ impl Checker<'_> {
         };
 
         // A task runs one function with one signature. A generic one would need its type
-        // arguments settled at the `spawn`, which N11 does not do: `docs/spec.md`, *Calling a
+        // arguments settled at the `spawn`, which N11 does not do: `docs/user/spec.md`, *Calling a
         // generic function*.
         if sig.generics > 0 {
             self.errors.push(
@@ -281,10 +281,10 @@ impl Checker<'_> {
             }
             // The capture rule. A sequence is a handle to unsynchronised shared mutable
             // storage, so letting one cross into a task would be a data race the
-            // language had invited — see `docs/spec.md`.
+            // language had invited — see `docs/user/spec.md`.
             // Derived rather than asked of the type: a record's legality is its fields',
             // recursively, so the table answers and the answer carries the field path
-            // that made it illegal. `docs/spec.md`, *Task safety is derived*.
+            // that made it illegal. `docs/user/spec.md`, *Task safety is derived*.
             if let Err(why) = self.res.types().task_safety(got) {
                 let shown = self.show(got);
                 let named = self.show(why.ty);
@@ -398,7 +398,7 @@ impl Checker<'_> {
 
         // Mutability is checked at the **root binding**, whatever the path. `p.x = 2`
         // replaces part of what `p` holds, so it needs `let mut p` for the same reason
-        // `p = q` does — a record is a value, not a handle to one. `docs/spec.md`,
+        // `p = q` does — a record is a value, not a handle to one. `docs/user/spec.md`,
         // *Binding mutability reaches every field*.
         if !binding.mutable {
             let written = if place.path.is_empty() {
@@ -538,7 +538,7 @@ impl Checker<'_> {
         self.loop_depth -= 1;
     }
 
-    /// A `for` loop (R1a, `docs/spec.md`, *`for` loops*): what it iterates, then its body with
+    /// A `for` loop (R1a, `docs/user/spec.md`, *`for` loops*): what it iterates, then its body with
     /// the name bound in the body's own scope — so the name is new each step, immutable, gone
     /// after the loop, and a `let` of it in the body is a same-scope duplicate (`N0202`).
     fn check_for(&mut self, f: &nazm_syntax::For) {

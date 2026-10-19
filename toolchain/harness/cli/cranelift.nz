@@ -139,7 +139,7 @@ fn cleanup_on_every_exit_and_on_failure_agrees(io: IoCap, p: ProcessCap, sp: Spa
 fn recursion_compiles_under_both_backends_and_agrees(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
     // Refused by both until N49; both now emit the stack check MIR places first in each function
-    // of a call cycle (`docs/spec.md`, *Native recursion*).
+    // of a call cycle (`docs/user/spec.md`, *Native recursion*).
     agree_src(h, "fn f(n: Int) -> Int { if n == 0 { 0 } else { f(n - 1) + 1 } }\nfn even(n: Int) -> Bool { if n == 0 { true } else { odd(n - 1) } }\nfn odd(n: Int) -> Bool { if n == 0 { false } else { even(n - 1) } }\nfn main() -> Int { if even(10) { f(30) } else { 0 } }\n")
 }
 

@@ -1,7 +1,7 @@
 //! N56: the registry from the command line — publish, require, lock, build, yank, and the
 //! refusals a build must make before it compiles anything.
 //!
-//! `docs/architecture.md` §7.58. The model is `nazm-package`'s, tested there; this holds the
+//! `docs/internal/architecture.md` §7.58. The model is `nazm-package`'s, tested there; this holds the
 //! commands and the builds to it.
 
 #![allow(

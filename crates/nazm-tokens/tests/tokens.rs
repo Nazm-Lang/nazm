@@ -248,7 +248,8 @@ fn a_missing_or_altered_asset_is_refused_by_name() {
 #[test]
 fn large_and_unusual_texts_count_without_panicking() {
     let r = registry();
-    let spec = std::fs::read_to_string(nazm_docs::default_root().join("docs/spec.md")).unwrap();
+    let spec =
+        std::fs::read_to_string(nazm_docs::default_root().join("docs/user/spec.md")).unwrap();
     let CostResult::Available(c) = r.measure(spec.as_bytes(), &[]) else {
         panic!()
     };

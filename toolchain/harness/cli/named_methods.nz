@@ -1,4 +1,4 @@
-// R1, 5b.15 (`docs/spec.md`, *Methods and indexes by name*): `x.f(a)` is `T_f(x, a)` for the
+// R1, 5b.15 (`docs/user/spec.md`, *Methods and indexes by name*): `x.f(a)` is `T_f(x, a)` for the
 // type's family where no trait gives `f`, `x[i]` is its `_get` and `x[i] = v` its `_set`; map
 // entries read, write and count by index; lines and splits keep their edges. Ported from
 // `crates/nazm-cli/tests/named_methods.rs` (R7).

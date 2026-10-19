@@ -1,5 +1,5 @@
 // N63: real-time bounds — what is bounded, what is measured, what is unknown
-// (`docs/architecture.md` §7.65). Ported from `crates/nazm-cli/tests/realtime.rs` (R7).
+// (`docs/internal/architecture.md` §7.65). Ported from `crates/nazm-cli/tests/realtime.rs` (R7).
 //
 // `the_watermark_is_the_board_s` reads the board entry's LLVM text from
 // `nazm_lir::runtime::board::emit_entry`, which the CLI writes only as an object, and stays Rust

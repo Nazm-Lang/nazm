@@ -42,7 +42,7 @@ pub fn run(source: &str) -> Outcome {
 
 /// As [`run`], with explicit budgets.
 ///
-/// The budgets are the interpreter's, not the language's — see `docs/spec.md`. They exist
+/// The budgets are the interpreter's, not the language's — see `docs/user/spec.md`. They exist
 /// so that a program which does not terminate reports instead of consuming the machine,
 /// whether it fails to terminate by looping or by recursing.
 #[must_use]
@@ -115,7 +115,7 @@ pub fn check_source(source: &str) -> Vec<nazm_diag::Diagnostic> {
 ///
 /// # Why the tree never leaves
 ///
-/// `docs/spec.md` promises that the whole pipeline runs on a thread whose stack the
+/// `docs/user/spec.md` promises that the whole pipeline runs on a thread whose stack the
 /// interpreter sets itself, because **a bound only means something against a known
 /// stack**: macOS gives the main thread 8 MiB, a spawned thread 2 MiB, and the test
 /// harness 2 MiB per test. Parsing, checking, lowering, emitting and *dropping* the tree

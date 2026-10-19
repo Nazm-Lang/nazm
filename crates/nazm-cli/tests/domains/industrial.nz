@@ -1,4 +1,4 @@
-// The industrial reference workload (Gate 3, `docs/systems-domains.md` Parts E–J): a batch
+// The industrial reference workload (Gate 3, `docs/internal/systems-domains.md` Parts E–J): a batch
 // controller on both emulated boards, held to the `industrial` profile, its loop feeding the
 // board's watchdog.
 //

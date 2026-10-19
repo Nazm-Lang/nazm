@@ -4,7 +4,7 @@
 // failure as a status, `-errno`, whose number is the platform's. This module turns one into an
 // `IoError` whose `kind` is the same on every platform — the table from number to kind for each
 // family of platforms is here, in one place — with the system's number and message beside it and
-// what the program was doing, which `io_context` adds. `docs/general-purpose.md` §8 and §13.
+// what the program was doing, which `io_context` adds. `docs/internal/general-purpose.md` §8 and §13.
 
 /// What kind of failure, the same on every platform.
 pub enum IoErrorKind {

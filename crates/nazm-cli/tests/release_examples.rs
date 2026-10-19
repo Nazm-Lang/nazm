@@ -1,6 +1,6 @@
 //! The release examples and the getting-started page, held to what they say (R1).
 //!
-//! `examples/tour/` is what a new reader runs first and `docs/getting-started.md` is what they
+//! `examples/tour/` is what a new reader runs first and `docs/user/getting-started.md` is what they
 //! read first, so a tour program that no longer checks, a command whose output changed, or two
 //! backends that disagree is a broken first impression — and nothing else in the suite would
 //! notice. Every tour program is checked, formatted, interpreted, and built and run under both
@@ -263,7 +263,7 @@ fn run_page(page: &str, min_runs: usize, min_commands: usize) {
 
 #[test]
 fn the_getting_started_page_runs_as_written() {
-    run_page("docs/getting-started.md", 6, 15);
+    run_page("docs/user/getting-started.md", 6, 15);
 }
 
 #[test]

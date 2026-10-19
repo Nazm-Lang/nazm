@@ -1,4 +1,4 @@
-//! R1, 5b.16 and 5b.17 (`docs/spec.md`, *Conveniences for the first program*): `let x: T`,
+//! R1, 5b.16 and 5b.17 (`docs/user/spec.md`, *Conveniences for the first program*): `let x: T`,
 //! inference from the type a result is wanted as, block comments, `loop`, `while let` and an
 //! impl without a trait — each the spelling of something the language had.
 //!

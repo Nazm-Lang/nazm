@@ -1,4 +1,4 @@
-//! Gate 3: a board's heap, and `no-heap` (`docs/spec.md`, *Boards*; `docs/systems-domains.md`
+//! Gate 3: a board's heap, and `no-heap` (`docs/user/spec.md`, *Boards*; `docs/internal/systems-domains.md`
 //! Part B).
 //!
 //! What a build shows on any host: a board whose manifest gives a heap builds a program that

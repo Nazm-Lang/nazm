@@ -20,7 +20,7 @@
 //!
 //! Not an incremental or cached artefact either. Every id here is **session-local**, in the
 //! same sense as [`FileId`](nazm_span::FileId): an index, valid for one compilation in one
-//! process, not derived from content and not a cache key. See `docs/research-register.md`
+//! process, not derived from content and not a cache key. See `docs/internal/research-register.md`
 //! R2 and R3 for what a durable definition identity would have to be; this is deliberately
 //! not that.
 
@@ -300,7 +300,7 @@ pub struct Instantiation {
 
 /// Which field of which record a projection refers to.
 ///
-/// **Not an offset.** `docs/architecture.md` requires field access to stay symbolic until
+/// **Not an offset.** `docs/internal/architecture.md` requires field access to stay symbolic until
 /// the layout boundary, so what resolution decides is *which field* — a record identity
 /// and the field's index in declaration order — and the backend decides where that field
 /// sits. A semantic stage that recorded a byte offset here would have made the layout
@@ -367,7 +367,7 @@ pub struct PayloadRef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumericFact {
     /// A literal's type where it is not the default — `Int` for an integer, `Float64` for a
-    /// floating-point literal — because a type was expected (`docs/general-purpose.md` §2).
+    /// floating-point literal — because a type was expected (`docs/internal/general-purpose.md` §2).
     Literal(Type),
     /// A conversion call, by its callee's span: `T(x)`, `try_convert[T](x)`,
     /// `wrap_convert[T](x)` or `saturate_convert[T](x)`.
@@ -380,7 +380,7 @@ pub enum NumericFact {
     },
 }
 
-/// One static (Gate 3, `docs/spec.md`, *Statics*): storage its module's unit defines.
+/// One static (Gate 3, `docs/user/spec.md`, *Statics*): storage its module's unit defines.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaticDef {
     pub module: ModuleId,
@@ -771,7 +771,7 @@ impl Resolution {
     }
 
     /// Which logical enum this is, across processes. The same rule, with
-    /// [`DefKind::Enum`]. A *variant* has no key of its own: `docs/spec.md` makes its
+    /// [`DefKind::Enum`]. A *variant* has no key of its own: `docs/user/spec.md` makes its
     /// durable meaning this key **and its name**, and nothing persistent has needed a
     /// composed identity, so none was invented.
     #[must_use]
@@ -785,7 +785,7 @@ impl Resolution {
     /// Needs the owning module's durable key, which the caller has and this does not: a
     /// `Resolution` knows which module owns a definition and nothing about where that
     /// module's source sits. `None` when the module has no durable identity, which is an
-    /// answer rather than a failure — see `docs/spec.md`, *Durable identity*.
+    /// answer rather than a failure — see `docs/user/spec.md`, *Durable identity*.
     #[must_use]
     pub fn def_key(&self, id: FnId, module: &ModuleKey) -> Option<DefKey> {
         let def = self.function(id)?;

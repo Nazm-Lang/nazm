@@ -1,6 +1,6 @@
 //! N54: select, deadlines, cooperative cancellation and the scheduler's counters.
 //!
-//! `docs/architecture.md` §7.56 and the spec section *Select, deadlines and cancellation*. What
+//! `docs/internal/architecture.md` §7.56 and the spec section *Select, deadlines and cancellation*. What
 //! only a whole run shows: that a select takes the lowest ready channel, a closed one included,
 //! under the interpreter and both native backends alike — the same stdout, status, memory
 //! report and scheduler counts — that a waiting select is woken by another task's send and by

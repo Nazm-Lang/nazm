@@ -20,7 +20,7 @@ use nazm_lir::ir::Builtin;
 
 use crate::exit;
 
-/// The version every `nazm capabilities` JSON object carries. See `docs/diagnostics.md`.
+/// The version every `nazm capabilities` JSON object carries. See `docs/user/diagnostics.md`.
 const SCHEMA: &str = "nazm.capabilities/1";
 
 #[derive(Debug, serde::Serialize)]
@@ -86,7 +86,7 @@ const CONSTRUCTS: &[ConstructRow] = &[
         name: "recursion, direct or mutual",
         interpreted: true,
         compiled: true,
-        evidence: "nazm-cli/tests/usability.rs; a stack check on entry to every function in a call cycle, N0408 (docs/spec.md, Native recursion)",
+        evidence: "nazm-cli/tests/usability.rs; a stack check on entry to every function in a call cycle, N0408 (docs/user/spec.md, Native recursion)",
     },
     ConstructRow {
         name: "`if` in statement and value position",
@@ -145,20 +145,20 @@ const CONSTRUCTS: &[ConstructRow] = &[
         interpreted: true,
         compiled: true,
         evidence: "nazm-cli/tests/traits.rs; nominal and static, no trait objects (N0607) and no \
-                   method values (N0608) (docs/spec.md, Traits and methods)",
+                   method values (N0608) (docs/user/spec.md, Traits and methods)",
     },
     ConstructRow {
         name: "modules: `use`, relative resolution, diamonds, cycles",
         interpreted: true,
         compiled: true,
-        evidence: "nazm-cli/tests/cli.rs; private by default, `pub` exports (docs/spec.md, Visibility)",
+        evidence: "nazm-cli/tests/cli.rs; private by default, `pub` exports (docs/user/spec.md, Visibility)",
     },
     ConstructRow {
         name: "re-exports: `pub use \"path\";` and `pub use \"path\" { a, b as c };`",
         interpreted: true,
         compiled: true,
         evidence: "nazm-cli/tests/reexports.rs; one definition under another module's names \
-                   (docs/spec.md, `pub use` offers another module's definitions)",
+                   (docs/user/spec.md, `pub use` offers another module's definitions)",
     },
     ConstructRow {
         name: "structured concurrency: `scope`, `spawn`, `Chan`",
@@ -176,13 +176,13 @@ const CONSTRUCTS: &[ConstructRow] = &[
         name: "string escapes: `\\n` `\\t` `\\r` `\\0` `\\\\` `\\\"` `\\xHH`",
         interpreted: true,
         compiled: true,
-        evidence: "nazm-cli/tests/usability.rs; decoded once, by the lexer (docs/spec.md, String escapes)",
+        evidence: "nazm-cli/tests/usability.rs; decoded once, by the lexer (docs/user/spec.md, String escapes)",
     },
     ConstructRow {
         name: "logical operators: `&&`, `||` (short-circuit) and `!`",
         interpreted: true,
         compiled: true,
-        evidence: "nazm-cli/tests/usability.rs; lowered to `if` in Core IR (docs/spec.md, Logical operators)",
+        evidence: "nazm-cli/tests/usability.rs; lowered to `if` in Core IR (docs/user/spec.md, Logical operators)",
     },
     ConstructRow {
         name: "qualified names: `use \"path\" as m;` and `m::item`",
@@ -194,7 +194,7 @@ const CONSTRUCTS: &[ConstructRow] = &[
         name: "function values: closures, named functions as values, indirect calls",
         interpreted: true,
         compiled: true,
-        evidence: "nazm-cli/tests/closures.rs; one closure object and calling convention under both backends (docs/spec.md, Function values and closures)",
+        evidence: "nazm-cli/tests/closures.rs; one closure object and calling convention under both backends (docs/user/spec.md, Function values and closures)",
     },
     ConstructRow {
         name: "a call to a foreign (C) function",
@@ -206,7 +206,7 @@ const CONSTRUCTS: &[ConstructRow] = &[
         name: "an iteration budget that stops a runaway loop",
         interpreted: true,
         compiled: false,
-        evidence: "docs/spec.md, The iteration and depth limits are the interpreter's: a compiled \
+        evidence: "docs/user/spec.md, The iteration and depth limits are the interpreter's: a compiled \
                    program has no budget and does not stop",
     },
 ];
@@ -235,7 +235,7 @@ fn inventory() -> Inventory {
         // Built-ins only. A user-defined record is not part of the language's
         // vocabulary — it exists in one program — and listing one here would confuse an
         // inventory of what the *compiler* has with an inventory of what a *source file*
-        // declares. `docs/spec.md` keeps the two apart.
+        // declares. `docs/user/spec.md` keeps the two apart.
         types: Type::every_builtin_name(),
         authority: nazm_core::sema::CapabilityKind::ALL
             .iter()

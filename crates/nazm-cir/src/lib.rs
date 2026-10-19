@@ -1,6 +1,6 @@
 //! Core IR: the checked meaning of a program, once.
 //!
-//! `docs/architecture.md` §7.41 is this crate's constitution, written before it. In one
+//! `docs/internal/architecture.md` §7.41 is this crate's constitution, written before it. In one
 //! paragraph: a checked program is lowered here exactly once — by `nazm-core`, only after
 //! checking succeeded — into typed functions whose names are identities, whose control flow is
 //! explicit and whose sugar is gone. The interpreter runs it and the native backend lowers it;
@@ -16,10 +16,10 @@
 //!
 //! # Level 3, by name
 //!
-//! `docs/architecture.md` §2 calls level 3 "Core" and describes it as ANF with traits as
+//! `docs/internal/architecture.md` §2 calls level 3 "Core" and describes it as ANF with traits as
 //! dictionaries. This is level 3 by responsibility — the first representation after checking,
 //! typed, with effects explicit — and not by that shape: it is a tree of structured regions,
-//! and the language has no traits. `docs/master-architecture.md` §3 states the rule for
+//! and the language has no traits. `docs/internal/master-architecture.md` §3 states the rule for
 //! reading a crate list against that table.
 
 pub mod digest;

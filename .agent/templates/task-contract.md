@@ -7,7 +7,7 @@
 - **Authorities:**
 - **Invariants that must hold:**
 - **Allowed actions:**
-- **Prohibited actions:** <at least the forbidden column of `docs/agent-governance.md` §4>
+- **Prohibited actions:** <at least the forbidden column of `docs/internal/agent-governance.md` §4>
 - **Acceptance criteria:**
 - **Evidence to produce:**
 - **Stop conditions:**

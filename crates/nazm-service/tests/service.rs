@@ -580,7 +580,7 @@ fn a_thousand_edits_leave_one_current_answer_and_bounded_state() {
         }
         // One document and one analysis of it are kept, over the current text only,
         // whatever the history: the same after a thousand edits as after ten. Resident
-        // memory across edits is measured in `docs/performance.md`.
+        // memory across edits is measured in `docs/internal/performance-log.md`.
         assert_eq!(s.retained(), after_warmup);
         assert_eq!(s.retained().0, 1);
         assert_eq!(s.retained().1, 1);

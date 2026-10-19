@@ -1,4 +1,4 @@
-//! R1c, L2: `@derive(json)` (`docs/spec.md`, *Derived serialisation*).
+//! R1c, L2: `@derive(json)` (`docs/user/spec.md`, *Derived serialisation*).
 //!
 //! A record of every field kind the derive carries — integers in and out of range, a float, a
 //! string, `Option`, `Vec`, `Chain` of itself, a derived enum with and without payloads — encoded,

@@ -121,7 +121,8 @@ fn a_section_for_a_person_is_its_text_exactly() {
     let plain = nazm(&["docs", "--section", "spec:generics"]);
     assert_eq!(plain.code, Some(0));
     assert_eq!(plain.stdout, s["body"].as_str().unwrap());
-    let file = std::fs::read_to_string(nazm_docs::default_root().join("docs/spec.md")).unwrap();
+    let file =
+        std::fs::read_to_string(nazm_docs::default_root().join("docs/user/spec.md")).unwrap();
     assert!(file.contains(&plain.stdout));
     // The index for a person: one id and title per section.
     let (index, _) = json(&["docs", "--index", "--json"]);
@@ -177,7 +178,7 @@ fn a_changed_document_is_a_new_state_and_a_broken_corpus_is_unavailable() {
     let root = at(dir.path());
     let (before, _) = json(&["docs", "--index", "--json", "--root", &root]);
     let state = before["state"].as_str().unwrap().to_owned();
-    let spec = dir.path().join("docs/spec.md");
+    let spec = dir.path().join("docs/user/spec.md");
     let text = std::fs::read_to_string(&spec).unwrap();
     let reworded = "### `while` is a statement, and there is still no loop value\n";
     std::fs::write(
@@ -234,7 +235,7 @@ fn an_ambiguous_request_is_refused_by_the_parser() {
         vec!["docs", "--index", "--section", "spec"],
         vec!["docs", "--index", "--state", "x"],
         vec!["docs", "--section", "spec", "--document", "spec"],
-        vec!["docs", "--section", "spec", "--path", "docs/spec.md"],
+        vec!["docs", "--section", "spec", "--path", "docs/user/spec.md"],
     ] {
         assert_eq!(nazm(&args).code, Some(5), "{args:?}");
     }

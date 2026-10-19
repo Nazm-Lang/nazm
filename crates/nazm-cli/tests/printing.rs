@@ -1,4 +1,4 @@
-//! R1, 5b.4 and 5b.13 (`docs/spec.md`, *Output*): `print` and `eprint` of any value an
+//! R1, 5b.4 and 5b.13 (`docs/user/spec.md`, *Output*): `print` and `eprint` of any value an
 //! interpolation's hole takes, and `println` and `eprintln`, which add a newline.
 //!
 //! The same bytes on each stream in every implementation, nothing live; what has no text is

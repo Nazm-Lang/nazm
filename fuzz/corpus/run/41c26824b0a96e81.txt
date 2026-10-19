@@ -2,7 +2,7 @@
 //
     }
 /S for when it renders a value: `show_all[T: Show]` renders every element of a `Vec[T]` without
-// being handed a rendering function, which is the result `docs/architecture.md` §7.79 names as
+// being handed a rendering function, which is the result `docs/internal/architecture.md` §7.79 names as
     }
 // orph=>an rule); a record or an enum implements `Show` in its own Int.
 

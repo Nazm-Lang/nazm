@@ -1,7 +1,7 @@
 // Checked arithmetic in a tight loop.
 //
 // Every `+` and `*` here is an overflow-checked intrinsic and a branch, never `nsw`
-// (`docs/spec.md`). This is the program that says what that costs.
+// (`docs/user/spec.md`). This is the program that says what that costs.
 
 fn main() {
     let mut i = 0;

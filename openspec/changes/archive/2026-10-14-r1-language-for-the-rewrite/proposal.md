@@ -28,16 +28,16 @@ Optional, recommended deferred: closures in generic functions (`N0387` lifted).
 
 ### New Capabilities
 - `language-for-the-rewrite`: the observable requirements. Archived with `--skip-specs`; the
-  normative text goes into `docs/spec.md`, `docs/stability.md` and the library reference.
+  normative text goes into `docs/user/spec.md`, `docs/user/stability.md` and the library reference.
 
 ### Modified Capabilities
 None.
 
 ## Impact
 
-`docs/spec.md` (*Generics*, *The memory constitution* and its cost table, *Cycles*, a new *for*
-section, the library tables, the process and file sections), `docs/grammar.ebnf`, `docs/stability.md`,
-`docs/diagnostics.md`. Code: `nazm-syntax` (`for`, `..`), `nazm-sema` (the ownership graph, `Box`,
+`docs/user/spec.md` (*Generics*, *The memory constitution* and its cost table, *Cycles*, a new *for*
+section, the library tables, the process and file sections), `docs/user/grammar.ebnf`, `docs/user/stability.md`,
+`docs/user/diagnostics.md`. Code: `nazm-syntax` (`for`, `..`), `nazm-sema` (the ownership graph, `Box`,
 `List`), `nazm-core` (the interpreter), `nazm-mir`/`nazm-lir`/`nazm-runtime` (layout, release,
 in-place append, the heap counter), `nazm-codegen-clif` (until cut-over), `library/std`.
 

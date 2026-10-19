@@ -1,4 +1,4 @@
-// v1, Q1-B-05: `exit_with`'s status is one contract in every implementation (`docs/spec.md`,
+// v1, Q1-B-05: `exit_with`'s status is one contract in every implementation (`docs/user/spec.md`,
 // *Ending*): `0..=255` reaches the host unchanged; anything outside fails with `N0416` and status
 // 2 — in the interpreter, the LIR oracle, LLVM at `-O0` and `-O2`, Cranelift, and from inside a
 // task. Ported from `crates/nazm-cli/tests/exit_status.rs` (R7).

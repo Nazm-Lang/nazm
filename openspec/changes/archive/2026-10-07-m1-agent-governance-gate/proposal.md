@@ -1,7 +1,7 @@
 ## Why
 
 M1 makes agent behaviour a repository-owned interface: a root `AGENTS.md`, nested ones for
-`compiler/`, `crates/nazm-runtime/` and `xtask/`, a `CLAUDE.md` shim, `docs/agent-governance.md`,
+`compiler/`, `crates/nazm-runtime/` and `xtask/`, a `CLAUDE.md` shim, `docs/internal/agent-governance.md`,
 `.agent/` templates, and an OpenSpec layer. Instruction files drift the way any duplicated
 vocabulary does: a shim that stops pointing to its source, a link to a renamed authority, a
 template that loses a required field, a nested file that quietly relaxes a root prohibition. None
@@ -31,5 +31,5 @@ of that is caught today, because nothing reads these files.
 ## Impact
 
 `xtask/src/` only (a new gate module and its registration in `run_checks`). Authorities touched:
-`docs/agent-governance.md` §14 and `docs/change-governance.md` describe the gate. Semantic epoch,
+`docs/internal/agent-governance.md` §14 and `docs/internal/change-governance.md` describe the gate. Semantic epoch,
 runtime ABI, schemas and std API: unchanged.

@@ -226,7 +226,7 @@ fn one_worker_runs_a_programs_tasks_in_the_same_order_every_time(io: IoCap, p: P
     ok()
 }
 
-/// What the default costs against threads (N106, `docs/performance.md`): spawn and join, a
+/// What the default costs against threads (N106, `docs/internal/performance-log.md`): spawn and join, a
 /// channel round trip, a blocked receive woken, and resident memory per live task — each program
 /// built once at `-O2`, five runs, median. Run with `--ignored --nocapture`; it measures, it does
 /// not judge.

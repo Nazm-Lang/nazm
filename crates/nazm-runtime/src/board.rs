@@ -1,4 +1,4 @@
-//! The freestanding runtime and entry (N62, `docs/architecture.md` §7.64), for each board of the
+//! The freestanding runtime and entry (N62, `docs/internal/architecture.md` §7.64), for each board of the
 //! table (N86, §7.87): no OS, no C library, no heap, one thread.
 //!
 //! A board is a description — where its image loads, its UART, how its machine is stopped, its
@@ -54,7 +54,7 @@ impl Isa {
     }
 }
 
-/// One region of a microcontroller's memory (M1, `docs/spec.md`, *Boards*): where it
+/// One region of a microcontroller's memory (M1, `docs/user/spec.md`, *Boards*): where it
 /// starts and how many bytes it has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Region {
@@ -79,7 +79,7 @@ pub struct Memory {
     pub ram: Region,
 }
 
-/// What a chip's boot ROM expects of an image beyond its code (M1, `docs/spec.md`,
+/// What a chip's boot ROM expects of an image beyond its code (M1, `docs/user/spec.md`,
 /// *Boards*).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Image {
@@ -137,7 +137,7 @@ impl Uart {
     }
 }
 
-/// A board's interrupt controller (Gate 3, `docs/spec.md`, *Boards*).
+/// A board's interrupt controller (Gate 3, `docs/user/spec.md`, *Boards*).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Controller {
     /// An AArch64 board's GICv2: its distributor and CPU interface. The timer is the virtual
@@ -148,7 +148,7 @@ pub enum Controller {
     Nvic { clock_hz: u64 },
 }
 
-/// A board's interrupts (Gate 3, `docs/spec.md`, *Boards*): a controller and what it delivers.
+/// A board's interrupts (Gate 3, `docs/user/spec.md`, *Boards*): a controller and what it delivers.
 /// AArch64's and Cortex-M's in 1.0; a RISC-V board has none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interrupts {
@@ -197,7 +197,7 @@ pub struct Handler {
     pub defined_here: bool,
 }
 
-/// One task of the board's fixed-priority scheduler (Gate 3, `docs/spec.md`, *Boards*): its name,
+/// One task of the board's fixed-priority scheduler (Gate 3, `docs/user/spec.md`, *Boards*): its name,
 /// the Nazm function's symbol, its priority (higher runs first) and period in ticks, and whether it
 /// takes the device's authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,7 +210,7 @@ pub struct Task {
 }
 
 /// One board: everything about it that is not the language's (N86). Since Gate 3 a board is a
-/// manifest (`docs/spec.md`, *Boards*): the built-in ones below print as one ([`Board::manifest`]),
+/// manifest (`docs/user/spec.md`, *Boards*): the built-in ones below print as one ([`Board::manifest`]),
 /// and `nazm build --board FILE` reads one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Board {
@@ -474,7 +474,7 @@ pub fn linker_script(board: &Board) -> String {
     linker_script_placing(board, &Placed::default())
 }
 
-/// The sections a program's `@section` names (Gate 3, `docs/spec.md`, *Boards*), by kind: each
+/// The sections a program's `@section` names (Gate 3, `docs/user/spec.md`, *Boards*), by kind: each
 /// is kept and placed after the board's own sections of that kind.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Placed {
@@ -546,7 +546,7 @@ pub fn linker_script_placing(board: &Board, placed: &Placed) -> String {
     )
 }
 
-/// The linker script of an image that runs from flash (M1, `docs/spec.md`, *Boards*):
+/// The linker script of an image that runs from flash (M1, `docs/user/spec.md`, *Boards*):
 /// the manifest's flash and RAM as `MEMORY`; the vector table, the boot ROM's block when the
 /// manifest's `[image]` asks for one, code and read-only data in flash; writable data in RAM with
 /// its initial values loaded in flash after the read-only data — `__data_start` to `__data_end`,
@@ -612,7 +612,7 @@ pub fn emit_runtime_for(board: &Board, needs: &crate::Needs) -> String {
     out
 }
 
-/// A board's arena (Gate 3, `docs/spec.md`, *Boards*): a bump allocator over the linker
+/// A board's arena (Gate 3, `docs/user/spec.md`, *Boards*): a bump allocator over the linker
 /// script's `__heap_start` to `__heap_end`, never returned to — `free` does nothing. Each block
 /// is 16-aligned behind a 16-byte header holding its size, so `realloc` copies what there was.
 /// The bump is a compare-and-swap, so an interrupt handler allocating while `main` does is safe.
@@ -1875,7 +1875,7 @@ entry:
 }
 "#;
 
-/// The atomic built-ins' operations (Gate 3, `docs/spec.md`, *Atomics*): one sequentially
+/// The atomic built-ins' operations (Gate 3, `docs/user/spec.md`, *Atomics*): one sequentially
 /// consistent access to an aligned 8-byte cell each. A board's runtime and the hosted one both
 /// define them, as they do the device registers; on a target without threads LLVM makes each
 /// the plain access it is with one task.
@@ -2619,7 +2619,7 @@ fn nvic_runtime(out: &mut String, i: &Interrupts, handlers: &[Handler]) {
     }
 }
 
-/// The board's fixed-priority scheduler (Gate 3, `docs/spec.md`, *Boards*). `nz_sched_tick` is the
+/// The board's fixed-priority scheduler (Gate 3, `docs/user/spec.md`, *Boards*). `nz_sched_tick` is the
 /// board timer's handler: one more tick. `nz_sched_run` loops over the tasks, highest priority
 /// first, the first written first among equals: a task whose release — its next multiple of its
 /// period — has come runs to completion and is released again a period on; one whose release came

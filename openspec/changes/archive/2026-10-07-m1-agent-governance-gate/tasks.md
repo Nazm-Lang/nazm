@@ -6,6 +6,6 @@
 
 ## 2. Authorities and evidence
 
-- [x] 2.1 Describe the gate in `docs/agent-governance.md` §14 and `docs/change-governance.md`
+- [x] 2.1 Describe the gate in `docs/internal/agent-governance.md` §14 and `docs/internal/change-governance.md`
 - [x] 2.2 `cargo xtask check` passes; `openspec validate --strict` passes
 - [x] 2.3 Archive the change with its `repository-governance` spec

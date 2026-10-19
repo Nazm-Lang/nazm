@@ -1,4 +1,4 @@
-//! The formal core's properties (`docs/formal-core.md`), checked over **every** program of the
+//! The formal core's properties (`docs/internal/formal-core.md`), checked over **every** program of the
 //! core up to [`BOUND`] nodes — a bounded model check, not a proof.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

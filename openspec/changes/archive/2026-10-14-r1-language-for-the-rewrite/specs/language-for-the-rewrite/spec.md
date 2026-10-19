@@ -3,7 +3,7 @@
 ### Requirement: A definition may refer to itself through an immutable indirection
 A record or enum SHALL be accepted when every cycle through it in the ownership graph of definitions
 consists of inline edges and edges through `Box` or `List`, with at least one of the latter
-(`docs/spec.md`, *Generics* and *Cycles*). A cycle with an edge through a mutable handle SHALL stay
+(`docs/user/spec.md`, *Generics* and *Cycles*). A cycle with an edge through a mutable handle SHALL stay
 refused with `N0359`, and an all-inline cycle with `N0336`.
 
 #### Scenario: an expression tree
@@ -32,7 +32,7 @@ to the length of `t`, and SHALL NOT change any other value's bytes.
 
 ### Requirement: `for` is defined by the `while` loop it stands for
 `for x in e { … }` over `Ints`, `Strs`, `Vec[T]`, `List[T]` and `Bytes`, and `for i in a..b { … }`,
-SHALL behave exactly as the `while` loop `docs/spec.md` gives for each, in every implementation; a
+SHALL behave exactly as the `while` loop `docs/user/spec.md` gives for each, in every implementation; a
 program using `in` as a name elsewhere SHALL keep its meaning.
 
 #### Scenario: pushing during a loop
@@ -46,7 +46,7 @@ program using `in` as a name elsewhere SHALL keep its meaning.
 ### Requirement: The library supplies what the toolchain needs
 `@std/blake3` and `@std/sha256` SHALL produce the official test vectors' digests; `@std/toml` SHALL
 parse and re-encode `nazm.toml` and `nazm.lock` files the toolchain writes; `file_walk`,
-`os_stdout`/`os_stderr`, `os_spawn_in` and `os_lock`/`os_unlock` SHALL behave as `docs/spec.md`
+`os_stdout`/`os_stderr`, `os_spawn_in` and `os_lock`/`os_unlock` SHALL behave as `docs/user/spec.md`
 states, under the interpreter and native builds.
 
 #### Scenario: hashing

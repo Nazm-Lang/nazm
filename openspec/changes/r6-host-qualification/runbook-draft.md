@@ -1,6 +1,6 @@
-# Draft — `docs/runbook.md`, *Mandatory containment* (R6, task 7.2)
+# Draft — `docs/internal/runbook.md`, *Mandatory containment* (R6, task 7.2)
 
-**Accepted 2026-10-20 and applied** to `docs/runbook.md` (with the runner's name and refusals added
+**Accepted 2026-10-20 and applied** to `docs/internal/runbook.md` (with the runner's name and refusals added
 there, which now is the text that rules). Kept as the record of what was proposed.
 
 ```diff
@@ -37,7 +37,7 @@ there, which now is the text that rules). Kept as the record of what was propose
 +
 +The heap limit is a ceiling the program enforces on itself: every byte its code and runtime ask
 +for is counted first, and an allocation past the limit does not happen (`N0406`, status 2;
-+`docs/spec.md`, *A bounded heap*). It does not count a task's stack, the image, C's own
++`docs/user/spec.md`, *A bounded heap*). It does not count a task's stack, the image, C's own
 +allocations or child processes — hence one at a time, and the deadline.
 +
 +**Withdrawn at once**, back to contained only until investigated, if a host run's peak resident

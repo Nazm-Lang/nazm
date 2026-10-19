@@ -184,7 +184,7 @@ impl Checker<'_> {
         }
         // Gate 1-C1: a closure's environment owns what it captures, so capturing a container
         // that can hold a function value is the one way it could come to own itself
-        // (`docs/spec.md`, *Cycles*). Decided by the captured binding's type, once per capture.
+        // (`docs/user/spec.md`, *Cycles*). Decided by the captured binding's type, once per capture.
         let first_capture = crossing
             .first()
             .and_then(|i| self.closures.get(*i))

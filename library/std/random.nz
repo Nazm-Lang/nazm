@@ -5,7 +5,7 @@
 // reproducible: one seed, one sequence, in every implementation and run, needing no authority.
 // **Entropy** is the operating system's, behind a `RandomCap`: `random_bytes` and `random_seed`,
 // for keys and for seeding a generator that should not be predicted. Reproducibility is the default
-// and unpredictability is asked for by name. `docs/general-purpose.md` §21.
+// and unpredictability is asked for by name. `docs/internal/general-purpose.md` §21.
 
 /// A seeded generator: its four words of state, shared like any handle.
 pub struct Rng {

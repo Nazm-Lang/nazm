@@ -852,7 +852,7 @@ pub fn rt_core_STRING_RUNTIME() -> Str ! {} {
 define hidden ptr @nz.str_alloc(i64 %n) {
 entry:
   ; Checked, because a length that overflows here would allocate less than the caller is
-  ; about to write. `docs/spec.md` reports it as N0406 at the call site.
+  ; about to write. `docs/user/spec.md` reports it as N0406 at the call site.
   %r = call {i64, i1} @llvm.uadd.with.overflow.i64(i64 %n, i64 16)
   %over = extractvalue {i64, i1} %r, 1
   br i1 %over, label %fail, label %ask
@@ -908,7 +908,7 @@ done:
   ret void
 }
 
-; An `Atomic`'s cell (`docs/spec.md`, *Atomics*): a backing of the string's shape, so it is
+; An `Atomic`'s cell (`docs/user/spec.md`, *Atomics*): a backing of the string's shape, so it is
 ; retained and released as a `Str`'s is, holding `v` in its 8 bytes, with its length -1 so that
 ; `nz.str_release` frees it uncounted. An atomic is not a string: the memory report counts
 ; neither its allocation nor its reclamation, as the interpreter does not (runtime ABI 38).
@@ -3576,7 +3576,7 @@ fail:
   ret ptr null
 ; A channel is four allocations, and a failure part-way through must not leave the earlier
 ; ones behind. One label per stage, each freeing exactly what has been taken by then —
-; which is `docs/spec.md`'s failure law applied to the runtime's own storage, not only to
+; which is `docs/user/spec.md`'s failure law applied to the runtime's own storage, not only to
 ; the program's.
 freec:
   call void @free(ptr %c)
@@ -10662,7 +10662,7 @@ ended:
   ret i64 %cw
 }
 
-; `TerminateProcess` with exit code 1 (`docs/spec.md` *Windows x86_64*: there are no signals); a
+; `TerminateProcess` with exit code 1 (`docs/user/spec.md` *Windows x86_64*: there are no signals); a
 ; child that has already ended is not an error, as `kill` on one not yet waited for is not.
 define hidden i32 @nz_os_terminate(i64 %pid) {
 entry:
@@ -10705,7 +10705,7 @@ entry:
   ret i64 %w
 }
 
-; There are no process groups (`docs/spec.md`, *The platform, further*): the process `pgid` itself,
+; There are no process groups (`docs/user/spec.md`, *The platform, further*): the process `pgid` itself,
 ; asked whether it exists (`sig` 0) or ended with exit code 1; ESRCH for one there is not.
 define hidden i32 @nz_os_signal_group(i64 %pgid, i64 %sig) {
 entry:

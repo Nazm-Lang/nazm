@@ -1,7 +1,7 @@
 //! MIR: each concrete function of a native program as a typed control-flow graph with its
 //! ownership and cleanup written out.
 //!
-//! `docs/architecture.md` §7.42 is this crate's constitution, written before it. In one
+//! `docs/internal/architecture.md` §7.42 is this crate's constitution, written before it. In one
 //! paragraph: for `nazm build`, after checking and Core IR, every concrete function — each
 //! non-generic definition and each generic instance a program needs — is lowered here once into
 //! basic blocks whose terminators are explicit, whose managed values are copied, moved and
@@ -18,7 +18,7 @@
 //!
 //! # Level 6, by responsibility
 //!
-//! `docs/architecture.md` §2 describes MIR as a CFG of places with explicit drops and panics,
+//! `docs/internal/architecture.md` §2 describes MIR as a CFG of places with explicit drops and panics,
 //! for borrow checking and optimisation. This is that level by responsibility — the first CFG,
 //! with ownership and failure explicit — and not an SSA form: locals are mutable, and there are
 //! no phi nodes, because nothing that reads MIR needs them.

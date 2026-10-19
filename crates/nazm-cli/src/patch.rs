@@ -3,7 +3,7 @@
 //! The root is analysed from disk exactly as `nazm check` would load it, the plan is derived
 //! from that analysis, and both are dropped. This command writes nothing: a patch is a
 //! proposal bound to exact source state, and applying one is not something it does.
-//! `docs/architecture.md` §7.31 says what a patch holds. `nazm patch apply` (N89, §7.90) is the
+//! `docs/internal/architecture.md` §7.31 says what a patch holds. `nazm patch apply` (N89, §7.90) is the
 //! one thing that writes one: all or nothing, only to files whose bytes are the plan's.
 
 use std::path::Path;

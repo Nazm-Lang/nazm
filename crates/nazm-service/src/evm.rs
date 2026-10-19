@@ -1,4 +1,4 @@
-//! The EVM backend (N70, `docs/architecture.md` §7.72): a contract (§7.71) compiled to bytecode,
+//! The EVM backend (N70, `docs/internal/architecture.md` §7.72): a contract (§7.71) compiled to bytecode,
 //! directly from Core IR.
 //!
 //! Values are 256-bit words holding sign-extended `i64`s, every arithmetic result checked with

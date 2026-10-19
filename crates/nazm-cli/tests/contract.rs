@@ -1,6 +1,6 @@
 //! N69: contracts — the `web3` profile, a contract's facts, and its simulator.
 //!
-//! `docs/architecture.md` §7.71. What the command shows: a contract's state, entrypoints and read
+//! `docs/internal/architecture.md` §7.71. What the command shows: a contract's state, entrypoints and read
 //! and write sets as `nazm.contract/1`, conservative where the analysis cannot see; transactions
 //! run deterministically, a revert leaving the state as it was, a runtime failure reverting with its
 //! code, and a transaction that changes the conserved quantity rejected (`N0396`); the `web3`

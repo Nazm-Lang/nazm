@@ -1,4 +1,4 @@
-//! R1a: `for` loops (`docs/spec.md`, *`for` loops*).
+//! R1a: `for` loops (`docs/user/spec.md`, *`for` loops*).
 //!
 //! Each form means the `while` loop the specification writes beside it, so the tests ask two
 //! things of every implementation — the interpreter, the LIR oracle, LLVM at `-O0` and `-O2`, and

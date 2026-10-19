@@ -1,6 +1,6 @@
 //! N65: the interactive tier — `nazm repl`, `nazm comptime`, `nazm reload-check`.
 //!
-//! `docs/architecture.md` §7.67. What the commands show end to end: a REPL session checks every
+//! `docs/internal/architecture.md` §7.67. What the commands show end to end: a REPL session checks every
 //! edit as one program, so a redefinition reaches its callers and one that breaks a caller is
 //! refused by the caller's name; comptime evaluates a parameterless pure function and refuses any
 //! other by name, and a runaway evaluation stops at its budget; a reload check says, per

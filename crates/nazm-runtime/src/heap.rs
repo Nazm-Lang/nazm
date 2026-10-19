@@ -1,4 +1,4 @@
-//! The counted heap (R1d, D5; `docs/spec.md`, *A bounded heap*): what `nazm build --heap-limit`
+//! The counted heap (R1d, D5; `docs/user/spec.md`, *A bounded heap*): what `nazm build --heap-limit`
 //! links, and nothing else does.
 //!
 //! A program built with a limit calls `nz.heap_malloc`, `nz.heap_realloc` and `nz.heap_free`
@@ -108,7 +108,7 @@ pub fn small_heap(text: &str) -> String {
     renamed(text, &SMALL)
 }
 
-/// The small-block heap's unit (R1.5 3.1, design D13; `docs/architecture.md` §7.119). Every block
+/// The small-block heap's unit (R1.5 3.1, design D13; `docs/internal/architecture.md` §7.119). Every block
 /// carries a 16-byte header holding its size class: 1 to 32 for a block of up to 512 bytes, whose
 /// capacity is sixteen times its class, and 0 for a larger one, which is C's `malloc`'s. A thread
 /// keeps up to [`SMALL_KEPT`] freed blocks of each class on a list of its own and hands them out

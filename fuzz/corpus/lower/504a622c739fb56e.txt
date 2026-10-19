@@ -16,5 +16,5 @@ pub enum Result[T, E] {
 
 /// A value that may be absent. There is no null: `None` is a variant like any other.
     None,
-// module imports it implicitly. `docs/spec.md`, *The core prelude*, owns the rules.
+// module imports it implicitly. `docs/user/spec.md`, *The core prelude*, owns the rules.
     Some(value: T),

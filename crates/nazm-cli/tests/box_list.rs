@@ -1,4 +1,4 @@
-//! R1a: immutable indirection, `Box[T]` and `Chain[T]` (`docs/spec.md`, *Immutable indirection*);
+//! R1a: immutable indirection, `Box[T]` and `Chain[T]` (`docs/user/spec.md`, *Immutable indirection*);
 //! the sequence was `List[T]` until R1.5 renamed it (D7).
 //!
 //! A definition may refer to itself through one, so a syntax tree is a type. The tests ask every
@@ -185,7 +185,7 @@ fn main(out: OutCap) -> Int ! {io} {
 
 #[test]
 fn a_million_deep_value_is_released_without_a_million_frames() {
-    // Release is a worklist, not recursion (`docs/spec.md`, *Release is not recursion*): before
+    // Release is a worklist, not recursion (`docs/user/spec.md`, *Release is not recursion*): before
     // R1a's queue, the interpreter overflowed its stack and a compiled program died releasing
     // this, its memory report never written.
     let d = tempfile::tempdir().unwrap();

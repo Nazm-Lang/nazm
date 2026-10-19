@@ -39,7 +39,7 @@ it must keep `nazm run` free of clang.
 ### New Capabilities
 - `nazm-interpreter`: the observable contract of the interpreter written in Nazm — agreement with
   the Rust interpreter on every input the suite runs. Archived with `--skip-specs`; the normative
-  text lands in `docs/architecture.md` when R4 closes.
+  text lands in `docs/internal/architecture.md` when R4 closes.
 
 ### Modified Capabilities
 None.

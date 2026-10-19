@@ -31,7 +31,7 @@ same tree, so R7 runs in parallel with R2–R4 and R9 rather than after them.
 
 ### New Capabilities
 - `harness-in-nazm`: what a ported check or test must do to count as ported. Archived with
-  `--skip-specs`, as `rewrite-in-nazm` is; the normative text lands in `docs/runbook.md` and
+  `--skip-specs`, as `rewrite-in-nazm` is; the normative text lands in `docs/internal/runbook.md` and
   `CONTRIBUTING.md` when the coordinator merges.
 
 ### Modified Capabilities

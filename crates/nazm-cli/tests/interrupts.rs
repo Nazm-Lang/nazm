@@ -1,4 +1,4 @@
-//! Gate 3: interrupts (`docs/spec.md`, *Boards*; `docs/systems-domains.md` Part B).
+//! Gate 3: interrupts (`docs/user/spec.md`, *Boards*; `docs/internal/systems-domains.md` Part B).
 //!
 //! What a build shows on any host: a handler's shape, its uniqueness and the interrupt it names
 //! are held to the board's manifest before anything is linked (`N0627`), a manifest's

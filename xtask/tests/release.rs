@@ -53,7 +53,7 @@ const INPUTS: &[&str] = &[
     "schema/nazm.lock-1.json",
     "scripts/release-candidate.sh",
     "fuzz/corpus/front/0001.txt",
-    "docs/spec.md",
+    "docs/user/spec.md",
 ];
 
 #[test]

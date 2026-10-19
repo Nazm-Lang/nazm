@@ -1,4 +1,4 @@
-//! The task pool's context switch, per target (N83, `docs/architecture.md` §7.84).
+//! The task pool's context switch, per target (N83, `docs/internal/architecture.md` §7.84).
 //!
 //! Three routines, written once per architecture and object format as module-level assembly in an
 //! LLVM unit of their own, so the rest of the runtime stays target-independent text:
@@ -343,7 +343,7 @@ pub fn emit_switch(target: SwitchTarget) -> String {
     out
 }
 
-/// The location of `errno` on `target` (N85, `docs/architecture.md` §7.86): `nz_errno_location`,
+/// The location of `errno` on `target` (N85, `docs/internal/architecture.md` §7.86): `nz_errno_location`,
 /// the one target-dependent fact the runtime's `errno` capture needs, in a unit of its own as the
 /// switch is, so the runtime text stays the same on every target.
 #[must_use]

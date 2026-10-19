@@ -1,4 +1,4 @@
-//! `docs/guide.md`'s syntax reference, generated from `docs/grammar.ebnf`.
+//! `docs/user/guide.md`'s syntax reference, generated from `docs/user/grammar.ebnf`.
 //!
 //! # Why generate rather than write
 //!
@@ -14,8 +14,8 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-pub(crate) const BEGIN: &str = "<!-- generated from docs/grammar.ebnf: begin -->";
-pub(crate) const END: &str = "<!-- generated from docs/grammar.ebnf: end -->";
+pub(crate) const BEGIN: &str = "<!-- generated from docs/user/grammar.ebnf: begin -->";
+pub(crate) const END: &str = "<!-- generated from docs/user/grammar.ebnf: end -->";
 
 pub(crate) fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -166,8 +166,8 @@ fn section(text: &str) -> String {
 /// If the guide is missing, or has lost one of its markers — which would mean writing
 /// the generated section into a file with no place for it.
 pub(crate) fn render() -> Result<String, String> {
-    let grammar = root().join("docs/grammar.ebnf");
-    let guide = root().join("docs/guide.md");
+    let grammar = root().join("docs/user/grammar.ebnf");
+    let guide = root().join("docs/user/guide.md");
     let text =
         std::fs::read_to_string(&grammar).map_err(|e| format!("{}: {e}", grammar.display()))?;
     let existing =
@@ -196,14 +196,14 @@ pub(crate) fn render() -> Result<String, String> {
 /// same way — even though this one can only ever have a single problem to report.
 pub(crate) fn check() -> Result<(), Vec<String>> {
     let want = render().map_err(|e| vec![e])?;
-    let guide = root().join("docs/guide.md");
+    let guide = root().join("docs/user/guide.md");
     let have =
         std::fs::read_to_string(&guide).map_err(|e| vec![format!("{}: {e}", guide.display())])?;
     if have == want {
         return Ok(());
     }
     Err(vec![format!(
-        "{} is not what docs/grammar.ebnf produces. Run `cargo xtask guide` to rewrite it.",
+        "{} is not what docs/user/grammar.ebnf produces. Run `cargo xtask guide` to rewrite it.",
         guide.display()
     )])
 }
@@ -215,6 +215,6 @@ pub(crate) fn check() -> Result<(), Vec<String>> {
 /// If either file cannot be read, or the guide cannot be written.
 pub(crate) fn write() -> Result<(), String> {
     let text = render()?;
-    let guide = root().join("docs/guide.md");
+    let guide = root().join("docs/user/guide.md");
     std::fs::write(&guide, text).map_err(|e| format!("{}: {e}", guide.display()))
 }

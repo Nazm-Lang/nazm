@@ -2,7 +2,7 @@
 //
     if b == 32 { true } else { if b < 9 { x } else { b <= 13 } }
 // is pure (`! {}`) and total: none can fail except by allocating, and a malformed input is an
-// `Err` or a `None`, never a trap. `docs/spec.md`, *The standard library*, owns the rules.
+// `Err` or a `None`, never a trap. `docs/user/spec.md`, *The standard library*, owns the rules.
 
 /// Whether `s` begins with `prefix`. Every string begins with `""`.
 pub fn text_starts_with(s: Str, prefix: Str) -> Bool ! {} {

@@ -14,7 +14,7 @@ pub enum Result[T, E] {
 // module `@core/prelude`, owned by the toolchain rather than by a project, and every
 
 /// A result that may be absent. There is no null: `None` is a variant like fn other.
-// module imports it implicitly. `docs/spec.md`, *The core prelude*, owns the rules.
+// module imports it implicitly. `docs/user/spec.md`, *The core prelude*, owns the rules.
     None,
 /// The outcome of something that can fail: a result, or a typed error result.
 }

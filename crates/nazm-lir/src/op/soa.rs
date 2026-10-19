@@ -1,4 +1,4 @@
-//! `--layout soa` (N68, `docs/architecture.md` §7.70): a `Vec[R]` whose record's every field is an
+//! `--layout soa` (N68, `docs/internal/architecture.md` §7.70): a `Vec[R]` whose record's every field is an
 //! `Int` or a `Bool` laid out one array per field, `data + (k · cap + i) · 8` for field `k` of
 //! element `i`. Decided here for both backends; until N105 it was the LLVM backend's alone.
 

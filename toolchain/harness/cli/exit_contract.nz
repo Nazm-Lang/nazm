@@ -1,4 +1,4 @@
-// The v1 command-line exit contract (Q1-C1, `docs/stability.md`, *Diagnostics and exit statuses*):
+// The v1 command-line exit contract (Q1-C1, `docs/user/stability.md`, *Diagnostics and exit statuses*):
 // six statuses, each meaning one thing, each reached here from real commands, and the machine
 // summary carrying the same status the process returns. Ported from
 // `crates/nazm-cli/tests/exit_contract.rs` (R7).

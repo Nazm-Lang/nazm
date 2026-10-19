@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nazm.runtime-1.json",
   "title": "nazm.runtime/1",
-  "description": "A runtime artifact's manifest (N82, `docs/architecture.md` §7.83): what `libnazmrt.a` beside it is. Written by `nazm runtime build`; read by `nazm build --runtime` and `nazm runtime verify`, which refuse an artifact whose schema, ABI revision, runtime digest, target, profile or archive bytes do not fit, or that lacks a service the program reaches.",
+  "description": "A runtime artifact's manifest (N82, `docs/internal/architecture.md` §7.83): what `libnazmrt.a` beside it is. Written by `nazm runtime build`; read by `nazm build --runtime` and `nazm runtime verify`, which refuse an artifact whose schema, ABI revision, runtime digest, target, profile or archive bytes do not fit, or that lacks a service the program reaches.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "abi", "runtime", "target", "profile", "services", "opt_level", "toolchain", "text", "archive"],

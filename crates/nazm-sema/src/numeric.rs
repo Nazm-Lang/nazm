@@ -1,4 +1,4 @@
-//! What every numeric operation means (Gate 2, `docs/general-purpose.md` §1–§3), as one Rust
+//! What every numeric operation means (Gate 2, `docs/internal/general-purpose.md` §1–§3), as one Rust
 //! implementation both interpreters call.
 //!
 //! The native backends implement the same operations in machine instructions and the runtime,
@@ -22,7 +22,7 @@
 
 use crate::types::{ConvertMode, NumKind};
 
-/// A constant's value (Gate 2, `docs/spec.md`, *Constants*): what the checker computed, and what
+/// A constant's value (Gate 2, `docs/user/spec.md`, *Constants*): what the checker computed, and what
 /// every implementation then uses as a literal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConstValue {

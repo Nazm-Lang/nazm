@@ -1,5 +1,5 @@
 // ledger: two processes asking each other things and surviving one of them failing (Gate 3
-// reference workload, `docs/systems-domains.md` Part N), on `@std/dist`.
+// reference workload, `docs/internal/systems-domains.md` Part N), on `@std/dist`.
 //
 //     ledger serve ADDR LOG [die-after KEY]   a ledger node, its applied credits in LOG
 //     ledger client ADDR COUNT                COUNT credits of their key's amount, each retried

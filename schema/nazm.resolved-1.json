@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nazm.resolved-1.json",
   "title": "nazm.resolved/1",
-  "description": "What checking one module decided about its names (N77, `docs/architecture.md` §7.78): its imports, its definitions and every resolved occurrence of a declared entity, each by durable identity. Written by `nazm resolve` one per line, and stored in the module's check entry (`nazm.check/3`) under the same key. No session id, absolute path, timestamp or load order; locals are absent. Ranges are byte offsets into the source `source` fingerprints.",
+  "description": "What checking one module decided about its names (N77, `docs/internal/architecture.md` §7.78): its imports, its definitions and every resolved occurrence of a declared entity, each by durable identity. Written by `nazm resolve` one per line, and stored in the module's check entry (`nazm.check/3`) under the same key. No session id, absolute path, timestamp or load order; locals are absent. Ranges are byte offsets into the source `source` fingerprints.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "module", "source", "imports", "definitions", "occurrences"],

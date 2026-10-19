@@ -1,4 +1,4 @@
-//! R1, 5b.9 (`docs/performance.md`): a field of a local read only to be an operation's operand is
+//! R1, 5b.9 (`docs/internal/performance-log.md`): a field of a local read only to be an operation's operand is
 //! borrowed where it is — no reference taken, none given back — and it is never released, on the
 //! normal path or on the failure path.
 //!

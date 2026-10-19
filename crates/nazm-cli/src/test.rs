@@ -57,7 +57,7 @@ struct Planned {
 /// `nazm test --fuzz`'s default: how many inputs a `@fuzz` target is given.
 pub(crate) const DEFAULT_FUZZ_CASES: u32 = 100;
 
-/// The version every `nazm test --json` object carries. See `docs/diagnostics.md`.
+/// The version every `nazm test --json` object carries. See `docs/user/diagnostics.md`.
 const SCHEMA: &str = "nazm.test/1";
 
 #[derive(Debug, serde::Serialize)]

@@ -1,4 +1,4 @@
-//! Contracts (N69, `docs/architecture.md` §7.71): what a module that is a contract offers, read off
+//! Contracts (N69, `docs/internal/architecture.md` §7.71): what a module that is a contract offers, read off
 //! the checker's resolution and Core IR — its state, its entrypoints, and each entrypoint's read and
 //! write sets over the state.
 //!

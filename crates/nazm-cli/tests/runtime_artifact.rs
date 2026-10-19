@@ -1,6 +1,6 @@
 //! N82: the runtime as a built, versioned, verified artifact.
 //!
-//! `docs/architecture.md` §7.83. What the commands show: `nazm runtime build` writes an archive and
+//! `docs/internal/architecture.md` §7.83. What the commands show: `nazm runtime build` writes an archive and
 //! a `nazm.runtime/1` manifest, the same bytes twice; `nazm runtime verify` accepts it; a program
 //! reaching every service, linked against it, behaves exactly as with a generated runtime — output,
 //! ending and memory report — on both backends; every way an artifact can fail to fit is refused by

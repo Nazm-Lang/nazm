@@ -63,7 +63,7 @@ fn by_zero(p: Prog, vm: Vm, pc: Int) -> V {
             "guard the divisor, for example `if d != 0 { n / d } else { 0 }`")
 }
 
-/// `Int` arithmetic, checked as `docs/spec.md` requires (`eval/arith.rs`, `arith`).
+/// `Int` arithmetic, checked as `docs/user/spec.md` requires (`eval/arith.rs`, `arith`).
 fn int_arith(p: Prog, vm: Vm, pc: Int, op: Int, a: Int, b: Int) -> V {
     if op == 0 {
         match checked_add(a, b) {

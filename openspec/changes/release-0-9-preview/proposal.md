@@ -11,7 +11,7 @@ Decisions (the copyright holder, 2026-10-12):
 
 | | Decision |
 | --- | --- |
-| (a) Version | toolchain `0.9.0` (first proposed as 0.3.0, a number an earlier internal candidate used, `docs/releases/996984f.md`); the language a **1.0 draft** — no compatibility promise until 1.0 |
+| (a) Version | toolchain `0.9.0` (first proposed as 0.3.0, a number an earlier internal candidate used, `docs/internal/releases/996984f.md`); the language a **1.0 draft** — no compatibility promise until 1.0 |
 | (b) Target | macOS, Apple Silicon (`aarch64-apple-darwin`) only |
 | (c) History | the two prompt-pack directories committed in `191b092` are removed from the history before the repository is made public |
 | (d) Publication | a public GitHub repository, a binary release, and `nazm.dev`; external contributions are not accepted yet (the CLA's legal review is open) |
@@ -24,8 +24,8 @@ Decisions (the copyright holder, 2026-10-12):
   language or the toolchain a released 1.0 say *1.0 draft*; the stability classes keep their names
   and are read as the promises 1.0 will make.
 - The release archive carries `THIRD-PARTY-NOTICES.md`, generated from `Cargo.lock` for what
-  `bin/nazm` links (`docs/licensing.md`, item 7), beside the project's own licence files.
-- `docs/releases/0.9.0.md`: what the preview is and is not, the target, the licences, the waived
+  `bin/nazm` links (`docs/user/licensing.md`, item 7), beside the project's own licence files.
+- `docs/user/releases/0.9.0.md`: what the preview is and is not, the target, the licences, the waived
   mutation run, the unsigned binary, and that contributions wait for the CLA's review.
 - The R1 language items committed by then ship as EXPERIMENTAL, as their sections say.
 - The history is rewritten to drop the prompt packs, and the commit hashes the documents cite are
@@ -33,8 +33,8 @@ Decisions (the copyright holder, 2026-10-12):
 
 ## Impact
 
-`Cargo.toml` versions, `README.md`, `docs/stability.md`, `docs/spec.md`, `docs/roadmap.md`,
-`docs/licensing.md`, the release scripts, and every document citing a commit hash. No language
+`Cargo.toml` versions, `README.md`, `docs/user/stability.md`, `docs/user/spec.md`, `docs/user/roadmap.md`,
+`docs/user/licensing.md`, the release scripts, and every document citing a commit hash. No language
 semantics change: the semantic epoch, the interface schema and the runtime ABI are unchanged.
 Publishing — the push, the repository's visibility, the release upload and the site — waits for the
 copyright holder's go-ahead.

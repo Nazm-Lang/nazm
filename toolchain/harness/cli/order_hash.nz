@@ -1,4 +1,4 @@
-// R1a: ordering and hashing are derived (`docs/spec.md`, *Ordering and hashing are derived*), and
+// R1a: ordering and hashing are derived (`docs/user/spec.md`, *Ordering and hashing are derived*), and
 // a `Box` or `Chain` compares by what it holds. Ported from `crates/nazm-cli/tests/order_hash.rs`
 // (R7).
 //

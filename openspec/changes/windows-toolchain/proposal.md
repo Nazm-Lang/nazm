@@ -38,5 +38,5 @@ W4 at the 1.0 gate. Linux follows the same steps after 1.0.
 
 ## Impact
 
-The eight Unix-specific files, `scripts/` packaging, CI, `docs/support.md`, R9's object writer, the
+The eight Unix-specific files, `scripts/` packaging, CI, `docs/user/support.md`, R9's object writer, the
 release gate. Nothing a program means changes.

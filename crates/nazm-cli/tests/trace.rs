@@ -1,4 +1,4 @@
-//! Gate 3: requirements traceability, `nazm trace` (`docs/systems-domains.md` Part S;
+//! Gate 3: requirements traceability, `nazm trace` (`docs/internal/systems-domains.md` Part S;
 //! `examples/requirements/`).
 //!
 //! A requirement resolves to the definitions it constrains — by durable identity and semantic

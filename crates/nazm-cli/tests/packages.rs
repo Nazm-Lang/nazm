@@ -1,6 +1,6 @@
 //! N46: packages, the lockfile, and reproducible builds.
 //!
-//! `docs/architecture.md` §7.48. What only whole builds show: a package built from its
+//! `docs/internal/architecture.md` §7.48. What only whole builds show: a package built from its
 //! directory under every implementation, with a diamond resolved to one package; every
 //! resolution refusal by its code; a package seeing only its own dependencies; a lockfile whose
 //! bytes are a function of the packages alone and that a `--locked` build is held to, refusing
@@ -586,7 +586,7 @@ fn a_large_package_graph_resolves_and_locks_deterministically() {
     );
 }
 
-/// For `docs/performance.md`: resolution, a clean build and an incremental one of the diamond.
+/// For `docs/internal/performance-log.md`: resolution, a clean build and an incremental one of the diamond.
 #[test]
 #[ignore = "a measurement, run by the benchmark gate"]
 fn what_packages_cost() {

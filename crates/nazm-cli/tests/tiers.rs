@@ -1,6 +1,6 @@
 //! N99: the execution tiers agree — the REPL, `nazm run`, and native builds by LLVM and Cranelift.
 //!
-//! `docs/architecture.md` §7.100. There is no JIT (BLOCKED: §7.67, §7.100); the tiers that exist
+//! `docs/internal/architecture.md` §7.100. There is no JIT (BLOCKED: §7.67, §7.100); the tiers that exist
 //! are held to one answer. A REPL session defines functions and evaluates expressions; each
 //! expression, with the session's definitions, is then a program run by the interpreter and built
 //! natively by both backends. Every tier must give the same value, or fail with the same code.

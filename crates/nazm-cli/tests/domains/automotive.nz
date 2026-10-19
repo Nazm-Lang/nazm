@@ -1,4 +1,4 @@
-// The automotive reference workload (Gate 3, `docs/systems-domains.md` Parts E–J): an ECU-style
+// The automotive reference workload (Gate 3, `docs/internal/systems-domains.md` Parts E–J): an ECU-style
 // periodic controller on both emulated boards, held to the `automotive` profile.
 //
 // The engine is simulated and integer-only, so the same program runs on a Cortex-M3. A 10 ms task

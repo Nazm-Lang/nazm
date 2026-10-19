@@ -5,7 +5,7 @@
 # sides into $OUT (default target/r2).
 #
 # The Nazm side is a program written in Nazm, so on the macOS host it runs only through `cargo xtask
-# host-run` (R6, `docs/runbook.md`), which takes no timing: its column is the peak resident memory
+# host-run` (R6, `docs/internal/runbook.md`), which takes no timing: its column is the peak resident memory
 # the runner recorded, with `-` for the time.
 
 set -eu

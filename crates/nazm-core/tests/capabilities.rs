@@ -1,6 +1,6 @@
 //! N37: capabilities — authority, checked separately from effects, within one module.
 //!
-//! `docs/spec.md`, *Capabilities*, is the law. What these tests hold:
+//! `docs/user/spec.md`, *Capabilities*, is the law. What these tests hold:
 //!
 //! * a function that declares an effect set holds only the authority of the capability
 //!   values its scope reaches — parameters and `let`s of type `IoCap` or `SpawnCap` — and

@@ -1,4 +1,4 @@
-//! The board's stack bound (N63, `docs/architecture.md` §7.65): the code generator's frame size
+//! The board's stack bound (N63, `docs/internal/architecture.md` §7.65): the code generator's frame size
 //! for every function of the image, summed along the deepest path of the image's call graph.
 //!
 //! Both facts are read from what was generated, not from Nazm: the frames from clang's

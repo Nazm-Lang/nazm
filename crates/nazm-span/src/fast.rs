@@ -1,4 +1,4 @@
-//! A fast hasher for the compiler's own tables (N106, `docs/architecture.md` §7.107).
+//! A fast hasher for the compiler's own tables (N106, `docs/internal/architecture.md` §7.107).
 //!
 //! The front end's maps are keyed by spans and by short identifiers, built and dropped once per
 //! check. `std`'s default, SipHash-1-3 with a per-process random key, defends a map against
