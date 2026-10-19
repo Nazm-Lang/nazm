@@ -1,0 +1,32 @@
+// The Core IR facts, for the tools (R5 hand-back; `compiler/facts.nz` names the front end's others;
+// this module is the Core IR's, which `core.nz` lowers from them, so it cannot be part of them).
+//
+// Function `i`'s (`ck_fn_*`'s numbering) Core IR: whether the lowering carries it (`fx_core_carried`;
+// `fx_core_why` says what it stopped at where not), its `nazm.core-ir/3` object, compact, with its
+// `digest` member (`fx_core_function`) and its two digests as `nazm inspect` reports them
+// (`fx_core_semantic`, `fx_core_body`: BLAKE3-256, hexadecimal); and the whole document
+// `nazm core-ir` prints (`fx_core_document`, "" where something is not carried). The native
+// (MIR) digests are the R3 pipeline's, over that document.
+
+use "syntax.nz";
+use "diag.nz";
+use "sema.nz";
+use "facts.nz";
+use "core.nz";
+
+pub fn fx_core_function(f: Facts, i: Int) -> Str { cr_function(f, i) }
+pub fn fx_core_carried(f: Facts, i: Int) -> Bool {
+    let o = cr_function(f, i);
+    str_len(o) >= 2 && (str_byte(o, 0) != 45 || str_byte(o, 1) != 32)
+}
+pub fn fx_core_why(f: Facts, i: Int) -> Str {
+    let o = cr_function(f, i);
+    if str_len(o) >= 2 && str_byte(o, 0) == 45 && str_byte(o, 1) == 32 { return str_slice(o, 2, str_len(o)); }
+    ""
+}
+pub fn fx_core_semantic(f: Facts, i: Int) -> Str { cr_digest_semantic(f, i) }
+pub fn fx_core_body(f: Facts, i: Int) -> Str { cr_digest_body(f, i) }
+pub fn fx_core_document(f: Facts) -> Str { cr_document(f) }
+// Both digests, the semantic one and then the body one, lowering the function once; none (an empty
+// list) where it is not carried.
+pub fn fx_core_digests(f: Facts, i: Int) -> Strs { cr_digests(f, i) }

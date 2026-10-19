@@ -12,6 +12,7 @@ use "syntax.nz";
 use "diag.nz";
 use "sema.nz";
 use "facts.nz";
+use "facts-core.nz";
 
 // A line break, written so that no string literal in this file holds one.
 fn nl() -> Str { str_from_byte(10) }
@@ -442,4 +443,29 @@ fn join_ints(xs: Ints) -> Str {
         i = i + 1;
     }
     str_join(parts, ",")
+}
+
+// Each function's Core IR digests, one line a function: `IDENTITY<TAB>SEMANTIC<TAB>BODY` (what
+// `refdump coredigests` prints from `cir::digests`), `-` for both where the lowering does not carry
+// it. `stops`, `refused` or `fails` where there is none.
+pub fn fd_coredigests(f: Facts) -> Str {
+    if fx_carried(f) == false { return str_concat("stops", nl()); }
+    if fx_refusal(f) != "" { return str_concat("refused", nl()); }
+    if fx_loaded(f) == false || fx_failed(f) { return str_concat("fails", nl()); }
+    let out = strs_new();
+    let c = fx_checker(f);
+    let mut i = 0;
+    while i < ck_fn_count(c) {
+        strs_push(out, fx_fn_identity(f, i));
+        strs_push(out, tab());
+        let digests = fx_core_digests(f, i);
+        if strs_len(digests) == 2 {
+            strs_push(out, cat3(strs_get(digests, 0), tab(), strs_get(digests, 1)));
+        } else {
+            strs_push(out, cat3("-", tab(), "-"));
+        }
+        strs_push(out, nl());
+        i = i + 1;
+    }
+    str_join(out, "")
 }
