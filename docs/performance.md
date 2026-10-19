@@ -4582,3 +4582,20 @@ speed) and behind only Rust and Zig, with the least memory of all. binary-trees 
 far: 3.3× C, 11× Java (a generational collector built for exactly this), and 9× C's memory — allocation and
 release of many small boxed nodes (`enum Tree` with `Box[Tree]`) is the path to work on, and the program is
 long beside the languages with classes. Not claimed: any lead on binary-trees.
+
+## binary-trees after the box and free-list fixes, measured (quiet window, 2026-10-19)
+
+`python3 bench/compare/compare.py NAZM OUT --runs 10 --only bintrees` at `95793836` (runtime ABI 51: a box holds one
+element, a one-thread program keeps every freed small block, a release that is not the last is inlined), begun at
+load 1.82 with no cargo, rustc or nextest running and Apple's `knowledgeconstructiond` stopped. Every row printed the
+expected output; the other languages' rows agree with *nbody and binary-trees* above to within 3%.
+
+| | before (`26e5e64a`) | after (`95793836`) | rank among 16 languages |
+| --- | ---: | ---: | --- |
+| run time, median | 3,804 ms | **1,971.7 ms** (1.93× faster) | #14 → **#13** (Java 355, Bun 568, Node 696, Go 898, C# 1,078, Fortran 1,116, C 1,158) |
+| peak RSS | 163 MiB | **98.3 MiB** (−40%) | #15 → **#12** (C 17.8 MiB) |
+| among the 7 rows checking overflow and bounds | | | **#4** (Fortran checked 1,182, Ada 1,222, Rust checked 1,384); the earlier section's "#3 of 7" should read #5 |
+
+Against C: 1.7× the time and 5.5× the memory, from 3.3× and 9×. What remains is the box's representation (a header
+block plus a data block where C has one node) and the retain/release pairs of a MIR without moves —
+performance-leadership 8.2, for the optimisation stage after R8. Not claimed: any lead on binary-trees.
