@@ -582,7 +582,17 @@ fn a_deadline_past_the_nanosecond_range_parks_without_spinning() {
                        let w = chan_select_until(ics, none, 4000);\n\
                        chan_send_of(c, 42); let r = chan_recv_of(res, got); }\n\
                    print(int_to_str(vec_get(got, 0))); 0 }\n";
-    built(d.path(), "far", src, "llvm");
+    // PowerShell, which samples the CPU on Windows, can take seconds to start on a busy runner:
+    // there main waits twelve seconds, so the process is still running when it is sampled.
+    let src = if cfg!(windows) {
+        src.replace(
+            "chan_select_until(ics, none, 4000)",
+            "chan_select_until(ics, none, 12000)",
+        )
+    } else {
+        src.to_owned()
+    };
+    built(d.path(), "far", &src, "llvm");
     let child = Command::new(d.path().join(crate::common::exe_name("far")))
         .env("NAZM_SCHEDULER", "pool")
         .env("NAZM_WORKERS", "1")
