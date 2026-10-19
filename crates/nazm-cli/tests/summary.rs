@@ -214,9 +214,12 @@ fn a_build_summary_is_the_builds_outcome_and_absence_of_diagnostics_is_not_succe
     assert_eq!(code, Some(0));
     assert_eq!(s["command"], "build");
     assert_eq!(s["status"], "success");
-    assert_eq!(s["artifact"], serde_json::json!({"path": "prog"}));
+    assert_eq!(
+        s["artifact"],
+        serde_json::json!({"path": crate::common::exe_name("prog")})
+    );
     assert!(dir.path().join(crate::common::exe_name("prog")).exists());
-    assert_eq!(plain.stdout.trim(), "plain");
+    assert_eq!(plain.stdout.trim(), crate::common::exe_name("plain"));
 
     // Rejected by the checker, and by the backend: diagnostics, and nothing written.
     for (text, code_wanted) in [
@@ -548,7 +551,7 @@ fn one_failure(native: bool, interpreted: &str, native_leg: &str) -> Value {
         "exit_code": 1,
         "native": native,
         "counts": {"cases": 1, "passed": 0, "failed": 1, "without_expectation": 0},
-        "failures": [{"name": "x", "file": "t/x.nz", "interpreted": interpreted, "native": native_leg}],
+        "failures": [{"name": "x", "file": std::path::Path::new("t").join("x.nz").display().to_string(), "interpreted": interpreted, "native": native_leg}],
     })
 }
 

@@ -202,7 +202,9 @@ fn an_unchanged_rebuild_reuses_its_executable_byte_for_byte() {
     // again, not believed.
     let dir = tempfile::tempdir().expect("tempdir");
     project(dir.path(), A_CALLS_B);
-    let bytes = |name: &str| std::fs::read(dir.path().join(name)).expect("the executable");
+    let bytes = |name: &str| {
+        std::fs::read(dir.path().join(crate::common::exe_name(name))).expect("the executable")
+    };
     build(dir.path(), "a.nz");
     let cold = bytes("prog");
     let records = || {
@@ -344,7 +346,10 @@ fn a_called_signature_change_reaches_the_caller_s_own_ir() {
     project(dir.path(), A_CALLS_B);
     let before = unit_of(&emitted(dir.path(), "a.nz", "one"), "a.nz");
     assert!(
-        before.contains("declare i64 @nz.m.b_2Enz.twice(i64)"),
+        before.contains(&format!(
+            "declare {} @nz.m.b_2Enz.twice(i64)",
+            crate::common::ret("i64")
+        )),
         "{before}"
     );
 
@@ -360,7 +365,10 @@ fn a_called_signature_change_reaches_the_caller_s_own_ir() {
     );
     let after = unit_of(&emitted(dir.path(), "a.nz", "two"), "a.nz");
     assert!(
-        after.contains("declare i64 @nz.m.b_2Enz.twice(i64, i64)"),
+        after.contains(&format!(
+            "declare {} @nz.m.b_2Enz.twice(i64, i64)",
+            crate::common::ret("i64")
+        )),
         "{after}"
     );
     assert_ne!(
@@ -480,6 +488,10 @@ fn shimmed(dir: &Path, version: &str) -> Command {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "the shim is a shell script named `clang`; Windows finds a compiler only as an `.exe`, so a script cannot stand in for it"
+)]
 fn a_backend_that_calls_itself_something_else_reuses_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
     project(dir.path(), A_CALLS_B);
@@ -1383,7 +1395,12 @@ fn one_instance_requested_by_two_modules_is_one_unit_and_one_object() {
     let units = emitted(dir.path(), "a.nz", "prog");
     let defining: Vec<&String> = units
         .iter()
-        .filter(|(_, ir)| ir.contains("define hidden i64 @nz.m.b_2Enz.identity.g.Int("))
+        .filter(|(_, ir)| {
+            ir.contains(&format!(
+                "define hidden {} @nz.m.b_2Enz.identity.g.Int(",
+                crate::common::ret("i64")
+            ))
+        })
         .map(|(name, _)| name)
         .collect();
     assert_eq!(defining.len(), 1, "{defining:?}");
@@ -1427,11 +1444,17 @@ fn a_callers_unit_never_carries_a_generic_body() {
     let units = emitted(dir.path(), "a.nz", "prog");
     let caller = unit_of(&units, "a.nz");
     assert!(
-        caller.contains("declare i64 @nz.m.b_2Enz.identity.g.Int(i64)"),
+        caller.contains(&format!(
+            "declare {} @nz.m.b_2Enz.identity.g.Int(i64)",
+            crate::common::ret("i64")
+        )),
         "{caller}"
     );
     assert!(
-        !caller.contains("define hidden i64 @nz.m.b_2Enz.identity"),
+        !caller.contains(&format!(
+            "define hidden {} @nz.m.b_2Enz.identity",
+            crate::common::ret("i64")
+        )),
         "{caller}"
     );
     // Nor does the defining module's own unit: a generic definition has no one body as
