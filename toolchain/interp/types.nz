@@ -20,7 +20,7 @@ pub enum V {
     Str(s: Str, obj: Int, start: Int),
     Rec(def: Int, obj: Int),
     Enm(def: Int, variant: Int, obj: Int),
-    Arr(items: List[V]),
+    Arr(items: Chain[V]),
     Ref(obj: Int),
     Cap(kind: Int),
     Num(kind: Int, v: Int128),
