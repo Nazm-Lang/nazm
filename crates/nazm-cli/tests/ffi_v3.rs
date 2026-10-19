@@ -1,7 +1,7 @@
 //! N85: FFI v3 — handles, C-layout records, C strings returned, `errno`, callbacks and shared
 //! libraries.
 //!
-//! `docs/architecture.md` §7.86 and the spec section *Foreign functions v3*. What only a whole build
+//! `docs/internal/architecture.md` §7.86 and the spec section *Foreign functions v3*. What only a whole build
 //! shows: that an opaque handle, a C struct laid out in declaration order, a string C keeps and
 //! Nazm copies, `errno` and an export passed as a C function pointer each cross under both
 //! backends with identical results and a balanced memory report; that a null where a declaration
@@ -612,7 +612,7 @@ int main(int argc, char **argv) {
 "#;
 
 // Linked and run on macOS here; Linux's is built by the same link with `-shared` and is exercised
-// in the Linux container by hand (`docs/performance.md`, N85). Elsewhere it is ignored, not a pass.
+// in the Linux container by hand (`docs/internal/performance-log.md`, N85). Elsewhere it is ignored, not a pass.
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "links a macOS shared library")]
 fn a_shared_library_links_into_a_c_program_and_shows_only_its_exports() {
@@ -704,7 +704,7 @@ fn object_kind(bytes: &[u8]) -> &'static str {
 /// (Linking it into a C program is the macOS test above; this one is the format, which needs no
 /// platform's loader.)
 #[test]
-#[cfg(not(windows))] // Windows has no DLL from this compiler (`docs/spec.md`, *Windows x86_64*)
+#[cfg(not(windows))] // Windows has no DLL from this compiler (`docs/user/spec.md`, *Windows x86_64*)
 fn a_shared_library_build_writes_a_shared_object_not_an_archive() {
     let name = if cfg!(target_os = "macos") {
         "libnz.dylib"

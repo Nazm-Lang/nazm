@@ -1,6 +1,6 @@
 //! N96: the contract simulator against the real VMs, on generated transaction sequences.
 //!
-//! `docs/architecture.md` §7.97. N70 and N71 held the EVM and WebAssembly backends to the
+//! `docs/internal/architecture.md` §7.97. N70 and N71 held the EVM and WebAssembly backends to the
 //! simulator on one written sequence each. Here sequences are generated — seeded, the same on every
 //! host — from the contract's own facts (`nazm.contract/1`'s entrypoints and their argument counts),
 //! with callers among the owner and two others and arguments from the edges of `Int`: every

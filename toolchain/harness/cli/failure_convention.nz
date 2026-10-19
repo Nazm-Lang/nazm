@@ -1,4 +1,4 @@
-// How a failure crosses a call (`docs/architecture.md` §7.106, *The failure bit*, and §7.115): a
+// How a failure crosses a call (`docs/internal/architecture.md` §7.106, *The failure bit*, and §7.115): a
 // failure deep in a recursion — direct, through a function value, through a trait method, in a
 // task, inside a C export, through a callback C calls, ten thousand frames deep through `defer`s,
 // and with the stack exhausted — ends the program with status 2 and the diagnostic at the failing

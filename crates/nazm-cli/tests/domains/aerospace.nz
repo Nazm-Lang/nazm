@@ -1,4 +1,4 @@
-// The aerospace reference workload (Gate 3, `docs/systems-domains.md` Parts E–J): sample, estimate,
+// The aerospace reference workload (Gate 3, `docs/internal/systems-domains.md` Parts E–J): sample, estimate,
 // actuate and report at a fixed rate on QEMU's AArch64 `virt` board, held to the `aerospace`
 // profile — no float whose result is the host library's.
 //

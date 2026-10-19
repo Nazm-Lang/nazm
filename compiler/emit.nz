@@ -2,8 +2,8 @@
 //
 // The fourth component, and the one that makes the others a *compiler*: it turns the node
 // arena into LLVM IR text, which `clang` assembles. Same arrangement as `nazm build` —
-// `docs/architecture.md` §1 says not to link LLVM in year one, and `clang` reads IR from
-// a file — and the same arrangement `docs/bootstrap.md` §4 records: emitting
+// `docs/internal/architecture.md` §1 says not to link LLVM in year one, and `clang` reads IR from
+// a file — and the same arrangement `docs/internal/bootstrap.md` §4 records: emitting
 // LLVM and invoking an external assembler is self-hosting, a wrapper that shells out to
 // the Rust compiler is not.
 //
@@ -38,7 +38,7 @@ use "parse.nz";
 fn nl() -> Str { str_from_byte(10) }
 
 // A double quote and a backslash, built rather than written: v0.1 string literals have
-// no escapes (`docs/spec.md`), so a quote cannot appear inside one. Emitting LLVM text
+// no escapes (`docs/user/spec.md`), so a quote cannot appear inside one. Emitting LLVM text
 // needs both constantly, which is the clearest argument for escapes the language has
 // produced so far — recorded rather than worked around silently.
 fn dq() -> Str { str_from_byte(34) }
@@ -70,7 +70,7 @@ fn v(n: Int) -> Str { str_concat("%", int_to_str(n)) }
 // The third field of a `Str` is the allocation whose lifetime keeps the pointer valid, or
 // null where nothing has to — a literal, or a process argument. It exists because
 // `str_slice` produces an interior pointer and two fields cannot say what owns one. See
-// `docs/architecture.md` §7.8; `crates/nazm-lir/src/ir.rs` says the same thing in Rust.
+// `docs/internal/architecture.md` §7.8; `crates/nazm-lir/src/ir.rs` says the same thing in Rust.
 fn llvm_type(t: Int) -> Str {
     if t == t_int() { return "i64"; }
     if t == t_bool() { return "i1"; }
@@ -137,7 +137,7 @@ fn position(src: Str, path: Str, offset: Int) -> Str {
 // --- the failure helper and its messages --------------------------------------------
 //
 // Not `llvm.trap`: a process killed by `SIGILL` is not the runtime-error contract
-// `docs/spec.md` promises, which is that the program *stops with a diagnostic*. So a
+// `docs/user/spec.md` promises, which is that the program *stops with a diagnostic*. So a
 // failing operation calls a generated helper that writes to descriptor 2 and exits 2 —
 // the same status `nazm run` uses.
 
@@ -211,7 +211,7 @@ fn guard(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
             str_concat(", i64 ", str_concat(int_to_str(str_len(text) + 1), ")"))));
     // `@nz.fail` records and returns; it does not end the process. The failure leaves
     // this function by its own exit, so that a `scope` further out can join its tasks
-    // before anything is reported — see `docs/spec.md`, *Error propagation*.
+    // before anything is reported — see `docs/user/spec.md`, *Error propagation*.
     unwind(out, next, current, live, owned, otype, rowns);
     open_block(out, current, live, str_concat("b", int_to_str(cont)));
     cont
@@ -640,7 +640,7 @@ fn divide(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, a: Int, 
 }
 
 // Remainder, whose *only* failure is a zero divisor. `Int::MIN % -1` is mathematically
-// zero and zero is representable, so `docs/spec.md` specifies it as `0` — and the `srem`
+// zero and zero is representable, so `docs/user/spec.md` specifies it as `0` — and the `srem`
 // instruction faults on that pair anyway, because it computes the quotient. The pair is
 // answered with a constant and never reaches the instruction.
 fn remainder(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, a: Int, b: Int, at: Str,
@@ -1293,7 +1293,7 @@ fn record_helper(out: Strs, next: Ints, r: Int, retain: Bool, rowns: Ints,
             str_concat(str_concat("(", ty), " %r) {")));
     add_line(out, "entry:");
     // Layout order, which is deterministic and which no program can observe:
-    // `docs/spec.md` says a record is destroyed by releasing each field and deliberately
+    // `docs/user/spec.md` says a record is destroyed by releasing each field and deliberately
     // does not say in which order.
     let mut pos = 0;
     while pos < ints_get(rcount, r) {
@@ -1469,7 +1469,7 @@ fn record_field(out: Strs, next: Ints, value: Int, rt: Int, at: Int) -> Int {
 
 // Where a field sits in the LLVM struct.
 //
-// **Canonical, by field name.** `docs/spec.md` makes declaration order non-semantic, so
+// **Canonical, by field name.** `docs/user/spec.md` makes declaration order non-semantic, so
 // laying fields out in name order makes that true of the object file as well: moving two
 // field declarations — an edit the language says means nothing — changes no byte here.
 // This is the layout boundary; nothing above it knows a position.
@@ -1487,7 +1487,7 @@ fn layout_index(rfirst: Ints, rcount: Ints, rfname: Strs, r: Int, at: Int) -> In
 }
 
 // Byte-lexicographic order, written out because the language has no `<` on `Str` — it
-// would need a collation decision `docs/spec.md` has not made. Field names are
+// would need a collation decision `docs/user/spec.md` has not made. Field names are
 // identifiers, so bytes are the whole of it, and this is the same order the reference
 // compiler sorts by.
 fn str_before(a: Str, b: Str) -> Bool {
@@ -1544,7 +1544,7 @@ fn make_str(out: Strs, next: Ints, ptr: Int, len: Int, owner: Str) -> Int {
 
 // --- ownership ------------------------------------------------------------------------
 //
-// The same five rules `docs/spec.md` states and `crates/nazm-lir/src/emit.rs` implements,
+// The same five rules `docs/user/spec.md` states and `crates/nazm-lir/src/emit.rs` implements,
 // implemented again here because the compiler written in Nazm has to emit the same memory
 // semantics as the one written in Rust. Not *similar* semantics: the differential tests
 // run the same program through both and compare allocation counts.
@@ -1810,7 +1810,7 @@ fn own_drop(out: Strs, next: Ints, owned: Ints, value: Int, t: Int, rowns: Ints,
 // Release everything this frame is still holding.
 //
 // Emitted before **every** way out of a function — the tail value, each `return`, and the
-// shared unwind block a failure takes — because `docs/spec.md` reclaims on the semantic
+// shared unwind block a failure takes — because `docs/user/spec.md` reclaims on the semantic
 // event, and "the closing brace" is not one of them. `frame` holds one type per slot,
 // `t_int()` where the slot needs nothing; parameter slots are `t_int()` for that reason,
 // which *is* rule 2. A slot never written holds a zeroed value, and releasing a null owner
@@ -2171,7 +2171,7 @@ fn slot_count(nk: Ints, nslot: Ints) -> Int {
 
 // The runtime, as generated LLVM rather than a linked crate: sequences and files need a
 // handful of helpers, and none of them needs stack switching or a custom allocator —
-// which is what `docs/architecture.md` reserves `nazm-rt` for.
+// which is what `docs/internal/architecture.md` reserves `nazm-rt` for.
 //
 // **Bounds checks are not here.** They live at each call site, because the diagnostic has
 // to name that call's source position and a shared helper has only one. What is here is
@@ -2337,7 +2337,7 @@ fn runtime() -> Str {
     strs_push(r, "define internal ptr @nz.str_alloc(i64 %n) {");
     strs_push(r, "entry:");
     strs_push(r, "  ; Checked, because a length that overflows here would allocate less than the caller is");
-    strs_push(r, "  ; about to write. `docs/spec.md` reports it as N0406 at the call site.");
+    strs_push(r, "  ; about to write. `docs/user/spec.md` reports it as N0406 at the call site.");
     strs_push(r, "  %r = call {i64, i1} @llvm.uadd.with.overflow.i64(i64 %n, i64 16)");
     strs_push(r, "  %over = extractvalue {i64, i1} %r, 1");
     strs_push(r, "  br i1 %over, label %fail, label %ask");
@@ -2393,7 +2393,7 @@ fn runtime() -> Str {
     strs_push(r, "  ret void");
     strs_push(r, "}");
     strs_push(r, "");
-    strs_push(r, "; An `Atomic`'s cell (`docs/spec.md`, *Atomics*): a backing of the string's shape, so it is");
+    strs_push(r, "; An `Atomic`'s cell (`docs/user/spec.md`, *Atomics*): a backing of the string's shape, so it is");
     strs_push(r, "; retained and released as a `Str`'s is, holding `v` in its 8 bytes, with its length -1 so that");
     strs_push(r, "; `nz.str_release` frees it uncounted. An atomic is not a string: the memory report counts");
     strs_push(r, "; neither its allocation nor its reclamation, as the interpreter does not (runtime ABI 38).");
@@ -5036,7 +5036,7 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
     // An enum is a discriminant followed by **one slot per variant**, in canonical
     // variant-name order — so the slot's index is one past the tag, and moving two
     // variant declarations changes no byte of this. Larger than the union it stands for,
-    // and deliberately so: correctness first, and `docs/performance.md` measures the cost.
+    // and deliberately so: correctness first, and `docs/internal/performance-log.md` measures the cost.
     let mut edef = 0;
     while edef < strs_len(rnames) {
         let mut declares = false;
@@ -5947,7 +5947,7 @@ fn channel_runtime() -> Str {
     strs_push(r, "  ret ptr null");
     strs_push(r, "; A channel is four allocations, and a failure part-way through must not leave the earlier");
     strs_push(r, "; ones behind. One label per stage, each freeing exactly what has been taken by then —");
-    strs_push(r, "; which is `docs/spec.md`'s failure law applied to the runtime's own storage, not only to");
+    strs_push(r, "; which is `docs/user/spec.md`'s failure law applied to the runtime's own storage, not only to");
     strs_push(r, "; the program's.");
     strs_push(r, "freec:");
     strs_push(r, "  call void @free(ptr %c)");

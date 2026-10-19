@@ -1,4 +1,4 @@
-//! R1a: arrays of strings, constant tables and exported constants (`docs/spec.md`, *Arrays* and
+//! R1a: arrays of strings, constant tables and exported constants (`docs/user/spec.md`, *Arrays* and
 //! *Constant tables and exported constants*).
 //!
 //! Every implementation — the interpreter, the LIR oracle, LLVM at `-O0` and `-O2`, and Cranelift

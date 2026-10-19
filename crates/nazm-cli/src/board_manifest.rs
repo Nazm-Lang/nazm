@@ -1,4 +1,4 @@
-//! `nazm build --board FILE` (Gate 3, `docs/spec.md`, *Boards*): a board's manifest read into the
+//! `nazm build --board FILE` (Gate 3, `docs/user/spec.md`, *Boards*): a board's manifest read into the
 //! description the linker script, the runtime and the entry are generated from.
 //!
 //! The keys are closed, as an attribute's vocabulary is: one this does not know, a value of the

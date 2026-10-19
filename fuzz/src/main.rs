@@ -1,4 +1,4 @@
-//! The coverage-guided fuzzer (N93, `docs/architecture.md` §7.94).
+//! The coverage-guided fuzzer (N93, `docs/internal/architecture.md` §7.94).
 //!
 //! `nazm-fuzz TARGET --seconds N [--seed S] [--corpus DIR]… [--out DIR] [--minimize]`
 //!

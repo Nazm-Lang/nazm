@@ -21,7 +21,7 @@
 //! The same interface must serialise to the same bytes, in this process and in the next
 //! one. Every field is a struct field or a `Vec` — **no map**, so no iteration order to
 //! depend on — exports are sorted by name and dependencies by key, and `serde_json` emits
-//! struct fields in declaration order. `docs/architecture.md` §7.3 says why that matters:
+//! struct fields in declaration order. `docs/internal/architecture.md` §7.3 says why that matters:
 //! a fingerprint over non-deterministic bytes is a fingerprint that changes when nothing
 //! did.
 
@@ -241,7 +241,7 @@ pub enum PersistentType {
 /// One field of a published record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersistentField {
-    /// The field's name, which **is** its identity. Never its position: `docs/spec.md`
+    /// The field's name, which **is** its identity. Never its position: `docs/user/spec.md`
     /// makes declaration order non-semantic, so a durable form keyed on an index would
     /// change meaning when an author moved two lines.
     pub name: String,
@@ -252,7 +252,7 @@ pub struct PersistentField {
 /// One variant of a published enum.
 ///
 /// The variant's **name** is its identity, exactly as a field's is. The numeric
-/// discriminant is not here and must not be: `docs/spec.md` makes a variant mean its enum
+/// discriminant is not here and must not be: `docs/user/spec.md` makes a variant mean its enum
 /// and its name, and the number a backend assigns is chosen fresh for each build from the
 /// canonical order. A file that wrote the tag would be publishing a representation as a
 /// meaning.
@@ -279,7 +279,7 @@ pub struct PersistentEnum {
     /// Its variants, sorted by name.
     ///
     /// Sorted rather than in declaration order, so that moving two variant declarations
-    /// produces identical bytes — which is what makes `docs/spec.md`'s claim that variant
+    /// produces identical bytes — which is what makes `docs/user/spec.md`'s claim that variant
     /// order is not semantic true of the fingerprint as well as of the language.
     pub variants: Vec<PersistentVariant>,
 }
@@ -311,7 +311,7 @@ pub struct PersistentRecord {
     /// Its fields, sorted by name.
     ///
     /// Sorted rather than in declaration order, so that moving two field declarations
-    /// produces identical bytes — which is what makes `docs/spec.md`'s claim that field
+    /// produces identical bytes — which is what makes `docs/user/spec.md`'s claim that field
     /// order is not semantic true of the fingerprint as well as of the language. A C struct's
     /// are in declaration order instead (N85): for it, order *is* semantic.
     pub fields: Vec<PersistentField>,
@@ -777,7 +777,7 @@ pub struct PersistentImpl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PublishError {
     /// The module has no durable identity — it escapes the source root, or a symbolic
-    /// link gave it two names. `docs/spec.md`, *Durable identity*, says why that is an
+    /// link gave it two names. `docs/user/spec.md`, *Durable identity*, says why that is an
     /// answer rather than a failure; there is simply nothing to write it under.
     NoModuleKey(ModuleId),
     /// A module it imports has none, and naming a dependency by a session-local id would
@@ -1547,7 +1547,7 @@ impl PersistentUnitInterface {
         let own = self.module_key();
         // A type this interface's module declares is one an importer may name. One from
         // another module is here because a shape mentions it, and naming it would be the
-        // transitive visibility `docs/spec.md` refuses — so it is declared **without**
+        // transitive visibility `docs/user/spec.md` refuses — so it is declared **without**
         // registering its name.
         let mine = |def: &str, kind: DefKind| {
             parse_type_key(def, kind)

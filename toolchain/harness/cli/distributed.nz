@@ -1,5 +1,5 @@
 // Gate 3: the distributed foundation (`library/std/dist.nz`, `examples/apps/ledger/`,
-// `docs/systems-domains.md` Part N). In one process, the `Local` transport; between two
+// `docs/internal/systems-domains.md` Part N). In one process, the `Local` transport; between two
 // processes, over TCP, a ledger server stopped the moment a credit is logged and restarted on the
 // same address, and a client whose retries carry it through — every credit applied exactly once.
 // Ported from `crates/nazm-cli/tests/distributed.rs` (R7), with the harness's children left running

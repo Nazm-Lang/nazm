@@ -1,6 +1,6 @@
 //! Every diagnostic code is either asserted by a test, or named as unprovokable.
 //!
-//! A code is part of the machine interface: `docs/diagnostics.md` promises that one
+//! A code is part of the machine interface: `docs/user/diagnostics.md` promises that one
 //! never changes meaning and is never reused, so each is a commitment. A commitment no
 //! test exercises is a claim about behaviour nobody has seen.
 //!
@@ -121,11 +121,11 @@ fn declared() -> Vec<(String, String)> {
     codes
 }
 
-/// Q1-D-11, -13, -14: `docs/diagnostics.md`'s registry is every declared code, each once, with
+/// Q1-D-11, -13, -14: `docs/user/diagnostics.md`'s registry is every declared code, each once, with
 /// its constant, and nothing else but codes marked reserved, which no constant declares.
 #[test]
 fn the_registry_is_every_declared_code_and_only_them() {
-    let docs = read("docs/diagnostics.md");
+    let docs = read("docs/user/diagnostics.md");
     let begin = docs
         .find("<!-- registry:begin -->")
         .expect("registry start");
@@ -151,7 +151,7 @@ fn the_registry_is_every_declared_code_and_only_them() {
     for (name, code) in &declared {
         assert!(
             rows.iter().any(|(c, n)| c == code && n == name),
-            "{code} ({name}) is declared and not in docs/diagnostics.md's registry: add the row\n| `{code}` | `{name}` | … |"
+            "{code} ({name}) is declared and not in docs/user/diagnostics.md's registry: add the row\n| `{code}` | `{name}` | … |"
         );
     }
     for (code, name) in &rows {

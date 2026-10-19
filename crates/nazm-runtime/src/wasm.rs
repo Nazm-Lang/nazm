@@ -1,4 +1,4 @@
-//! The WebAssembly runtime and entry (N64, `docs/architecture.md` §7.66): `wasm32-unknown-unknown`
+//! The WebAssembly runtime and entry (N64, `docs/internal/architecture.md` §7.66): `wasm32-unknown-unknown`
 //! — no OS, no C library, no heap, one thread, and every capability of the outside an import.
 //!
 //! A failure is recorded in plain globals, as on the board (§7.64), and handed to the host by the
@@ -200,7 +200,7 @@ pub fn emit_entry(entry: &str, roots: usize) -> String {
 
 /// The reference host for Node (`DIR/host.mjs`): it provides exactly the imports it knows, refuses
 /// a module that asks for any other, prints `main`'s result, and exits 0, or 2 after a failure.
-pub const HOST: &str = r#"// Written by nazm build for wasm32-unknown-unknown (N64, docs/architecture.md §7.66).
+pub const HOST: &str = r#"// Written by nazm build for wasm32-unknown-unknown (N64, docs/internal/architecture.md §7.66).
 // The reference host: `node host.mjs module.wasm`. It grants only what the module imports and
 // it knows — `nazm_host.write` (standard output and error) and `nazm_host.report` (a failure).
 import { readFileSync } from 'node:fs';

@@ -1,7 +1,7 @@
 //! N56: a local registry — version ranges, deterministic resolution, an immutable,
 //! digest-checked store, and the attacks a package store has to refuse.
 //!
-//! `docs/architecture.md` §7.58. Every registry here is a temporary directory built by
+//! `docs/internal/architecture.md` §7.58. Every registry here is a temporary directory built by
 //! [`nazm_package::publish`]; nothing reaches a network.
 
 #![allow(

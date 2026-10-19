@@ -49,7 +49,7 @@ pub fn lsp_cli() -> Cli {
     let c = cli_command("lsp", "Serve the Language Server Protocol to an editor, on stdin and stdout",
             "Serve the Language Server Protocol to an editor, on stdin and stdout." + nl() + nl()
             + "Started and owned by the editor; ends when it says `exit`. Diagnostics, definition and hover, from the same "
-            + "loader and checker every other command uses, over the editor's unsaved buffers. `docs/architecture.md` §7.18 "
+            + "loader and checker every other command uses, over the editor's unsaved buffers. `docs/internal/architecture.md` §7.18 "
             + "says what it does and does not do.")
     cli_option(c, "", "source-root", "SOURCE_ROOT", true, "", false, "Measure every module's durable identity from this directory, as "
             + "`nazm check --source-root` does. Without it, each open file's root is decided exactly as `nazm check` decides "

@@ -28,7 +28,7 @@ pub fn fix_cli() -> Cli {
             + "which it is right and left for a person. Nothing is written without `--apply`.")
     cli_positional(c, "FILE", true, false, true, "", "")
     cli_flag(c, "", "apply", "Write the edits. Without this the command reports and changes nothing", "")
-    cli_flag(c, "", "json", "One JSON object per edit, on stdout. See `docs/diagnostics.md`", "")
+    cli_flag(c, "", "json", "One JSON object per edit, on stdout. See `docs/user/diagnostics.md`", "")
     c
 }
 

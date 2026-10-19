@@ -1,5 +1,5 @@
 // counter: the state and logic of a native window, as a Nazm shared library (Gate 3 reference,
-// `docs/systems-domains.md` Part Q). The window is the host's — `host.m`, Cocoa — and its event
+// `docs/internal/systems-domains.md` Part Q). The window is the host's — `host.m`, Cocoa — and its event
 // loop calls these through the C ABI: each click or key a step of the state machine, each frame
 // a question of what to show. Nothing here knows a window exists.
 //

@@ -1,5 +1,5 @@
 // The performance-claims gate (R7, ported from `xtask/src/claims.rs`; N92): `bench/claims.toml`
-// files every measured section of `docs/performance.md` — every `##` or `###` heading that says
+// files every measured section of `docs/internal/performance-log.md` — every `##` or `###` heading that says
 // *measured* or *frozen* — as reproducible, dated or unreproduced, and every reproducible entry's
 // command is real. It does not run them.
 
@@ -117,9 +117,9 @@ fn command_problem(h: Caps, root: Str, sources: Strs, how: Str) -> Str ! { io } 
 
 pub fn gate_claims(h: Caps, root: Str) -> Strs ! { io } {
     let problems = strs_new();
-    let doc = match read_rust(h, f"{root}/docs/performance.md") {
+    let doc = match read_rust(h, f"{root}/docs/internal/performance-log.md") {
         Result.Ok(value: t) => t,
-        Result.Err(error: e) => { strs_push(problems, f"could not read docs/performance.md: {e}"); return problems; },
+        Result.Err(error: e) => { strs_push(problems, f"could not read docs/internal/performance-log.md: {e}"); return problems; },
     };
     let register = match read_rust(h, f"{root}/bench/claims.toml") {
         Result.Ok(value: t) => t,
@@ -179,7 +179,7 @@ pub fn gate_claims(h: Caps, root: Str) -> Strs ! { io } {
     let headings = measured(doc);
     for hd in headings {
         match map_get(filed, hd) {
-            Option.None() => strs_push(problems, f"docs/performance.md measures `{hd}`, and bench/claims.toml does not file it"),
+            Option.None() => strs_push(problems, f"docs/internal/performance-log.md measures `{hd}`, and bench/claims.toml does not file it"),
             Option.Some(value: n) => if n > 1 { strs_push(problems, f"`{hd}` is filed {n} times") } else { 0 },
         };
     }
@@ -191,7 +191,7 @@ pub fn gate_claims(h: Caps, root: Str) -> Strs ! { io } {
             }
         }
         if !found {
-            strs_push(problems, f"bench/claims.toml files `{k}`, which docs/performance.md does not measure");
+            strs_push(problems, f"bench/claims.toml files `{k}`, which docs/internal/performance-log.md does not measure");
         }
     }
     problems

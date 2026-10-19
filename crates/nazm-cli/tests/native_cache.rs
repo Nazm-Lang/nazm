@@ -1140,7 +1140,7 @@ fn a_record_type_is_named_from_its_durable_identity_and_not_its_position() {
 
 #[test]
 fn reordering_a_records_fields_changes_no_object() {
-    // `docs/spec.md` says field order is not semantic; the layout is canonical by field
+    // `docs/user/spec.md` says field order is not semantic; the layout is canonical by field
     // name, so the claim holds of the object file too. A source edit that means nothing
     // must not produce a different binary, or the compiler and the linker would disagree
     // about whether anything happened.
@@ -1261,7 +1261,7 @@ fn an_enum_a_unit_never_mentions_is_not_in_its_text() {
 
 #[test]
 fn reordering_an_enums_variants_changes_no_object() {
-    // `docs/spec.md` says variant order is not semantic, so the discriminant is derived
+    // `docs/user/spec.md` says variant order is not semantic, so the discriminant is derived
     // from the names — and the claim holds of the object file too. A source edit that
     // means nothing must not produce a different binary. The same for payload fields.
     for (what, before, after) in [
@@ -1337,7 +1337,7 @@ fn an_enum_type_is_named_from_its_durable_identity_and_not_its_position() {
 
 // --- N11: generic function instances as artefacts of their own ------------------------------
 //
-// `docs/architecture.md` §7.12. One concrete instance is one unit and one object, named from
+// `docs/internal/architecture.md` §7.12. One concrete instance is one unit and one object, named from
 // its definition's identity and its type arguments' canonical keys, and never folded into a
 // caller's unit. The object cache needs nothing new to reuse one: its key is the instance's
 // exact bytes, as every unit's is.
@@ -1507,7 +1507,7 @@ fn one_new_instantiation_compiles_the_caller_and_the_new_instance_and_nothing_el
 
 #[test]
 fn a_generic_body_edit_recompiles_its_instances_and_no_caller() {
-    // `docs/spec.md`: the body is not part of the interface. So the callers' units do not
+    // `docs/user/spec.md`: the body is not part of the interface. So the callers' units do not
     // change — they declare the instance by its symbol and signature — and only the units
     // that carry the body do.
     let dir = tempfile::tempdir().expect("tempdir");

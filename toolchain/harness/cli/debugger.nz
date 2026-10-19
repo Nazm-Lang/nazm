@@ -1,5 +1,5 @@
 // N58: debugger and profiler v2 — variables, and the runtime's counters as a profile
-// (`docs/architecture.md` §7.60). Ported from `crates/nazm-cli/tests/debugger.rs` (R7). The live
+// (`docs/internal/architecture.md` §7.60). Ported from `crates/nazm-cli/tests/debugger.rs` (R7). The live
 // session beside them is `#[ignore]`d and needs Docker, which stays Rust (`design.md`).
 
 use "@std/json"

@@ -2,7 +2,7 @@
 //! `os_stdout`/`os_stderr` and `os_lock`/`os_unlock`; P2's `os_lstat`, `os_chmod`, `os_realpath`,
 //! `os_mkdtemp` and `os_try_lock`).
 //!
-//! `docs/spec.md`, *The platform, further*. What only a whole run shows: that raw bytes on standard
+//! `docs/user/spec.md`, *The platform, further*. What only a whole run shows: that raw bytes on standard
 //! output keep their place among `print`'s and that closing the handle leaves the stream open; what a
 //! path itself is — a link not followed, a hard link the same file by device and inode; permissions
 //! set through a link; a canonical path; a temporary directory made private and writable under; and

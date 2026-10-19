@@ -1,4 +1,4 @@
-//! Constants (Gate 2, `docs/spec.md`, *Constants*): `const NAME: T = value;`, computed by the
+//! Constants (Gate 2, `docs/user/spec.md`, *Constants*): `const NAME: T = value;`, computed by the
 //! checker.
 //!
 //! A constant's value is an expression of literals, other constants of its module, the
@@ -185,7 +185,7 @@ struct Evaluator<'a, 'e> {
     aggregates: HashMap<String, Type>,
 }
 
-/// The second phase (R1a, L8, `docs/spec.md`, *Constant tables and exported constants*): each
+/// The second phase (R1a, L8, `docs/user/spec.md`, *Constant tables and exported constants*): each
 /// constant of a record, enum, tuple or array type — `tys`, its declared type resolved where the
 /// module's types are known — computed into `consts` beside the scalars the first phase did.
 pub fn evaluate_aggregates(

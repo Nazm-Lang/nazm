@@ -1,4 +1,4 @@
-//! Packages on the command line (N46, `docs/architecture.md` §7.48).
+//! Packages on the command line (N46, `docs/internal/architecture.md` §7.48).
 //!
 //! `nazm check|build|run DIR` builds the package in `DIR` from its `main`; `--locked` holds any
 //! of them to the package's lockfile before anything is compiled; `nazm lock DIR` writes that
@@ -60,7 +60,7 @@ pub(crate) fn profile_graph(path: &Path) -> Option<nazm_package::Graph> {
 }
 
 /// Every module of a library package — one with no `main` — for `nazm check DIR` (N74,
-/// `docs/architecture.md` §7.76): the `.nz` files under its source root, sorted. `None` for
+/// `docs/internal/architecture.md` §7.76): the `.nz` files under its source root, sorted. `None` for
 /// anything else, which takes the ordinary route and its ordinary refusals.
 pub(crate) fn library_modules(path: &Path) -> Option<Vec<PathBuf>> {
     if !path.is_dir() || !nazm_package::is_package(path) {

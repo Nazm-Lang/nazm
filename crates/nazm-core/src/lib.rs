@@ -3,7 +3,7 @@
 //! The pipeline is deliberately one direction with no back edges: source → tokens → AST →
 //! checked → Core IR → evaluated, or handed to a backend. Each stage collects every
 //! diagnostic it can before the next runs, so a program with three mistakes reports three —
-//! and Core IR is built only for a program with none (`docs/architecture.md` §7.41).
+//! and Core IR is built only for a program with none (`docs/internal/architecture.md` §7.41).
 
 pub mod check;
 pub mod constants;
@@ -98,7 +98,7 @@ const ONE_FILE: &str = "<input>";
 
 /// A compilation of one file: that file as the root module, and the core prelude.
 ///
-/// The prelude is part of every compilation, including this one — `docs/spec.md`, *The
+/// The prelude is part of every compilation, including this one — `docs/user/spec.md`, *The
 /// core prelude* — so a program given as a string sees `Result` and `Option` exactly as a
 /// program read from disk does. It comes **after** the file, so the file is still
 /// `FileId::ROOT` and every span in it means what it meant before.
@@ -118,7 +118,7 @@ pub fn one_file(source: &str) -> (nazm_span::SourceMap, sema::ModuleGraph) {
 
 /// As [`run`], with explicit budgets.
 ///
-/// The budgets are the interpreter's, not the language's — see `docs/spec.md`. They exist
+/// The budgets are the interpreter's, not the language's — see `docs/user/spec.md`. They exist
 /// so that a program which does not terminate reports instead of consuming the machine,
 /// whether it fails to terminate by looping or by recursing.
 #[must_use]
@@ -355,7 +355,7 @@ pub fn check_map_with_warnings(
 ///
 /// # Why the tree never leaves
 ///
-/// `docs/spec.md` promises that the whole pipeline runs on a thread whose stack the
+/// `docs/user/spec.md` promises that the whole pipeline runs on a thread whose stack the
 /// interpreter sets itself, because **a bound only means something against a known
 /// stack**: macOS gives the main thread 8 MiB, a spawned thread 2 MiB, and the test
 /// harness 2 MiB per test. Parsing, checking, lowering, emitting and *dropping* the tree
@@ -401,7 +401,7 @@ where
 /// Whether this compilation is a **program**.
 ///
 /// The root module owns `main` and a program without one is `N0204` — a rule about
-/// programs, settled in `docs/spec.md`. Asking a module what it *offers* is a different
+/// programs, settled in `docs/user/spec.md`. Asking a module what it *offers* is a different
 /// question, and a library answers it perfectly well with no entry point. This is the one
 /// distinction between the two, named rather than expressed as a filter over diagnostics
 /// at a call site.
@@ -658,7 +658,7 @@ pub fn machine_only_call(
     })
 }
 
-/// The first placement only a board's image has (Gate 3, `docs/spec.md`, *Boards*): a function
+/// The first placement only a board's image has (Gate 3, `docs/user/spec.md`, *Boards*): a function
 /// or static `@section` names, with where and what.
 #[must_use]
 pub fn board_only(core: &cir::Program) -> Option<(nazm_span::Span, String)> {

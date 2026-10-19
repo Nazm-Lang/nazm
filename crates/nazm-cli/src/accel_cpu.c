@@ -1,4 +1,4 @@
-// Written by nazm accel (Gate 3, docs/spec.md, *Providers*): the CPU provider. The kernel's one
+// Written by nazm accel (Gate 3, docs/user/spec.md, *Providers*): the CPU provider. The kernel's one
 // source text — the OpenCL C a device builds — compiled here as C, after a prelude that gives
 // OpenCL's few words their C meaning, and its element function `nz_item` run over every element
 // by a pool of threads, one per core, each taking a contiguous share.

@@ -42,8 +42,8 @@ fn long_about() -> Str {
             + "spawn, channels), integers of every width, floats, fixed arrays, constants, `Bytes` and UTF-8 `Text`. `nazm run` "
             + "interprets a program; `nazm build` compiles it natively through LLVM or Cranelift, and the two are held to the "
             + "same results. Trait objects and effect handlers are not in the language; a program using an absent construct is "
-            + "refused by name rather than misparsed. Run `nazm capabilities` for this build's own answer. See docs/spec.md and "
-            + "docs/stability.md."
+            + "refused by name rather than misparsed. Run `nazm capabilities` for this build's own answer. See docs/user/spec.md and "
+            + "docs/user/stability.md."
 }
 
 // Every command, in `cli.rs`'s order, and its `about` (the first paragraph of its doc comment, its
@@ -101,11 +101,11 @@ fn commands() -> Strs {
     strs_push(s, "obligations")
     strs_push(s, "Print every obligation of a checked program, `nazm.obligations/1` (N87): each contract clause, call of a function with a precondition, operation that can overflow or divide by zero, index, allocation, call through a function value and call into C, each proved, checked as the program runs, or unknown. Compiler evidence, not certification")
     strs_push(s, "mir")
-    strs_push(s, "Print each concrete function of the native program as MIR, `nazm.mir/1` (N40): basic blocks with every copy, move, drop, scope join and failure edge written out, after the validator accepted it. Debug output, internal and unstable; `docs/architecture.md` §7.42")
+    strs_push(s, "Print each concrete function of the native program as MIR, `nazm.mir/1` (N40): basic blocks with every copy, move, drop, scope join and failure edge written out, after the validator accepted it. Debug output, internal and unstable; `docs/internal/architecture.md` §7.42")
     strs_push(s, "runtime")
-    strs_push(s, "Build or check a runtime artifact (N82, `docs/architecture.md` §7.83): the whole runtime for one target and profile, compiled once into `libnazmrt.a` beside a `nazm.runtime/1` manifest, which `nazm build --runtime DIR` links")
+    strs_push(s, "Build or check a runtime artifact (N82, `docs/internal/architecture.md` §7.83): the whole runtime for one target and profile, compiled once into `libnazmrt.a` beside a `nazm.runtime/1` manifest, which `nazm build --runtime DIR` links")
     strs_push(s, "lir")
-    strs_push(s, "Print what LIR decided for a checked program, `nazm.lir/2` (N81, N105): the target's data layout, every unit's symbols and linkage, every record's and enum's byte layout on that target, which types own anything, and every unit's instructions — what both backends read, validated. `docs/architecture.md` §7.82 and §7.106")
+    strs_push(s, "Print what LIR decided for a checked program, `nazm.lir/2` (N81, N105): the target's data layout, every unit's symbols and linkage, every record's and enum's byte layout on that target, which types own anything, and every unit's instructions — what both backends read, validated. `docs/internal/architecture.md` §7.82 and §7.106")
     strs_push(s, "doc")
     strs_push(s, "Document a program's public API (N74), from its semantic definitions: every exported function, record and enum of its own modules, with effects, capabilities, foreign symbols and a link to the source. One `nazm.api-doc/2` line on stdout, or `api.json` and `api.md` in `-o DIR`. Not `nazm docs`, which reads Nazm's own documentation")
     strs_push(s, "bindgen")

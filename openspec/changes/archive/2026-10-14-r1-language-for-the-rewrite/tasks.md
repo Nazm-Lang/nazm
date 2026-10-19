@@ -5,8 +5,8 @@
 ## 2. How every item is carried out
 
 Each item is its own commit series (`CONTRIBUTING.md`, *The constitution comes before the code*):
-spec text first (`docs/spec.md`, `docs/grammar.ebnf`, `docs/stability.md` epoch entry,
-`docs/diagnostics.md` for a new code); then the parser, checker, interpreter and both native
+spec text first (`docs/user/spec.md`, `docs/user/grammar.ebnf`, `docs/user/stability.md` epoch entry,
+`docs/user/diagnostics.md` for a new code); then the parser, checker, interpreter and both native
 backends; tests across the interpreter, LLVM `-O0`/`-O2` and Cranelift with the memory report
 compared; mutants mapped to the new responsibility; host suite before each
 commit; the capability matrix and limitations updated. The Nazm compiler (`compiler/*.nz`) refuses
@@ -74,7 +74,7 @@ C for `main`'s authority. Published with the rest of R1 as 0.10.0.
       the map remembering the entry `m[k]` found, its vectors read once a probe, a field read as an
       operand borrowed in MIR, the runtime's state addressed directly)
 - [x] 5b.10 The benchmark in the repository, re-run for each publication, and its results on nazm.dev —
-      `bench/compare/` (15 languages × hello, fib, words; `compare.py`), results in `docs/performance.md`
+      `bench/compare/` (15 languages × hello, fib, words; `compare.py`), results in `docs/internal/performance-log.md`
       (2026-10-14), which nazm.dev publishes at each release
 - [x] 5b.11 `else if` — the grammar and the guide have promised it since 2026-09-21 and the parser
       never accepted it; a grammar `@example` of it, so the two cannot drift again

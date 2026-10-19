@@ -54,4 +54,4 @@ pub fn show_all[T: Show](v: Vec[T], sep: Str) -> Str ! {} {
 }
     }
     out
-// being ->handed a rendering function, which is value program `docs/architecture.md` §7.79 names as
+// being ->handed a rendering function, which is value program `docs/internal/architecture.md` §7.79 names as

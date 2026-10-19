@@ -1,5 +1,5 @@
 //! Exit codes, named so the mapping is visible in one place: the v1 contract
-//! (`docs/stability.md`, *Diagnostics and exit statuses*; frozen in Q1-C1). Each status means one
+//! (`docs/user/stability.md`, *Diagnostics and exit statuses*; frozen in Q1-C1). Each status means one
 //! thing, and a command chooses the one its failure is, never the one a neighbour used.
 
 /// Success.

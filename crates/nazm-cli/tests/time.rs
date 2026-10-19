@@ -1,6 +1,6 @@
 //! Gate 2: time.
 //!
-//! `docs/general-purpose.md` §11 and the spec's *Time*. What only a whole run shows: that the
+//! `docs/internal/general-purpose.md` §11 and the spec's *Time*. What only a whole run shows: that the
 //! monotonic clock in nanoseconds advances by at least what a sleep waited, that the wall clock is
 //! after 2023, that `@std/time`'s `Duration`, `Instant` and `WallTime` compose, and that a sleep on
 //! the task pool parks its task — on **one** worker, a task that computes finishes before one that

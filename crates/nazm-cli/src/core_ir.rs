@@ -6,7 +6,7 @@
 //! both backends start from, rather than from LLVM IR or the interpreter's behaviour. The
 //! same one lowering `nazm run` and `nazm build` use, reached the same way: only for a
 //! program that checks. Not a user-facing syntax and not an interchange format;
-//! `docs/architecture.md` §7.41 says what the version promises.
+//! `docs/internal/architecture.md` §7.41 says what the version promises.
 
 use std::path::Path;
 use std::process::ExitCode;

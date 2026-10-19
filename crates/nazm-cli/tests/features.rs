@@ -1,4 +1,4 @@
-//! Gate 2: package features (`docs/general-purpose.md` §22, `docs/spec.md` *Package features*).
+//! Gate 2: package features (`docs/internal/general-purpose.md` §22, `docs/user/spec.md` *Package features*).
 //!
 //! What this holds: a package's `default` features are on unless nothing asks; a dependent asks a
 //! dependency for more; a feature enables others, its own or a dependency's; `--features` asks

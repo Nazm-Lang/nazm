@@ -4,8 +4,8 @@
 // operating system holds; copies of one are the same file. Whatever names a path takes the
 // `IoCap` that allows it; whatever uses a `File` takes only the file, which reaches nothing but
 // itself — so a function can be handed one file and no other authority. Every function returns a
-// `Result` whose error says what kind of failure it was, the same on every platform. A file not closed stays open until the program ends. `docs/general-purpose.md`
-// §8 is the design record; `docs/spec.md`, *Files and handles*, the built-ins beneath.
+// `Result` whose error says what kind of failure it was, the same on every platform. A file not closed stays open until the program ends. `docs/internal/general-purpose.md`
+// §8 is the design record; `docs/user/spec.md`, *Files and handles*, the built-ins beneath.
 
 use "@std/ioerror";
 
@@ -425,7 +425,7 @@ pub fn file_replace_atomic(io: IoCap, path: Str, data: Bytes) -> Result[Int, IoE
     }
 }
 
-// R1d (`docs/spec.md`, *The platform, further*): standard output and errors as files, what a path
+// R1d (`docs/user/spec.md`, *The platform, further*): standard output and errors as files, what a path
 // itself is, permissions, canonical paths, temporary directories and locks.
 
 /// Standard output as a `File`: raw bytes, in order with `print`. Closing it closes the handle and

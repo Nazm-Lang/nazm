@@ -1,4 +1,4 @@
-// Gate 2: process and environment (`docs/general-purpose.md` §12, the spec's *Process and
+// Gate 2: process and environment (`docs/internal/general-purpose.md` §12, the spec's *Process and
 // environment*). Ported from `crates/nazm-cli/tests/process.rs` (R7).
 //
 // What only a whole run shows: that `@std/process` runs a program with input, collecting its

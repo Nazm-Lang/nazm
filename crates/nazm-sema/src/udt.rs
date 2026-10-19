@@ -20,7 +20,7 @@ use crate::types::Type;
 /// How deeply user-defined types may contain one another by value.
 ///
 /// A bound rather than a stack: computing a layout, a copy or a drop walks the containment
-/// graph, and `docs/architecture.md`'s rule about recursion with the shape of the input
+/// graph, and `docs/internal/architecture.md`'s rule about recursion with the shape of the input
 /// applies to *type* structure too. Cycles are already refused
 /// ([`UserTypes::layout_cycle`]), so the graph is finite — but finite is not bounded, and a
 /// thousand-deep chain would still overflow whichever consumer recursed first.
@@ -497,7 +497,7 @@ impl UserTypes {
     /// `Ok(())` or the **field path** that makes it illegal. A record inherits the answer
     /// from its fields; an enum from **every** field of **every** variant, because task
     /// safety is a property of the type and a value's active variant is not known where a
-    /// `spawn` is checked. `docs/spec.md` states that asymmetry and why there is no
+    /// `spawn` is checked. `docs/user/spec.md` states that asymmetry and why there is no
     /// flow-sensitive escape.
     ///
     /// The path names the variant it went through: `work.Values.items` rather than
@@ -609,7 +609,7 @@ impl UserTypes {
     /// Whether `<`, `<=`, `>` and `>=` are defined for this type (L6), and if not, why:
     /// integers, `Bool` and `Str`, and records, enums and tuples of them. A float orders
     /// numerically on its own but makes no structure ordered — an IEEE 754 comparison is not a
-    /// total order — and nothing reached through an indirection orders. `docs/spec.md`,
+    /// total order — and nothing reached through an indirection orders. `docs/user/spec.md`,
     /// *Ordering and hashing are derived*.
     ///
     /// # Errors
@@ -767,7 +767,7 @@ impl UserTypes {
     ///
     /// A record contains its fields by value and an enum contains its active payload by
     /// value, so a chain of either that returns to where it started describes a value that
-    /// contains itself — no finite layout exists. `docs/spec.md` refuses it as an
+    /// contains itself — no finite layout exists. `docs/user/spec.md` refuses it as an
     /// impossible layout rather than as a memory-safety problem, and the rule is stated
     /// over inline containment so that a future indirection can break a cycle without this
     /// rule having to change.
@@ -838,7 +838,7 @@ impl UserTypes {
     ///
     /// `None` when the chain is longer than [`MAX_TYPE_DEPTH`]. Only meaningful once
     /// [`Self::layout_cycle`] has found nothing — a cycle has no depth, and this would walk
-    /// it forever. The caller checks cycles first, which is the order `docs/spec.md`'s
+    /// it forever. The caller checks cycles first, which is the order `docs/user/spec.md`'s
     /// declaration stages are written in.
     #[must_use]
     pub fn depth(&self, t: Type) -> Option<usize> {
@@ -917,7 +917,7 @@ const COUNTED: u8 = 2;
 const IMMUTABLE: u8 = 4;
 
 /// One path kind followed by another: counted as soon as either is, else immutable as soon as
-/// either is, else inline (`docs/spec.md`, *Immutable indirection*).
+/// either is, else inline (`docs/user/spec.md`, *Immutable indirection*).
 const fn then(a: u8, b: u8) -> u8 {
     if a == COUNTED || b == COUNTED {
         COUNTED

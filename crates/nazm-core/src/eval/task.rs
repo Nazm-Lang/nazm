@@ -7,7 +7,7 @@ use super::*;
 impl Interpreter {
     /// Start one task and hand back the handle its scope will join.
     ///
-    /// One OS thread per task, and `docs/spec.md` says so rather than implying anything
+    /// One OS thread per task, and `docs/user/spec.md` says so rather than implying anything
     /// else. Each task gets its **own** interpreter over the same program: the state
     /// shared between tasks is exactly the channels they were handed, which is what the
     /// capture rule is for.

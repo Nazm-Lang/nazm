@@ -1,4 +1,4 @@
-//! The instruction-level LIR (N105, `docs/architecture.md` §7.106): the one lowering both native
+//! The instruction-level LIR (N105, `docs/internal/architecture.md` §7.106): the one lowering both native
 //! backends consume.
 //!
 //! [`lower_unit`] turns one unit of validated MIR into a [`Module`]; [`validate`] holds it to the

@@ -2,7 +2,7 @@
 //! new process group and a null standard input, `os_pid`, `os_child_pid`, `os_kill_group`,
 //! `os_try_wait`, `os_wait_until` and `os_child_rusage`).
 //!
-//! `docs/spec.md`, *The platform, further*. What only a whole run shows: that a child gets exactly
+//! `docs/user/spec.md`, *The platform, further*. What only a whole run shows: that a child gets exactly
 //! the environment given, ordered by name, in the directory given, its program found on this
 //! process's `PATH`; that a malformed environment, a flag, a directory or a program that cannot be is
 //! refused before anything starts; that a null standard input reads as empty; that a bounded wait

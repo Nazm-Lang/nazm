@@ -1,4 +1,4 @@
-//! R1a: multi-line and raw string literals (`docs/spec.md`, *Multi-line and raw strings*).
+//! R1a: multi-line and raw string literals (`docs/user/spec.md`, *Multi-line and raw strings*).
 //!
 //! Every implementation is asked for the bytes the rules give, worked out by hand; the formatter
 //! keeps a literal as written; and what the lexer refuses, by which code, once.

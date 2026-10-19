@@ -1,5 +1,5 @@
 // N95: the support matrix — every target, under each backend, run-verified, run-verified under
-// Wine, compile-only or unsupported, and nothing in between (`docs/architecture.md` §7.96). Ported
+// Wine, compile-only or unsupported, and nothing in between (`docs/internal/architecture.md` §7.96). Ported
 // from `crates/nazm-cli/tests/platform_matrix.rs` (R7).
 //
 // The matrix is one table in `nazm-lir`, printed by `nazm inspect`; this holds the capability
@@ -105,7 +105,7 @@ fn every_accepted_target_has_a_row_and_every_cell_one_of_five_answers(io: IoCap,
 fn the_capability_matrix_states_exactly_what_the_compiler_does(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
     let doc = support(h)?;
-    let text = read_text(h, f"{repo_root(h)}/docs/capability-matrix.md")?;
+    let text = read_text(h, f"{repo_root(h)}/docs/internal/capability-matrix.md")?;
     // The N95 table: `| triple | LLVM | Cranelift | CPU (LLVM / Cranelift) | debugger |`.
     let mut i = 0;
     while i < cells_len(doc) {
@@ -118,7 +118,7 @@ fn the_capability_matrix_states_exactly_what_the_compiler_does(io: IoCap, p: Pro
                 row = l;
             }
         }
-        check_that(str_len(row) > 0, f"no row for {triple} in docs/capability-matrix.md")?;
+        check_that(str_len(row) > 0, f"no row for {triple} in docs/internal/capability-matrix.md")?;
         let cols = strs_new();
         for col in split(row, "|") {
             strs_push(cols, trim_ws(col));

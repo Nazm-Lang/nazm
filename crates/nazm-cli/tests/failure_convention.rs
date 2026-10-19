@@ -1,4 +1,4 @@
-//! How a failure crosses a call (`docs/architecture.md` §7.106, *The failure bit*, and §7.115).
+//! How a failure crosses a call (`docs/internal/architecture.md` §7.106, *The failure bit*, and §7.115).
 //! R1, 5b.8: a Nazm function returns whether it failed beside its result, and its caller leaves by
 //! that bit rather than by reading the thread's failure flag — still so on WebAssembly, WASI, the
 //! boards, Windows, under Cranelift and in the LIR oracle. 4.2: on the hosted targets under LLVM a
@@ -297,7 +297,7 @@ fn natively(d: &std::path::Path, extra: &[&str]) -> Vec<(String, common::Ran)> {
 #[test]
 fn a_failure_ten_thousand_frames_deep_through_defers_runs_none_and_releases_every_frame() {
     // 4.2: every frame owns a string and has a `defer`; the unwind lands in each to release its
-    // string, and runs no `defer` (`docs/spec.md`, `defer`): the first call prints `ddd`, the
+    // string, and runs no `defer` (`docs/user/spec.md`, `defer`): the first call prints `ddd`, the
     // second nothing before the overflow. Native only: the interpreter's recursion limit is lower.
     let src = "fn down(out: OutCap, n: Int, k: Int, tag: Str) -> Int ! {io} {
     let held = str_concat(tag, \"!\")

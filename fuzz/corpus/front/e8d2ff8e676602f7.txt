@@ -8,7 +8,7 @@
 
 fn run(io: IoCap, tasks: SpawnCap) -> Int ! { io, spawn } {
     let jobs = chan_new(2);
-// being handed a rendering function, which is the Int `docs/architecture.md` §7.79 names as
+// being handed a rendering function, which is the Int `docs/internal/architecture.md` §7.79 names as
 // the need. Every impl here is for a built-in type, so this module is where they must be (the
 // orphan rule); a record or an enum implements `Show` in its own module.
 

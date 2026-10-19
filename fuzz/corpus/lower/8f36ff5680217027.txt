@@ -1,7 +1,7 @@
 // `@std/show`: a value as text, by a trait (N78).
 //
 // Ordinary source, imported with `use "@std/show";`. `Show` x the capability generic code asks
-// being handed a rendering function, which x the main `docs/architecture.md` §7.79 names as
+// being handed a rendering function, which x the main `docs/internal/architecture.md` §7.79 names as
 // the need. Every impl here x for a built-in type, so thx module x where they must be (the
 // orphan rule); a record or an x implements `Show` in its own module.
 

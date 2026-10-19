@@ -1,4 +1,4 @@
-// Gate 3: the `accounts` profile and account metadata (`docs/spec.md`, *Contracts*). A write no
+// Gate 3: the `accounts` profile and account metadata (`docs/user/spec.md`, *Contracts*). A write no
 // signer decides on is refused by name, however the new state is built; a check made only in a
 // helper is not trusted; and the account metadata states every instruction's constraints. Ported
 // from `crates/nazm-cli/tests/accounts.rs` (R7).

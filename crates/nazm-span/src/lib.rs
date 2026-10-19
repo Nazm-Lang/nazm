@@ -47,7 +47,7 @@ pub use fast::{FastMap, FastSet, FastState};
 ///
 /// Anything needing identity that survives a process — incremental compilation, caching,
 /// telling an agent that an edit produced the same definition — needs a different thing
-/// that does not exist yet. See `docs/research-register.md` R2 and R3. Conflating the two
+/// that does not exist yet. See `docs/internal/research-register.md` R2 and R3. Conflating the two
 /// is the mistake this comment exists to prevent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FileId(u32);
@@ -150,7 +150,7 @@ struct Entry {
     /// Where this file would begin in the concatenation of every file in load order.
     ///
     /// Carried for one reason: the machine-readable diagnostic schema has always emitted
-    /// offsets into that concatenation, and `docs/diagnostics.md` promises not to change
+    /// offsets into that concatenation, and `docs/user/diagnostics.md` promises not to change
     /// the shape inside a version. It is a **wire compatibility** detail, used by
     /// [`SourceMap::global`] and nowhere else, and no semantic pass may read it.
     global_start: u32,
@@ -267,7 +267,7 @@ impl SourceMap {
     ///
     /// **Wire compatibility only.** `nazm.diagnostic/1` has always published offsets into
     /// that concatenation, so they are reproduced here rather than changed under existing
-    /// consumers. Nothing semantic may use this; `docs/diagnostics.md` records the promise
+    /// consumers. Nothing semantic may use this; `docs/user/diagnostics.md` records the promise
     /// and what a future schema version would do instead.
     #[must_use]
     pub fn global(&self, span: Span) -> (u32, u32) {

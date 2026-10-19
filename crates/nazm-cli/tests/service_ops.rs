@@ -1,6 +1,6 @@
 //! v1 track C, C4: what a long-running service needs besides HTTP.
 //!
-//! `docs/spec.md`, *Calendar time*, *Metrics*, *Configuration*, *Logging* and *HTTP*'s drain. What
+//! `docs/user/spec.md`, *Calendar time*, *Metrics*, *Configuration*, *Logging* and *HTTP*'s drain. What
 //! the programs show, on the interpreter and every backend: calendar dates against known days in
 //! both directions over ±2000 years, RFC 3339 and HTTP dates written and read with every refusal,
 //! durations as text; counters, gauges and a histogram counted from several tasks and written as

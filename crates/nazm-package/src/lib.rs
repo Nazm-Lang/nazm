@@ -1,6 +1,6 @@
 //! Packages (N46): the manifest, deterministic resolution, integrity digests and the lockfile.
 //!
-//! `docs/architecture.md` §7.48 is the contract. A package is a directory holding
+//! `docs/internal/architecture.md` §7.48 is the contract. A package is a directory holding
 //! [`MANIFEST`]; [`resolve`] reads the root package's manifest and every dependency's, in name
 //! order, and returns a [`Graph`] — packages sorted by name, each with its identity, its source
 //! root, its dependencies and its [digest](digest). [`Graph::lock_text`] is the lockfile's exact
@@ -404,7 +404,7 @@ const MAX_CANDIDATES: usize = 10_000;
 /// Requirements on one package: each with who placed it.
 type Placed = Vec<(VersionReq, String)>;
 
-/// The backtracking search over the registry's packages (N90, `docs/architecture.md` §7.91).
+/// The backtracking search over the registry's packages (N90, `docs/internal/architecture.md` §7.91).
 struct Search<'a> {
     registry: &'a Path,
     /// What the path packages require: `(package, requirement, who)`.

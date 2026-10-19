@@ -1,6 +1,6 @@
 //! N12: `Result`, `Option`, and `?`, as the checker and the interpreter see them.
 //!
-//! `docs/spec.md`, *The core prelude* and *Propagation*, is the law. The claims held here:
+//! `docs/user/spec.md`, *The core prelude* and *Propagation*, is the law. The claims held here:
 //!
 //! * `Result` and `Option` are ordinary generic enums every module sees without a `use`;
 //! * `?` recognises the core prelude's `Result` by **definition**, never by name or shape;

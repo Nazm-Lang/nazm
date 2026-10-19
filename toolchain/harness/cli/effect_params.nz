@@ -1,4 +1,4 @@
-// N51: effect parameters, captured authority and the bounded bridge (`docs/architecture.md` §7.53,
+// N51: effect parameters, captured authority and the bounded bridge (`docs/internal/architecture.md` §7.53,
 // the spec's *Effect parameters and captured authority*). Ported from
 // `crates/nazm-cli/tests/effect_params.rs` (R7).
 //

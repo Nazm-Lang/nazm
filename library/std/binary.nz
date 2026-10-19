@@ -4,7 +4,7 @@
 // byte order, unsigned and zig-zag varints (LEB128), and length-prefixed bytes and strings, and
 // `binary_finish` gives them as one `Bytes`; a `Reader` reads them back in the same order, every
 // read a `Result` whose error names what was short or wrong and where. The same values encode to
-// the same bytes in every implementation and on every platform. `docs/general-purpose.md` §14.
+// the same bytes in every implementation and on every platform. `docs/internal/general-purpose.md` §14.
 
 /// Bytes being written: the pieces so far, and their total length.
 pub struct Writer {

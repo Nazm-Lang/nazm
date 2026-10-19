@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run programs built for x86_64-pc-windows-gnu on a real Windows host, and compare each with the
 # same program built natively here: standard output, standard error and exit status, each on its
-# own. The evidence docs/support.md calls run-verified on a Windows host.
+# own. The evidence docs/user/support.md calls run-verified on a Windows host.
 #
 #   scripts/windows-host.sh [HOST] [FILE.nz ...]
 #

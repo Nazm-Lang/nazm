@@ -29,7 +29,7 @@
 //! never taken from a file on disk.
 //!
 //! That is a smaller claim than "incremental compilation" and it is the one that is true.
-//! `docs/capability-matrix.md` says which.
+//! `docs/internal/capability-matrix.md` says which.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -501,7 +501,7 @@ pub(crate) fn run(
     ExitCode::from(exit::CHECK_FAILED)
 }
 
-/// `nazm check DIR` for a library package (N74, `docs/architecture.md` §7.76): each module of its
+/// `nazm check DIR` for a library package (N74, `docs/internal/architecture.md` §7.76): each module of its
 /// source root checked as a module — no `main` required — with everything it imports, and each
 /// diagnostic reported once however many modules reach it.
 pub(crate) fn library(modules: &[std::path::PathBuf], json: bool) -> ExitCode {

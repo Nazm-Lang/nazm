@@ -1,4 +1,4 @@
-// Gate 2: the reference applications (`examples/apps/`, `docs/general-purpose.md` §24). Ported
+// Gate 2: the reference applications (`examples/apps/`, `docs/internal/general-purpose.md` §24). Ported
 // from `crates/nazm-cli/tests/apps.rs` (R7).
 //
 // Five programs that do ordinary work — a command-line counter, a concurrent server, a JSON

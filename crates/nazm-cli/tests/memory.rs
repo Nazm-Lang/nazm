@@ -5,14 +5,14 @@
 //!
 //! `free` returns storage to the allocator, not to the operating system, so a program can
 //! reclaim everything it allocated and show no change in resident size at all. Peak memory
-//! is the right instrument for *whether a workload still grows* — `docs/performance.md`
+//! is the right instrument for *whether a workload still grows* — `docs/internal/performance-log.md`
 //! uses it for that — and the wrong one for *whether this particular value was reclaimed*.
 //! So the runtime counts allocations and reclamations, both implementations report the same
 //! three numbers under `NAZM_MEMORY_REPORT`, and these tests read them.
 //!
 //! # Why every case is run twice
 //!
-//! `docs/spec.md`'s memory constitution is a statement about the language, not about a
+//! `docs/user/spec.md`'s memory constitution is a statement about the language, not about a
 //! backend. A rule the compiled program obeys and the interpreter does not is a rule
 //! neither of them really has, so each case asserts the same value **and** the same counts
 //! from both.
@@ -31,7 +31,7 @@ const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
 
 /// Runs a compiled program with a deadline, as every other suite that runs one does.
 ///
-/// `nazm build` emits no iteration budget (`docs/spec.md`, *The native execution contract
+/// `nazm build` emits no iteration budget (`docs/user/spec.md`, *The native execution contract
 /// for loops*), so a backend defect that turns a terminating loop into a runaway makes a
 /// bare `.output()` wait for ever. Found in N12.2: under
 /// `the-loop-reuses-its-first-condition` this file hung for the whole of a campaign step's
@@ -508,7 +508,7 @@ fn a_slice_of_a_slice_of_a_heap_string_is_safe() {
 
 #[test]
 fn an_empty_slice_and_an_empty_string_are_ordinary() {
-    // `docs/spec.md` gives an empty `Str` real storage so its pointer stays valid. An
+    // `docs/user/spec.md` gives an empty `Str` real storage so its pointer stays valid. An
     // empty *slice* of an immortal string owns nothing, and an empty concatenation owns a
     // backing like any other.
     let r = strings(
@@ -569,7 +569,7 @@ fn a_string_stored_in_a_sequence_outlives_the_binding_it_came_from() {
 
 #[test]
 fn a_string_read_out_of_a_sequence_survives_being_overwritten() {
-    // §15, and the behaviour `docs/spec.md` has promised since sequences existed: a `Str`
+    // §15, and the behaviour `docs/user/spec.md` has promised since sequences existed: a `Str`
     // already read out of a sequence is unaffected by changing the sequence. It used to
     // be true because nothing was ever freed. It is true now because `strs_get` hands
     // back its own reference and `strs_set` releases the old element only after taking
@@ -896,7 +896,7 @@ fn a_program_that_calls_exit_with_reclaims_nothing_and_says_nothing() {
 // A record allocates nothing of its own: it has no header, no count and no storage. What
 // these cases are about is its **fields** — that copying one takes a reference per owning
 // field, that destroying one gives every reference back, and that both happen at the same
-// moment in both implementations. `docs/spec.md`, *Records are values whose fields keep
+// moment in both implementations. `docs/user/spec.md`, *Records are values whose fields keep
 // their own semantics*.
 
 #[test]
@@ -954,7 +954,7 @@ fn copying_a_record_takes_one_reference_per_owning_field() {
 
 #[test]
 fn a_record_field_is_another_reference_to_the_same_sequence() {
-    // `docs/spec.md`'s table, as a measurement: the `Ints` field is a handle, so both
+    // `docs/user/spec.md`'s table, as a measurement: the `Ints` field is a handle, so both
     // copies name one storage — one allocation for two records — and it goes when the
     // last of them does.
     let r = reclaimed(
@@ -1098,7 +1098,7 @@ fn a_record_returned_as_a_tail_and_by_return_reclaims_the_same() {
 
 #[test]
 fn a_field_read_out_of_a_temporary_outlives_it() {
-    // The case `docs/spec.md` names: the record `make()` returned is destroyed on this
+    // The case `docs/user/spec.md` names: the record `make()` returned is destroyed on this
     // line, and the string read out of it is still valid. A projection that borrowed
     // rather than taking its own reference would leave `s` pointing at freed bytes — and
     // because the binding retains what it stores, only a shape where *nothing else* holds
@@ -1466,7 +1466,7 @@ fn a_matched_sequence_handle_is_the_one_it_names() {
 #[test]
 fn many_short_lived_enums_keep_a_constant_live_set() {
     // §117. The count of live string backings must not grow with the number of values
-    // ever built, which is the scaling claim `docs/spec.md` makes for every heap-backed
+    // ever built, which is the scaling claim `docs/user/spec.md` makes for every heap-backed
     // type and now makes for enums composed of them.
     let r = both(
         "enum E {\n    Empty,\n    Pair(a: Str, b: Str),\n}\n\
@@ -1758,7 +1758,7 @@ fn a_value_whose_every_branch_leaves_makes_nothing_after_it_run() {
 
 // --- N11: `Vec[T]` and generic values ------------------------------------------------------
 //
-// `docs/spec.md`, *`Vec[T]` — a mutable handle, by the sequence law*. Every case runs in
+// `docs/user/spec.md`, *`Vec[T]` — a mutable handle, by the sequence law*. Every case runs in
 // both implementations, which must agree on the value and on what each class of storage
 // did — and the interesting half is the element: a `Vec` of `Str`, of a record, of an enum
 // and of another `Vec` each owns its elements by **the element's** law, which is the
@@ -1835,7 +1835,7 @@ fn a_vec_of_str_owns_each_string_by_the_string_law() {
 
 #[test]
 fn a_record_read_out_of_a_vec_survives_its_slot_being_overwritten() {
-    // `docs/spec.md`: `vec_get` returns its own copy. The element is overwritten at once,
+    // `docs/user/spec.md`: `vec_get` returns its own copy. The element is overwritten at once,
     // and then enough small allocations are made that a block the overwrite freed too
     // early would be handed back out — the churn is what makes a use-after-free show as a
     // wrong answer or a signal rather than as nothing.
@@ -2188,7 +2188,7 @@ fn main() -> Int {
 
 #[test]
 fn only_storage_an_append_made_grows_in_place_and_it_fills_to_its_room() {
-    // R1b, D2 (`docs/spec.md`, *Strings*, **Building**). Sixteen one-byte appends to a literal:
+    // R1b, D2 (`docs/user/spec.md`, *Strings*, **Building**). Sixteen one-byte appends to a literal:
     // the first copies into sixteen bytes of room and the other fifteen fill it exactly — one
     // allocation, in both implementations. A padded string's allocation has a spare byte, but
     // no append made it, so the append after it copies: two more.

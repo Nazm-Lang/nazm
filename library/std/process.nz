@@ -3,7 +3,7 @@
 // Imported with `use "@std/process";`. `exit_with` is a built-in and is not wrapped: a second
 // name for it would be a second way to say one thing. Running another program is every authority
 // that program has, so it takes a `ProcessCap`; a child already started is its own handle's, and
-// its pipes are `@std/file` `File`s. `docs/general-purpose.md` §12.
+// its pipes are `@std/file` `File`s. `docs/internal/general-purpose.md` §12.
 
 use "@std/ioerror";
 use "@std/file";
@@ -107,7 +107,7 @@ pub fn process_run(p: ProcessCap, sp: SpawnCap, program: Str, args: Strs, input:
     Result[ProcessOutput, IoError].Ok(value: ProcessOutput(status: status, stdout: stdout, stderr: stderr))
 }
 
-// R1d (`docs/spec.md`, *The platform, further*): a child in a directory with an environment of its
+// R1d (`docs/user/spec.md`, *The platform, further*): a child in a directory with an environment of its
 // own, a new process group and a null standard input, ids, bounded waits, a signal to a group, and a
 // child's peak memory.
 

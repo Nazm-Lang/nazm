@@ -1,4 +1,4 @@
-//! Resource facts, read off MIR (N52, `docs/architecture.md` §7.54).
+//! Resource facts, read off MIR (N52, `docs/internal/architecture.md` §7.54).
 //!
 //! Every operation that allocates, retains, blocks, talks to a channel, calls C or starts a task
 //! is already an explicit MIR statement, so the facts are one pass over each function's blocks

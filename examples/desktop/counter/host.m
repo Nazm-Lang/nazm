@@ -1,4 +1,4 @@
-// The window host for `counter.nz` (Gate 3, docs/systems-domains.md Part Q): Cocoa, its state and
+// The window host for `counter.nz` (Gate 3, docs/internal/systems-domains.md Part Q): Cocoa, its state and
 // logic the Nazm library's, reached through the C ABI from the event loop's callbacks.
 //
 //     host           an interactive window: `+`, `-`, `mode`, `reset`

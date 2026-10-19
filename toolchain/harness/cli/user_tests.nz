@@ -1,4 +1,4 @@
-// Gate 2: user tests, fuzz targets and benchmarks (`docs/general-purpose.md` §18–§19, `docs/spec.md`
+// Gate 2: user tests, fuzz targets and benchmarks (`docs/internal/general-purpose.md` §18–§19, `docs/user/spec.md`
 // *Tests and benchmarks*): `nazm test` runs every `@test` function of a file under the interpreter
 // and natively, by name; `Ok` passes, `Err` fails with its message, a trap fails, `@test(fails)`
 // inverts; `--filter` narrows; a `@fuzz` target gets deterministic inputs; the file's own `main` is

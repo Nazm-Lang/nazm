@@ -1,4 +1,4 @@
-// R1b, L12: `defer` (`docs/spec.md`, *Defer*). Deferred blocks run on every way out — the block's
+// R1b, L12: `defer` (`docs/user/spec.md`, *Defer*). Deferred blocks run on every way out — the block's
 // end, `return`, `break`, `continue`, `?` — in reverse order, everywhere, nothing live; a deferred
 // body leaves nothing; and it sees what is assigned after it. Ported from
 // `crates/nazm-cli/tests/defer.rs` (R7).

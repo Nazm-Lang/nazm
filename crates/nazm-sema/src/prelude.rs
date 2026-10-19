@@ -16,8 +16,8 @@
 //! # What it is not
 //!
 //! Not a standard library, a package, or a namespace mechanism. There is one such module,
-//! it has two declarations, and nothing can add a second one. `docs/spec.md`, *The core
-//! prelude*, owns the rules; `docs/architecture.md` §7.13 says why the boundary is here.
+//! it has two declarations, and nothing can add a second one. `docs/user/spec.md`, *The core
+//! prelude*, owns the rules; `docs/internal/architecture.md` §7.13 says why the boundary is here.
 //!
 //! # The bytes
 //!

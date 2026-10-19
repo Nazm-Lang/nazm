@@ -1,4 +1,4 @@
-// N57: targets and cross-compilation (`docs/architecture.md` §7.59). Every triple of the matrix
+// N57: targets and cross-compilation (`docs/internal/architecture.md` §7.59). Every triple of the matrix
 // is built by both backends from this host — to an executable where the host's toolchain links
 // it, to objects and a link list where it cannot — each object in the target's own format and
 // architecture. Ported from `crates/nazm-cli/tests/cross.rs` (R7).

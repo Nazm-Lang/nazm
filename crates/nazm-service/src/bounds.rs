@@ -1,4 +1,4 @@
-//! Loop bounds (N63, `docs/architecture.md` §7.65): what the compiler establishes about how many
+//! Loop bounds (N63, `docs/internal/architecture.md` §7.65): what the compiler establishes about how many
 //! times a `while` turns, read off Core IR.
 //!
 //! One form is bounded: a counter set to a literal as its last write before the loop, compared

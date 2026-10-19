@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nazm.obligations-1.json",
   "title": "nazm.obligations/1",
-  "description": "Every obligation of a checked program (N87, `docs/architecture.md` §7.88): each contract clause, each call of a function stating a precondition, each operation that can overflow or divide by zero, each index and allocation, each call through a function value and each call into C, with whether it is proved at compile time (and why), checked as the program runs, or unknown. Written by `nazm obligations --json` as one line; deterministic. Compiler evidence for a reviewer, not certification.",
+  "description": "Every obligation of a checked program (N87, `docs/internal/architecture.md` §7.88): each contract clause, each call of a function stating a precondition, each operation that can overflow or divide by zero, each index and allocation, each call through a function value and each call into C, with whether it is proved at compile time (and why), checked as the program runs, or unknown. Written by `nazm obligations --json` as one line; deterministic. Compiler evidence for a reviewer, not certification.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "evidence", "proved", "checked", "unknown", "obligations"],

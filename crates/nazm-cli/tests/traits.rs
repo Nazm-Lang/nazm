@@ -1,4 +1,4 @@
-//! Traits and methods (N78, `docs/architecture.md` §7.79), held across the interpreter,
+//! Traits and methods (N78, `docs/internal/architecture.md` §7.79), held across the interpreter,
 //! LLVM at -O0 and -O2, and Cranelift, and every refusal by its code.
 
 #![allow(

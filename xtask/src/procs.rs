@@ -31,7 +31,7 @@
 //! tree (its parent exited first) is invisible to both mechanisms. Inside
 //! `cargo xtask contained mutate` that residue dies with the container's pid namespace.
 //! Outside it, it is why recovery after an interruption stays an operator's attested
-//! action (`docs/runbook.md`).
+//! action (`docs/internal/runbook.md`).
 //!
 //! # Every id is validated before it is signalled
 //!

@@ -158,7 +158,7 @@ pub(crate) fn check_emission_reach() -> Result<(), Vec<String>> {
 /// catches the realistic regression — a request added somewhere convenient — not a call graph.
 ///
 /// One file is the exception, and only for the transport: the interpreter's network module, which
-/// opens a socket only when the program it runs holds a `NetCap` and asks (Gate 2, `docs/spec.md`,
+/// opens a socket only when the program it runs holds a `NetCap` and asks (Gate 2, `docs/user/spec.md`,
 /// *Networking*). No provider's API is allowed even there, and nothing else of the compiler, the
 /// checker or the tools may name the transport.
 pub(crate) fn check_network_reach() -> Result<(), Vec<String>> {

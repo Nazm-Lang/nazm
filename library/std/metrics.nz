@@ -1,7 +1,7 @@
 // `@std/metrics`: counters, gauges and histograms, and the Prometheus text exposition (v1 track C,
 // C4).
 //
-// Imported with `use "@std/metrics";`. `docs/spec.md`, *Metrics*, states the rules; the design
+// Imported with `use "@std/metrics";`. `docs/user/spec.md`, *Metrics*, states the rules; the design
 // record is `openspec/changes/v1-every-domain/design.md`, section C. A metric is a set of atomic
 // cells, so a `Counter`, `Gauge` or `Histogram` may cross into a task and every copy counts into
 // the same cells; a registry (`Metrics`) may cross too, and `metrics_render` writes what it holds

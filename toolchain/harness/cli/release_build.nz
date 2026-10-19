@@ -1,4 +1,4 @@
-// `nazm build --release` (R1.5, D15; `docs/architecture.md` §7.117): a macOS executable stripped,
+// `nazm build --release` (R1.5, D15; `docs/internal/architecture.md` §7.117): a macOS executable stripped,
 // position-independent, stack-protected and signed ad hoc with the hardened runtime — a test per
 // property, read from the file with the system's own tools — and the default build unchanged.
 // Ported from `crates/nazm-cli/tests/release_build.rs` (R7). The Rust file compiles its macOS

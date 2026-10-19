@@ -1,11 +1,11 @@
-//! The environment and child processes (Gate 2, `docs/spec.md`, *Process and environment*): the
+//! The environment and child processes (Gate 2, `docs/user/spec.md`, *Process and environment*): the
 //! `os_env_*` built-ins, and `os_spawn` and the child's handles over the table `eval::os` keeps.
 //!
 //! A child is a handle like any other, keyed by a descriptor it holds open on `/dev/null` — a child
 //! has no descriptor of its own, and the native runtime keys it the same way — and its three pipes
 //! are handles too, read and written with `os_read` and `os_write`.
 //!
-//! R1d (`docs/spec.md`, *The platform, further*): a child in a directory with an environment of its
+//! R1d (`docs/user/spec.md`, *The platform, further*): a child in a directory with an environment of its
 //! own — the program found on this process's `PATH` here, as `posix_spawnp` finds it, and the
 //! environment handed over ordered by name, as the native runtime orders it — a new process group, a
 //! null standard input, bounded waits that look again every 10 ms at most, a signal to a group (by
@@ -481,7 +481,7 @@ fn decoded(st: std::process::ExitStatus) -> i64 {
         .unwrap_or(-EINVAL)
 }
 
-/// On Windows (`docs/spec.md`, *Windows x86_64*): the exit code, a `DWORD` read unsigned as
+/// On Windows (`docs/user/spec.md`, *Windows x86_64*): the exit code, a `DWORD` read unsigned as
 /// natively; there are no signals.
 #[cfg(not(unix))]
 fn decoded(st: std::process::ExitStatus) -> i64 {
@@ -572,7 +572,7 @@ fn kill_group(group: i64, sig: i64) -> i64 {
     }
 }
 
-/// `os_kill_group` on Windows (`docs/spec.md`, *The platform, further*, **Where**): there are no
+/// `os_kill_group` on Windows (`docs/user/spec.md`, *The platform, further*, **Where**): there are no
 /// process groups, so the process `group` itself — asked whether it exists for `sig` 0
 /// (`tasklist`), ended with exit code 1 otherwise (`taskkill /F`, which is `TerminateProcess`);
 /// `ESRCH` for one there is not, `EPERM` for one this account may not end.

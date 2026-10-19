@@ -1,6 +1,6 @@
 //! v1, Q1-B-05: `exit_with`'s status is one contract in every implementation.
 //!
-//! `docs/spec.md`, *Ending*: the language's status is `0..=255`, and the host reports exactly that
+//! `docs/user/spec.md`, *Ending*: the language's status is `0..=255`, and the host reports exactly that
 //! value; anything outside fails with `N0416` and exit status 2. Before the contract, a status
 //! outside the range ended with 1 in the interpreter, 2 natively and something else in the LIR
 //! oracle — each host's own truncation. Every implementation is asked: the interpreter, LLVM at

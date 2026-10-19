@@ -40,7 +40,7 @@ use std::time::{Duration, Instant};
 
 pub(crate) const IMAGE: &str = "nazm-contained:1.98.1";
 
-/// The same image built for `linux/amd64` (Gate 3, `docs/systems-domains.md` Part A): on an
+/// The same image built for `linux/amd64` (Gate 3, `docs/internal/systems-domains.md` Part A): on an
 /// Apple-silicon host it runs under emulation, and its evidence is labelled *emulated host*.
 pub(crate) const IMAGE_AMD64: &str = "nazm-contained-amd64:1.98.1";
 
@@ -104,7 +104,7 @@ impl ExecutionProfile {
     };
     /// Four CPUs, four jobs, four test threads: the fastest profile that stayed inside the
     /// frozen memory gates on the workloads it is the default for. P2, P4 with one and two
-    /// test threads, and P6 were measured and dropped; `docs/performance.md` says why.
+    /// test threads, and P6 were measured and dropped; `docs/internal/performance-log.md` says why.
     pub(crate) const P4T4: Self = Self {
         name: "p4t4",
         milli_cpus: 4000,
@@ -565,7 +565,7 @@ pub(crate) fn refuse_uncontained(what: &str) -> Option<String> {
     Some(format!(
         "refusing to run `{what}` with no resource ceiling: it runs only inside the contained \
          runner (`cargo xtask contained …`), where `NAZM_CONTAINED=1` is set and the cgroup caps \
-         memory. Setting the variable on a host does not make a ceiling (docs/runbook.md)."
+         memory. Setting the variable on a host does not make a ceiling (docs/internal/runbook.md)."
     ))
 }
 

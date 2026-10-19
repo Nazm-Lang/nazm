@@ -1,6 +1,6 @@
 [package]
 name = "nazm-formal"
-description = "The formal core of Nazm (docs/formal-core.md): its typing rules and big-step semantics, transcribed rule by rule, and a bounded enumeration of its programs."
+description = "The formal core of Nazm (docs/internal/formal-core.md): its typing rules and big-step semantics, transcribed rule by rule, and a bounded enumeration of its programs."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

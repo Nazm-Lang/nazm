@@ -1,4 +1,4 @@
-//! A checked program to Core IR — the one lowering (`docs/architecture.md` §7.41).
+//! A checked program to Core IR — the one lowering (`docs/internal/architecture.md` §7.41).
 //!
 //! # Only after checking
 //!
@@ -922,7 +922,7 @@ impl<'a> Lower<'a> {
         })
     }
 
-    /// A `for` loop as the `while` loop `docs/spec.md` (*`for` loops*) says it means (R1a):
+    /// A `for` loop as the `while` loop `docs/user/spec.md` (*`for` loops*) says it means (R1a):
     /// `let seq = e; let mut i = 0; while i < len(seq) { let x = get(seq, i); i = i + 1; body }`,
     /// or `let mut i = a; let end = b; while i < end { let x = i; i = i + 1; body }`. The
     /// step is counted before the body, so `continue` moves on; the hidden locals are this
@@ -1668,7 +1668,7 @@ impl<'a> Lower<'a> {
                 let ty = operand.ty.or(Some(Type::Int));
                 node(ExprKind::Complement(Box::new(operand)), ty, *op_span)
             }
-            // `!e`, `a && b` and `a || b` are `if`s (`docs/spec.md`, *Logical operators*, N49):
+            // `!e`, `a && b` and `a || b` are `if`s (`docs/user/spec.md`, *Logical operators*, N49):
             // lowered here, so short-circuiting is control flow every later layer already has.
             AstExpr::Not {
                 operand, op_span, ..
@@ -3185,7 +3185,7 @@ impl<'a> Lower<'a> {
         })
     }
 
-    /// A `match` with any pattern (R1a, `docs/spec.md`, *Patterns*), as
+    /// A `match` with any pattern (R1a, `docs/user/spec.md`, *Patterns*), as
     /// `{ let scrutinee = e; let arm = <the first arm whose pattern matches>; <arm `arm`> }`:
     /// each pattern's test is a `Bool` of the plain matches and comparisons it means, and each
     /// arm, once chosen, binds its names out of the scrutinee and runs its body — written once.
@@ -3360,7 +3360,7 @@ impl<'a> Lower<'a> {
         }
     }
 
-    /// An interpolation (R1a, L4, `docs/spec.md`, *String interpolation*): each piece's text,
+    /// An interpolation (R1a, L4, `docs/user/spec.md`, *String interpolation*): each piece's text,
     /// joined left to right by `str_concat`, so each hole is evaluated once and in order.
     fn interpolation(&mut self, parts: &[nazm_syntax::InterpPart], at: Span) -> Lowered<Expr> {
         let mut acc: Option<Expr> = None;

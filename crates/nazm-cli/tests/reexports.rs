@@ -1,6 +1,6 @@
 //! N103: re-exports — `pub use "PATH";` and `pub use "PATH" { a, b as c };`.
 //!
-//! `docs/architecture.md` §7.104. A re-export offers another module's definition under this
+//! `docs/internal/architecture.md` §7.104. A re-export offers another module's definition under this
 //! module's name, and is the same definition: every answer about it — what a call means, what a
 //! reference finds, what a persisted interface names, what a rename changes — is the defining
 //! module's. Each test states its expected answer rather than comparing two paths that could

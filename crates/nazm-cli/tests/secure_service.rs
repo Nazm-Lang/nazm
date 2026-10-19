@@ -1,4 +1,4 @@
-//! Gate 3: the cybersecurity reference workload (`docs/systems-domains.md` Part K; `docs/spec.md`,
+//! Gate 3: the cybersecurity reference workload (`docs/internal/systems-domains.md` Part K; `docs/user/spec.md`,
 //! *Domain profiles*).
 //!
 //! `tests/domains/cyber.nz` is a TCP service held to the `cyber` profile as a locked package. These

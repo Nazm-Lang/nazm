@@ -13,7 +13,7 @@ pub struct Program {
     ///
     /// A separate list from the functions, because they are a separate namespace: a
     /// module may declare a record `Point` and a function `Point` and they do not
-    /// collide. `docs/spec.md`, *Types and functions are separate namespaces*.
+    /// collide. `docs/user/spec.md`, *Types and functions are separate namespaces*.
     pub records: Vec<Record>,
     /// `enum` declarations, in source order.
     ///
@@ -42,7 +42,7 @@ pub struct Program {
     pub hole: Option<HoleSite>,
 }
 
-/// `@name` or `@name(arguments)` written before a declaration (Gate 2, `docs/spec.md`,
+/// `@name` or `@name(arguments)` written before a declaration (Gate 2, `docs/user/spec.md`,
 /// *Attributes*). The vocabulary is the compiler's and the checker holds it; here an attribute is
 /// its words.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,7 +166,7 @@ pub enum HoleSite {
     Payload { variant: Span, pattern: bool },
 }
 
-/// `const NAME: Type = value;`, optionally `pub` (Gate 2, `docs/spec.md`, *Constants*): a
+/// `const NAME: Type = value;`, optionally `pub` (Gate 2, `docs/user/spec.md`, *Constants*): a
 /// value the checker computes, usable wherever an expression is and as an array's length.
 /// `const` is a word only here, at the start of an item, so no name a program already uses
 /// stops being one.
@@ -180,7 +180,7 @@ pub struct Const {
     pub ty: TypeName,
     pub value: Expr,
     pub span: Span,
-    /// Written `static` rather than `const` (Gate 3, `docs/spec.md`, *Statics*): storage with
+    /// Written `static` rather than `const` (Gate 3, `docs/user/spec.md`, *Statics*): storage with
     /// one address, read-only unless an `Atomic`, whose value the checker computes as a
     /// constant's — or `atomic_new` of one. Everything a constant's name does, a static's does,
     /// except stand for an array's length.
@@ -244,7 +244,7 @@ pub struct Qualifier {
 ///
 /// The keyword is `struct` and the category is *record* — one concept with one spelling
 /// in source and one in the semantics, chosen so that neither word has to do both jobs.
-/// `docs/spec.md` states the reason.
+/// `docs/user/spec.md` states the reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {
     /// The attributes written before it (Gate 2).
@@ -255,14 +255,14 @@ pub struct Record {
     /// [`Function::pub_span`].
     pub pub_span: Option<Span>,
     /// `[A, B]` after the name, in the order written. Empty for a record that is not
-    /// generic. Order is semantic and spelling is not: `docs/spec.md`, *Order is semantic;
+    /// generic. Order is semantic and spelling is not: `docs/user/spec.md`, *Order is semantic;
     /// names are not*.
     pub type_params: Vec<TypeParam>,
     /// The fields, in the order written.
     ///
     /// Order is recorded because a reader wrote it and a formatter must preserve it. It
     /// is **not** part of what the type means: construction is by name, and
-    /// `docs/spec.md` makes reordering two fields a no-op for both the interface
+    /// `docs/user/spec.md` makes reordering two fields a no-op for both the interface
     /// fingerprint and the native layout.
     pub fields: Vec<Field>,
     /// `extern "C" struct …` (N85): a record C sees. `None` for every ordinary record.
@@ -293,7 +293,7 @@ pub struct Field {
 
 /// `enum Name { Variant, Other(field: Type), … }`
 ///
-/// One keyword and one category, unlike `struct`/record: `docs/spec.md` says why there is
+/// One keyword and one category, unlike `struct`/record: `docs/user/spec.md` says why there is
 /// no second spelling for either.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Enum {
@@ -308,7 +308,7 @@ pub struct Enum {
     /// The variants, in the order written.
     ///
     /// Order is recorded because a reader wrote it and a formatter must preserve it. It is
-    /// **not** part of what the type means: `docs/spec.md` makes reordering two variants a
+    /// **not** part of what the type means: `docs/user/spec.md` makes reordering two variants a
     /// no-op for the language, for the interface fingerprint and for the discriminant the
     /// backend assigns.
     pub variants: Vec<Variant>,
@@ -358,7 +358,7 @@ pub struct Function {
     /// checker infers an undeclared function's effects from its body. What the names
     /// mean, and whether they exist, is `nazm_sema`'s to decide; here they are words.
     pub effects: Option<EffectDecl>,
-    /// `requires E` and `ensures E` clauses (N87, `docs/architecture.md` §7.88), in the order
+    /// `requires E` and `ensures E` clauses (N87, `docs/internal/architecture.md` §7.88), in the order
     /// written, every `requires` before every `ensures`. Empty for most functions.
     pub contracts: Vec<Contract>,
     /// `None` when the body failed to parse.
@@ -678,7 +678,7 @@ pub enum Stmt {
     Assign(Assign),
     While(While),
     /// `for NAME in e { … }` or `for NAME in a..b { … }` (R1a): each the `while` loop
-    /// `docs/spec.md` (*`for` loops*) gives for it.
+    /// `docs/user/spec.md` (*`for` loops*) gives for it.
     For(For),
     /// Leave the enclosing function with this value.
     Return(Return),
@@ -776,7 +776,7 @@ pub struct Assign {
 
 /// Where an assignment writes: a binding, then a path of fields through it.
 ///
-/// A **projection path**, not a variable and an optional field. `docs/architecture.md`
+/// A **projection path**, not a variable and an optional field. `docs/internal/architecture.md`
 /// asks for this shape before it is strictly needed, because the ownership and mutability
 /// rules are about a *place*: `a.inner.count = 3` checks mutability at `a` and replaces a
 /// field two levels down, and a representation that held one optional field name could not
@@ -784,7 +784,7 @@ pub struct Assign {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Place {
     /// The root binding's name. Mutability is checked here and nowhere else — see
-    /// `docs/spec.md`, *Binding mutability reaches every field*.
+    /// `docs/user/spec.md`, *Binding mutability reaches every field*.
     pub name: String,
     pub name_span: Span,
     /// The fields and indexes, outermost first: `a.b[i].c` is `[b, [i], c]`.
@@ -822,7 +822,7 @@ pub struct MatchArm {
     pub span: Span,
 }
 
-/// A pattern (`docs/spec.md`, *Enums* and, since R1a, *Patterns*).
+/// A pattern (`docs/user/spec.md`, *Enums* and, since R1a, *Patterns*).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pattern {
     /// `_`: matches anything and binds nothing. It declines to *name* a value; the value is
@@ -886,7 +886,7 @@ pub struct VariantPattern {
     pub variant: String,
     /// Where the variant name is written — the span resolution keys this pattern by.
     pub variant_span: Span,
-    /// Every payload field of the variant, exactly once. `docs/spec.md` requires the
+    /// Every payload field of the variant, exactly once. `docs/user/spec.md` requires the
     /// pattern to account for all of them, so that adding a payload field breaks old
     /// patterns instead of letting them ignore new state.
     pub fields: Vec<PatternField>,
@@ -903,7 +903,7 @@ pub struct PatternField {
     /// What the payload must match.
     ///
     /// `_` means *introduce no binding*; it does not mean the field is not there and does
-    /// not mean it is not released. `docs/spec.md` says so, because the opposite reading
+    /// not mean it is not released. `docs/user/spec.md` says so, because the opposite reading
     /// is the one that leaks.
     pub pattern: Pattern,
 }
@@ -1077,7 +1077,7 @@ pub enum Expr {
     ///
     /// Named rather than positional, so that field order is never an implicit API. The
     /// parenthesised form rather than `Point { … }` avoids the ambiguity between a record
-    /// literal and the block of an `if` whose condition is a bare name; `docs/spec.md`
+    /// literal and the block of an `if` whose condition is a bare name; `docs/user/spec.md`
     /// records both decisions.
     ///
     /// Distinguished from [`Self::Call`] by two tokens of lookahead — `IDENT (` followed
@@ -1097,7 +1097,7 @@ pub enum Expr {
     /// `Token.Number(value: 42)` — build a value of an enum by naming one of its variants.
     ///
     /// Always qualified by the enum, and always parenthesised, including for a variant
-    /// with no payload: `docs/spec.md` gives both reasons. `IDENT . IDENT (` is what
+    /// with no payload: `docs/user/spec.md` gives both reasons. `IDENT . IDENT (` is what
     /// distinguishes this from a projection, and it is a decision rather than a guess —
     /// there are no methods and no function values, so nothing else can put a `(` after a
     /// field read.
@@ -1142,7 +1142,7 @@ pub enum Expr {
     ///
     /// On the core prelude's `Result.Ok` it is the payload; on `Result.Err` it leaves the
     /// enclosing function, returning that error value in the function's own `Result`.
-    /// Ordinary control flow over an ordinary enum: `docs/spec.md`, *Propagation*.
+    /// Ordinary control flow over an ordinary enum: `docs/user/spec.md`, *Propagation*.
     Propagate {
         operand: Box<Expr>,
         /// Where the `?` is written — the span resolution keys this propagation by, and

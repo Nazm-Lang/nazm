@@ -1,6 +1,6 @@
 //! N86: boards as data, a second architecture, device registers by width.
 //!
-//! `docs/architecture.md` §7.87. What a build shows on this host: every board's linker script,
+//! `docs/internal/architecture.md` §7.87. What a build shows on this host: every board's linker script,
 //! runtime and entry are generated from its description, and differ exactly where the board does;
 //! `riscv64gc-unknown-none-elf` is a target of the matrix, and a host whose `clang` has no RISC-V
 //! code generator refuses it by name rather than reporting the compiler's fault; the four new
@@ -328,7 +328,7 @@ fn a_device_register_of_any_width_is_a_board_s_and_needs_an_mmio_cap() {
 }
 
 /// Builds `nazm` from a copy of this tree inside the `nazm-qemu:n86` image, then builds, links
-/// and boots programs on both boards at `-O0` and `-O2` (`docs/performance.md`, N86). Needs Docker
+/// and boots programs on both boards at `-O0` and `-O2` (`docs/internal/performance-log.md`, N86). Needs Docker
 /// and the image: `docker build -t nazm-qemu:n86 -f docker/qemu.Dockerfile docker`, then
 /// `cargo test -p nazm-cli --test cli_a_b -- --ignored boards::`.
 #[test]

@@ -1,6 +1,6 @@
 //! N49: string escapes, the logical operators, native recursion and qualified names.
 //!
-//! `docs/architecture.md` §7.51 and the spec sections it names. What only a whole run shows:
+//! `docs/internal/architecture.md` §7.51 and the spec sections it names. What only a whole run shows:
 //! that each mechanism means the same in the interpreter and in both native backends — the
 //! same stdout, exit status and memory report — that refusals are refusals before anything
 //! runs, and that the formatter keeps what was written.

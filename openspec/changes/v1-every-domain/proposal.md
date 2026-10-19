@@ -9,7 +9,7 @@ waits until every domain is ready** — cloud computing, quantum computing, hard
 microcontrollers and microchip drivers — rather than shipping a stable core first and adding domains
 as 1.x. 1.0 therefore moves from the March–April 2027 estimate to whenever the last domain passes
 its gate — estimated on 2026-10-16, from the pace so far, as early 2027 if the boards, the quantum
-account, the Windows host and the licence review are started alongside the code (`docs/roadmap.md`,
+account, the Windows host and the licence review are started alongside the code (`docs/user/roadmap.md`,
 *When 0.11.0 and 1.0*).
 
 ## What Changes

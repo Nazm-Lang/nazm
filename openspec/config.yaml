@@ -1,16 +1,16 @@
 schema: spec-driven
 
-# OpenSpec is change governance for Nazm, nothing more (docs/change-governance.md).
+# OpenSpec is change governance for Nazm, nothing more (docs/internal/change-governance.md).
 # It records proposed and in-flight changes. It is not the authority for current Nazm semantics
-# or implementation status: docs/spec.md, docs/master-architecture.md, docs/architecture.md,
-# docs/stability.md, docs/capability-matrix.md and docs/limitations.md are, and an accepted
+# or implementation status: docs/user/spec.md, docs/internal/master-architecture.md, docs/internal/architecture.md,
+# docs/user/stability.md, docs/internal/capability-matrix.md and docs/user/limitations.md are, and an accepted
 # change updates them before it is archived.
 context: |
   Nazm: a programming language and toolchain. Rust workspace under crates/, a compiler written in
   Nazm under compiler/, the standard library under library/.
-  Authorities, in order: docs/capability-matrix.md (status and evidence), docs/spec.md
-  (semantics), docs/master-architecture.md (laws), docs/stability.md (compatibility),
-  docs/runbook.md (operations), docs/limitations.md (boundaries). Goals are ambition only.
+  Authorities, in order: docs/internal/capability-matrix.md (status and evidence), docs/user/spec.md
+  (semantics), docs/internal/master-architecture.md (laws), docs/user/stability.md (compatibility),
+  docs/internal/runbook.md (operations), docs/user/limitations.md (boundaries). Goals are ambition only.
   A delta spec states observable requirements and cites the authority section it changes; it
   never restates the language specification. Changes to language or toolchain behaviour archive
   with --skip-specs: their normative text lives in the authorities. openspec/specs/ holds only

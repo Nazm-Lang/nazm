@@ -50,5 +50,5 @@ claimed without reproducible evidence, and results, hypotheses and goals are kep
 
 ## Impact
 
-`bench/compare/`, `docs/performance.md`, the optimiser, LIR, the runtime and both backends; the
+`bench/compare/`, `docs/internal/performance-log.md`, the optimiser, LIR, the runtime and both backends; the
 rewrite's stages port whatever this changes. Nothing a program means changes.

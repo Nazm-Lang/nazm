@@ -1,6 +1,6 @@
 //! N72: account-oriented contracts — signed writes and account metadata.
 //!
-//! `docs/architecture.md` §7.74. What the commands show: the `accounts` profile refuses an
+//! `docs/internal/architecture.md` §7.74. What the commands show: the `accounts` profile refuses an
 //! entrypoint that writes the state without deciding on its `caller`, by name, and does not trust a
 //! check made only in a helper; a read-only entrypoint needs no signer; `--accounts` writes each
 //! instruction's discriminator, arguments and account constraints and the state account's layout.

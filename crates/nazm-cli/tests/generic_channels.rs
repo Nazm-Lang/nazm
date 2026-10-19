@@ -1,6 +1,6 @@
 //! N53: generic channels.
 //!
-//! `docs/architecture.md` §7.55 and the spec section *Generic channels*. What only a whole run
+//! `docs/internal/architecture.md` §7.55 and the spec section *Generic channels*. What only a whole run
 //! shows: that a `Chan[T]` of strings, records and enums means the same in the interpreter and
 //! in both native backends — the same stdout, exit status and memory report — that a value still
 //! queued when the last reference goes is released exactly once, that a send after close is

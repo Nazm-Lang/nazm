@@ -71,7 +71,7 @@ pub(crate) fn check_single_resolver() -> Result<(), Vec<String>> {
     }
 }
 
-/// Nothing below Core IR asks what a source position meant (N39, `docs/architecture.md`
+/// Nothing below Core IR asks what a source position meant (N39, `docs/internal/architecture.md`
 /// §7.41).
 ///
 /// The one lowering in `nazm-core` reads the checker's **position maps** — the span-keyed
@@ -159,7 +159,7 @@ pub(crate) fn check_core_ir_boundary() -> Result<(), Vec<String>> {
                 problems.push(format!(
                     "{rel}:{} asks the resolution `{pat}…`, a question about a source \
                      position. Below Core IR the answer is in Core IR; asking again is a \
-                     second lowering (docs/architecture.md §7.41)",
+                     second lowering (docs/internal/architecture.md §7.41)",
                     at(i)
                 ));
             }
@@ -169,7 +169,7 @@ pub(crate) fn check_core_ir_boundary() -> Result<(), Vec<String>> {
                 for (i, _) in flat.match_indices(word) {
                     problems.push(format!(
                         "{rel}:{} names `{word}`: the native backend reads validated MIR and \
-                         nothing of the checker or of Core IR (docs/architecture.md §7.42)",
+                         nothing of the checker or of Core IR (docs/internal/architecture.md §7.42)",
                         at(i)
                     ));
                 }
@@ -180,7 +180,7 @@ pub(crate) fn check_core_ir_boundary() -> Result<(), Vec<String>> {
                 for (i, _) in flat.match_indices(word) {
                     problems.push(format!(
                         "{rel}:{} names `{word}`: the interpreter runs Core IR and nothing \
-                         else (docs/architecture.md §7.41)",
+                         else (docs/internal/architecture.md §7.41)",
                         at(i)
                     ));
                 }

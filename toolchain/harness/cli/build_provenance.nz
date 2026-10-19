@@ -1,5 +1,5 @@
 // N73: build provenance — `nazm build --provenance FILE` and `--attest-with CMD`
-// (`docs/architecture.md` §7.75). The record names every source module and the output with digests
+// (`docs/internal/architecture.md` §7.75). The record names every source module and the output with digests
 // anyone can recompute (plain BLAKE3 over the bytes — recomputed here with `@std/blake3`), the
 // toolchain and the options that reach the output; two builds of one program in two clean
 // directories write the same record; a change is seen; an attestation is the local command's

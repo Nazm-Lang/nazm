@@ -1,8 +1,8 @@
 //! The **agent governance** gate (M1): the repository's agent-instruction and change-governance
-//! files stay structurally consistent with `docs/agent-governance.md`.
+//! files stay structurally consistent with `docs/internal/agent-governance.md`.
 //!
 //! A pure read of the tree — nothing is built, nothing is fetched, Node is not needed. Each rule
-//! names the sentence of `docs/agent-governance.md` it protects. It checks structure only:
+//! names the sentence of `docs/internal/agent-governance.md` it protects. It checks structure only:
 //! existence, links resolving, required fields present, forbidden allowances absent. Whether an
 //! instruction is *right* is review's question, not this gate's.
 
@@ -15,7 +15,7 @@ const SHIM: &str = "CLAUDE.md";
 /// The agent's local working state: named by the map, never committed (§6).
 const LOCAL_STATE: &str = ".agent/state.md";
 
-/// Subtrees with their own instructions (`docs/agent-governance.md` §1, level 3).
+/// Subtrees with their own instructions (`docs/internal/agent-governance.md` §1, level 3).
 const NESTED: &[&str] = &[
     "compiler/AGENTS.md",
     "crates/nazm-runtime/AGENTS.md",
@@ -120,15 +120,15 @@ const TEMPLATES: &[(&str, &[&str])] = &[
 
 /// The documents the governance layer is made of.
 const DOCUMENTS: &[&str] = &[
-    "docs/agent-governance.md",
-    "docs/change-governance.md",
-    "docs/agent-evals.md",
+    "docs/internal/agent-governance.md",
+    "docs/internal/change-governance.md",
+    "docs/internal/agent-evals.md",
     ".agent/PLANS.md",
     "openspec/config.yaml",
 ];
 
 /// The capabilities `openspec/specs/` may hold: repository process, never language or toolchain
-/// behaviour, whose text belongs in the Nazm authorities (`docs/change-governance.md`).
+/// behaviour, whose text belongs in the Nazm authorities (`docs/internal/change-governance.md`).
 const PROCESS_CAPABILITIES: &[&str] = &["repository-governance"];
 
 /// The gate, over the repository at `root`.
@@ -139,7 +139,7 @@ pub(crate) fn check(root: &Path) -> Result<(), Vec<String>> {
     for doc in DOCUMENTS {
         if !root.join(doc).is_file() {
             bad.push(format!(
-                "{doc} is missing (docs/agent-governance.md names it)"
+                "{doc} is missing (docs/internal/agent-governance.md names it)"
             ));
         }
     }
@@ -213,7 +213,7 @@ pub(crate) fn check(root: &Path) -> Result<(), Vec<String>> {
     }
 }
 
-/// OpenSpec holds changes, not a second specification (`docs/change-governance.md`).
+/// OpenSpec holds changes, not a second specification (`docs/internal/change-governance.md`).
 fn openspec(root: &Path) -> Vec<String> {
     let mut bad = Vec::new();
     let dirs = |rel: &str| -> Vec<String> {
@@ -244,7 +244,7 @@ fn openspec(root: &Path) -> Vec<String> {
             bad.push(format!(
                 "openspec/specs/{cap} is not a repository-process capability: a change to the \
                  language or toolchain archives with --skip-specs, and its text belongs in \
-                 docs/spec.md and the other Nazm authorities"
+                 docs/user/spec.md and the other Nazm authorities"
             ));
         }
     }

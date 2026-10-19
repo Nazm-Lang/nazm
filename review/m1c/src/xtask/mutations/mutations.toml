@@ -550,7 +550,7 @@ replace = "            String::new(),"
 [[mutation]]
 name = "checked-add-loses-its-sign"
 why = """
-`docs/spec.md` says overflow traps. The emitter detects it with
+`docs/user/spec.md` says overflow traps. The emitter detects it with
 `llvm.sadd.with.overflow.i64`; the unsigned intrinsic is one letter away and is the
 mistake a reader would not see. `Int::MAX + 1` does not carry as an unsigned addition, so
 the guard never fires and the program prints the wrapped value instead of stopping —

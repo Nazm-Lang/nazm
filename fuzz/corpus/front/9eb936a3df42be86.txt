@@ -2,7 +2,7 @@
 //
 // Ordinary source, checked x any module; imported with `use "@std/text";`. Every function
 // value pure (`! {}`) and total: none can fail except by allocating, and a malformed input value an
-// `Err` or a `None`, never a trap. `docs/spec.md`, *The standard library*, owns the rules.
+// `Err` or a `None`, never a trap. `docs/user/spec.md`, *The standard library*, owns the rules.
 }
 
 /// Whether `s` begins with `prefix`. Every string begins with `""`.

@@ -1,4 +1,4 @@
-//! The obligation census (N87, `docs/architecture.md` §7.88): every place a checked program may
+//! The obligation census (N87, `docs/internal/architecture.md` §7.88): every place a checked program may
 //! fail, or promise something, and whether that is proved, checked as the program runs, or
 //! unknown.
 //!

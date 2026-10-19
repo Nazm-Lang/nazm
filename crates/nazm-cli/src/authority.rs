@@ -1,4 +1,4 @@
-//! The program's authority (R1, 5b.1, option C; `docs/spec.md`, *What `main` holds, and how it
+//! The program's authority (R1, 5b.1, option C; `docs/user/spec.md`, *What `main` holds, and how it
 //! ends*): the capabilities its `main` holds — every authority a program has enters there — said
 //! by `nazm build` and `nazm inspect`, so a reader learns what a program may touch without
 //! reading its body. Read from `main`'s signature as the parser gives it, so the `OutCap` option C

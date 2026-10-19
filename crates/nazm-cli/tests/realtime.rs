@@ -1,6 +1,6 @@
 //! N63: real-time bounds — what is bounded, what is measured, what is unknown.
 //!
-//! `docs/architecture.md` §7.65. What a whole check or build shows: the `realtime` profile accepts
+//! `docs/internal/architecture.md` §7.65. What a whole check or build shows: the `realtime` profile accepts
 //! a program whose loops have the counted form and states each loop's bound, its call depth and its
 //! site counts, with `wcet` unknown; it refuses an unbounded loop as `unknown` with the reason, and a
 //! blocking channel operation and a clock by site; a board build writes `bounds.json` — a static

@@ -1,6 +1,6 @@
 //! N45: the standard library — `use "@std/…"`.
 //!
-//! `docs/architecture.md` §7.47 and `docs/spec.md` *The standard library*. What only whole
+//! `docs/internal/architecture.md` §7.47 and `docs/user/spec.md` *The standard library*. What only whole
 //! programs show: that each standard module is found by name and only by name; that its functions
 //! behave as documented at their edges under the interpreter, both optimisation levels of the LLVM
 //! backend and the Cranelift backend, and reclaim everything; that the ones reaching the outside
@@ -757,7 +757,7 @@ fn chan_take_receives_one_value_at_a_time_across_tasks() {
 
 #[test]
 fn the_spec_s_example_runs_everywhere() {
-    let spec = std::fs::read_to_string(repo().join("docs/spec.md")).unwrap();
+    let spec = std::fs::read_to_string(repo().join("docs/user/spec.md")).unwrap();
     let at = spec
         .find("<!-- id: std -->")
         .expect("the standard library section");
@@ -769,7 +769,7 @@ fn the_spec_s_example_runs_everywhere() {
 
 #[test]
 fn every_public_standard_function_is_documented_and_listed() {
-    let spec = std::fs::read_to_string(repo().join("docs/spec.md")).unwrap();
+    let spec = std::fs::read_to_string(repo().join("docs/user/spec.md")).unwrap();
     let at = spec.find("<!-- id: std -->").unwrap();
     let section = &spec[at..at + spec[at..].find("\n### ").unwrap()];
     let mut seen = 0;
@@ -803,7 +803,7 @@ fn every_public_standard_function_is_documented_and_listed() {
     assert!(seen >= 30, "{seen}");
 }
 
-/// Measurements for `docs/performance.md`. Run with `--ignored --nocapture`.
+/// Measurements for `docs/internal/performance-log.md`. Run with `--ignored --nocapture`.
 #[test]
 #[ignore = "a measurement, run by the benchmark gate"]
 fn what_the_standard_library_costs() {

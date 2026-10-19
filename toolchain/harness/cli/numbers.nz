@@ -213,7 +213,7 @@ fn numeric_misuse_is_refused_before_anything_runs(io: IoCap, p: ProcessCap, sp: 
     ok()
 }
 
-/// The C library's functions may differ in the last place between hosts (`docs/general-purpose.md`
+/// The C library's functions may differ in the last place between hosts (`docs/internal/general-purpose.md`
 /// §1), so each is compared rounded to six decimal places — which every conforming library
 /// agrees on — rather than digit for digit.
 @test

@@ -1,6 +1,6 @@
 //! N59: scalar temporaries as SSA values in the LLVM emitter.
 //!
-//! `docs/architecture.md` §7.61. What a whole build shows: a temporary of type `Int` or `Bool`
+//! `docs/internal/architecture.md` §7.61. What a whole build shows: a temporary of type `Int` or `Bool`
 //! that MIR assigns once and reads only later in its block has no stack slot, every other local
 //! keeps one, and the program means what it meant — at `-O0`, where clang promotes nothing, and at
 //! `-O2`.

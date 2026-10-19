@@ -1,7 +1,7 @@
 //! N83: the task pool — M:N tasks on bounded workers, opt-in by `NAZM_SCHEDULER=pool` until N106
 //! made it the default (`scheduler_default.rs`); here the thread model is asked for by name.
 //!
-//! `docs/architecture.md` §7.84. What the programs show: every concurrency shape gives the same
+//! `docs/internal/architecture.md` §7.84. What the programs show: every concurrency shape gives the same
 //! output, ending and memory report on the pool as on one thread per task, on both backends;
 //! ten thousand tasks run, all alive at once, on two workers; a task's failure and stack limit are
 //! its own on a shared worker; a task polling with a select that does not wait lets a sibling on

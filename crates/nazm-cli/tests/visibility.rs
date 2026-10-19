@@ -2,7 +2,7 @@
 //!
 //! # Why these cases, and why through the binary
 //!
-//! `docs/spec.md` settles what a module owns, what `pub` does, what `use` brings in, and
+//! `docs/user/spec.md` settles what a module owns, what `pub` does, what `use` brings in, and
 //! what happens when two names collide. Every clause of it is a decision a reader will
 //! rely on, so each has a case here, and each runs the real compiler over real files on
 //! disk — the loader, the graph, the checker and, where the program is meant to run, the

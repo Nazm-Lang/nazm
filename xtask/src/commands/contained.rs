@@ -426,7 +426,7 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
                 )),
             )
         }
-        // A prebuilt toolchain for the image's own host (Gate 3, `docs/systems-domains.md` Part
+        // A prebuilt toolchain for the image's own host (Gate 3, `docs/internal/systems-domains.md` Part
         // A): the release binary packaged by `scripts/host-archive.sh` and exported by name into
         // `target/archives/`. The name is the supervisor's, from the platform it measures.
         Some("archive") => {
@@ -566,7 +566,7 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
 /// The profile a workload runs under when `--profile` is not given. N14.1.
 ///
 /// The workspace suite and the selfhost suite take P4T4, which their calibration qualified
-/// (`docs/performance.md`). Everything else is P1. `mutate` is P1 because every parallel
+/// (`docs/internal/performance-log.md`). Everything else is P1. `mutate` is P1 because every parallel
 /// profile tried crossed the frozen total-memory gate on it, not because its verdicts
 /// differed. `bench` is P1 for good: it measures the programs and the compiler, and a
 /// measurement shares the machine with nothing. `--profile p1` reproduces any older

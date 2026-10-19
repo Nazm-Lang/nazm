@@ -494,7 +494,7 @@ fn function(m: &Module, f: &Function) -> Result<(), Vec<String>> {
     }
 }
 
-/// A call's `failed` value is its failure edge (4.2, `docs/architecture.md` §7.115): only the
+/// A call's `failed` value is its failure edge (4.2, `docs/internal/architecture.md` §7.115): only the
 /// condition of the branch that ends the call's block, the call its last instruction. So a backend
 /// can make it an unwind edge — a landing pad continuing where the branch's `then` goes — or keep
 /// it as a register on a target that returns the bit.

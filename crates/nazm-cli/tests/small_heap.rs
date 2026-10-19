@@ -1,4 +1,4 @@
-//! R1.5 3.1 (design D13): the small-block heap (`docs/architecture.md` §7.119).
+//! R1.5 3.1 (design D13): the small-block heap (`docs/internal/architecture.md` §7.119).
 //!
 //! What a whole run shows: a program that calls no C allocates through it — strings, lists grown
 //! from a small block past 512 bytes and back, maps — and prints what the interpreter prints, with

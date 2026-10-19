@@ -408,7 +408,7 @@ fn a_real_extra_citation_is_neither_credit_nor_false_and_an_invented_one_is_hall
         &with(
             t,
             "citations",
-            json!(["spec:returns", "docs/spec.md#return", "spec:blocks"]),
+            json!(["spec:returns", "docs/user/spec.md#return", "spec:blocks"]),
         ),
     );
     assert!(s.solved, "{s:?}");

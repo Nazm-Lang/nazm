@@ -1,5 +1,5 @@
 //! R1a: patterns — wildcards, alternatives, nesting and literals, `if let` and `let … else`
-//! (`docs/spec.md`, *Patterns*).
+//! (`docs/user/spec.md`, *Patterns*).
 //!
 //! Every implementation — the interpreter, the LIR oracle, LLVM at `-O0` and `-O2`, and Cranelift
 //! — is asked for what the section's rules work out by hand, with every allocation reclaimed;

@@ -324,9 +324,9 @@ fn chan_take_receives_one_value_at_a_time_across_tasks(io: IoCap, p: ProcessCap,
     agrees4(h, one_file(CHAN_PROG), "5050\n")
 }
 
-/// The standard library section of `docs/spec.md`: from its marker to the next `### ` heading.
+/// The standard library section of `docs/user/spec.md`: from its marker to the next `### ` heading.
 fn spec_from_marker(h: Caps) -> Result[Str, Str] ! { io } {
-    let spec = read_text(h, f"{repo_root(h)}/docs/spec.md")?;
+    let spec = read_text(h, f"{repo_root(h)}/docs/user/spec.md")?;
     let at = find(spec, "<!-- id: std -->");
     check_that(at >= 0, "the standard library section")?;
     Result[Str, Str].Ok(value: str_slice(spec, at, str_len(spec)))

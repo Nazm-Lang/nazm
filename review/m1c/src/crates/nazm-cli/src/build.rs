@@ -3,7 +3,7 @@
 //! The pipeline is the existing front end plus two new steps: `nazm_lir::lower` turns a
 //! *checked* tree into the low-level representation, `nazm_lir::emit_llvm` turns that into
 //! LLVM IR text, and `clang` turns that into a binary. No LLVM is linked into `nazm` —
-//! `docs/architecture.md` §1 says not to in year one, and `clang` reads IR from a file.
+//! `docs/internal/architecture.md` §1 says not to in year one, and `clang` reads IR from a file.
 //!
 //! # Publishing the result
 //!

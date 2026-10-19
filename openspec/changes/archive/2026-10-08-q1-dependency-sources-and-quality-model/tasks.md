@@ -7,9 +7,9 @@
 
 ## 2. Classification and process
 
-- [x] 2.1 `docs/quality-model.md`
-- [x] 2.2 `docs/vulnerability-process.md`
-- [x] 2.3 `docs/security-qualification.md` classifies every Q1 finding by it
+- [x] 2.1 `docs/internal/quality-model.md`
+- [x] 2.2 `docs/user/vulnerability-process.md`
+- [x] 2.3 `docs/internal/security-qualification.md` classifies every Q1 finding by it
 
 ## 3. Close
 

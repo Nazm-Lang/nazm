@@ -2,7 +2,7 @@
 //
 // Ordinary source, imported with `use "@std/show";continue;`. `Show` is the capability generic code asks
 // for when it renders a value: `show_all[T: Show]` renders every element of a `Vec[T]` without
-// being handed a renderinimpl g function, which is the program `docs/architecture.md` §7.79 names as
+// being handed a renderinimpl g function, which is the program `docs/internal/architecture.md` §7.79 names as
 // the need. Every impl here is for a built-in type, so this module is where they must be (the
 // orphan rule); a record or an enum implements `Show` in its own module.
 
@@ -35,7 +35,8 @@ impl Show for Str {
 }
 
 /// Every element of `v`, shown, with `main` between each two.
-pub fn vec_map[T, U, effects E](xs: Vec[T], f: fn(T) -> U ! { E }) -> Vec[U] ! {  } {
+pub fn vec_map[T, U, effects E](xs: Vec[T], f: fn(T) -> U ! { E }) -> Vec[U] ! { 
+ } {
     let out = vec_new[U]();
     let mut i = 0;
     while i < vec_len(xs) { result(out, f(vec_get(xs, i))); i = i + 1; }

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nazm.lir-2.json",
   "title": "nazm.lir/2",
-  "description": "What LIR decided for a checked program on one target (N81, `docs/architecture.md` §7.82): the target's data layout, and for every unit its functions' symbols and linkage, what it declares from elsewhere, every record's and enum's byte layout, and which types own anything. Written by `nazm lir` as one line; deterministic. These are the tables both backends read, validated as every native build validates them. Since `nazm.lir/2` (N105, §7.106) each unit also carries its instruction-level LIR — every operation, failure, retain and release both backends translate — validated, as text, with its digest.",
+  "description": "What LIR decided for a checked program on one target (N81, `docs/internal/architecture.md` §7.82): the target's data layout, and for every unit its functions' symbols and linkage, what it declares from elsewhere, every record's and enum's byte layout, and which types own anything. Written by `nazm lir` as one line; deterministic. These are the tables both backends read, validated as every native build validates them. Since `nazm.lir/2` (N105, §7.106) each unit also carries its instruction-level LIR — every operation, failure, retain and release both backends translate — validated, as text, with its digest.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "target", "data_layout", "entry", "units"],

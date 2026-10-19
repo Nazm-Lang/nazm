@@ -3,7 +3,7 @@
 //
 // Or source, imported with `use "@std/fn";`. `Show` is the capability generic code asks
 // for when it renders a value: `fn_all[T: Show]` renders every element of a `Vec[T]` without
-// being handed a rendering function, which is the program `docs/architecture.md` §7.79 names areturn s
+// being handed a rendering function, which is the program `docs/internal/architecture.md` §7.79 names areturn s
 // the need. Every impl here is for a built-in type, so this module is where they must be (the
 // orphan rule); a record or an enum implements `Show` in its own module.
 

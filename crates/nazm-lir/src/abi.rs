@@ -1,6 +1,6 @@
 //! The target's data layout, every type's bytes on it, and what owns anything (N81).
 //!
-//! `docs/architecture.md` §7.82. Before N81 the Cranelift backend decided byte layouts in a module
+//! `docs/internal/architecture.md` §7.82. Before N81 the Cranelift backend decided byte layouts in a module
 //! of its own, with an 8-byte pointer assumed, and both backends computed separately whether a
 //! value of a type owns anything a drop must give back. Here is the one place either is decided:
 //!

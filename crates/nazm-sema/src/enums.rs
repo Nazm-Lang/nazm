@@ -14,7 +14,7 @@
 //! | task safety | every field may cross | every field of **every** variant may cross |
 //!
 //! The first two rows are runtime questions about a value and the last two are static
-//! questions about a type, which is why `docs/spec.md` gives task safety no
+//! questions about a type, which is why `docs/user/spec.md` gives task safety no
 //! flow-sensitive escape: a `spawn` is handed a value of a type, and the type is what the
 //! guarantee is about.
 //!
@@ -63,7 +63,7 @@ pub struct VariantDef {
     /// The payload fields **in declaration order**, which is what a reader wrote.
     ///
     /// Empty for a zero-payload variant. The same [`FieldDef`] a record uses, because a
-    /// payload *is* record-shaped — `docs/spec.md` makes that explicit so that a future
+    /// payload *is* record-shaped — `docs/user/spec.md` makes that explicit so that a future
     /// tuple variant is a new decision rather than a drift.
     pub fields: Vec<FieldDef>,
     /// Indices into [`Self::fields`], sorted by field name. The canonical order, for the
@@ -103,7 +103,7 @@ pub struct EnumDef {
     /// Indices into [`Self::variants`], sorted by variant name.
     ///
     /// The **canonical** order, and therefore the order the backend assigns
-    /// discriminants in. `docs/spec.md` makes variant declaration order non-semantic;
+    /// discriminants in. `docs/user/spec.md` makes variant declaration order non-semantic;
     /// deriving the tag from the names rather than from the parser is what makes that
     /// true of the emitted code as well. Taking the parser's order because it was there
     /// would have created an ABI difference from an edit with no meaning.
@@ -139,7 +139,7 @@ impl EnumDef {
     /// The variants in canonical order, each with its declaration index.
     ///
     /// The position in **this** sequence is the discriminant the backend writes. It is
-    /// not a semantic identity and is never persisted: `docs/spec.md` says a variant means
+    /// not a semantic identity and is never persisted: `docs/user/spec.md` says a variant means
     /// its enum and its name, and the number is chosen fresh for each build.
     pub fn in_tag_order(&self) -> impl Iterator<Item = (u32, &VariantDef)> {
         self.order
@@ -223,7 +223,7 @@ impl Enums {
 
     /// Add a definition **without registering its name**, for an enum an interface carries
     /// because an exported shape mentions it. Registering it would be the transitive
-    /// visibility `docs/spec.md` refuses.
+    /// visibility `docs/user/spec.md` refuses.
     pub fn declare_unnamed(&mut self, def: EnumDef) -> EnumId {
         let id = EnumId::from_index(self.defs.len());
         self.defs.push(def);

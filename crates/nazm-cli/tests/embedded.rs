@@ -1,4 +1,4 @@
-//! Gate 3: the embedded domain's reference workload and `@std/hal` (`docs/systems-domains.md` Part
+//! Gate 3: the embedded domain's reference workload and `@std/hal` (`docs/internal/systems-domains.md` Part
 //! C; `library/std/hal.nz`).
 //!
 //! A traffic light — red, green, yellow, each held for two of the board timer's ticks, announced on

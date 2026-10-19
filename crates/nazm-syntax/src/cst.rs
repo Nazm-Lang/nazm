@@ -52,7 +52,7 @@ use crate::lexer::{Lexeme, TokenKind};
 ///
 /// Three groups, kept apart by [`SyntaxKind::is_token`] and [`SyntaxKind::is_trivia`]:
 /// the language's tokens, one per [`TokenKind`]; trivia and invalid bytes; and the nodes,
-/// one per grammar construct in `docs/grammar.ebnf`, plus [`SyntaxKind::Error`].
+/// one per grammar construct in `docs/user/grammar.ebnf`, plus [`SyntaxKind::Error`].
 ///
 /// A node kind names a construct of the grammar, not a function of the parser. There is a
 /// [`SyntaxKind::ParenExpr`] although the abstract tree has no parenthesis, because the

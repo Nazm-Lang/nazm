@@ -1,6 +1,6 @@
 //! Gate 2: floating point, fixed-width integers, bit operations and conversions.
 //!
-//! `docs/general-purpose.md` §1–§3 and the spec's *Numbers* sections. What only a whole run
+//! `docs/internal/general-purpose.md` §1–§3 and the spec's *Numbers* sections. What only a whole run
 //! shows: that every numeric operation means the same in the interpreter and in both native
 //! backends at both optimisation levels — the same text, digit for digit, the same traps with
 //! the same codes — and that every misuse is refused before anything runs. The interpreter's
@@ -362,7 +362,7 @@ fn numeric_misuse_is_refused_before_anything_runs() {
     );
 }
 
-/// The C library's functions may differ in the last place between hosts (`docs/general-purpose.md`
+/// The C library's functions may differ in the last place between hosts (`docs/internal/general-purpose.md`
 /// §1), so each is compared rounded to six decimal places — which every conforming library
 /// agrees on — rather than digit for digit.
 #[test]

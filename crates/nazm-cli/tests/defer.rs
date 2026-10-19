@@ -1,4 +1,4 @@
-//! R1b, L12: `defer` (`docs/spec.md`, *Scope-exit cleanup: `defer`*).
+//! R1b, L12: `defer` (`docs/user/spec.md`, *Scope-exit cleanup: `defer`*).
 //!
 //! A deferred block runs whenever its block is left — at its end, or by `return`, `?`, `break`
 //! or `continue` — the last registered first, after a returned value is computed. The tests ask

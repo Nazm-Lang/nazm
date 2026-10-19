@@ -1,5 +1,5 @@
 // The dependency-source gate (R7, ported from `xtask/src/supply.rs`; Q1,
-// `docs/security-qualification.md`, *Supply chain*): every crate the compiler is built from is this
+// `docs/internal/security-qualification.md`, *Supply chain*): every crate the compiler is built from is this
 // workspace's own or comes from crates.io with the checksum Cargo verifies, read off `Cargo.lock`.
 
 use "@std/toml"

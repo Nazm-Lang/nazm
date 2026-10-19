@@ -7,7 +7,7 @@
 //!
 //! That is a soundness statement before it is a speed one. A cache that hits when it
 //! should not is not a slow compiler; it is a compiler that accepted a program it should
-//! have refused, silently, with a plausible explanation. `docs/architecture.md` §3 has
+//! have refused, silently, with a plausible explanation. `docs/internal/architecture.md` §3 has
 //! said since before there was a compiler that anything omitted from a key is a
 //! miscompilation waiting to happen, and this crate is that sentence made into types.
 //!
@@ -36,7 +36,7 @@
 //! Collapsing the second into the third is the mistake worth naming. A `CheckKey` says
 //! nothing about a body except through the module's own source fingerprint, and nothing
 //! at all about a target; an object file keyed on one would be handed back for a
-//! different machine. `docs/roadmap.md` records what the third needs.
+//! different machine. `docs/user/roadmap.md` records what the third needs.
 //!
 //! # The second store: native objects
 //!
@@ -72,7 +72,7 @@
 //! process, and the object bytes it stores are handed to it.
 //!
 //! There is still no executable cache, no link-result cache and no incremental linker.
-//! `docs/capability-matrix.md` says which claims this supports and which it does not.
+//! `docs/internal/capability-matrix.md` says which claims this supports and which it does not.
 
 pub mod artifact;
 mod digest;

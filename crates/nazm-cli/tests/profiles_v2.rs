@@ -1,6 +1,6 @@
 //! N60: restriction profiles v2 — stack and determinism rules, and the `unknown` verdict.
 //!
-//! `docs/architecture.md` §7.62. Each rule is read off compiler facts — MIR's stack checks and
+//! `docs/internal/architecture.md` §7.62. Each rule is read off compiler facts — MIR's stack checks and
 //! indirect calls, the resolution's call sites — and its verdict is `pass`, `fail` or `unknown`,
 //! with `unknown` refused.
 

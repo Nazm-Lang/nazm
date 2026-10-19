@@ -613,7 +613,7 @@ impl Checker<'_> {
         self.check_again(&[], &call, expected)
     }
 
-    /// An interpolation's hole (R1a, L4, `docs/spec.md`, *String interpolation*): a `Str`, an
+    /// An interpolation's hole (R1a, L4, `docs/user/spec.md`, *String interpolation*): a `Str`, an
     /// integer, a float, a `Bool`, or a value whose `Show` is in scope — its `show()` checked as
     /// the method call at the hole's braces it lowers to. A precision is a float's.
     fn check_hole(&mut self, expr: &Expr, spec: nazm_syntax::FormatSpec, at: Span) {

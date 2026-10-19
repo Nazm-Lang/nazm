@@ -1,4 +1,4 @@
-//! R1b: a mutable cell, `Cell[T]` (`docs/spec.md`, *A mutable cell*).
+//! R1b: a mutable cell, `Cell[T]` (`docs/user/spec.md`, *A mutable cell*).
 //!
 //! One value that can be replaced, reached through a handle, so a callee's change is its caller's.
 //! The tests ask every implementation — the interpreter, the LIR oracle, LLVM at `-O0` and `-O2`,

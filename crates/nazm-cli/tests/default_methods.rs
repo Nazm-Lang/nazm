@@ -1,4 +1,4 @@
-//! R1b, L11a: default trait methods (`docs/spec.md`, *Traits and methods*, **Default bodies**).
+//! R1b, L11a: default trait methods (`docs/user/spec.md`, *Traits and methods*, **Default bodies**).
 //!
 //! A trait method may end in a body an impl that writes none gets. The body is checked once, as a
 //! function generic over `Self`, and each call — direct, UFCS, or through a bound — runs it at the

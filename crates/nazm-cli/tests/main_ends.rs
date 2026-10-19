@@ -1,4 +1,4 @@
-//! R1, 5b.1–5b.3 (`docs/spec.md`, *What `main` holds, and how it ends* and *A function with no
+//! R1, 5b.1–5b.3 (`docs/user/spec.md`, *What `main` holds, and how it ends* and *A function with no
 //! result type*): `main` prints with no capability written; its result is the exit status; a
 //! function written with no result type returns nothing.
 //!
@@ -201,7 +201,7 @@ fn what_main_holds_and_what_returns_nothing_is_checked() {
 
 #[test]
 fn a_private_function_declares_no_effects() {
-    // R1, 5b.5 (`docs/spec.md`, *Declared and inferred*): a function that is not `pub` writes
+    // R1, 5b.5 (`docs/user/spec.md`, *Declared and inferred*): a function that is not `pub` writes
     // no `! { … }`; its own module's callers see what its body requires — a pure caller may
     // call a pure one — while another module's undeclared function may still do anything.
     for (label, r) in as_users_run(&[(

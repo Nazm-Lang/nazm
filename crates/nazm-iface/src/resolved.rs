@@ -1,5 +1,5 @@
 //! What checking a module decided about its names, in a form another process can read:
-//! `nazm.resolved/1`. N77, `docs/architecture.md` §7.78.
+//! `nazm.resolved/1`. N77, `docs/internal/architecture.md` §7.78.
 //!
 //! # What it is
 //!

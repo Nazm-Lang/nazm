@@ -1,4 +1,4 @@
-//! Traits and their impls (N78, `docs/architecture.md` §7.79): the checker's one table of
+//! Traits and their impls (N78, `docs/internal/architecture.md` §7.79): the checker's one table of
 //! which type implements which trait, and with which functions.
 //!
 //! A trait is a named set of method signatures in which `Self` is the trait's own type
@@ -162,7 +162,7 @@ impl Traits {
     }
 
     /// Whether `ty` satisfies `trait_id` by derivation rather than by an impl (L6,
-    /// `docs/spec.md`, *Ordering and hashing are derived*): the trait is `@std/hash`'s `Hash`,
+    /// `docs/user/spec.md`, *Ordering and hashing are derived*): the trait is `@std/hash`'s `Hash`,
     /// `ty` has no impl of its own, and every component is an integer, `Bool`, `Str`, or a
     /// record, enum or tuple of them none of which has an impl.
     #[must_use]

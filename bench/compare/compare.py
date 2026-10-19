@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""R1, 5b.10: three small programs in fifteen languages, timed on the host (docs/performance.md).
+"""R1, 5b.10: three small programs in fifteen languages, timed on the host (docs/internal/performance-log.md).
 
 Each workload is written once per language under bench/compare/<lang>/, idiomatically and as
 short as is natural there:

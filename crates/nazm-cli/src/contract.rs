@@ -1,4 +1,4 @@
-//! `nazm contract FILE` (N69, `docs/architecture.md` §7.71): a contract's machine-readable facts
+//! `nazm contract FILE` (N69, `docs/internal/architecture.md` §7.71): a contract's machine-readable facts
 //! (`--interface`), or a deterministic run of transactions against it (`--txs FILE`) on the
 //! interpreter, which owns the persistent state between them.
 //!

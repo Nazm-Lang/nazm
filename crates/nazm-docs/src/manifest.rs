@@ -2,13 +2,13 @@
 //!
 //! The one place the allowlist is written. It carries no title, heading or text — only
 //! each document's stable id, its path from the repository root, the authority
-//! `docs/master-architecture.md` §5 gives it, and which structural reader it takes. The
+//! `docs/internal/master-architecture.md` §5 gives it, and which structural reader it takes. The
 //! order here is the corpus order: the order of that section's authority table, with
 //! `mcp.md` beside `diagnostics.md` and the grammar beside the guide generated from it.
 //!
 //! Not in it, deliberately: `README.md` (an entry point that summarises and links),
-//! `docs/releases/` (frozen evidence for one tested commit each, never updated), and
-//! `docs/research/` (a draft protocol with frozen thresholds). Nothing is discovered by
+//! `docs/internal/releases/` (frozen evidence for one tested commit each, never updated), and
+//! `docs/internal/research/` (a draft protocol with frozen thresholds). Nothing is discovered by
 //! walking a directory.
 
 use serde::Serialize;
@@ -82,75 +82,85 @@ const fn doc(
 pub const CORPUS: &[Document] = &[
     doc(
         "goals",
-        "docs/NAZM_LANGUAGE_GOALS.md",
+        "docs/internal/NAZM_LANGUAGE_GOALS.md",
         Authority::Goal,
         Format::Markdown,
     ),
     doc(
         "master",
-        "docs/master-architecture.md",
+        "docs/internal/master-architecture.md",
         Authority::Law,
         Format::Markdown,
     ),
     doc(
         "architecture",
-        "docs/architecture.md",
+        "docs/internal/architecture.md",
         Authority::Architecture,
         Format::Markdown,
     ),
     doc(
         "spec",
-        "docs/spec.md",
+        "docs/user/spec.md",
         Authority::Normative,
         Format::Markdown,
     ),
     doc(
         "capabilities",
-        "docs/capability-matrix.md",
+        "docs/internal/capability-matrix.md",
         Authority::Evidence,
         Format::Markdown,
     ),
     doc(
         "roadmap",
-        "docs/roadmap.md",
+        "docs/user/roadmap.md",
         Authority::Planning,
         Format::Markdown,
     ),
     doc(
         "research",
-        "docs/research-register.md",
+        "docs/internal/research-register.md",
         Authority::Research,
         Format::Markdown,
     ),
     doc(
         "bootstrap",
-        "docs/bootstrap.md",
+        "docs/internal/bootstrap.md",
         Authority::Evidence,
         Format::Markdown,
     ),
     doc(
         "diagnostics",
-        "docs/diagnostics.md",
+        "docs/user/diagnostics.md",
         Authority::Interface,
         Format::Markdown,
     ),
-    doc("mcp", "docs/mcp.md", Authority::Interface, Format::Markdown),
+    doc(
+        "mcp",
+        "docs/user/mcp.md",
+        Authority::Interface,
+        Format::Markdown,
+    ),
     doc(
         "performance",
-        "docs/performance.md",
+        "docs/internal/performance-log.md",
         Authority::Evidence,
         Format::Markdown,
     ),
     doc(
         "runbook",
-        "docs/runbook.md",
+        "docs/internal/runbook.md",
         Authority::Operational,
         Format::Markdown,
     ),
-    doc("guide", "docs/guide.md", Authority::Guide, Format::Markdown),
+    doc(
+        "guide",
+        "docs/user/guide.md",
+        Authority::Guide,
+        Format::Markdown,
+    ),
     doc(
         "grammar",
-        "docs/grammar.ebnf",
+        "docs/user/grammar.ebnf",
         Authority::Grammar,
         Format::Ebnf,
     ),

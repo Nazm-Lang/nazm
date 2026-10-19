@@ -24,7 +24,7 @@ use nazm_span::SourceMap;
 
 use crate::{exit, load};
 
-/// The version every `nazm fix` JSON object carries. See `docs/diagnostics.md`.
+/// The version every `nazm fix` JSON object carries. See `docs/user/diagnostics.md`.
 const SCHEMA: &str = "nazm.fix/1";
 
 /// One suggested edit, resolved to a real file and offset.

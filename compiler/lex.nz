@@ -4,7 +4,7 @@
 // are separate because a library that carried a `main` would collide with the `main` of
 // anything that imported it.
 //
-// The first component of the self-hosted compiler. It follows `docs/bootstrap.md` §1: tokens
+// The first component of the self-hosted compiler. It follows `docs/internal/bootstrap.md` §1: tokens
 // live in parallel `Ints`/`Strs` arrays addressed by index, spans are byte offsets so they mean
 // the same thing as `nazm-span::Span`, and every loop is a loop.
 //
@@ -430,7 +430,7 @@ pub fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs, io: IoC
     ints_len(kinds)
 }
 
-// A literal's bytes with its escapes decoded (`docs/spec.md`, *String escapes*). An error's
+// A literal's bytes with its escapes decoded (`docs/user/spec.md`, *String escapes*). An error's
 // span is `base + k` for the bytes written, or `fixed_from..fixed_to` when `fixed_from` is not
 // -1 (a multi-line string reports every escape at its opening delimiter, as the reference does).
 fn decode_escapes(raw: Str, base: Int, fixed_from: Int, fixed_to: Int,

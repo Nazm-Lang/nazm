@@ -1,6 +1,6 @@
 //! The architectural rules CI enforces.
 //!
-//! This file is the machine-readable form of the crate table in `docs/architecture.md` §7.
+//! This file is the machine-readable form of the crate table in `docs/internal/architecture.md` §7.
 //! Compiler workspaces rot in a specific way: a dependency gets added because it was
 //! convenient, and two years later the type checker imports the backend and nobody can say
 //! when that started. Writing the layering down and failing the build on violations is
@@ -22,7 +22,7 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         "nazm-diag" => &["nazm-span"],
         "nazm-syntax" => &["nazm-span", "nazm-diag"],
         "nazm-core" => &["nazm-span", "nazm-diag", "nazm-syntax"],
-        // Level 7 of the table in `docs/architecture.md` §2, and the only level built.
+        // Level 7 of the table in `docs/internal/architecture.md` §2, and the only level built.
         // It reads the syntax tree and produces LLVM IR *as text*, so it needs no
         // code-generator dependency — which is why `may_depend_on_codegen` below stays
         // false for it.

@@ -1,5 +1,5 @@
 // N62: a freestanding target — `aarch64-unknown-none`, no OS, no libc, no heap
-// (`docs/architecture.md` §7.64). Ported from `crates/nazm-cli/tests/freestanding.rs` (R7).
+// (`docs/internal/architecture.md` §7.64). Ported from `crates/nazm-cli/tests/freestanding.rs` (R7).
 //
 // `the_board_runtime_has_no_thread_local_storage_and_no_c_library` reads the board runtime's and
 // entry's LLVM text from `nazm_lir::runtime::board`, which the CLI writes only as objects, and

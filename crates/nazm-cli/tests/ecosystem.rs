@@ -1,7 +1,7 @@
 //! N74: the ecosystem a fresh user meets — templates, API docs, C headers, a publish dry run and an
 //! editor client.
 //!
-//! `docs/architecture.md` §7.76. What the commands show: every template initialises into a project
+//! `docs/internal/architecture.md` §7.76. What the commands show: every template initialises into a project
 //! its own README's commands check, test, build and inspect; a library package is checked as its
 //! modules; `nazm doc` documents exactly the public definitions with their semantic facts and links
 //! back to the source, the same bytes twice; `nazm bindgen` translates only what crosses the C
@@ -525,7 +525,7 @@ fn every_command_has_its_own_help_naming_the_schema_it_prints() {
 }
 
 /// `nazm --version` and `nazm --help` name the release they are: toolchain 0.10.0, the language a
-/// 1.0 draft (`docs/stability.md`). The crate version is the toolchain version; the help's
+/// 1.0 draft (`docs/user/stability.md`). The crate version is the toolchain version; the help's
 /// sentence is written by hand and is held to it here.
 #[test]
 fn the_help_and_version_name_the_release() {

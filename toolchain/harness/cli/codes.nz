@@ -1,4 +1,4 @@
-// Q1-D-11, -13, -14 and v1, Q1-D-24: every diagnostic code is in `docs/diagnostics.md`'s registry,
+// Q1-D-11, -13, -14 and v1, Q1-D-24: every diagnostic code is in `docs/user/diagnostics.md`'s registry,
 // each once, with its constant; every code is asserted by a test or named as unprovokable, with a
 // reason. A read of the tree, no `nazm` run. Ported from `crates/nazm-cli/tests/codes.rs` (R7).
 
@@ -190,7 +190,7 @@ fn trim_ticks(s: Str) -> Str ! {} {
 @test
 fn the_registry_is_every_declared_code_and_only_them(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
-    let docs = read(h, "docs/diagnostics.md")?;
+    let docs = read(h, "docs/user/diagnostics.md")?;
     let begin = find(docs, "<!-- registry:begin -->");
     let end = find(docs, "<!-- registry:end -->");
     check_that(begin >= 0, "registry start")?;
@@ -232,7 +232,7 @@ fn the_registry_is_every_declared_code_and_only_them(io: IoCap, p: ProcessCap, s
             }
             k = k + 1;
         }
-        check_that(found, f"{d.code} ({d.name}) is declared and not in docs/diagnostics.md's registry: add the row\n| `{d.code}` | `{d.name}` | … |")?;
+        check_that(found, f"{d.code} ({d.name}) is declared and not in docs/user/diagnostics.md's registry: add the row\n| `{d.code}` | `{d.name}` | … |")?;
     }
     let mut k = 0;
     while k < strs_len(codes) {

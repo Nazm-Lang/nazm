@@ -1,4 +1,4 @@
-//! R1, 5b.11 and 5b.19 (`docs/spec.md`, *`else if`, and a line break for `;`*): `else if` means
+//! R1, 5b.11 and 5b.19 (`docs/user/spec.md`, *`else if`, and a line break for `;`*): `else if` means
 //! `else { if … }`, and a line break — or a block's `}` — ends a statement where a `;` would.
 //!
 //! Each program is asked of the interpreter and of each backend, with the same output and memory

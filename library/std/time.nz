@@ -24,7 +24,7 @@ pub fn time_passed(t: TimeCap, deadline: Int) -> Bool ! {} {
     time_now_ms() >= deadline
 }
 
-// Gate 2 (`docs/general-purpose.md` §11): nanoseconds, typed. A `Duration` is a span, an `Instant`
+// Gate 2 (`docs/internal/general-purpose.md` §11): nanoseconds, typed. A `Duration` is a span, an `Instant`
 // a reading of the monotonic clock — comparable only with another reading in the same run — and a
 // `WallTime` the wall clock, which may jump.
 
@@ -98,7 +98,7 @@ pub fn time_sleep(t: TimeCap, d: Duration) -> Int ! {} {
     time_sleep_ms(d.nanos / 1000000)
 }
 
-// v1 track C, C4 (`docs/spec.md`, *Calendar time*): the proleptic Gregorian calendar, UTC and
+// v1 track C, C4 (`docs/user/spec.md`, *Calendar time*): the proleptic Gregorian calendar, UTC and
 // fixed offsets, RFC 3339 text and HTTP's date, and durations as text. All of it is pure
 // arithmetic on values: only `time_wall` reads a clock. There is no time-zone database and no
 // leap second; a `DateTime` is a date, a time of day and the offset from UTC it was written at.

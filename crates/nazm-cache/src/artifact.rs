@@ -9,7 +9,7 @@
 //! `Resolution` in particular is deliberately absent. It is the checker's answer to every
 //! name mention in every body, it is addressed by session-local `FnId`s and slot numbers,
 //! and it has no stable written form. Persisting it would mean designing one — and
-//! `docs/architecture.md` §7.4 says why that is a later decision rather than a convenient
+//! `docs/internal/architecture.md` §7.4 says why that is a later decision rather than a convenient
 //! one: a cached interface is already enough for a dependent to be checked without its
 //! dependency's body, which is the reuse this milestone is for.
 //!
@@ -25,7 +25,7 @@
 //! The file name is the key, which is a digest; a digest match is evidence and not proof.
 //! So the artefact repeats the inputs it was keyed on, and [`CheckArtifact::validate`]
 //! recomputes the key from them and requires it to be the one asked for. A truncated,
-//! edited or mis-filed entry fails that and is a miss. `docs/architecture.md` §7.4 keeps
+//! edited or mis-filed entry fails that and is a miss. `docs/internal/architecture.md` §7.4 keeps
 //! the claim where it belongs: BLAKE3 is collision-resistant in practice for a compiler,
 //! which is a reason to trust a match and not a reason to skip the check.
 
@@ -40,7 +40,7 @@ use crate::source::SourceFingerprint;
 
 /// The identifier every persisted check result carries.
 ///
-/// `name/major`, the rule `docs/diagnostics.md` states and `nazm.interface/1` follows: the
+/// `name/major`, the rule `docs/user/diagnostics.md` states and `nazm.interface/1` follows: the
 /// major number changes when a reader written against the previous one would be **wrong**.
 /// An unknown version is refused, never reinterpreted — a cache is the one place where
 /// reinterpreting a future file's fields as the current ones fails silently and

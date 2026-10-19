@@ -11,11 +11,11 @@ with Nazm without carrying this notice or the licence text.
 
 The project templates `nazm init` writes into a new project are dedicated to
 the user under MIT-0 (crates/nazm-cli/templates/LICENSE). The language
-specification, docs/spec.md, is also available under CC-BY-4.0
+specification, docs/user/spec.md, is also available under CC-BY-4.0
 (LICENSE-CC-BY-4.0).
 
 The toolchain itself (bin/nazm, bin/nazm-mcp) links third-party Rust crates
 under their own licences, which are permissive (MIT, Apache-2.0, BSD, ISC,
 Zlib and Unicode-3.0); THIRD-PARTY-NOTICES.md carries each one's licence
-expression, authors and licence and notice texts, and docs/licensing.md
+expression, authors and licence and notice texts, and docs/user/licensing.md
 summarises them.

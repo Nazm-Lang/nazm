@@ -5,7 +5,7 @@
 //! the evidence; `crates/nazm-cli/tests/memory.rs` is the back end's, and
 //! `crates/nazm-cli/tests/visibility.rs` the module system's.
 //!
-//! Each test names the rule in `docs/spec.md` it pins.
+//! Each test names the rule in `docs/user/spec.md` it pins.
 
 #![allow(
     clippy::unwrap_used,
@@ -73,7 +73,7 @@ fn a_variant_is_built_by_naming_its_enum_and_eliminated_by_match() {
 
 #[test]
 fn a_zero_payload_variant_is_written_with_parentheses_everywhere_but_its_declaration() {
-    // `docs/spec.md`: the declaration has no field list to write, and construction and
+    // `docs/user/spec.md`: the declaration has no field list to write, and construction and
     // patterns write the parentheses because `Token.Eof` alone is a field projection.
     let src = r"
         enum E { A, }
@@ -84,7 +84,7 @@ fn a_zero_payload_variant_is_written_with_parentheses_everywhere_but_its_declara
 
 #[test]
 fn a_single_variant_enum_is_a_sum_type_rather_than_a_record() {
-    // Allowed, and it is still eliminated by naming the variant: `docs/spec.md` refuses to
+    // Allowed, and it is still eliminated by naming the variant: `docs/user/spec.md` refuses to
     // special-case it into a record, so adding a second variant later is an ordinary edit.
     let src = r"
         enum Wrapper { Value(data: Int), }
@@ -112,7 +112,7 @@ fn payload_initialisers_may_be_written_in_any_order_and_mean_the_same_value() {
 // second times 10 — and `1 * 10` is that second term, not an operation to simplify away.
 #[allow(clippy::identity_op)]
 fn payload_initialisers_are_evaluated_exactly_once_in_the_order_written() {
-    // `docs/spec.md` fixes the order as the order written, whatever order the payload is
+    // `docs/user/spec.md` fixes the order as the order written, whatever order the payload is
     // stored in. The sequence records which ran first.
     let src = r"
         enum P { V(left: Int, right: Int), }

@@ -14,7 +14,7 @@ use crate::plan;
 ///
 /// The capability question — *who may emit a backend artefact, and who may invoke the
 /// toolchain* — is [`check_emission_reach`], which looks at call sites instead. The two
-/// together are what `docs/architecture.md` §1 means by keeping Cranelift and LLVM behind
+/// together are what `docs/internal/architecture.md` §1 means by keeping Cranelift and LLVM behind
 /// the LIR contract; neither is sufficient alone.
 /// Every catalogued mutation still matches its file, exactly once.
 ///

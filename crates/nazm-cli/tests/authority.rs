@@ -1,7 +1,7 @@
 //! N79: effects and capabilities v3 — the bridge as a recorded contract, attenuation,
 //! subsumption.
 //!
-//! `docs/architecture.md` §7.80. What the commands show: an `OutCap` authorises the standard
+//! `docs/internal/architecture.md` §7.80. What the commands show: an `OutCap` authorises the standard
 //! streams and nothing else; an `IoCap` is accepted where an `OutCap` is expected, never the
 //! reverse; a function value whose effects are a subset of the expected ones is accepted, passed
 //! or returned, and one with more is refused; every function's inherited authority is recorded

@@ -18,7 +18,7 @@ lockfile alone, with no network.
 - **THEN** the gate fails rather than passing
 
 ### Requirement: Findings carry a severity and a disposition
-A gate's findings SHALL each be classified by `docs/quality-model.md` with a technical severity and,
+A gate's findings SHALL each be classified by `docs/internal/quality-model.md` with a technical severity and,
 separately, a programme disposition, and a gate SHALL NOT be accepted while a finding it classified
 RELEASE-BLOCKER or GATE-BLOCKER is open.
 

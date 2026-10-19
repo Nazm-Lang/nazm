@@ -50,7 +50,7 @@ mod exit {
                   `if`/`else`, `while` with `break` and `continue`, `return`, recursion, \
                   and arithmetic and comparison over Int, Bool and Str. No collections, \
                   user-defined types, effects or I/O yet; programs using them are refused \
-                  by name rather than misparsed. See docs/spec.md.",
+                  by name rather than misparsed. See docs/user/spec.md.",
     version
 )]
 struct Cli {
@@ -99,7 +99,7 @@ enum Command {
     },
     /// Compile to a native executable.
     ///
-    /// A narrow subset for now — see `docs/roadmap.md` M1a. Anything outside it is
+    /// A narrow subset for now — see `docs/user/roadmap.md` M1a. Anything outside it is
     /// refused by name after ordinary checking; nothing is partially compiled.
     Build {
         file: PathBuf,

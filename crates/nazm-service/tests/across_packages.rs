@@ -1,6 +1,6 @@
 //! N74: the language service across a package boundary.
 //!
-//! `docs/architecture.md` §7.76. A program that depends on another package is one compilation to
+//! `docs/internal/architecture.md` §7.76. A program that depends on another package is one compilation to
 //! the service, as it is to `nazm check`: diagnostics, definition, references, hover and workspace
 //! symbols reach the dependency's sources, and renaming the dependency's public function is refused
 //! — its other importers are programs no open document loads, so no edit could be shown complete.

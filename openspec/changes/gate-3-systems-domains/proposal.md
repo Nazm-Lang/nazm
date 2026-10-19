@@ -7,7 +7,7 @@ domain matrix every claim points to. Gate 2 is closed at `3a2e3ba`; this change 
 
 ## What Changes
 
-The design is `docs/systems-domains.md`, written before the code. Steps 3B–3L:
+The design is `docs/internal/systems-domains.md`, written before the code. Steps 3B–3L:
 
 - Hosts: Linux x86_64 execution, prebuilt archives and clean installs; a Win32 runtime port run under
   Wine in Docker (labelled so; real Windows execution stays a final-v1 item).
@@ -17,14 +17,14 @@ The design is `docs/systems-domains.md`, written before the code. Steps 3B–3L:
   aerospace, automotive, medical-style and cyber profiles as compositions, each with a workload.
 - AI/HPC CPU provider and float kernels; a storage engine; a distributed foundation; WASI; Android
   and iOS libraries (iOS once Xcode is installed); a desktop host; web3 qualification;
-  requirements traceability (`nazm trace`); `docs/v1-domain-matrix.md`.
+  requirements traceability (`nazm trace`); `docs/internal/v1-domain-matrix.md`.
 - Versions move as each step requires, recorded per step.
 
 ## Capabilities
 
 ### New Capabilities
 - `systems-domain-coverage`: the observable requirements of each part. Archived with
-  `--skip-specs`: the normative text is `docs/spec.md` and the authorities.
+  `--skip-specs`: the normative text is `docs/user/spec.md` and the authorities.
 
 ### Modified Capabilities
 None.

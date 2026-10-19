@@ -1,4 +1,4 @@
-//! R1b, L14: `nazm build --stack-size` (`docs/spec.md`, *Native recursion, and the stack it runs
+//! R1b, L14: `nazm build --stack-size` (`docs/user/spec.md`, *Native recursion, and the stack it runs
 //! on*).
 //!
 //! A program that recurses 250,000 calls deep, in `main` and in a task, meets `N0408` on the

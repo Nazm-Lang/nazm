@@ -80,7 +80,7 @@ impl Checker<'_> {
 
     /// Check a record construction and return the record it builds.
     ///
-    /// Initialisers are evaluated **in the order written**, which `docs/spec.md` fixes
+    /// Initialisers are evaluated **in the order written**, which `docs/user/spec.md` fixes
     /// and which this order of checking mirrors: a diagnostic about the second field
     /// comes after one about the first, and so does the side effect at runtime.
     pub(super) fn check_construction(

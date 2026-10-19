@@ -1,6 +1,6 @@
 //! N89: workspace editing — renaming what a project exports, and applying a plan stale-safely.
 //!
-//! `docs/architecture.md` §7.90. What only a real workspace on disk shows: that an exported
+//! `docs/internal/architecture.md` §7.90. What only a real workspace on disk shows: that an exported
 //! function, record or variant is renamed in every module under a declared source root — those
 //! the root's own compilation does not load included — and nowhere else; that the renamed workspace
 //! checks and means what it meant; that a library package's API, a root nobody declared, and a

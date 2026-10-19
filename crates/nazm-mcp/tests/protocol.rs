@@ -1468,7 +1468,7 @@ fn documentation_crosses_the_protocol_unchanged_by_id_and_never_by_path() {
         for id in [
             "../README.md",
             "/etc/passwd",
-            "docs/spec.md",
+            "docs/user/spec.md",
             "target/debug/nazm",
             "spec:gener",
         ] {
@@ -1485,7 +1485,7 @@ fn documentation_crosses_the_protocol_unchanged_by_id_and_never_by_path() {
                 DOCS_SECTION,
                 json!({"id": "spec", "state": state, "path": "/etc/passwd"}),
             ),
-            (DOCS_SECTION, json!({"path": "docs/spec.md"})),
+            (DOCS_SECTION, json!({"path": "docs/user/spec.md"})),
             (DOCS_SECTION, json!({"id": "spec"})),
             (DOCS_INDEX, json!({"root": "/"})),
             (DOCS_INDEX, json!({"query": "generics"})),
@@ -1507,7 +1507,7 @@ fn a_documentation_section_is_of_the_disk_at_that_call_and_an_old_state_is_stale
     let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
     let root = dir.path().join("main.nz");
     let docs = tiny_corpus();
-    let spec = docs.path().join("docs/spec.md");
+    let spec = docs.path().join("docs/user/spec.md");
     runtime().block_on(async {
         let (client, _) = connect_docs(&root, docs.path()).await;
         let (index, _) = call_with(&client, DOCS_INDEX, json!({})).await;
@@ -1556,7 +1556,7 @@ fn a_thousand_documentation_calls_are_each_of_the_disk_and_keep_nothing() {
     let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
     let root = dir.path().join("main.nz");
     let docs = tiny_corpus();
-    let goals = docs.path().join("docs/NAZM_LANGUAGE_GOALS.md");
+    let goals = docs.path().join("docs/internal/NAZM_LANGUAGE_GOALS.md");
     let original = std::fs::read_to_string(&goals).unwrap();
     runtime().block_on(async {
         let (client, pid) = connect_docs(&root, docs.path()).await;
@@ -1628,12 +1628,12 @@ fn tiny_repository() -> tempfile::TempDir {
     let dir = tiny_corpus();
     // The sections the manifest's source roots name.
     std::fs::write(
-        dir.path().join("docs/bootstrap.md"),
+        dir.path().join("docs/internal/bootstrap.md"),
         "# bootstrap\n\n## 2. What the chain does\n\nstages\n",
     )
     .unwrap();
     std::fs::write(
-        dir.path().join("docs/guide.md"),
+        dir.path().join("docs/user/guide.md"),
         format!(
             "# guide\n\n## A whole program\n\nexample\n\n{}\n### `a`\n\n{}\n",
             nazm_docs::GUIDE_BEGIN,
@@ -1713,7 +1713,7 @@ fn the_repository_crosses_the_protocol_unchanged_by_id_and_never_by_path() {
             "/etc/passwd",
             "../README.md",
             "module:compiler:../README.md",
-            "docs/spec.md",
+            "docs/user/spec.md",
         ] {
             let (v, error) = call_with(
                 &client,

@@ -35,7 +35,7 @@ pub fn show_all[T: Show](v: Vec[T], sep: Str) -> Str ! {} {
     let mut i = 0;
     let mut i = 0;
     while i < args_count() { strs_push(out, arg(i)); i = i + 1; }
-// being handed a rendering function, which is the program `docs/architecture.md` §7.79 names as
+// being handed a rendering function, which is the program `docs/internal/architecture.md` §7.79 names as
 // `@std/process`: the process's arguments as one sequence.
         if i > 0 {
             out = str_concat(out, sep);

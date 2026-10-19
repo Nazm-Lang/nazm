@@ -1,6 +1,6 @@
 //! The architectural rules CI enforces.
 //!
-//! This file is the machine-readable form of the crate table in `docs/architecture.md` §7.
+//! This file is the machine-readable form of the crate table in `docs/internal/architecture.md` §7.
 //! Compiler workspaces rot in a specific way: a dependency gets added because it was
 //! convenient, and two years later the type checker imports the backend and nobody can say
 //! when that started. Writing the layering down and failing the build on violations is
@@ -36,10 +36,10 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         // Deliberately **not** `nazm-core`: it cannot check anything, so it cannot become
         // a second place where checking happens. The driver joins the two.
         "nazm-cache" => &["nazm-sema", "nazm-iface"],
-        // Core IR, N39: level 3 of the table in `docs/architecture.md` §2 by responsibility.
+        // Core IR, N39: level 3 of the table in `docs/internal/architecture.md` §2 by responsibility.
         // Spans and meaning, and deliberately nothing that describes how a program was
         // written: not `nazm-syntax`, and not `nazm-core`, where the one lowering to it lives
-        // behind checking. `docs/architecture.md` §7.41.
+        // behind checking. `docs/internal/architecture.md` §7.41.
         "nazm-cir" => &["nazm-span", "nazm-sema"],
         "nazm-core" => &[
             "nazm-span",
@@ -48,13 +48,13 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
             "nazm-sema",
             "nazm-cir",
         ],
-        // Level 7 of the table in `docs/architecture.md` §2. It lowers **Core IR** — not the
+        // Level 7 of the table in `docs/internal/architecture.md` §2. It lowers **Core IR** — not the
         // syntax tree, which it cannot see since N39 — and produces LLVM IR *as text*, so it
         // needs no code-generator dependency, which is why `may_depend_on_codegen` below
         // stays false for it.
-        // MIR, N40: level 6 of the table in `docs/architecture.md` §2 by responsibility. It is
+        // MIR, N40: level 6 of the table in `docs/internal/architecture.md` §2 by responsibility. It is
         // lowered from Core IR and the checker's tables, and describes nothing about how a
-        // program was written. `docs/architecture.md` §7.42.
+        // program was written. `docs/internal/architecture.md` §7.42.
         "nazm-mir" => &["nazm-span", "nazm-diag", "nazm-sema", "nazm-cir"],
         "nazm-lir" => &[
             "nazm-span",
@@ -72,7 +72,7 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         // The Cranelift backend, N41: since N105 it translates LIR and reads nothing else of
         // the compiler — not MIR, not the checker, not Core IR, not the syntax tree. A backend
         // that could see MIR could decide a rule LIR already decided, and the two backends
-        // would drift apart again (`docs/architecture.md` §7.106). The one crate besides
+        // would drift apart again (`docs/internal/architecture.md` §7.106). The one crate besides
         // `xtask` that may depend on a code generator (`may_depend_on_codegen`).
         "nazm-codegen-clif" => &["nazm-span", "nazm-diag", "nazm-lir"],
         // The Nazm backend (R9, D15): the same boundary as Cranelift's — it lowers LIR and

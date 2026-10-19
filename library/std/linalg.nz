@@ -4,7 +4,7 @@
 // 3×3 matrix, their products — as values: nothing allocates, so it runs on a board without a heap
 // and under `no-heap`. Every operation is the arithmetic operators and `float_sqrt`, each correctly
 // rounded, so a result is the same on every host and under `no-float-nondeterminism`.
-// `docs/systems-domains.md` Parts E–J.
+// `docs/internal/systems-domains.md` Parts E–J.
 
 /// A vector of three components.
 pub struct Vec3 {

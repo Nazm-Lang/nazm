@@ -82,7 +82,7 @@ pub(super) fn node_span(res: &Resolution, node: TypeNode) -> Option<Span> {
 ///
 /// Three stages build the same environment — field resolution, signature declaration and
 /// body checking — and a collision is one mistake, so exactly one of them says so.
-/// `docs/spec.md` refuses an ambiguity where it is created, and the earliest stage that
+/// `docs/user/spec.md` refuses an ambiguity where it is created, and the earliest stage that
 /// can see it is where it is created.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Collisions {

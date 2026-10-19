@@ -38,14 +38,14 @@ use crate::key::ModuleKey;
 /// editor's unsaved buffer) or a unit is more than one file (a package). Neither exists
 /// yet, and neither is what this milestone builds. What the newtype buys today is that
 /// nothing can silently use a file's position in load order as a semantic identity, which
-/// is precisely the conflation `docs/research-register.md` R2 warns about.
+/// is precisely the conflation `docs/internal/research-register.md` R2 warns about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ModuleId(u32);
 
 impl ModuleId {
     /// The module the compilation started from: the file named on the command line.
     ///
-    /// It owns `main`. See `docs/spec.md`, *The root module owns `main`*.
+    /// It owns `main`. See `docs/user/spec.md`, *The root module owns `main`*.
     pub const ROOT: Self = Self(0);
 
     #[must_use]
@@ -111,12 +111,12 @@ struct Module {
     /// two different names through a symbolic link. The loader decides, because only it
     /// sees the second name. Neither case is an error: the compilation is complete and
     /// correct, and the module simply has no durable identity for something else to key
-    /// on. See `docs/spec.md`, *Durable identity*.
+    /// on. See `docs/user/spec.md`, *Durable identity*.
     key: Option<ModuleKey>,
     /// Modules named by this one's `use` items, deduplicated, in source order.
     ///
     /// **Direct only.** What they in turn import is not here and is not this module's
-    /// business — `docs/spec.md` states the rule and why it is the one with the largest
+    /// business — `docs/user/spec.md` states the rule and why it is the one with the largest
     /// effect on how much a reader of one module has to know.
     imports: Vec<Dependency>,
 }
@@ -129,7 +129,7 @@ struct Module {
 #[derive(Debug, Clone, Default)]
 pub struct ModuleGraph {
     modules: Vec<Module>,
-    /// What `@cfg` is decided by for this compilation (Gate 2, `docs/spec.md`, *Conditional
+    /// What `@cfg` is decided by for this compilation (Gate 2, `docs/user/spec.md`, *Conditional
     /// compilation*). `None` is the host's, the configuration every command without a target
     /// or a profile checks for.
     config: Option<Box<BuildConfig>>,
@@ -316,7 +316,7 @@ impl ModuleGraph {
     ///
     /// Importing the same module twice adds one edge, and a module importing itself adds
     /// none: it already sees all of its own definitions, so the edge would only be a way
-    /// for a module to collide with itself. `docs/spec.md` says both.
+    /// for a module to collide with itself. `docs/user/spec.md` says both.
     pub fn import(&mut self, from: ModuleId, to: ModuleId, at: Span) {
         self.import_as(from, to, at, None);
     }

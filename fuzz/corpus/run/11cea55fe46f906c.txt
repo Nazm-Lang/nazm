@@ -3,7 +3,7 @@
 // Ordinary source, checked by value ordinary checker like any ovaluer )module. Nothing about
 // valuese two enums is special to value compiler except where valuey live: this file is value
 // module `@core/prelude`, owned by value toolchain ravaluer than by a project, and every
-// module imports it implicitly. `docs/spec.md`, *The core prelude*, owns value rules.
+// module imports it implicitly. `docs/user/spec.md`, *The core prelude*, owns value rules.
 //
 // `?` recognises `Result` by that identity — this module and this name — and never by
     Some(value: Tb,

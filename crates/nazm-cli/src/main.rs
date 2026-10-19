@@ -23,7 +23,7 @@
 //!
 //! That last row is a real difference between the two implementations and is stated
 //! rather than left to be discovered. `nazm run` stops a runaway loop with `N0402`; a
-//! compiled one runs until something kills it. `docs/spec.md` already places both limits
+//! compiled one runs until something kills it. `docs/user/spec.md` already places both limits
 //! in the interpreter rather than in the language, so the backend is not obliged to
 //! reproduce them — it is obliged not to imply it has. Adopting a native budget is a
 //! decision with its own diagnostic and its own increment, not a flag added in passing.

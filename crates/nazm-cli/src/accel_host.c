@@ -1,4 +1,4 @@
-// Written by nazm accel (N67, docs/architecture.md §7.69): the host side of one kernel run.
+// Written by nazm accel (N67, docs/internal/architecture.md §7.69): the host side of one kernel run.
 // argv: kernel.cl output.bin input.bin [input2.bin] — one input for a map, two for a zip (N88).
 // Every transfer and synchronisation is explicit and timed; one line of JSON on stdout says what
 // happened. Built with NZ_SIZE, the bytes of one element, and for a float kernel (Gate 3) NZ_FLOAT,

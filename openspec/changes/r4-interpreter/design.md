@@ -23,7 +23,7 @@ diagnostics; written in the 0.10.0 language; fast enough that the interpreter-dr
 do not slow down noticeably.
 
 **Non-goals:** parsing or checking source (R2's — the input is checked Core IR); a new semantics
-(where the Rust and `docs/spec.md` disagree the spec is the authority and the case is reported, not
+(where the Rust and `docs/user/spec.md` disagree the spec is the authority and the case is reported, not
 silently followed); C calls (`nazm run` refuses them before running, `N0385`, a check the front end
 makes); the `comptime`, `contract`, `accel` and `repl` drivers (R5 commands that call the
 interpreter — the code is shaped so they can).
@@ -378,7 +378,7 @@ Two differences, one on each side:
   `atomic_new(0); atomic_new(1)` reports `strings allocated=2` built, 0 interpreted;
   `http_listen` makes three atomics, so every program that listens is 3 ahead. The LIR lowering
   backs an `Atomic` with a string backing that the `Str` triple counts
-  (`crates/nazm-lir/src/op/atomics.rs`). `docs/spec.md` promises that "the interpreter and a
+  (`crates/nazm-lir/src/op/atomics.rs`). `docs/user/spec.md` promises that "the interpreter and a
   compiled program allocate the same strings" (*Strings*, *Building*) and names no allocation in
   `atomic_new` (*Atomics*), so this is the compiled side's. Both interpreters agree with each
   other here. **Fixed at runtime ABI 38:** `nz.atomic_cell` allocates the cell in a backing of a

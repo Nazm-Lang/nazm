@@ -5,7 +5,7 @@
 // the `audit` rule asks the function making it to call `audit_transition`, which writes one
 // structured record, a JSON object on its own line, to the board's UART:
 // `{"audit":MACHINE,"from":FROM,"to":TO}`. Nothing allocates and every loop is counted, so a
-// heapless board, `no-heap` and `bounded-loops` admit it. `docs/systems-domains.md` Parts E–J.
+// heapless board, `no-heap` and `bounded-loops` admit it. `docs/internal/systems-domains.md` Parts E–J.
 
 /// The record of `machine` moving from state `from` to `to`, written byte by byte to the UART whose
 /// data register is at `uart`; `0`.

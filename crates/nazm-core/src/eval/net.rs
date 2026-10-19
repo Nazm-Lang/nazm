@@ -1,4 +1,4 @@
-//! Sockets (Gate 2, `docs/spec.md`, *Networking*): the network `os_` built-ins over the handle
+//! Sockets (Gate 2, `docs/user/spec.md`, *Networking*): the network `os_` built-ins over the handle
 //! table `eval::os` keeps. Every interpreted task is a thread, so a wait here is a blocking call
 //! with the handle's deadline; what the native runtime does with a reactor, the interpreter does
 //! by blocking the task's own thread.

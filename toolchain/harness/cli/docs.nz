@@ -107,13 +107,13 @@ fn every_schema_file_is_documented_and_every_documented_schema_exists(io: IoCap,
     let h = caps(io, p, sp, v, t);
     let files = names_ending(h, "schema", ".json")?;
     check_that(strs_len(files) >= 4, f"only {str_join(files, ", ")}")?;
-    let doc = read(h, "docs/diagnostics.md")?;
+    let doc = read(h, "docs/user/diagnostics.md")?;
     for f in files {
         // `nazm.fix-1.json` is documented under its identifier, `nazm.fix/1`.
         let stem = trim_end_matches(f, ".json");
         let dash = rfind(stem, "-");
         let identifier = if dash >= 0 { f"{str_slice(stem, 0, dash)}/{str_slice(stem, dash + 1, str_len(stem))}" } else { "" };
-        check_that(text_contains(doc, identifier), f"schema/{f} exists and `{identifier}` is not mentioned in docs/diagnostics.md")?;
+        check_that(text_contains(doc, identifier), f"schema/{f} exists and `{identifier}` is not mentioned in docs/user/diagnostics.md")?;
     }
     // And each schema agrees with itself: the title is the identifier it stamps on every object.
     for f in files {
@@ -146,7 +146,7 @@ fn the_documented_target_is_the_one_the_emitter_names(io: IoCap, p: ProcessCap, 
     let note = jstr(inv, "native_target");
     let target = "aarch64-apple-darwin";
     check_that(text_contains(note, target), f"the emitter's note changed: {note}")?;
-    for file in words("README.md docs/releases/4fb1554.md") {
+    for file in words("README.md docs/internal/releases/4fb1554.md") {
         let text = flowed(read(h, file)?);
         check_that(text_contains(text, target), f"{file} does not name the only verified target")?;
         check_that(text_contains(text, "unverified rather than unsupported"), f"{file} names the target without the qualification the emitter carries")?;
@@ -154,7 +154,7 @@ fn the_documented_target_is_the_one_the_emitter_names(io: IoCap, p: ProcessCap, 
     ok()
 }
 
-/// What `docs/support.md` writes for a status the compiler names: a QEMU run is
+/// What `docs/user/support.md` writes for a status the compiler names: a QEMU run is
 /// `emulator-verified`, a kind of run-verified.
 fn shown_status(status: Str, row: Str) -> Str ! {} {
     if status == "run-verified" && text_contains(row, "QEMU") { "emulator-verified" } else { status }
@@ -163,7 +163,7 @@ fn shown_status(status: Str, row: Str) -> Str ! {} {
 @test
 fn the_support_page_states_the_compilers_own_matrix(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
-    let page = read(h, "docs/support.md")?;
+    let page = read(h, "docs/user/support.md")?;
     let inv = inspected(h)?;
     let n = jlen(inv, "toolchain/support");
     let mut seen = 0;
@@ -185,33 +185,33 @@ fn the_support_page_states_the_compilers_own_matrix(io: IoCap, p: ProcessCap, sp
                 i = i + 1;
             }
             if at >= 0 {
-                check_that(strs_len(cells) == 5, f"docs/support.md: the row for {triple} is malformed: {line}")?;
+                check_that(strs_len(cells) == 5, f"docs/user/support.md: the row for {triple} is malformed: {line}")?;
                 let llvm = jstr(inv, f"toolchain/support/{at}/llvm/status");
                 let clif = jstr(inv, f"toolchain/support/{at}/cranelift/status");
-                check_that(shown_status(llvm, line) == strs_get(cells, 1), f"docs/support.md says {triple} is `{strs_get(cells, 1)}` under LLVM; the compiler says {llvm}")?;
-                check_that(shown_status(clif, line) == strs_get(cells, 2), f"docs/support.md says {triple} is `{strs_get(cells, 2)}` under Cranelift; the compiler says {clif}")?;
-                check_that(strs_get(cells, 4) == jstr(inv, f"toolchain/support/{at}/debugger"), f"docs/support.md: the debugger cell for {triple}")?;
+                check_that(shown_status(llvm, line) == strs_get(cells, 1), f"docs/user/support.md says {triple} is `{strs_get(cells, 1)}` under LLVM; the compiler says {llvm}")?;
+                check_that(shown_status(clif, line) == strs_get(cells, 2), f"docs/user/support.md says {triple} is `{strs_get(cells, 2)}` under Cranelift; the compiler says {clif}")?;
+                check_that(strs_get(cells, 4) == jstr(inv, f"toolchain/support/{at}/debugger"), f"docs/user/support.md: the debugger cell for {triple}")?;
                 seen = seen + 1;
             }
         }
     }
-    check_that(seen == n, "docs/support.md must have one row per target the compiler accepts")?;
+    check_that(seen == n, "docs/user/support.md must have one row per target the compiler accepts")?;
     let mut k = 0;
     while k < jlen(inv, "toolchain/non_goals") {
         let what = jstr(inv, f"toolchain/non_goals/{k}/what");
         let why = jstr(inv, f"toolchain/non_goals/{k}/why");
-        check_that(text_contains(page, f"| {what} | {why} |"), f"docs/support.md does not state the non-goal `{what}` as the compiler does")?;
+        check_that(text_contains(page, f"| {what} | {why} |"), f"docs/user/support.md does not state the non-goal `{what}` as the compiler does")?;
         k = k + 1;
     }
     ok()
 }
 
-/// Every anchored section of `docs/spec.md` is classified for 1.0, once, in one of the classes,
+/// Every anchored section of `docs/user/spec.md` is classified for 1.0, once, in one of the classes,
 /// and the table names no section that does not exist (Gate 1).
 @test
 fn every_spec_section_is_classified_for_1_0(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
-    let spec = read(h, "docs/spec.md")?;
+    let spec = read(h, "docs/user/spec.md")?;
     let ids = strs_new();
     for l in text_lines(spec) {
         match strip_prefix(text_trim(l), "<!-- id:") {
@@ -262,13 +262,13 @@ fn every_spec_section_is_classified_for_1_0(io: IoCap, p: ProcessCap, sp: SpawnC
     ok()
 }
 
-/// `docs/stability.md` puts every command of this build in exactly one class, and classifies
+/// `docs/user/stability.md` puts every command of this build in exactly one class, and classifies
 /// every schema `schema/` holds (Gate 1).
 @test
 fn the_stability_contract_classifies_every_command_and_schema_file(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
     let inv = jparse(nazm(h, "", words("capabilities --json")).stdout)?;
-    let stability = read(h, "docs/stability.md")?;
+    let stability = read(h, "docs/user/stability.md")?;
     let after = split(stability, "### The command line");
     check_that(strs_len(after) > 1, "the command-line section")?;
     let rows = strs_new();
@@ -287,7 +287,7 @@ fn the_stability_contract_classifies_every_command_and_schema_file(io: IoCap, p:
                 n = n + 1;
             }
         }
-        check_that(n == 1, f"`nazm {c}` is in {n} classes of docs/stability.md")?;
+        check_that(n == 1, f"`nazm {c}` is in {n} classes of docs/user/stability.md")?;
         i = i + 1;
     }
     let ms = split(stability, "### Machine-readable output");
@@ -299,7 +299,7 @@ fn the_stability_contract_classifies_every_command_and_schema_file(io: IoCap, p:
         let dash = rfind(stem, "-");
         check_that(dash >= 0, file)?;
         let id = f"`{str_slice(stem, 0, dash)}/{str_slice(stem, dash + 1, str_len(stem))}`";
-        check_that(text_contains(schemas, id), f"{id} ({file}) is not classified in docs/stability.md")?;
+        check_that(text_contains(schemas, id), f"{id} ({file}) is not classified in docs/user/stability.md")?;
     }
     ok()
 }
@@ -307,8 +307,8 @@ fn the_stability_contract_classifies_every_command_and_schema_file(io: IoCap, p:
 @test
 fn the_stability_contract_states_the_current_identities(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
-    // M1: `docs/stability.md` restates the identities a build carries, held to the binary's own.
-    let text = read(h, "docs/stability.md")?;
+    // M1: `docs/user/stability.md` restates the identities a build carries, held to the binary's own.
+    let text = read(h, "docs/user/stability.md")?;
     let inv = inspected(h)?;
     let rows = "Semantic epoch|Runtime ABI|Interface schema|Toolchain version";
     let wants = strs_new();
@@ -324,11 +324,11 @@ fn the_stability_contract_states_the_current_identities(io: IoCap, p: ProcessCap
                 row = l;
             }
         }
-        check_that(row != "", f"docs/stability.md has no `{name}` row")?;
+        check_that(row != "", f"docs/user/stability.md has no `{name}` row")?;
         // The third cell: what the identity is now.
         let cells = split(row, "|");
         let current = if strs_len(cells) > 3 { text_trim(strs_get(cells, 3)) } else { "" };
-        check_that(current == strs_get(wants, k), f"docs/stability.md's {name} row is stale: {row}")?;
+        check_that(current == strs_get(wants, k), f"docs/user/stability.md's {name} row is stale: {row}")?;
         k = k + 1;
     }
     ok()

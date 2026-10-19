@@ -11,7 +11,7 @@ use crate::exit;
 
 /// The optimisation a compiled run is built with: Cranelift's `speed`, as `--opt-level 2` asks
 /// of `nazm build`. On `bench/compare/nazm/fib.nz` a warm build costs the same at 0 and at 2
-/// (`docs/performance.md`), so the faster code is not paid for in the build.
+/// (`docs/internal/performance-log.md`), so the faster code is not paid for in the build.
 const OPT_LEVEL: u8 = 2;
 
 /// Build `path` and run it with `args`; the build's own refusal, or the program's status.
