@@ -108,9 +108,14 @@ fn outputs(r: &Request<'_>) -> Value {
 
 /// Where `nazm build` wrote its output: `-o`, or the source's stem.
 fn output_path(r: &Request<'_>) -> PathBuf {
-    r.out.map_or_else(
-        || PathBuf::from(r.source.file_stem().unwrap_or_default()),
-        Path::to_path_buf,
+    crate::build::published_name(
+        r.out.map_or_else(
+            || PathBuf::from(r.source.file_stem().unwrap_or_default()),
+            Path::to_path_buf,
+        ),
+        r.target,
+        r.library,
+        r.objects.is_some(),
     )
 }
 

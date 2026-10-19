@@ -195,7 +195,13 @@ fn a_function_handed_a_file_uses_it_with_no_other_authority() {
 #[test]
 fn the_platform_family_is_the_hosts() {
     let src = "fn main(io: IoCap) -> Int ! { io } { print(int_to_str(os_family())); 0 }\n";
-    let family = if cfg!(target_os = "linux") { "1" } else { "0" };
+    let family = if cfg!(target_os = "linux") {
+        "1"
+    } else if cfg!(windows) {
+        "2"
+    } else {
+        "0"
+    };
     agrees(src, &format!("{family}0"));
 }
 

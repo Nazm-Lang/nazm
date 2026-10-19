@@ -14,8 +14,15 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <windows.h>
+// OpenCL's `long` is 64 bits, and so is every kernel's `long` and `ulong`; Windows's C `long` is
+// 32 (LLP64). Past the system headers, which want their own `long`, the word is `long long`.
+#define long long long
+#endif
 
-// OpenCL's words, in C. `long` is 64 bits on every host the CPU provider runs on (LP64).
+// OpenCL's words, in C. `long` is 64 bits on every host the CPU provider runs on (LP64), and on
+// Windows through the definition above.
 #define __kernel static
 #define __global
 #define __private
@@ -86,7 +93,13 @@ int main(int argc, char **argv) {
     if (!in1 || (argc == 5 && (!in2 || in2_len != in_len))) { printf("{\"error\":\"unreadable input\"}\n"); return 3; }
     size_t n = in_len / sizeof(NZ_T);
     out = malloc(n * sizeof(NZ_T) + 8);
+#ifdef _WIN32
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    long cores = (long)si.dwNumberOfProcessors;
+#else
     long cores = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
     size_t threads = cores > 0 ? (size_t)cores : 1;
     if (threads > n) threads = n > 0 ? n : 1;
     pthread_t pool[256];

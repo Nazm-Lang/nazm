@@ -626,13 +626,18 @@ fn three_modules_with_one_private_name_keep_three_objects() {
     let cold = build(dir.path(), "main.nz");
     // The small-block heap's unit too (R1.5 3.1).
     assert_eq!(
-        cold.units, 7,
+        cold.units,
+        7 + crate::common::PLATFORM_UNITS,
         "four modules, a runtime, the small-block heap and an entry"
     );
-    assert_eq!(cold.stored, 7, "two units shared an object");
+    assert_eq!(
+        cold.stored,
+        7 + crate::common::PLATFORM_UNITS,
+        "two units shared an object"
+    );
 
     let warm = build(dir.path(), "main.nz");
-    assert_eq!(warm.reused, 7);
+    assert_eq!(warm.reused, 7 + crate::common::PLATFORM_UNITS);
     // Each unit found its own object, so the program still computes what it should —
     // `1 + 2 + 3`, with each `helper` the one its own module defines.
     assert_eq!(run(dir.path(), "prog").stdout, "6");
@@ -655,9 +660,16 @@ fn a_diamond_compiles_its_base_once() {
     );
     let cold = build(dir.path(), "a.nz");
     // Four modules, the runtime, the small-block heap (R1.5 3.1) and the entry.
-    assert_eq!(cold.units, 7, "d.nz was counted once per import edge");
-    assert_eq!(cold.compiled, 7);
-    assert_eq!(build(dir.path(), "a.nz").reused, 7);
+    assert_eq!(
+        cold.units,
+        7 + crate::common::PLATFORM_UNITS,
+        "d.nz was counted once per import edge"
+    );
+    assert_eq!(cold.compiled, 7 + crate::common::PLATFORM_UNITS);
+    assert_eq!(
+        build(dir.path(), "a.nz").reused,
+        7 + crate::common::PLATFORM_UNITS
+    );
 }
 
 #[test]
@@ -874,7 +886,8 @@ fn two_programs_needing_the_same_support_share_one_runtime_object() {
     let second = second.expect("a report");
     // The small-block heap's unit (R1.5 3.1) is the same text in both, so it is shared too.
     assert_eq!(
-        second.reused, 2,
+        second.reused,
+        2 + crate::common::PLATFORM_UNITS,
         "exactly the runtime and the small-block heap should be shared: {second:?}"
     );
 }

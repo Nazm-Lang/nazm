@@ -214,7 +214,15 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
     let int = |n: i64| Some(Value::Int(n));
     let handle = |n: i64| Some(Value::OsHandle(n));
     match (op, args) {
-        (Intrinsic::OsOpenRead, [Value::Str(p)]) => handle(opened(File::open(path(p)))),
+        (Intrinsic::OsOpenRead, [Value::Str(p)]) => {
+            let name = path(p);
+            // Windows refuses to open a directory (`ERROR_ACCESS_DENIED`) where POSIX opens it and
+            // fails the read with `EISDIR`; the compiled runtime reports the directory.
+            if cfg!(windows) && std::fs::metadata(&name).is_ok_and(|m| m.is_dir()) {
+                return handle(-EISDIR);
+            }
+            handle(opened(File::open(name)))
+        }
         (Intrinsic::OsOpenWrite, [Value::Str(p), Value::Int(mode)]) => {
             let mut o = OpenOptions::new();
             match mode {
@@ -336,7 +344,16 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
         (Intrinsic::OsWrite, [Value::OsHandle(h), Value::Bytes(data)]) => int(match object(*h) {
             Err(s) => s,
             Ok(o) => match &*o {
-                Object::File(f) => counted((&*f).write(&data.read())),
+                Object::File(f) => {
+                    let wrote = (&*f).write(&data.read());
+                    // Windows answers a write through a handle opened to read with
+                    // `ERROR_ACCESS_DENIED`; POSIX says `EBADF`, as the compiled runtime does.
+                    if cfg!(windows) && wrote.as_ref().is_err_and(|e| e.raw_os_error() == Some(5)) {
+                        -EBADF
+                    } else {
+                        counted(wrote)
+                    }
+                }
                 Object::Stdin => -EBADF,
                 // In order with `print` and `eprint`, which write through the same streams.
                 Object::Stdout => stream(&mut std::io::stdout(), &data.read()),

@@ -38,6 +38,9 @@ pub(super) fn errno(e: &std::io::Error) -> i64 {
         Some(code) => windows_errno(code),
         #[cfg(not(windows))]
         Some(code) => i64::from(code),
+        // A failure the library raised itself, with no system number: a program that is not found
+        // (`Command` on Windows looks for it before it asks the system).
+        None if cfg!(windows) && e.kind() == std::io::ErrorKind::NotFound => 2,
         None => 22,
     }
 }
