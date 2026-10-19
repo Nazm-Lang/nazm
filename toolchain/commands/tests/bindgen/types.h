@@ -1,0 +1,14 @@
+struct Handle;
+typedef struct Other Other;
+struct Point { int64_t x; int64_t y; };
+struct Line { struct Point a; struct Point b; bool on; };
+int64_t use_handle(struct Handle *h);
+struct Handle *make(void);
+Other *other_new(int64_t n);
+int64_t len(const struct Point *p);
+int64_t sum(const struct Line *l, const Point *q);
+struct Point by_value(void);
+int64_t by_value_in(struct Point p);
+int64_t mut_in(struct Point *p);
+const char *label(Other *o);
+int64_t both(struct Handle *h, Other *o, const struct Point *p, const char *s, bool b);
