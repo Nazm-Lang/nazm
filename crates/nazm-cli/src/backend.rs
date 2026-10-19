@@ -1034,7 +1034,13 @@ mod tests {
             assert!(!compile_args(2, cross, true)
                 .iter()
                 .any(|a| a.contains("cpu")));
-            // The CPU is the one clang itself resolves for a separately optimised object.
+            // The CPU is the one clang itself resolves for a separately optimised object. That is
+            // Apple's clang, the one a macOS target is built with; LLVM's own resolves an older
+            // baseline for x86_64 macOS (`core2`, not `penryn`), so another host has nothing to
+            // compare against.
+            if !cfg!(target_os = "macos") {
+                continue;
+            }
             let Ok(out) = Command::new(DRIVER)
                 .arg("-###")
                 .args(compile_args(2, cross, false))
