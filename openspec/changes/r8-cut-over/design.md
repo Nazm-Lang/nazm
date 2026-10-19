@@ -369,6 +369,17 @@ check runs the last stage's `fe --coredoc-sources` beside the seed's `core-ir --
   the status byte for byte, the refusals and check failures with their diagnostics included.
   Largest host-run peak (the driver with its stages, and the reference's `nzcg`): 77 MiB; no
   withdrawal condition.
+- **The self-build through `nazm build`**, `cargo xtask contained selfbuild` (heap limit 2 GiB per
+  built program), 2026-10-20: **passed** — stage 0 (the seed) built `nazm`, `pl`, `cg`; stages 1–3
+  each built 9 programs through the previous stage's `nazm build --backend nazm`; stage 1 vs 2 and
+  2 vs 3: 9 executables identical, 0 differ; Core IR: 9 documents identical to the reference's;
+  66 corpus programs built by stage 3 run as the seed's builds do; 68 run by the self-built
+  interpreter as by the seed's; `nazm-check` byte for byte (16 gates); the heap probe stopped with
+  `N0406` at 224.6 MiB resident. Peak resident memory of a whole build (the driver and the stages
+  it waited for): largest 1,483.9 MiB, `nazm build` of `toolchain/commands/nazm.nz` (the front
+  end in process); `pl` 579–593 MiB, `cg` 285–292 MiB. The first run found the driver reading a
+  stage's heap limit from the first `the heap limit of` text in its image — the pipeline carries
+  that text as a template — and so taking the stage as unlimited: fixed (`bd_limits`).
 
 ## Slice 1 — the evidence
 
