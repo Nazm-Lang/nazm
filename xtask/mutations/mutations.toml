@@ -21044,6 +21044,14 @@ replace = '''  %st = call i64 @nz.chq_park(ptr %c, ptr %m, ptr %rec, ptr %sqp, p
 '''
 killers = [{ package = "nazm-runtime", lib = true, name = "tests::a_channel_waiter_is_counted_out_by_whoever_takes_it_off_a_list" }]
 
+[[mutation]]
+name = "lto-the-link-generates-for-no-cpu"
+why = "a whole-program link names no CPU, so libLTO generates ARMv8.0 code and every atomic is a load-/store-exclusive loop (four tasks +13%)"
+file = "crates/nazm-cli/src/backend.rs"
+find = '''            a.push(format!("-Wl,-mcpu,{cpu}"));'''
+replace = '''            let _ = cpu;'''
+killers = [{ package = "nazm-cli", bin = "nazm", name = "backend::tests::a_whole_program_link_generates_for_the_cpu_a_separate_object_is_compiled_for" }]
+
 # The compiler-speed round: a check reads an entry without building its interface or unit, parses
 # each file once and without its lossless tree, and reads the prelude's names from a table.
 
