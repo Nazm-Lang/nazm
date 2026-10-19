@@ -14,7 +14,9 @@
 // whether saved or not (`fx_check_over`); `hover` of a local of any type (`fx_show`) and of a call
 // to a plain function (its signature and effects); `definition` of a local and of what the checker
 // records a name refers to (`fx_declaration_at`: a function called or used as a value, a record
-// built, a variant named); `--source-root`; and `null` where the reference answers nothing (no
+// built, a variant named), and in a compilation with no errors of anything the reference index
+// (`fx_ref_*`) knows; `references`, `prepareRename` and `rename` (the candidate program checked again), `documentSymbol` and
+// `workspace/symbol` (design D23); `--source-root`; and `null` where the reference answers nothing (no
 // name, a built-in called, a function's own name where it is declared, a field or variant after
 // `.`, a declaration in the standard library).
 //
@@ -22,10 +24,10 @@
 // written: more than one document open at once (the reference publishes them in a hash map's
 // order), a compilation that does not load or that the front end stops at; hover of a method, a
 // generic or foreign function or a call through a value, hover of a name the checker publishes no
-// binding for, definition of what the facts index no declaration for (a type named in a signature,
-// a constant, a field); completion, references, signature help, rename, symbols, semantic tokens,
-// code actions and call hierarchy; and any message the reference's parsers would read differently
-// from this port's.
+// binding for, definition of what the facts index no declaration for in a compilation with errors the
+// index is not promised for; completion, signature help, semantic tokens, code actions and call
+// hierarchy; a rename of an exported name in a declared workspace; and any message the reference's
+// parsers would read differently from this port's.
 //
 // Standard output is the protocol: nothing else is ever written there.
 
@@ -81,6 +83,8 @@ struct Server {
     library: Strs,
     // `--source-root`, absolute, or "" to decide each document's root as `check` does.
     root: Strs,
+    // What the client said it reads: versioned edits (`documentChanges`), nested symbols.
+    flags: Ints,
 }
 
 fn doc_index(s: Server, path: Str) -> Int {
@@ -487,6 +491,7 @@ fn locate(io: IoCap, s: Server, j: J) -> Ints {
     let k = if path == "" { 0 - 1 } else { doc_named(io, s, path) }
     if k < 0 || vec_len(s.facts) == 0 {
         ints_push(out, 0 - 1)
+        ints_push(out, 0 - 2)
         return out
     }
     let text = strs_get(s.texts, k)
@@ -577,7 +582,11 @@ fn hover(io: IoCap, s: Server, j: J) -> Str {
         if st > 0 && str_byte(text, st - 1) == 46 && !called { return "null" }
         // A function's name where it is declared: no call is there, and no local.
         if ints_get(span, 2) == k_fn() { return "null" }
-        if might_mean(io, f, name, st, en) { refuse(io, "hover of what the facts publish no binding for") }
+        // A local the facts publish no binding for cannot be shown; any other name is nothing hover shows.
+        let e = entity_at(f, st, en)
+        // A parameter is no use of itself where it is declared: the reference shows nothing there.
+        if e >= 0 && fx_ref_kind(f, e) == "local" && fx_ref_decl_start(f, e) == st && fx_ref_decl_end(f, e) == en { return "null" }
+        if e >= 0 && fx_ref_kind(f, e) == "local" { refuse(io, "hover of a local the facts publish no binding for") }
         return "null"
     }
     let ty = fx_show(f, ck_binding_ty(c, b))
@@ -587,7 +596,114 @@ fn hover(io: IoCap, s: Server, j: J) -> Str {
 
 fn ident_byte(b: Int) -> Bool { (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 95 || b >= 128 }
 
+// --- the reference index (`fx_ref_*`): definition, references, rename ----------------------------------
+
+// The entity the identifier at `st..en` of the document (module 0, whose offsets are the compilation's)
+// is of — its declaration or one of its uses — or -1 (`ReferenceIndex::target`).
+fn entity_at(f: Facts, st: Int, en: Int) -> Int {
+    let n = fx_ref_count(f)
+    for i in 0..n {
+        if fx_ref_decl_start(f, i) == st && fx_ref_decl_end(f, i) == en { return i }
+    }
+    for i in 0..n {
+        for k in 0..fx_ref_use_count(f, i) {
+            if fx_ref_use_start(f, i, k) == st && fx_ref_use_end(f, i, k) == en { return i }
+        }
+    }
+    0 - 1
+}
+
+// Whether module `m` is a file an editor can open: not the core prelude and not the standard library.
+fn module_file(f: Facts, m: Int) -> Bool { m >= 0 && !fe_starts(fx_module_name(f, m), "@") }
+
+// A place in module `m` (local offsets) as a `Location`.
+fn loc_json(io: IoCap, f: Facts, m: Int, s: Int, e: Int) -> Str {
+    let name = pk_normalise(fx_module_name(f, m))
+    if !fe_starts(name, "/") { refuse(io, "a location in a module this port does not name by its path") }
+    let t = fx_module_text(f, m)
+    "{\"range\":" + range(t, line_starts(t), s, e) + ",\"uri\":" + json_str(uri_of(name)) + "}"
+}
+
 fn definition(io: IoCap, s: Server, j: J) -> Str {
+    if vec_len(s.facts) > 0 && unreliable(vec_get(s.facts, 0)) { return definition_failing(io, s, j) }
+    let span = locate(io, s, j)
+    let st = ints_get(span, 0)
+    if st < 0 { return "null" }
+    let f = vec_get(s.facts, 0)
+    let e = entity_at(f, st, ints_get(span, 1))
+    if e < 0 { return "null" }
+    let ds = fx_ref_decl_start(f, e)
+    if ds < 0 { return "null" }
+    let m = fx_module_at(f, ds)
+    if !module_file(f, m) { return "null" }
+    let base = fx_module_base(f, m)
+    loc_json(io, f, m, ds - base, fx_ref_decl_end(f, e) - base)
+}
+
+// Whether location `(m1, s1, e1)` goes before `(m2, s2, e2)`: by path, then start and end.
+fn loc_less(f: Facts, m1: Int, s1: Int, e1: Int, m2: Int, s2: Int, e2: Int) -> Bool {
+    if m1 != m2 { return fe_path_before(pk_normalise(fx_module_name(f, m1)), pk_normalise(fx_module_name(f, m2))) }
+    if s1 != s2 { return s1 < s2 }
+    e1 < e2
+}
+
+fn references(io: IoCap, s: Server, j: J) -> Str {
+    let p = j_get(j, 0, "params")
+    let inc = j_get(j, j_get(j, p, "context"), "includeDeclaration")
+    if j_kind(j, inc) != 1 && j_kind(j, inc) != 2 { refuse(io, "a `references` request whose context this port does not read as the reference does") }
+    let span = locate(io, s, j)
+    let st = ints_get(span, 0)
+    if st < 0 { return "null" }
+    let f = vec_get(s.facts, 0)
+    if unreliable(f) { refuse(io, "references in a compilation whose errors leave the facts' index unlike the reference's") }
+    let e = entity_at(f, st, ints_get(span, 1))
+    if e < 0 { return "null" }
+    // The facts record a trait's method as used in its own default methods' bodies, where the reference does not.
+    if fx_ref_kind(f, e) == "trait method" { refuse(io, "the references of a trait's method") }
+    // The uses in the files an editor can open, and the declaration where asked for and there is one.
+    let ms = ints_new()
+    let ss = ints_new()
+    let es = ints_new()
+    let ds = fx_ref_decl_start(f, e)
+    for k in 0..fx_ref_use_count(f, e) {
+        let a = fx_ref_use_start(f, e, k)
+        let m = fx_module_at(f, a)
+        if module_file(f, m) {
+            ints_push(ms, m)
+            ints_push(ss, a - fx_module_base(f, m))
+            ints_push(es, fx_ref_use_end(f, e, k) - fx_module_base(f, m))
+        }
+    }
+    if j_kind(j, inc) == 1 && ds >= 0 {
+        let m = fx_module_at(f, ds)
+        if module_file(f, m) {
+            ints_push(ms, m)
+            ints_push(ss, ds - fx_module_base(f, m))
+            ints_push(es, fx_ref_decl_end(f, e) - fx_module_base(f, m))
+        }
+    }
+    let order = ints_new()
+    for i in 0..ints_len(ms) {
+        let mut pos = 0
+        while pos < ints_len(order) && !loc_less(f, ints_get(ms, i), ints_get(ss, i), ints_get(es, i), ints_get(ms, ints_get(order, pos)),
+                ints_get(ss, ints_get(order, pos)), ints_get(es, ints_get(order, pos))) { pos += 1 }
+        ints_push(order, 0)
+        let mut k = ints_len(order) - 1
+        while k > pos {
+            ints_set(order, k, ints_get(order, k - 1))
+            k -= 1
+        }
+        ints_set(order, pos, i)
+    }
+    let out = strs_new()
+    for r in 0..ints_len(order) {
+        let i = ints_get(order, r)
+        strs_push(out, loc_json(io, f, ints_get(ms, i), ints_get(ss, i), ints_get(es, i)))
+    }
+    "[" + str_join(out, ",") + "]"
+}
+
+fn definition_failing(io: IoCap, s: Server, j: J) -> Str {
     let span = locate(io, s, j)
     let st = ints_get(span, 0)
     if st < 0 { return "null" }
@@ -624,6 +740,631 @@ fn definition(io: IoCap, s: Server, j: J) -> Str {
     let de = ck_binding_end(c, b)
     if ds < 0 || de > str_len(text) { refuse(io, "definition of a binding declared elsewhere") }
     "{\"range\":" + range(text, line_starts(text), ds, de) + ",\"uri\":" + json_str(uri_of(strs_get(s.paths, 0))) + "}"
+}
+
+// --- rename (`rename.rs`) ---------------------------------------------------------------------------------
+
+// Whether the entity's owning top-level definition is exported (`exported`): a function, record or enum with
+// `pub`, or a field, variant or payload field of one; a local or a constant never. An entity the tables
+// do not have is taken to be exported.
+fn exported(f: Facts, kind: Str, ds: Int) -> Bool {
+    let c = fx_checker(f)
+    if kind == "local" || kind == "constant" { return false }
+    let m = fx_module_at(f, ds)
+    let local = ds - fx_module_base(f, m)
+    if kind == "function" {
+        for i in 0..ck_fn_count(c) {
+            if ck_fn_name_start(c, i) == ds && !ck_fn_closure(c, i) { return ck_fn_public(c, i) }
+        }
+        return true
+    }
+    let t = fx_tree(f)
+    if kind == "record" || kind == "field" {
+        for r in 0..ck_record_count(c) {
+            let node = ck_record_node(c, r)
+            if ck_record_module(c, r) != m || node < 0 { continue }
+            let span = sx_field(t, node, "span")
+            if kind == "record" && ck_record_name_start(c, r) == ds { return ck_record_public(c, r) }
+            if kind == "field" && fx_start(f, span) <= local && local < fx_end(f, span) { return ck_record_public(c, r) }
+        }
+        return true
+    }
+    for e in 0..ck_enum_count(c) {
+        let node = ck_enum_node(c, e)
+        if ck_enum_module(c, e) != m || node < 0 { continue }
+        let span = sx_field(t, node, "span")
+        if kind == "enum" && ck_enum_name_start(c, e) == ds { return ck_enum_public(c, e) }
+        if kind != "enum" && fx_start(f, span) <= local && local < fx_end(f, span) { return ck_enum_public(c, e) }
+    }
+    true
+}
+
+// The reason a rename of the entity at `st..en` is not offered (`Refusal`'s words), "" where it is; then
+// `out` holds the entity, where it is declared (its module and local offsets) and its name.
+fn renameable(io: IoCap, s: Server, f: Facts, st: Int, en: Int, out: Strs) -> Str {
+    let e = entity_at(f, st, en)
+    if e < 0 { return "nothing a program declared is named here" }
+    let kind = fx_ref_kind(f, e)
+    if kind == "trait" || kind == "trait method" {
+        return "not every occurrence is known: a trait's methods are written again in every impl of it"
+    }
+    let ds = fx_ref_decl_start(f, e)
+    let toolchain = "this is the core prelude's, which the toolchain owns"
+    if ds < 0 { return toolchain }
+    let m = fx_module_at(f, ds)
+    if fx_module_name(f, m) == "@core/prelude.nz" { return toolchain }
+    if exported(f, kind, ds) {
+        // Within a declared workspace every module that can name it is searched: not carried.
+        let root = pk_decide(strs_get(s.paths, 0), io)
+        if strs_get(s.root, 0) != "" || pk_root_how(root) != 0 { refuse(io, "a rename of an exported name within a declared workspace") }
+        return "this is exported, and a module no open program loads may use it, so every occurrence cannot be known; declare a workspace (a `nazm.root` marker or `--source-root`) and every module under it is searched"
+    }
+    if first_error(f) >= 0 { return "a program containing this has errors, so its uses are not all known" }
+    let base = fx_module_base(f, m)
+    strs_push(out, int_to_str(e))
+    strs_push(out, int_to_str(m))
+    strs_push(out, int_to_str(ds - base))
+    strs_push(out, int_to_str(fx_ref_decl_end(f, e) - base))
+    strs_push(out, str_slice(fx_module_text(f, m), ds - base, fx_ref_decl_end(f, e) - base))
+    ""
+}
+
+// Whether the facts' reference index may differ from the reference's for this compilation: a parser stage
+// reported, or a diagnostic of a kind after which the checker leaves out what the reference still records (an
+// item it refuses to declare, a closure it does not check, a trait it does not know).
+fn unreliable(f: Facts) -> Bool {
+    let d = fx_diags(f)
+    for i in 0..dg_len(d) {
+        if ints_get(d.file, i) >= 0 { return true }
+        let c = dg_code(d, i)
+        if c == "N0203" || c == "N0386" || c == "N0305" || c == "N0101" || c == "N0334" || c == "N0610" { return true }
+    }
+    false
+}
+
+// The first diagnostic of a module's analysis (the program's missing `main` is no part of it), or -1.
+fn first_error(f: Facts) -> Int {
+    let d = fx_diags(f)
+    for i in 0..dg_len(d) {
+        if dg_severity(d, i) == "error" && dg_code(d, i) != "N0204" { return i }
+    }
+    0 - 1
+}
+
+fn num(s: Str) -> Int {
+    let mut n = 0
+    for i in 0..str_len(s) { n = n * 10 + str_byte(s, i) - 48 }
+    n
+}
+
+fn prepare_rename(io: IoCap, s: Server, j: J) -> Str {
+    let span = locate(io, s, j)
+    let st = ints_get(span, 0)
+    if st < 0 { return "null" }
+    let f = vec_get(s.facts, 0)
+    if unreliable(f) { refuse(io, "a rename in a compilation whose errors leave the facts' index unlike the reference's") }
+    let info = strs_new()
+    if renameable(io, s, f, st, ints_get(span, 1), info) != "" { return "null" }
+    let text = strs_get(s.texts, 0)
+    "{\"placeholder\":" + json_str(strs_get(info, 4)) + ",\"range\":" + range(text, line_starts(text), st, ints_get(span, 1)) + "}"
+}
+
+// `valid_name`: the reason `name` is no identifier, "" where it is one.
+fn invalid_name(name: Str) -> Str {
+    if name == "" { return "is empty" }
+    if name == "_" { return "is `_`, which discards rather than names" }
+    let kinds = ints_new()
+    let starts = ints_new()
+    let ends = ints_new()
+    let texts = strs_new()
+    let d = dg_new()
+    lex_all(name, kinds, starts, ends, texts, d)
+    if dg_len(d) > 0 { return "is not a token" }
+    let real = ints_len(kinds)
+    let only = real - 1
+    if real == 1 && ints_get(kinds, only) == k_ident() && ints_get(starts, only) == 0 && ints_get(ends, only) == str_len(name) { return "" }
+    if real == 1 && ints_get(kinds, only) != k_ident() { return "is a keyword or a symbol, not an identifier" }
+    "is not one identifier"
+}
+
+// How a compilation's occurrences group into entities: for each entity, its kind and the sorted places of
+// its declaration and uses, the groups sorted and each once. `edits` (starts, ends, replacement lengths of
+// module `shifted`, ordered) moves that module's offsets past a rename's edits.
+fn partition(f: Facts, shifted: Int, e_start: Ints, e_end: Ints, e_len: Ints) -> Strs {
+    let groups = strs_new()
+    for i in 0..fx_ref_count(f) {
+        let places = strs_new()
+        let ds = fx_ref_decl_start(f, i)
+        if ds >= 0 { strs_push(places, place_of(f, ds, fx_ref_decl_end(f, i), shifted, e_start, e_end, e_len)) }
+        for k in 0..fx_ref_use_count(f, i) {
+            strs_push(places, place_of(f, fx_ref_use_start(f, i, k), fx_ref_use_end(f, i, k), shifted, e_start, e_end, e_len))
+        }
+        strs_push(groups, fx_ref_kind(f, i) + "|" + str_join(sort_places(places), ";"))
+    }
+    sort_unique(groups)
+}
+
+// `moved`: a span's place after the edits (ordered, disjoint) are applied: `NAME:START-END`, zero-padded so
+// that places sort as (name, start, end) do.
+fn place_of(f: Facts, a: Int, b: Int, shifted: Int, e_start: Ints, e_end: Ints, e_len: Ints) -> Str {
+    let m = fx_module_at(f, a)
+    let base = fx_module_base(f, m)
+    let mut s = a - base
+    let mut e = b - base
+    if m == shifted {
+        let mut delta = 0
+        let mut done = false
+        for k in 0..ints_len(e_start) {
+            if !done {
+                let grew = ints_get(e_len, k) - ints_get(e_end, k) + ints_get(e_start, k)
+                if ints_get(e_start, k) == s && ints_get(e_end, k) == e {
+                    s = s + delta
+                    e = s + ints_get(e_len, k)
+                    done = true
+                } else if ints_get(e_end, k) <= s {
+                    delta += grew
+                }
+            }
+        }
+        if !done {
+            s = s + delta
+            e = e + delta
+        }
+    }
+    fx_module_name(f, m) + str_from_byte(0) + pad(s) + "-" + pad(e)
+}
+
+fn pad(n: Int) -> Str {
+    let t = int_to_str(n)
+    let mut z = ""
+    for i in 0..12 - str_len(t) { z = z + "0" }
+    z + t
+}
+
+fn sort_places(xs: Strs) -> Strs { sort_strs(xs) }
+
+fn sort_strs(xs: Strs) -> Strs {
+    let n = strs_len(xs)
+    if n < 2 { return xs }
+    let mid = n / 2
+    let left = strs_new()
+    let right = strs_new()
+    for i in 0..mid { strs_push(left, strs_get(xs, i)) }
+    for i in mid..n { strs_push(right, strs_get(xs, i)) }
+    let a = sort_strs(left)
+    let b = sort_strs(right)
+    let out = strs_new()
+    let mut i = 0
+    let mut k = 0
+    while i < strs_len(a) && k < strs_len(b) {
+        if fe_str_less(strs_get(b, k), strs_get(a, i)) {
+            strs_push(out, strs_get(b, k))
+            k += 1
+        } else {
+            strs_push(out, strs_get(a, i))
+            i += 1
+        }
+    }
+    while i < strs_len(a) {
+        strs_push(out, strs_get(a, i))
+        i += 1
+    }
+    while k < strs_len(b) {
+        strs_push(out, strs_get(b, k))
+        k += 1
+    }
+    out
+}
+
+fn sort_unique(xs: Strs) -> Strs {
+    let sorted = sort_strs(xs)
+    let out = strs_new()
+    for i in 0..strs_len(sorted) {
+        if i == 0 || strs_get(sorted, i) != strs_get(sorted, i - 1) { strs_push(out, strs_get(sorted, i)) }
+    }
+    out
+}
+
+fn same_strs(a: Strs, b: Strs) -> Bool {
+    if strs_len(a) != strs_len(b) { return false }
+    for i in 0..strs_len(a) {
+        if strs_get(a, i) != strs_get(b, i) { return false }
+    }
+    true
+}
+
+fn failure(io: IoCap, id: Str, why: Str) -> Int { respond_error(io, id, 0 - 32803, "nazm cannot rename this: " + why) }
+
+// `textDocument/rename`: the validated plan as a versioned edit, or why there is none.
+fn rename(io: IoCap, s: Server, j: J, id: Str) -> Int {
+    let p = j_get(j, 0, "params")
+    let name = j_get(j, p, "newName")
+    if j_kind(j, name) != 4 { refuse(io, "a `rename` request without a `newName` string") }
+    let span = locate(io, s, j)
+    let st = ints_get(span, 0)
+    if st < 0 && ints_get(span, 1) == 0 - 2 { return respond_error(io, id, 0 - 32803, "the document is not open") }
+    if st < 0 { return failure(io, id, "nothing a program declared is named here") }
+    let f = vec_get(s.facts, 0)
+    if unreliable(f) { refuse(io, "a rename in a compilation whose errors leave the facts' index unlike the reference's") }
+    let info = strs_new()
+    let why = renameable(io, s, f, st, ints_get(span, 1), info)
+    if why != "" { return failure(io, id, why) }
+    let bad = invalid_name(j_str(j, name))
+    if bad != "" { return failure(io, id, "the new name " + bad) }
+    let old = strs_get(info, 4)
+    if j_str(j, name) == old { return failure(io, id, "the new name is the current one") }
+    let e = num(strs_get(info, 0))
+    let m = num(strs_get(info, 1))
+    if m != 0 { refuse(io, "a rename that edits another file than the document") }
+    // The declaration and every use, in the declaring file, ordered.
+    let text = fx_module_text(f, m)
+    let base = fx_module_base(f, m)
+    let starts = ints_new()
+    let ends = ints_new()
+    ints_push(starts, num(strs_get(info, 2)))
+    ints_push(ends, num(strs_get(info, 3)))
+    for k in 0..fx_ref_use_count(f, e) {
+        let a = fx_ref_use_start(f, e, k)
+        if fx_module_at(f, a) != m { return failure(io, id, "refused: a use outside the declaring file") }
+        let mut at = ints_len(starts)
+        while at > 0 && (ints_get(starts, at - 1) > a - base || (ints_get(starts, at - 1) == a - base && ints_get(ends, at - 1) > fx_ref_use_end(f, e, k) - base)) { at -= 1 }
+        ints_push(starts, 0)
+        ints_push(ends, 0)
+        let mut q = ints_len(starts) - 1
+        while q > at {
+            ints_set(starts, q, ints_get(starts, q - 1))
+            ints_set(ends, q, ints_get(ends, q - 1))
+            q -= 1
+        }
+        ints_set(starts, at, a - base)
+        ints_set(ends, at, fx_ref_use_end(f, e, k) - base)
+    }
+    // Written under a name a re-export gave it, an occurrence keeps its spelling.
+    let e_start = ints_new()
+    let e_end = ints_new()
+    let e_len = ints_new()
+    for k in 0..ints_len(starts) {
+        if str_slice(text, ints_get(starts, k), ints_get(ends, k)) != old { continue }
+        if ints_len(e_end) > 0 && ints_get(e_end, ints_len(e_end) - 1) > ints_get(starts, k) { return failure(io, id, "refused: two occurrences overlap") }
+        ints_push(e_start, ints_get(starts, k))
+        ints_push(e_end, ints_get(ends, k))
+        ints_push(e_len, str_len(j_str(j, name)))
+    }
+    // The candidate program: the document with the edits, checked as the document is.
+    let parts = strs_new()
+    let mut at = 0
+    for k in 0..ints_len(e_start) {
+        strs_push(parts, str_slice(text, at, ints_get(e_start, k)))
+        strs_push(parts, j_str(j, name))
+        at = ints_get(e_end, k)
+    }
+    strs_push(parts, str_slice(text, at, str_len(text)))
+    let edited = str_join(parts, "")
+    let over_paths = strs_new()
+    let over_texts = strs_new()
+    strs_push(over_paths, strs_get(s.paths, 0))
+    strs_push(over_texts, edited)
+    let g = fx_check_over(strs_get(s.paths, 0), strs_get(s.root, 0), over_paths, over_texts, strs_get(s.library, 0), fe_host_os(), fe_host_arch(), io)
+    if fx_refusal(g) != "" { refuse(io, "a source root the reference refuses") }
+    if fe_load_failed(g) { refuse(io, "a candidate program that does not load") }
+    if !fx_carried(g) { refuse(io, fx_why(g)) }
+    if first_error(g) >= 0 {
+        return failure(io, id, "the renamed program would not check: " + strs_get(fx_diags(g).message, first_error(g)))
+    }
+    if !same_strs(partition(f, m, e_start, e_end, e_len), partition(g, 0 - 1, ints_new(), ints_new(), ints_new())) {
+        return failure(io, id, "the renamed program would mean something else: a use would refer to a different definition")
+    }
+    // `plan_is_current`: the text the plan was made from is the document's.
+    if strs_get(s.texts, 0) != text { return respond_error(io, id, 0 - 32803, "the program changed while the rename was being planned") }
+    if ints_get(s.flags, 0) == 0 {
+        return respond_error(io, id, 0 - 32803, "this client does not accept versioned edits, so a rename could be applied to a" + spaces(14)
+                + "document that has since changed")
+    }
+    let starts_of = line_starts(text)
+    let edits = strs_new()
+    for k in 0..ints_len(e_start) {
+        strs_push(edits, "{\"newText\":" + json_str(j_str(j, name)) + ",\"range\":" + range(text, starts_of, ints_get(e_start, k), ints_get(e_end, k)) + "}")
+    }
+    respond(io, id, "{\"documentChanges\":[{\"edits\":[" + str_join(edits, ",") + "],\"textDocument\":{\"uri\":" + json_str(uri_of(strs_get(s.paths, 0)))
+            + ",\"version\":" + int_to_str(ints_get(s.versions, 0)) + "}}]}")
+}
+
+fn spaces(n: Int) -> Str {
+    let mut out = ""
+    for i in 0..n { out = out + " " }
+    out
+}
+
+// --- symbols (`symbols.rs`) -------------------------------------------------------------------------------
+
+// The declarations of one file, with those it holds: kind (1 function, 2 record, 3 enum, 4 variant, 5 field,
+// 6 payload field), name, its whole declaration and its name (local offsets), what it is (`detail`, with
+// `has` saying there is one) and the symbol it is declared in (-1 for none).
+struct Sy {
+    kind: Ints,
+    name: Strs,
+    start: Ints,
+    end: Ints,
+    ns: Ints,
+    ne: Ints,
+    detail: Strs,
+    has: Ints,
+    parent: Ints,
+}
+
+fn sy_new() -> Sy {
+    Sy(kind: ints_new(), name: strs_new(), start: ints_new(), end: ints_new(), ns: ints_new(), ne: ints_new(), detail: strs_new(), has: ints_new(), parent: ints_new())
+}
+
+fn sy_add(y: Sy, kind: Int, name: Str, s: Int, e: Int, ns: Int, ne: Int, detail: Str, has: Bool, parent: Int) -> Int {
+    ints_push(y.kind, kind)
+    strs_push(y.name, name)
+    ints_push(y.start, s)
+    ints_push(y.end, e)
+    ints_push(y.ns, ns)
+    ints_push(y.ne, ne)
+    strs_push(y.detail, detail)
+    ints_push(y.has, if has { 1 } else { 0 })
+    ints_push(y.parent, parent)
+    ints_len(y.kind) - 1
+}
+
+// The symbols declared in `parent` (-1 for the top level), in source order.
+fn sy_kids(y: Sy, parent: Int) -> Ints {
+    let out = ints_new()
+    for i in 0..ints_len(y.kind) {
+        if ints_get(y.parent, i) != parent { continue }
+        let mut at = ints_len(out)
+        while at > 0 && (ints_get(y.start, ints_get(out, at - 1)) > ints_get(y.start, i)
+                || (ints_get(y.start, ints_get(out, at - 1)) == ints_get(y.start, i) && ints_get(y.ns, ints_get(out, at - 1)) > ints_get(y.ns, i))) { at -= 1 }
+        ints_push(out, 0)
+        let mut k = ints_len(out) - 1
+        while k > at {
+            ints_set(out, k, ints_get(out, k - 1))
+            k -= 1
+        }
+        ints_set(out, at, i)
+    }
+    out
+}
+
+// `fn NAME[T: Equality](a: T) -> R ! { … }`: the declared signature of function `i`, as `Signature::render`
+// spells it. Refused for a foreign function and for one with an effect parameter, whose labels the facts do
+// not spell.
+fn fn_label(io: IoCap, f: Facts, i: Int) -> Str {
+    let c = fx_checker(f)
+    let t = fx_tree(f)
+    if ck_fn_foreign(c, i) != "" { refuse(io, "a foreign function's signature") }
+    let node = ck_fn_node(c, i)
+    let params = sx_items(t, sx_field(t, node, "params"))
+    let tys = ck_fn_params(c, i)
+    let shown = strs_new()
+    // `main`'s `out` is written nowhere: the checker gives it first.
+    let implicit = strs_len(tys) - ints_len(params)
+    if implicit < 0 || implicit > 1 { refuse(io, "a function whose parameters the facts do not name") }
+    if implicit == 1 { strs_push(shown, "out: " + strs_get(tys, 0)) }
+    for k in 0..ints_len(params) {
+        let p = sx_name(t, ints_get(params, k), "name")
+        if p == "" { refuse(io, "a function whose parameters the facts do not name") }
+        strs_push(shown, p + ": " + strs_get(tys, k + implicit))
+    }
+    let mut sig = "fn " + ck_fn_name(c, i)
+    let tps = sx_items(t, sx_field(t, node, "type_params"))
+    if ints_len(tps) > 0 {
+        let names = strs_new()
+        for k in 0..ints_len(tps) {
+            let tp = ints_get(tps, k)
+            if sx_text(t, sx_field(t, tp, "effect")) == "true" { refuse(io, "a function with an effect parameter") }
+            let req = sx_field(t, tp, "requires")
+            strs_push(names, sx_name(t, tp, "name") + (if sx_is_some(t, req) && sx_name(t, sx_unwrap(t, req), "name") == "Equality" { ": Equality" } else { "" }))
+        }
+        sig = sig + "[" + str_join(names, ", ") + "]"
+    }
+    sig = sig + "(" + str_join(shown, ", ") + ") -> " + ck_fn_ret(c, i)
+    let declared = ck_fn_declared(c, i)
+    if declared >= 0 { sig = sig + " ! " + effect_set(declared) }
+    sig
+}
+
+// The symbols of module `m` (`declared_in`): functions, then records, then enums; each in source order
+// within its parent. `details` asks for the labels (a document's outline), which the facts spell for fewer
+// functions than they list.
+fn symbols_of(io: IoCap, f: Facts, m: Int, details: Bool) -> Sy {
+    let c = fx_checker(f)
+    let t = fx_tree(f)
+    let y = sy_new()
+    let base = fx_module_base(f, m)
+    for i in 0..ck_fn_count(c) {
+        if ck_fn_module(c, i) != m || ck_fn_closure(c, i) { continue }
+        let node = ck_fn_node(c, i)
+        if node < 0 { continue }
+        let span = sx_field(t, node, "span")
+        let sig = if details { fn_label(io, f, i) } else { "" }
+        sy_add(y, 1, ck_fn_name(c, i), fx_start(f, span), fx_end(f, span), ck_fn_name_start(c, i) - base, ck_fn_name_end(c, i) - base, sig, details, 0 - 1)
+    }
+    for r in 0..ck_record_count(c) {
+        if ck_record_module(c, r) != m { continue }
+        let node = ck_record_node(c, r)
+        if node < 0 { continue }
+        let span = sx_field(t, node, "span")
+        let at = sy_add(y, 2, ck_record_name(c, r), fx_start(f, span), fx_end(f, span), ck_record_name_start(c, r) - base, ck_record_name_end(c, r) - base, "", false, 0 - 1)
+        let rt = fx_record_type(f, r)
+        let fields = sx_items(t, sx_field(t, node, "fields"))
+        if rt < 0 || ck_record_arity(c, rt) != ints_len(fields) { refuse(io, "a record whose fields the facts do not publish") }
+        for k in 0..ints_len(fields) {
+            let fd = ints_get(fields, k)
+            let fs = sx_field(t, fd, "span")
+            let ns = sx_field(t, fd, "name_span")
+            sy_add(y, 5, ck_record_field_name(c, rt, k), fx_start(f, fs), fx_end(f, fs), fx_start(f, ns), fx_end(f, ns),
+                    fx_show(f, fx_record_field_ty(f, rt, k)), true, at)
+        }
+    }
+    for e in 0..ck_enum_count(c) {
+        if ck_enum_module(c, e) != m { continue }
+        let node = ck_enum_node(c, e)
+        if node < 0 { continue }
+        let span = sx_field(t, node, "span")
+        let at = sy_add(y, 3, ck_enum_name(c, e), fx_start(f, span), fx_end(f, span), ck_enum_name_start(c, e) - base, ck_enum_name_end(c, e) - base, "", false, 0 - 1)
+        let et = fx_enum_type(f, e)
+        let variants = sx_items(t, sx_field(t, node, "variants"))
+        if et < 0 || ck_variant_count(c, et) != ints_len(variants) { refuse(io, "an enum whose variants the facts do not publish") }
+        for v in 0..ints_len(variants) {
+            let vn = ints_get(variants, v)
+            let vs = sx_field(t, vn, "span")
+            let vns = sx_field(t, vn, "name_span")
+            let payload = sx_items(t, sx_field(t, vn, "fields"))
+            if ck_variant_arity(c, et, v) != ints_len(payload) { refuse(io, "a variant whose payload the facts do not publish") }
+            let listed = strs_new()
+            for k in 0..ints_len(payload) { strs_push(listed, ck_payload_name(c, et, v, k) + ": " + fx_show(f, fx_payload_ty(f, et, v, k))) }
+            let vname = ck_variant_name(c, et, v)
+            let vat = sy_add(y, 4, vname, fx_start(f, vs), fx_end(f, vs), fx_start(f, vns), fx_end(f, vns), vname + "(" + str_join(listed, ", ") + ")", ints_len(payload) > 0, at)
+            for k in 0..ints_len(payload) {
+                let pn = ints_get(payload, k)
+                let ps = sx_field(t, pn, "span")
+                let pns = sx_field(t, pn, "name_span")
+                sy_add(y, 6, ck_payload_name(c, et, v, k), fx_start(f, ps), fx_end(f, ps), fx_start(f, pns), fx_end(f, pns),
+                        fx_show(f, fx_payload_ty(f, et, v, k)), true, vat)
+            }
+        }
+    }
+    y
+}
+
+// The protocol's `SymbolKind` of a symbol kind.
+fn lsp_kind(kind: Int) -> Int {
+    if kind == 1 { return 12 }
+    if kind == 2 { return 23 }
+    if kind == 3 { return 10 }
+    if kind == 4 { return 22 }
+    8
+}
+
+fn sy_nested(f: Facts, y: Sy, i: Int, text: Str, starts: Ints) -> Str {
+    let kids = sy_kids(y, i)
+    let parts = strs_new()
+    if ints_len(kids) > 0 {
+        let inner = strs_new()
+        for k in 0..ints_len(kids) { strs_push(inner, sy_nested(f, y, ints_get(kids, k), text, starts)) }
+        strs_push(parts, "\"children\":[" + str_join(inner, ",") + "]")
+    }
+    if ints_get(y.has, i) == 1 { strs_push(parts, "\"detail\":" + json_str(strs_get(y.detail, i))) }
+    strs_push(parts, "\"kind\":" + int_to_str(lsp_kind(ints_get(y.kind, i))))
+    strs_push(parts, "\"name\":" + json_str(strs_get(y.name, i)))
+    strs_push(parts, "\"range\":" + range(text, starts, ints_get(y.start, i), ints_get(y.end, i)))
+    strs_push(parts, "\"selectionRange\":" + range(text, starts, ints_get(y.ns, i), ints_get(y.ne, i)))
+    "{" + str_join(parts, ",") + "}"
+}
+
+fn sy_flat(y: Sy, i: Int, container: Str, has_container: Bool, uri: Str, text: Str, starts: Ints, out: Strs) -> Int {
+    let mut parts = strs_new()
+    if has_container { strs_push(parts, "\"containerName\":" + json_str(container)) }
+    strs_push(parts, "\"kind\":" + int_to_str(lsp_kind(ints_get(y.kind, i))))
+    strs_push(parts, "\"location\":{\"range\":" + range(text, starts, ints_get(y.start, i), ints_get(y.end, i)) + ",\"uri\":" + json_str(uri) + "}")
+    strs_push(parts, "\"name\":" + json_str(strs_get(y.name, i)))
+    strs_push(out, "{" + str_join(parts, ",") + "}")
+    let kids = sy_kids(y, i)
+    for k in 0..ints_len(kids) { sy_flat(y, ints_get(kids, k), strs_get(y.name, i), true, uri, text, starts, out) }
+    0
+}
+
+// Whether a parser or the attributes reported (a stage that named the file): what the checker declares after
+// is then not the text's items.
+fn parse_failed(f: Facts) -> Bool {
+    let d = fx_diags(f)
+    for i in 0..dg_len(d) {
+        if ints_get(d.file, i) >= 0 { return true }
+    }
+    false
+}
+
+fn document_symbols(io: IoCap, s: Server, j: J) -> Str {
+    let p = j_get(j, 0, "params")
+    let td = j_get(j, p, "textDocument")
+    let uri = j_get(j, td, "uri")
+    if j_kind(j, uri) != 4 || !plain_uri(j_str(j, uri)) { refuse(io, "a request's parameters this port does not read as the reference does") }
+    let path = path_of(j_str(j, uri))
+    let k = if path == "" { 0 - 1 } else { doc_named(io, s, path) }
+    if k < 0 || vec_len(s.facts) == 0 { return "null" }
+    let f = vec_get(s.facts, 0)
+    if parse_failed(f) { refuse(io, "the symbols of a document the parser read with recovery") }
+    let y = symbols_of(io, f, 0, true)
+    let text = fx_module_text(f, 0)
+    let starts = line_starts(text)
+    let top = sy_kids(y, 0 - 1)
+    let out = strs_new()
+    if ints_get(s.flags, 1) == 1 {
+        for i in 0..ints_len(top) { strs_push(out, sy_nested(f, y, ints_get(top, i), text, starts)) }
+    } else {
+        for i in 0..ints_len(top) { sy_flat(y, ints_get(top, i), "", false, j_str(j, uri), text, starts, out) }
+    }
+    "[" + str_join(out, ",") + "]"
+}
+
+// `workspace/symbol`: every declaration of every file of the compilation whose name holds the query, by
+// name, then file, then where its name is, then kind.
+fn workspace_symbols(io: IoCap, s: Server, j: J) -> Str {
+    let p = j_get(j, 0, "params")
+    let q = j_get(j, p, "query")
+    if j_kind(j, q) != 4 { refuse(io, "a `workspace/symbol` request without a query") }
+    if vec_len(s.facts) == 0 { return "[]" }
+    let f = vec_get(s.facts, 0)
+    if parse_failed(f) { refuse(io, "the symbols of a document the parser read with recovery") }
+    let query = j_str(j, q)
+    // One row per symbol: a sortable key, then the response object.
+    let rows = strs_new()
+    for m in 0..fx_modules(f) {
+        if !module_file(f, m) { continue }
+        let y = symbols_of(io, f, m, false)
+        let text = fx_module_text(f, m)
+        let starts = line_starts(text)
+        for i in 0..ints_len(y.kind) {
+            let name = strs_get(y.name, i)
+            if !ut_contains_text(name, query) { continue }
+            let par = ints_get(y.parent, i)
+            let mut container = ""
+            if par >= 0 {
+                container = strs_get(y.name, par)
+                // A payload field is in its variant, which is in its enum.
+                if ints_get(y.kind, i) == 6 { container = strs_get(y.name, ints_get(y.parent, par)) + "." + strs_get(y.name, par) }
+            }
+            let mut parts = strs_new()
+            if par >= 0 { strs_push(parts, "\"containerName\":" + json_str(container)) }
+            strs_push(parts, "\"kind\":" + int_to_str(lsp_kind(ints_get(y.kind, i))))
+            strs_push(parts, "\"location\":" + loc_json(io, f, m, ints_get(y.ns, i), ints_get(y.ne, i)))
+            strs_push(parts, "\"name\":" + json_str(name))
+            // (name, path, where the name is, kind), in that order, each a fixed-width field.
+            let key = name + str_from_byte(0) + path_key(pk_normalise(fx_module_name(f, m))) + str_from_byte(0) + pad(ints_get(y.ns, i)) + int_to_str(ints_get(y.kind, i))
+            strs_push(rows, key + str_from_byte(1) + "{" + str_join(parts, ",") + "}")
+        }
+    }
+    let sorted = sort_strs(rows)
+    let out = strs_new()
+    for i in 0..strs_len(sorted) {
+        let row = strs_get(sorted, i)
+        let mut cut = 0
+        while str_byte(row, cut) != 1 { cut += 1 }
+        strs_push(out, str_slice(row, cut + 1, str_len(row)))
+    }
+    "[" + str_join(out, ",") + "]"
+}
+
+// A path as a string that sorts as `Path`'s order does: a component before the longer ones it begins.
+fn path_key(p: Str) -> Str {
+    let out = strs_new()
+    for i in 0..str_len(p) {
+        if str_byte(p, i) == 47 { strs_push(out, str_from_byte(2)) } else { strs_push(out, str_slice(p, i, i + 1)) }
+    }
+    str_join(out, "")
+}
+
+fn ut_contains_text(s: Str, p: Str) -> Bool {
+    let n = str_len(p)
+    let mut i = 0
+    while i + n <= str_len(s) {
+        if str_slice(s, i, i + n) == p { return true }
+        i += 1
+    }
+    false
 }
 
 // --- the messages ----------------------------------------------------------------------------------------
@@ -763,6 +1504,11 @@ fn words(s: Str) -> Strs {
 fn request(io: IoCap, s: Server, j: J, method: Str, id: Str) -> Int {
     if method == "textDocument/hover" { return respond(io, id, hover(io, s, j)) }
     if method == "textDocument/definition" { return respond(io, id, definition(io, s, j)) }
+    if method == "textDocument/references" { return respond(io, id, references(io, s, j)) }
+    if method == "textDocument/prepareRename" { return respond(io, id, prepare_rename(io, s, j)) }
+    if method == "textDocument/rename" { return rename(io, s, j, id) }
+    if method == "textDocument/documentSymbol" { return respond(io, id, document_symbols(io, s, j)) }
+    if method == "workspace/symbol" { return respond(io, id, workspace_symbols(io, s, j)) }
     if implemented(method) { refuse(io, "`" + method + "`") }
     respond_error(io, id, 0 - 32601, "`" + method + "` is not implemented by nazm lsp")
 }
@@ -795,7 +1541,11 @@ pub fn lsp_command(io: IoCap, c: Cli) -> Int {
     strs_push(libs, library)
     let roots = strs_new()
     strs_push(roots, root)
-    let s = Server(paths: strs_new(), versions: ints_new(), texts: strs_new(), facts: vec_new[Facts](), library: libs, root: roots)
+    let flags = ints_new()
+    let caps = j_get(j0, j_get(j0, 0, "params"), "capabilities")
+    ints_push(flags, if j_kind(j0, j_get(j0, j_get(j0, j_get(j0, caps, "workspace"), "workspaceEdit"), "documentChanges")) == 1 { 1 } else { 0 })
+    ints_push(flags, if j_kind(j0, j_get(j0, j_get(j0, j_get(j0, caps, "textDocument"), "documentSymbol"), "hierarchicalDocumentSymbolSupport")) == 1 { 1 } else { 0 })
+    let s = Server(paths: strs_new(), versions: ints_new(), texts: strs_new(), facts: vec_new[Facts](), library: libs, root: roots, flags: flags)
     while true {
         let body = read_message(io, h)
         if body == "" { return 0 }

@@ -184,6 +184,9 @@ fn fe_path_less(a: Str, b: Str) -> Bool {
     str_len(a) < str_len(b)
 }
 
+// Whether path `a` goes before `b` as `Path`'s order has it, component by component.
+pub fn fe_path_before(a: Str, b: Str) -> Bool { fe_path_less(a, b) }
+
 // Every `.nz` file under `dir` (absolute), not through a symbolic link to a directory; false when a
 // directory cannot be read.
 pub fn fe_walk(io: IoCap, dir: Str, out: Strs) -> Bool {
@@ -229,7 +232,6 @@ pub fn fe_sort_paths(xs: Strs) -> Strs {
     }
     out
 }
-
 
 // Byte order (`str`'s `Ord`).
 pub fn fe_str_less(a: Str, b: Str) -> Bool {

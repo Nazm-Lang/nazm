@@ -1,12 +1,17 @@
 # The scripted sessions run.sh's `lsp` part gives each input (design D16): the handshake, the file
 # opened with its text as it is on disk and closed, `shutdown` and `exit` — each message framed as
-# an editor frames it; with `hover`, hover at a few positions before the file is closed.
+# an editor frames it; with `hover`, hover at a few positions before the file is closed; with `nav`,
+# what a client that reads versioned edits asks of up to forty of the file's names (definition, references
+# with and without the declaration, prepareRename, rename); with `syms`, the document's symbols and the
+# workspace's for a client that reads nested symbols; with `flat` and `symsflat`, the same for a client
+# that reads neither.
 #
-#   python3 -I lsp-session.py ABSOLUTE-PATH [hover] > session.bin
+#   python3 -I lsp-session.py ABSOLUTE-PATH [hover|nav|flat] > session.bin
 #
 # Exits 1, writing nothing, for a file that is not UTF-8: no editor can send it.
 
 import json
+import re
 import sys
 
 
@@ -15,8 +20,25 @@ def frame(message):
     return b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body
 
 
+def utf16(s):
+    return len(s.encode("utf-16-le")) // 2
+
+
+def names(text, wanted):
+    """Up to `wanted` identifiers of the text, evenly spread, as (line, character) inside each."""
+    found = []
+    for n, line in enumerate(text.split("\n")):
+        for m in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", line):
+            found.append((n, utf16(line[: m.start() + max(1, (m.end() - m.start()) // 2)]), m.group(0)))
+    if len(found) <= wanted:
+        return found
+    step = len(found) / wanted
+    return [found[int(i * step)] for i in range(wanted)]
+
+
 def main():
     path = sys.argv[1]
+    mode = sys.argv[2] if sys.argv[2:] else ""
     try:
         with open(path, "rb") as f:
             text = f.read().decode("utf-8")
@@ -27,18 +49,48 @@ def main():
         for c in path
     )
     doc = {"uri": uri}
+    caps = {}
+    if mode in ("nav", "syms"):
+        caps = {
+            "workspace": {"workspaceEdit": {"documentChanges": True}},
+            "textDocument": {"documentSymbol": {"hierarchicalDocumentSymbolSupport": True}},
+        }
     out = [
-        frame({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}}),
+        frame({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": caps}}),
         frame({"jsonrpc": "2.0", "method": "initialized", "params": {}}),
         frame({"jsonrpc": "2.0", "method": "textDocument/didOpen",
                "params": {"textDocument": {"uri": uri, "languageId": "nazm", "version": 1, "text": text}}}),
     ]
     n = 2
-    positions = [(0, 4), (1, 8), (2, 9), (3, 12), (5, 6), (8, 10), (13, 16)] if sys.argv[2:] == ["hover"] else []
-    for line, character in positions:
-        out.append(frame({"jsonrpc": "2.0", "id": n, "method": "textDocument/hover",
-                          "params": {"textDocument": doc, "position": {"line": line, "character": character}}}))
+
+    def ask(method, params):
+        nonlocal n
+        out.append(frame({"jsonrpc": "2.0", "id": n, "method": method, "params": params}))
         n += 1
+
+    if mode == "hover":
+        for line, character in [(0, 4), (1, 8), (2, 9), (3, 12), (5, 6), (8, 10), (13, 16)]:
+            ask("textDocument/hover", {"textDocument": doc, "position": {"line": line, "character": character}})
+    elif mode in ("syms", "symsflat"):
+        ask("textDocument/documentSymbol", {"textDocument": doc})
+        ask("workspace/symbol", {"query": ""})
+        ask("workspace/symbol", {"query": "a"})
+    elif mode in ("nav", "flat"):
+        for number, (line, character, word) in enumerate(names(text, 40 if mode == "nav" else 12)):
+            at = {"textDocument": doc, "position": {"line": line, "character": character}}
+            ask("textDocument/definition", at)
+            ask("textDocument/references", dict(at, context={"includeDeclaration": True}))
+            if mode == "nav":
+                ask("textDocument/references", dict(at, context={"includeDeclaration": False}))
+            if number % 5 == 0:
+                # Each rename checks the program again: not at every name of a file of sixteen thousand lines.
+                ask("textDocument/prepareRename", at)
+                ask("textDocument/rename", dict(at, newName="Zrenamed" if word[0].isupper() else "zz_renamed"))
+        if mode == "nav" and names(text, 1):
+            line, character, _ = names(text, 1)[0]
+            at = {"textDocument": doc, "position": {"line": line, "character": character}}
+            for bad in ["", "_", "fn", "9x", "a b", "main"]:
+                ask("textDocument/rename", dict(at, newName=bad))
     out.append(frame({"jsonrpc": "2.0", "method": "textDocument/didClose", "params": {"textDocument": doc}}))
     out.append(frame({"jsonrpc": "2.0", "id": n, "method": "shutdown"}))
     out.append(frame({"jsonrpc": "2.0", "method": "exit"}))

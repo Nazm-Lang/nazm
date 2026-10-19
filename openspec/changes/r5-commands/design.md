@@ -482,6 +482,52 @@ offers as a program, not as a module; `capabilities` is the build's own tables (
 the backend's `Builtin`, `TARGET_NOTE`) of which the backend's is not in `compiler/`. They are not
 ported, and `nazm CMD` says so (`not carried`, 6).
 
+**D23 — `check --summary-json`, `check --locked` and the language server's navigation (2026-10-19, R5d).**
+`toolchain/commands/summary.nz` is `nazm_service::summary` for `check`: the command's own outcome (`success`,
+`rejected`, `unreadable`, `refused`, with the exit status the command returns) and a reference to each diagnostic
+it reported — its errors and then its warnings, by code, severity, place and fix counts — in the canonical order
+of N30 (primary file, start, end, code, secondary places, fix places, then the order reported). The identities
+come from a second compilation of the same root checked as a module (`fx_check_module_in`, which is what the
+language service analyses: no `N0204`), through the facts' `fx_diag_ids`, `fx_diag_order` and `fx_state_source`; a
+reference is that compilation's diagnostic with the same structure, the n-th matched to the n-th, so it carries the
+id and `scope: index`, and a diagnostic only the command reports (a missing `main`, warnings) is a `command`
+reference with no id. Nothing is linked, and `root`, `state` and every `primary` are `null`, where the root cannot
+be read or the two compilations did not read the same files and bytes. `check --locked` is `Graph::verify`
+(`pkg.nz`'s `graph_verify_locked`, reached through `lockcheck.nz` because `pkg.nz`'s `Graph` and the front end's
+share a name): the lockfile read with `toml.nz`, then held to the resolution — the schema, a name recorded twice, a
+package missing, one not used, a version, source or dependency that differs, features, a digest — with the
+reference's words, `N0505` for a lockfile that is not there; a form of TOML the reader does not read is refused.
+
+`lsp.nz` carries what the facts' reference index (`fx_ref_*`, `ReferenceIndex`) and its declarations answer: `definition`
+(the entity the name is, where it is declared; the old path of `fx_declaration_at` and the checker's bindings stays
+where the compilation has errors the index is not promised for), `textDocument/references` (the uses in the files
+an editor can open, the declaration where `includeDeclaration` asks for it, ordered by path, start and end),
+`prepareRename` and `rename` (`rename.rs`: the entity, its coverage, whether it is exported, a compilation with no
+errors, the new name lexed as one identifier, the candidate program checked again with the edits applied and its
+occurrences partitioned into entities as the program's own were, the plan as a versioned edit; a client that does
+not say it accepts `documentChanges` is refused after the plan is made, and a document whose text is not the one
+the compilation holds — a file with no final line break — is "the program changed while the rename was being
+planned"), and `textDocument/documentSymbol` and `workspace/symbol` (`symbols.rs`: functions, records and enums
+and their fields, variants and payload fields in source order, the details as the signature renderer, `Types::show`
+and `push_list` write them; nested or flat as the client's `hierarchicalDocumentSymbolSupport` says). Hover of a name
+that is a local declared as a parameter is `null` as the reference has it. Refused, counted and named: a compilation
+that does not load, two open documents, completion, signature help, semantic tokens, code actions, call
+hierarchy; a rename of an exported name in a declared workspace (the reference searches every module under it); a
+function whose signature the facts do not spell (a foreign function, one with an effect parameter); the references
+of a trait's method (the facts record its uses in the trait's own default methods, which the reference does not);
+and every index query in a compilation with a diagnostic of a kind after which the facts' index differs from the
+reference's (`N0203`, `N0305`, `N0334`, `N0386`, `N0610`, `N0101`, or any a parser stage reported — hand-back to R2).
+`run.sh lsp` also opens every input and asks, in four more sessions, `nav` (definition, references with and
+without the declaration, prepareRename and rename of up to forty names, and a rename to names that are not names),
+`flat` (a client that reads neither versioned edits nor nested symbols), `syms` and `symsflat`
+(`tests/lsp-session.py`); `tests/lsp/nav.txt`, `navflat.txt` and `navmod.txt` are scripted sessions of the same.
+Measured 2026-10-19 (R5d): `check` 3,393 inputs, each also with `--summary-json`: 3,392 agree, 0 differ, 1 refused (not
+UTF-8); `lsp` 18 sessions: 17 agree, 0 differ, 1 refused (two open documents), and 3,378 inputs, six sessions each:
+2,730 agree, 0 differ, 647 refused (304 a compilation that does not load, 179 definition in a compilation whose errors
+leave the index unlike the reference's, 53 the references of a trait's method, 36 a foreign function's label, 24 a
+document that does not lex, 21 a source root the reference refuses, 13 hover of a method, closure or generic, …), 1 not
+UTF-8; `tests/args/check.txt` and `lsp.txt` 133 command lines: 128 agree, 0 differ, 5 refused.
+
 ## Risks / Trade-offs
 
 - **Two formatters until the Rust one retires.** A change to `format.rs` must be ported too; the
