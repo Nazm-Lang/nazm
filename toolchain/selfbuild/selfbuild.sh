@@ -293,12 +293,23 @@ if [ -x "$last/interp" ]; then
         fi
         (cd "$dir" && timeout 60 "$nazm" run --interpret "$file" > "$corpus/$n.iref.stdout" 2> "$corpus/$n.iref.stderr" < /dev/null; echo $? > "$corpus/$n.iref.status")
         (cd "$dir" && timeout 60 "$last/interp" --std "$root/library" "$corpus/$n.ir.json" "$file" > "$corpus/$n.i.stdout" 2> "$corpus/$n.i.stderr" < /dev/null; echo $? > "$corpus/$n.i.status")
+        # A runaway recursion is the one thing the two interpreters say differently by design: the
+        # seed's stops where its own native stack gives out ("recursed deeper than the interpreter's
+        # stack holds, at N calls", N a property of the host), the Nazm one at its fixed depth of
+        # 512. Both must refuse it with N0403, with the same output and status; the text is not compared.
+        if grep -q "^error\[N0403\]: .* recursed deeper than the interpreter's stack holds" "$corpus/$n.iref.stderr" \
+            && grep -q "^error\[N0403\]: .* recursed deeper than 512" "$corpus/$n.i.stderr"; then
+            : > "$corpus/$n.iref.stderr"; : > "$corpus/$n.i.stderr"
+        fi
         if cmp -s "$corpus/$n.iref.stdout" "$corpus/$n.i.stdout" && cmp -s "$corpus/$n.iref.stderr" "$corpus/$n.i.stderr" \
             && cmp -s "$corpus/$n.iref.status" "$corpus/$n.i.status"; then
             iagree=$((iagree + 1))
         else
             idisagree=$((idisagree + 1))
             say "  the self-built interpreter disagrees with the seed's: $rel (status $(cat "$corpus/$n.iref.status") vs $(cat "$corpus/$n.i.status"))"
+            for x in stdout stderr; do
+                cmp -s "$corpus/$n.iref.$x" "$corpus/$n.i.$x" || say "    $x: $(diff "$corpus/$n.iref.$x" "$corpus/$n.i.$x" | head -6 | cut -c1-200)"
+            done
         fi
     done
     say "interp: $iagree programs run by stage $stages's interpreter as by the seed's \`run --interpret\`, $idisagree disagree"
