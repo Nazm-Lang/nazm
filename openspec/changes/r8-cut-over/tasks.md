@@ -12,9 +12,12 @@
       heap (`toolchain/interp/tests/run.sh`, `toolchain/harness/tests/{run,seeded}.sh`); the
       interpreter's suite refuses to run uncontained
       (`cargo xtask contained run 'cargo build --locked -p nazm-cli && sh toolchain/interp/tests/run.sh'`)
-- [ ] 1.4 `cargo xtask contained selfbuild`: stages 1–3 identical with the two programs added, the
-      interpreter and `nazm-check` agreeing — **unexecuted** at this commit: the copyright holder's
-      gate held the machine; the host evidence is `design.md`, *Slice 1 — the evidence*
+- [x] 1.4 `cargo xtask contained selfbuild`: stages 1–3 identical with the two programs added, the
+      interpreter and `nazm-check` agreeing — passed 2026-10-20: 68 programs run by the self-built
+      interpreter as by the seed's, `nazm-check` byte for byte (16 gates). The one disagreement the
+      first run found (calls.nz, fail_defer.nz) was the runaway-recursion message, which the seed's
+      interpreter words by its host stack ("at N calls") and the Nazm one by its fixed depth of 512;
+      the comparison now requires N0403 from both and the same output and status
 
 ## 2. Slice 2 — the comparison scripts under the R6 rule
 - [ ] 2.1 `cargo xtask host-run`: the program's exit status passed through; its report on standard
