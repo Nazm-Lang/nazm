@@ -24,6 +24,24 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def work(cmd):
+    # A program built by Nazm runs on a macOS host only through `cargo xtask host-run`
+    # (`toolchain/lib/stage.sh` sets STAGE_MODE=host and STAGE_XTASK), which records the
+    # instructions retired in its report file; contained (Linux) there is no counter.
+    if os.environ.get("STAGE_MODE") == "contained":
+        r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return r.returncode, None
+    if os.environ.get("STAGE_MODE") == "host":
+        report = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"nazm-growth-{os.getpid()}.txt")
+        try:
+            r = subprocess.run([os.environ["STAGE_XTASK"], "host-run", "--deadline-secs", "900",
+                                "--report", report, "--"] + cmd,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            with open(report) as f:
+                m = re.search(r"instructions retired (\d+)", f.read())
+        finally:
+            if os.path.exists(report):
+                os.remove(report)
+        return r.returncode, int(m.group(1)) if m else None
     r = subprocess.run(["/usr/bin/time", "-l"] + cmd, stdout=subprocess.DEVNULL,
                        stderr=subprocess.PIPE, text=True)
     m = re.search(r"(\d+)\s+instructions retired", r.stderr)

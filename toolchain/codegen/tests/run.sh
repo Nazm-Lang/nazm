@@ -8,7 +8,7 @@
 # The target is aarch64-apple-darwin unless NZCG_TARGET says otherwise; x86_64-apple-darwin runs
 # under Rosetta on an arm64 Mac.
 #
-# Builds the generator with the 0.10.0 release ($NAZM); the reference is the Rust `nazm` built from
+# Builds the generator with the checkout's `nazm` ($NAZM, heap limit 2 GiB); the reference is the Rust `nazm` built from
 # this checkout ($NAZM_REF, by default CARGO_TARGET_DIR=~/.cache/nazm-target-track9). For each input (by default
 # bench/compare/nazm/fib.nz, every program of tests/compat/v1/run/ and every corpus program):
 #
@@ -24,9 +24,15 @@
 # counted as agreeing. Prints one line per input that does not agree, then the summary
 # `N agree, M differ, K refused, S skipped`. Exit status 0 only when nothing differs.
 set -u
-NAZM=${NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
+# The generator is a program written in Nazm: built by the checkout's `nazm` with a heap limit of at
+# most 2 GiB and run through `cargo xtask host-run` on macOS (one at a time) or contained
+# (`toolchain/lib/stage.sh`; the runbook's R6 rule).
+stage_name=codegen-run
+. "$(dirname "$0")/../../lib/stage.sh"
+stage_init "$(cd "$(dirname "$0")/../../.." && pwd)"
+NAZM=${NAZM:-$(stage_checkout_nazm "$stage_root")}
 # The reference: the Rust `nazm` built from this checkout (rebuild it when library/, crates/ or
-# the runtime change); the 0.10.0 release above only builds the generator.
+# the runtime change); the checkout's `nazm` above builds the generator.
 REF=${NAZM_REF:-$HOME/.cache/nazm-target-track9/debug/nazm}
 # `--one-thread` when the reference made the program one thread: its runtime then defines the
 # stack limit as a plain global, not a thread-local one (the generator inlines the check, 7.3).
@@ -41,7 +47,7 @@ TARGET=${NZCG_TARGET:-aarch64-apple-darwin}
 ARCH=${TARGET%%-*}
 [ "$ARCH" = aarch64 ] && ARCH=arm64
 mkdir -p "$OUT"
-if ! "$NAZM" build "$HERE/main.nz" -o "$NZCG" >"$OUT/build.log" 2>&1; then
+if ! stage_build "$NAZM" "$HERE/main.nz" -o "$NZCG" >"$OUT/build.log" 2>&1; then
   echo "nzcg did not build:"; cat "$OUT/build.log"; exit 2
 fi
 
@@ -97,7 +103,7 @@ for src in "${inputs[@]}"; do
   if grep -qE '^objects .*-small\.o( |$)' "$W/obj/link.txt"; then
     perl -pi -e 's/^(import func \@|  (?:v\d+ = )?call \@)(malloc|realloc|free)\b/$1nz.small_$2/' "$W/lir.txt"
   fi
-  "$NZCG" --target "$TARGET" $(one_thread "$W/obj") "$W/lir.txt" "$W/gen" >"$W/gen.out" 2>"$W/gen.err"
+  "$STAGE_RUN" 300 "$NZCG" --target "$TARGET" $(one_thread "$W/obj") "$W/lir.txt" "$W/gen" >"$W/gen.out" 2>"$W/gen.err"
   st=$?
   if [ $st -eq 3 ]; then
     echo "refused  $rel: $(head -1 "$W/gen.err")"; refused=$((refused+1)); continue
@@ -106,7 +112,7 @@ for src in "${inputs[@]}"; do
   fi
   # Deterministic (D7): a second run writes the same bytes.
   mkdir -p "$W/gen2"
-  "$NZCG" --target "$TARGET" $(one_thread "$W/obj") "$W/lir.txt" "$W/gen2" >/dev/null 2>&1
+  "$STAGE_RUN" 300 "$NZCG" --target "$TARGET" $(one_thread "$W/obj") "$W/lir.txt" "$W/gen2" >/dev/null 2>&1
   if ! diff -r "$W/gen" "$W/gen2" >/dev/null; then
     echo "differ   $rel: two runs of the generator wrote different objects"; differ=$((differ+1)); continue
   fi

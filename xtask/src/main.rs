@@ -239,9 +239,11 @@ fn help() {
                            --verify-killers   also verify every decided mutant's catalogued\n  \
                                               killers in the same session, around the\n  \
                                               one injection its verdict is taken from\n  \
-           host-run        [--deadline-secs N] -- EXE [ARGS]: run ONE Nazm-built program on the\n  \
+           host-run        [--deadline-secs N] [--report FILE] [--max-output-mib N] -- EXE [ARGS]: run ONE Nazm-built program on the\n  \
                            macOS host, only if it links the counted heap with a limit of at most\n  \
-                           2 GiB and no other host stage runs; deadline; records its peak RSS\n  \
+                           2 GiB and no other host stage runs; deadline; records its peak RSS;\n  \
+                           exits with the program's status (124 past the deadline); the\n  \
+                           report goes to standard error, or appended to --report FILE\n  \
            mutate-recover  repair a tree an interrupted mutation run left mutated;\n  \
                            needs --confirm-no-writers, and read what it prints first\n  \
            help            this message\n"

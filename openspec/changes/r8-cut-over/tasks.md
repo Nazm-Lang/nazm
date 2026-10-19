@@ -20,11 +20,17 @@
       the comparison now requires N0403 from both and the same output and status
 
 ## 2. Slice 2 — the comparison scripts under the R6 rule
-- [ ] 2.1 `cargo xtask host-run`: the program's exit status passed through; its report on standard
-      error or in a file, not on standard output
-- [ ] 2.2 Every script under `toolchain/` that runs a Nazm-built program (front end, pipeline,
+- [x] 2.1 `cargo xtask host-run`: the program's exit status passed through; its report on standard
+      error or in a file, not on standard output (`--report FILE`; status 124 deadline, 125 signal, 126
+      output past `--max-output-mib`, 70 withdrawn; output passed as bytes; tests in
+      `xtask/tests/host_run.rs`)
+- [x] 2.2 Every script under `toolchain/` that runs a Nazm-built program (front end, pipeline,
       code generator, commands, harness, interpreter) builds it with the checkout's `nazm` and a heap
       limit, and runs it contained or through `host-run`; none defaults to the 0.10.0 release
+      (`toolchain/lib/stage.sh`, `stage-run.sh`; the scripts that run programs in parallel, built
+      without a limit, or as a campaign refuse to start uncontained; host smoke: a built program
+      through `stage-run.sh` and the port's `check` under a 2 GiB limit; the suites themselves
+      unexecuted here)
 
 ## 3. Slice 3 — R6 gap 2
 - [ ] 3.1 `callee_at` (`call`, `call_indirect`, `call_trait`) and a payload binding's `at` in

@@ -39,8 +39,11 @@ pub(crate) const MARGIN: u64 = 256 * 1024 * 1024;
 /// The deadline when none is given, and the longest one allowed.
 const DEFAULT_DEADLINE: u64 = 900;
 const MAX_DEADLINE: u64 = 3600;
-/// The most of a program's stdout and of its stderr that is kept.
+/// The most of a program's stdout and of its stderr that is kept, unless `--max-output-mib` says
+/// otherwise (never more than `MAX_OUTPUT_MIB`). Output past it is dropped and the run fails with
+/// `EXIT_TRUNCATED`: a script comparing the output must never compare a prefix.
 const OUTPUT_CAP: usize = 4 * 1024 * 1024;
+const MAX_OUTPUT_MIB: usize = 256;
 /// The largest executable the runner will read to check.
 const MAX_IMAGE: u64 = 512 * 1024 * 1024;
 
@@ -165,6 +168,14 @@ pub(crate) fn parse_peak_rss(report: &str) -> Option<u64> {
     })
 }
 
+/// Instructions retired from BSD `time -l`'s report (Apple silicon and recent Intel report it).
+pub(crate) fn parse_instructions(report: &str) -> Option<u64> {
+    report.lines().find_map(|l| {
+        let n = l.trim().strip_suffix("instructions retired")?;
+        n.trim().parse::<u64>().ok()
+    })
+}
+
 /// The withdrawal condition a finished run shows, if any.
 pub(crate) fn withdrawal(
     limit: u64,
@@ -220,16 +231,21 @@ struct Options {
     args: Vec<String>,
     deadline: u64,
     margin: u64,
+    /// Where the run's report line is appended; standard error when it is not given.
+    report_to: Option<PathBuf>,
+    output_cap: usize,
 }
 
 fn parse_args(args: &[String]) -> Result<Options, Refusal> {
     let usage = |m: &str| {
         Refusal::Usage(format!(
-            "{m}\nusage: cargo xtask host-run [--deadline-secs N] -- EXECUTABLE [ARGS...]"
+            "{m}\nusage: cargo xtask host-run [--deadline-secs N] [--report FILE] [--max-output-mib N] -- EXECUTABLE [ARGS...]"
         ))
     };
     let mut deadline = DEFAULT_DEADLINE;
     let mut margin = MARGIN;
+    let mut report_to = None;
+    let mut output_cap = OUTPUT_CAP;
     let mut i = 0;
     while let Some(a) = args.get(i) {
         match a.as_str() {
@@ -243,6 +259,25 @@ fn parse_args(args: &[String]) -> Result<Options, Refusal> {
                     .and_then(|n| n.parse().ok())
                     .filter(|n| (1..=MAX_DEADLINE).contains(n))
                     .ok_or_else(|| usage(&format!("--deadline-secs takes 1..={MAX_DEADLINE}")))?;
+                i += 2;
+            }
+            "--max-output-mib" => {
+                output_cap = args
+                    .get(i + 1)
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .filter(|n| (1..=MAX_OUTPUT_MIB).contains(n))
+                    .ok_or_else(|| {
+                        usage(&format!("--max-output-mib takes 1..={MAX_OUTPUT_MIB}"))
+                    })?
+                    * 1024
+                    * 1024;
+                i += 2;
+            }
+            "--report" => {
+                report_to = Some(PathBuf::from(
+                    args.get(i + 1)
+                        .ok_or_else(|| usage("--report takes a file"))?,
+                ));
                 i += 2;
             }
             // Only ever tighter than the rule's 256 MiB: for the tests of the breach report.
@@ -265,6 +300,8 @@ fn parse_args(args: &[String]) -> Result<Options, Refusal> {
         args: args.get(i + 1..).unwrap_or_default().to_vec(),
         deadline,
         margin,
+        report_to,
+        output_cap,
     })
 }
 
@@ -294,7 +331,7 @@ pub(crate) fn host_run(args: &[String]) -> ExitCode {
         Ok(code) => code,
         Err(r) => {
             eprintln!("host-run: refused [{}]: {}", r.name(), r.why());
-            ExitCode::FAILURE
+            ExitCode::from(EXIT_REFUSED)
         }
     }
 }
@@ -339,9 +376,16 @@ fn run(args: &[String]) -> Result<ExitCode, Refusal> {
     let _ = fs::remove_file(&report);
     let ran = result.map_err(Refusal::Usage)?;
 
-    print!("{}", ran.stdout);
-    eprint!("{}", ran.stderr);
-    println!(
+    // The program's standard output is the only thing on this process's standard output, so a
+    // script can compare it; the report goes with the program's standard error, after it.
+    {
+        use std::io::Write as _;
+        let _ = std::io::stdout().write_all(&ran.stdout);
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().write_all(&ran.stderr);
+    }
+    let stderr_text = String::from_utf8_lossy(&ran.stderr).into_owned();
+    let line = format!(
         "host-run: heap limit {limit} bytes; peak resident {} bytes; {}",
         ran.peak.map_or_else(|| "unknown".into(), |p| p.to_string()),
         if ran.timed_out {
@@ -349,28 +393,83 @@ fn run(args: &[String]) -> Result<ExitCode, Refusal> {
         } else {
             format!("exit {:?}", ran.code)
         }
-    );
-    if let Some(why) = withdrawal(limit, opts.margin, ran.peak, &ran.stderr, ran.code) {
+    ) + &ran
+        .instructions
+        .map_or_else(String::new, |n| format!("; instructions retired {n}"))
+        + &if ran.truncated {
+            format!(
+                "; OUTPUT TRUNCATED at {} bytes (stdout {} bytes, stderr {} bytes)",
+                opts.output_cap, ran.stdout_total, ran.stderr_total
+            )
+        } else {
+            String::new()
+        };
+    // With `--report FILE` the report is appended there and standard error is the program's alone,
+    // so a script can compare it.
+    match &opts.report_to {
+        None => eprintln!("{line}"),
+        Some(file) => {
+            use std::io::Write as _;
+            let written = fs::File::options()
+                .create(true)
+                .append(true)
+                .open(file)
+                .and_then(|mut f| writeln!(f, "{line}"));
+            if let Err(e) = written {
+                return Err(Refusal::Usage(format!("{}: {e}", file.display())));
+            }
+        }
+    }
+    // A stage killed at its deadline leaves no resource report to read: not a breach.
+    let unreadable_after_kill = ran.timed_out && ran.peak.is_none();
+    if let Some(why) = withdrawal(limit, opts.margin, ran.peak, &stderr_text, ran.code)
+        .filter(|_| !unreadable_after_kill)
+    {
         let _ = fs::write(&marker, format!("{why} (running {})", opts.exe.display()));
         eprintln!(
             "host-run: WITHDRAWAL CONDITION: {why}. The host rule is withdrawn: only \
              `cargo xtask contained` until it is investigated (marker: {})",
             marker.display()
         );
-        return Ok(ExitCode::FAILURE);
+        return Ok(ExitCode::from(EXIT_WITHDRAWN));
     }
-    Ok(if ran.timed_out || ran.code != Some(0) {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    })
+    if ran.truncated && !ran.timed_out {
+        return Ok(ExitCode::from(EXIT_TRUNCATED));
+    }
+    Ok(ExitCode::from(exit_status(ran.code, ran.timed_out)))
+}
+
+/// Status of a refused run, a stage past its deadline, a stage killed by a signal and a withdrawal.
+/// They are the shell's own conventions where it has one (`timeout` uses 124), so a program's
+/// status never has to be guessed from them: a script that needs the program's own status compares
+/// it with these.
+pub(crate) const EXIT_REFUSED: u8 = 1;
+pub(crate) const EXIT_DEADLINE: u8 = 124;
+pub(crate) const EXIT_SIGNALLED: u8 = 125;
+pub(crate) const EXIT_WITHDRAWN: u8 = 70;
+/// Output past `--max-output-mib` was dropped: what a script compared would be a prefix.
+pub(crate) const EXIT_TRUNCATED: u8 = 126;
+
+/// The status `host-run` exits with: the program's own, passed through.
+pub(crate) fn exit_status(code: Option<i32>, timed_out: bool) -> u8 {
+    if timed_out {
+        return EXIT_DEADLINE;
+    }
+    match code {
+        Some(c) => u8::try_from(c & 0xff).unwrap_or(EXIT_SIGNALLED),
+        None => EXIT_SIGNALLED,
+    }
 }
 
 struct Ran {
-    stdout: String,
-    stderr: String,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    stdout_total: u64,
+    stderr_total: u64,
+    truncated: bool,
     code: Option<i32>,
     peak: Option<u64>,
+    instructions: Option<u64>,
     timed_out: bool,
 }
 
@@ -389,8 +488,14 @@ fn execute(opts: &Options, report: &Path) -> Result<Ran, String> {
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("cannot start /usr/bin/time: {e}"))?;
-    let out = child.stdout.take().map(|s| contained::drain(s, OUTPUT_CAP));
-    let err = child.stderr.take().map(|s| contained::drain(s, OUTPUT_CAP));
+    let out = child
+        .stdout
+        .take()
+        .map(|s| contained::drain(s, opts.output_cap));
+    let err = child
+        .stderr
+        .take()
+        .map(|s| contained::drain(s, opts.output_cap));
     let pgid = child.id();
     let start = Instant::now();
     let mut timed_out = false;
@@ -413,19 +518,24 @@ fn execute(opts: &Options, report: &Path) -> Result<Ran, String> {
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    let text = |rx: Option<std::sync::mpsc::Receiver<(Vec<u8>, u64)>>| {
+    let take = |rx: Option<std::sync::mpsc::Receiver<(Vec<u8>, u64)>>| {
         rx.and_then(|r| r.recv_timeout(Duration::from_secs(5)).ok())
-            .map(|(b, _)| String::from_utf8_lossy(&b).into_owned())
             .unwrap_or_default()
     };
-    let peak = fs::read_to_string(report)
-        .ok()
-        .and_then(|t| parse_peak_rss(&t));
+    let (stdout, stdout_total) = take(out);
+    let (stderr, stderr_total) = take(err);
+    let time_report = fs::read_to_string(report).ok();
+    let peak = time_report.as_deref().and_then(parse_peak_rss);
+    let instructions = time_report.as_deref().and_then(parse_instructions);
     Ok(Ran {
-        stdout: text(out),
-        stderr: text(err),
+        truncated: stdout_total > stdout.len() as u64 || stderr_total > stderr.len() as u64,
+        stdout,
+        stderr,
+        stdout_total,
+        stderr_total,
         code: status.code(),
         peak,
+        instructions,
         timed_out,
     })
 }
@@ -489,6 +599,13 @@ mod tests {
     }
 
     #[test]
+    fn the_instruction_count_is_read_from_the_time_report() {
+        let r = "  1.00 real\n   123456 instructions retired\n  99 maximum resident set size\n";
+        assert_eq!(parse_instructions(r), Some(123_456));
+        assert_eq!(parse_instructions("no counter here\n"), None);
+    }
+
+    #[test]
     fn the_peak_is_read_from_the_time_report() {
         let t = "        0.00 real         0.00 user         0.00 sys\n   1802240  maximum resident set size\n";
         assert_eq!(parse_peak_rss(t), Some(1_802_240));
@@ -510,6 +627,16 @@ mod tests {
         assert!(withdrawal(l, MARGIN, Some(1), said, Some(2)).is_none());
         assert!(withdrawal(l, MARGIN, Some(1), said, Some(0)).is_some());
         assert!(withdrawal(l, MARGIN, Some(1), said, None).is_some());
+    }
+
+    #[test]
+    fn the_programs_exit_status_is_passed_through() {
+        assert_eq!(exit_status(Some(0), false), 0);
+        assert_eq!(exit_status(Some(2), false), 2);
+        assert_eq!(exit_status(Some(255), false), 255);
+        assert_eq!(exit_status(None, false), EXIT_SIGNALLED);
+        assert_eq!(exit_status(Some(0), true), EXIT_DEADLINE);
+        assert_eq!(exit_status(Some(3), true), EXIT_DEADLINE);
     }
 
     #[test]

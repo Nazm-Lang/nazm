@@ -14,9 +14,15 @@
 # and hold every row of LLVM's (as tests/lines.sh compares them). Prints
 # `N structurally sound, M not, K refused` per target.
 set -u
-NAZM=${NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
+# The generator is a program written in Nazm: built by the checkout's `nazm` with a heap limit of at
+# most 2 GiB and run through `cargo xtask host-run` on macOS (one at a time) or contained
+# (`toolchain/lib/stage.sh`; the runbook's R6 rule).
+stage_name=codegen-elf
+. "$(dirname "$0")/../../lib/stage.sh"
+stage_init "$(cd "$(dirname "$0")/../../.." && pwd)"
+NAZM=${NAZM:-$(stage_checkout_nazm "$stage_root")}
 # The reference: the Rust `nazm` built from this checkout (rebuild it when library/, crates/ or
-# the runtime change); the 0.10.0 release above only builds the generator.
+# the runtime change); the checkout's `nazm` above builds the generator.
 REF=${NAZM_REF:-$HOME/.cache/nazm-target-track9/debug/nazm}
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
@@ -27,7 +33,7 @@ DWARFDUMP=${DWARFDUMP:-$(xcrun -f llvm-dwarfdump 2>/dev/null || echo /Library/De
 DEBUG=()
 "$REF" lir --help 2>/dev/null | grep -q -- '--debug' && DEBUG=(--debug)
 mkdir -p "$OUT"
-"$NAZM" build "$HERE/main.nz" -o "$NZCG" >"$OUT/build.log" 2>&1 || { cat "$OUT/build.log"; exit 2; }
+stage_build "$NAZM" "$HERE/main.nz" -o "$NZCG" >"$OUT/build.log" 2>&1 || { cat "$OUT/build.log"; exit 2; }
 if [ $# -gt 0 ]; then
   inputs=("$@")
 else
@@ -63,7 +69,7 @@ for target in aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
        ! "$REF" lir --target "$target" --ops ${DEBUG[@]+"${DEBUG[@]}"} "$src" >"$W/lir.txt" 2>/dev/null; then
       continue
     fi
-    "$NZCG" --target "$target" "$W/lir.txt" "$W/gen" >/dev/null 2>"$W/gen.err"
+    "$STAGE_RUN" 300 "$NZCG" --target "$target" "$W/lir.txt" "$W/gen" >/dev/null 2>"$W/gen.err"
     st=$?
     if [ $st -eq 3 ]; then refused=$((refused+1)); echo "refused  $target $rel: $(head -1 "$W/gen.err")"; continue; fi
     if [ $st -ne 0 ]; then bad=$((bad+1)); echo "not      $target $rel: the generator failed"; continue; fi

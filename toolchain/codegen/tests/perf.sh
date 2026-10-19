@@ -6,9 +6,15 @@
 #
 #     toolchain/codegen/tests/perf.sh            (NZCG_TARGET as tests/run.sh reads it)
 set -u
-NAZM=${NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
+# The generator is a program written in Nazm: built by the checkout's `nazm` with a heap limit of at
+# most 2 GiB and run through `cargo xtask host-run` on macOS (one at a time) or contained
+# (`toolchain/lib/stage.sh`; the runbook's R6 rule).
+stage_name=codegen-perf
+. "$(dirname "$0")/../../lib/stage.sh"
+stage_init "$(cd "$(dirname "$0")/../../.." && pwd)"
+NAZM=${NAZM:-$(stage_checkout_nazm "$stage_root")}
 # The reference: the Rust `nazm` built from this checkout (rebuild it when library/, crates/ or
-# the runtime change); the 0.10.0 release above only builds the generator.
+# the runtime change); the checkout's `nazm` above builds the generator.
 REF=${NAZM_REF:-$HOME/.cache/nazm-target-track9/debug/nazm}
 # `--one-thread` when the reference made the program one thread: its runtime then defines the
 # stack limit as a plain global, not a thread-local one (the generator inlines the check, 7.3).
@@ -22,7 +28,7 @@ ARCH=${TARGET%%-*}
 P=$OUT/perf-$TARGET
 NZCG=$OUT/nzcg
 mkdir -p "$P"
-"$NAZM" build "$HERE/main.nz" -o "$NZCG" >"$P/build.log" 2>&1 || { cat "$P/build.log"; exit 2; }
+stage_build "$NAZM" "$HERE/main.nz" -o "$NZCG" >"$P/build.log" 2>&1 || { cat "$P/build.log"; exit 2; }
 [ -f "$P/words.txt" ] || python3 "$ROOT/bench/compare/gen_words.py" "$P/words.txt"
 
 # The best of five wall-clock runs, in milliseconds.
@@ -48,7 +54,7 @@ for src in "$ROOT/bench/compare/nazm/fib.nz" "$ROOT/bench/compare/nazm/words.nz"
   "$REF" build --target "$TARGET" --opt-level 2 "$src" -o "$W/o2" >/dev/null 2>&1
   "$REF" build --target "$TARGET" --objects "$W/obj" "$src" >/dev/null 2>&1
   "$REF" lir --target "$TARGET" --ops "$src" >"$W/lir.txt" 2>/dev/null
-  if ! "$NZCG" --target "$TARGET" $(one_thread "$W/obj") "$W/lir.txt" "$W/gen" 2>"$W/gen.err"; then
+  if ! "$STAGE_RUN" 300 "$NZCG" --target "$TARGET" $(one_thread "$W/obj") "$W/lir.txt" "$W/gen" 2>"$W/gen.err"; then
     echo "$name: refused: $(head -1 "$W/gen.err")"; continue
   fi
   k=0; list=()

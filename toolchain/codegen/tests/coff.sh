@@ -20,7 +20,13 @@
 # generator's objects in place of LLVM's unit objects. Prints one line per input that fails, then
 # `N structurally sound and linked, M not, K refused, S skipped`.
 set -u
-NAZM=${NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
+# The generator is a program written in Nazm: built by the checkout's `nazm` with a heap limit of at
+# most 2 GiB and run through `cargo xtask host-run` on macOS (one at a time) or contained
+# (`toolchain/lib/stage.sh`; the runbook's R6 rule).
+stage_name=codegen-coff
+. "$(dirname "$0")/../../lib/stage.sh"
+stage_init "$(cd "$(dirname "$0")/../../.." && pwd)"
+NAZM=${NAZM:-$(stage_checkout_nazm "$stage_root")}
 REF=${NAZM_REF:-$HOME/.cache/nazm-target-track9/debug/nazm}
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
@@ -35,7 +41,7 @@ command -v "$CC" >/dev/null || { echo "coff.sh: $CC is not installed"; exit 2; }
 DEBUG=()
 "$REF" lir --help 2>/dev/null | grep -q -- '--debug' && DEBUG=(--debug)
 mkdir -p "$OUT"
-"$NAZM" build "$HERE/main.nz" -o "$NZCG" >"$OUT/build.log" 2>&1 || { cat "$OUT/build.log"; exit 2; }
+stage_build "$NAZM" "$HERE/main.nz" -o "$NZCG" >"$OUT/build.log" 2>&1 || { cat "$OUT/build.log"; exit 2; }
 if [ $# -gt 0 ]; then
   inputs=("$@")
 else
@@ -95,11 +101,11 @@ for src in "${inputs[@]}"; do
     echo "skipped  $rel (no objects or LIR)"; skipped=$((skipped+1)); continue
   fi
   ot=$(one_thread "$W/obj")
-  "$NZCG" --target "$TARGET" $ot "$W/lir.txt" "$W/gen" >/dev/null 2>"$W/gen.err"
+  "$STAGE_RUN" 300 "$NZCG" --target "$TARGET" $ot "$W/lir.txt" "$W/gen" >/dev/null 2>"$W/gen.err"
   st=$?
   if [ $st -eq 3 ]; then refused=$((refused+1)); echo "refused  $rel: $(head -1 "$W/gen.err")"; continue; fi
   if [ $st -ne 0 ]; then bad=$((bad+1)); echo "not      $rel: the generator failed ($st)"; continue; fi
-  "$NZCG" --target "$TARGET" $ot "$W/lir.txt" "$W/gen2" >/dev/null 2>&1
+  "$STAGE_RUN" 300 "$NZCG" --target "$TARGET" $ot "$W/lir.txt" "$W/gen2" >/dev/null 2>&1
   why=""
   diff -r "$W/gen" "$W/gen2" >/dev/null || why="$why not-deterministic"
   k=0; list=()

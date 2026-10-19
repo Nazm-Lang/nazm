@@ -13,9 +13,15 @@
 # The program is written here rather than as a `.nz` file in the tree: the compiler written in
 # Nazm reads every `.nz` file there and does not know foreign declarations (examples/ffi).
 set -u
-NAZM=${NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
+# The generator is a program written in Nazm: built by the checkout's `nazm` with a heap limit of at
+# most 2 GiB and run through `cargo xtask host-run` on macOS (one at a time) or contained
+# (`toolchain/lib/stage.sh`; the runbook's R6 rule).
+stage_name=codegen-unwind
+. "$(dirname "$0")/../../lib/stage.sh"
+stage_init "$(cd "$(dirname "$0")/../../.." && pwd)"
+NAZM=${NAZM:-$(stage_checkout_nazm "$stage_root")}
 # The reference: the Rust `nazm` built from this checkout (rebuild it when library/, crates/ or
-# the runtime change); the 0.10.0 release above only builds the generator.
+# the runtime change); the checkout's `nazm` above builds the generator.
 REF=${NAZM_REF:-$HOME/.cache/nazm-target-track9/debug/nazm}
 # `--one-thread` when the reference made the program one thread: its runtime then defines the
 # stack limit as a plain global, not a thread-local one (the generator inlines the check, 7.3).
@@ -28,7 +34,7 @@ ARCH=${TARGET%%-*}
 W=$OUT/unwind-$TARGET
 NZCG=$OUT/nzcg
 rm -rf "$W"; mkdir -p "$W/obj" "$W/gen"
-"$NAZM" build "$HERE/main.nz" -o "$NZCG" >"$OUT/build.log" 2>&1 || { cat "$OUT/build.log"; exit 2; }
+stage_build "$NAZM" "$HERE/main.nz" -o "$NZCG" >"$OUT/build.log" 2>&1 || { cat "$OUT/build.log"; exit 2; }
 cat >"$W/walk.c" <<'EOF'
 #include <unwind.h>
 #include <dlfcn.h>
@@ -82,7 +88,7 @@ cc -arch "$ARCH" -c "$W/walk.c" -o "$W/walk.o" || exit 2
 "$REF" build --target "$TARGET" "$W/uw.nz" --link "$W/walk.o" -o "$W/ref" >"$W/ref.build" 2>&1 || { cat "$W/ref.build"; exit 2; }
 "$REF" build --target "$TARGET" --objects "$W/obj" "$W/uw.nz" >"$W/obj.build" 2>&1 || { cat "$W/obj.build"; exit 2; }
 "$REF" lir --target "$TARGET" --ops "$W/uw.nz" >"$W/lir.txt" || exit 2
-"$NZCG" --target "$TARGET" $(one_thread "$W/obj") "$W/lir.txt" "$W/gen" || exit 2
+"$STAGE_RUN" 300 "$NZCG" --target "$TARGET" $(one_thread "$W/obj") "$W/lir.txt" "$W/gen" || exit 2
 k=0; list=()
 for o in $(sed -n 's/^objects //p' "$W/obj/link.txt"); do
   if [[ $o =~ -[mg][0-9]+\.o$ ]]; then cp "$W/gen/unit-$k.o" "$W/obj/$o"; k=$((k+1)); fi

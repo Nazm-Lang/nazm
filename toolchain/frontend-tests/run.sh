@@ -24,12 +24,18 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-nazm=${NAZM:-"$HOME/.local/nazm-0.10.0/bin/nazm"}
+# The drivers are programs written in Nazm, run here once per input per mode: contained, in
+# parallel (`cargo xtask contained run '...'`), or on a macOS host one at a time through
+# `cargo xtask host-run` (`toolchain/lib/stage.sh`; the runbook's R6 rule).
+stage_name=frontend-tests
+STAGE_HEAP=${R2_HEAP_LIMIT:-${STAGE_HEAP:-2G}}
+. "$root/toolchain/lib/stage.sh"
+stage_init "$root"
+nazm=${NAZM:-$(stage_checkout_nazm "$root")}
 out=${OUT:-"$root/target/r2"}
 ref_target=${R2_REF_TARGET:-"$HOME/.cache/nazm-target-r2"}
-heap=${R2_HEAP_LIMIT:-2G}
 deadline=${R2_DEADLINE:-20}
-jobs=${R2_JOBS:-6}
+jobs=$(stage_jobs "${R2_JOBS:-6}")
 
 [ -x "$nazm" ] || { echo "run.sh: no reference nazm at $nazm (set NAZM)" >&2; exit 2; }
 modes=${*:-tokens tree syntax}
@@ -66,18 +72,18 @@ for mode in $modes; do
   esac
   exe="$out/bin/$driver"
   # The parser recurses with the program's nesting, as the reference's does on its 24 MiB stack.
-  "$nazm" build --heap-limit "$heap" --stack-size 256M "$root/compiler/$driver.nz" -o "$exe" >/dev/null \
+  stage_build "$nazm" --stack-size 256M "$root/compiler/$driver.nz" -o "$exe" >/dev/null \
     || { echo "run.sh: compiler/$driver.nz did not build" >&2; exit 2; }
   rm -rf "$out/$mode"
   mkdir -p "$out/$mode"
   # The R3 pipeline, which lowers MIR from the Core IR document (the R5 hand-back, fact 4).
   if [ "$mode" = mir ]; then
-    "$nazm" build --heap-limit "$heap" --stack-size 256M "$root/toolchain/pipeline/main.nz" -o "$out/bin/pipeline" >/dev/null 2>&1 \
+    stage_build "$nazm" --stack-size 256M "$root/toolchain/pipeline/main.nz" -o "$out/bin/pipeline" >/dev/null 2>&1 \
       || { echo "run.sh: toolchain/pipeline/main.nz did not build" >&2; exit 2; }
   fi
   # One worker per input: compare, and leave a `.diff` behind when the two disagree.
   export R2_ROOT="$root" R2_REF="$ref" R2_EXE="$exe" R2_MODE="$mode" R2_DIR="$out/$mode" R2_DEADLINE="$deadline" R2_NAZM="$nazm" \
-    R2_OS="$host_os" R2_ARCH="$host_arch" R2_PIPELINE="$out/bin/pipeline"
+    R2_OS="$host_os" R2_ARCH="$host_arch" R2_PIPELINE="$out/bin/pipeline" R2_STAGE_RUN="$STAGE_RUN"
   # shellcheck disable=SC2016
   tr '\n' '\0' < "$list" | xargs -0 -n 1 -P "$jobs" sh -c '
     f=$1
@@ -92,29 +98,29 @@ for mode in $modes; do
     case $R2_MODE in
       tokens|tree)
         "$R2_REF" "$R2_MODE" "$R2_ROOT/$f" > "$want" 2>&1 || true
-        timeout "$R2_DEADLINE" "$R2_EXE" "$R2_ROOT/$f" > "$got" 2>&1 || true ;;
+        "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" "$R2_ROOT/$f" > "$got" 2>&1 || true ;;
       check)
         { "$R2_NAZM" check --json --no-cache "$R2_ROOT/$f" 2>&1 >/dev/null || true; } | grep "^{" > "$want" || true
         # Standard error says where the checker stopped (design D13), kept beside the result.
-        timeout "$R2_DEADLINE" "$R2_EXE" "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
+        "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
       render)
         # The standard error of `nazm check`, without its summary line.
         { "$R2_NAZM" check --no-cache "$R2_ROOT/$f" 2>&1 >/dev/null || true; } | grep -Ev "^nazm: [0-9]+ (error|warning)" > "$want" || true
-        timeout "$R2_DEADLINE" "$R2_EXE" --text "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
+        "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" --text "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
       facts)
         status=0
         "$R2_NAZM" doc "$R2_ROOT/$f" > "$want.json" 2>/dev/null || status=$?
         python3 "$R2_ROOT/toolchain/frontend-tests/doc-facts.py" "$status" < "$want.json" > "$want"
         rm -f "$want.json"
-        timeout "$R2_DEADLINE" "$R2_EXE" --facts "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
+        "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" --facts "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
       core)
         status=0
         "$R2_NAZM" core-ir "$R2_ROOT/$f" > "$want.json" 2>/dev/null || status=$?
         python3 "$R2_ROOT/toolchain/frontend-tests/core-ir.py" want "$status" < "$want.json" > "$want"
-        timeout "$R2_DEADLINE" "$R2_EXE" --core "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
+        "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" --core "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop"
         # Function by function and part by part: an input agrees when every one carried does,
         # and a document printed whole is what the reference printed, byte for byte.
@@ -135,8 +141,8 @@ for mode in $modes; do
         units="$R2_DIR/$name.units"
         rm -rf "$units"
         mkdir -p "$units"
-        timeout "$R2_DEADLINE" "$R2_EXE" --units "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" "$units" > /dev/null 2>&1 || true
-        timeout "$R2_DEADLINE" "$R2_EXE" --units "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" "$units" > "$got" 2> "$R2_DIR/$name.reuse" || true
+        "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" --units "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" "$units" > /dev/null 2>&1 || true
+        "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" --units "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" "$units" > "$got" 2> "$R2_DIR/$name.reuse" || true
         rm -rf "$units"
         if python3 "$R2_ROOT/toolchain/frontend-tests/core-ir.py" compare "$want" "$got" "$want.json" > "$R2_DIR/$name.count"; then
           [ -n "${R2_KEEP:-}" ] || rm -f "$want" "$got" "$want.json"
@@ -149,29 +155,29 @@ for mode in $modes; do
         # The keys of the cache (design D28): for each module its key, source fingerprint,
         # published interface, interface hash and check key, as the reference computes them.
         "$R2_REF" keys "$R2_ROOT/$f" > "$want" 2>/dev/null || true
-        timeout "$R2_DEADLINE" "$R2_EXE" --keys "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
+        "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" --keys "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
       refs)
         # The reference index (R5 hand-back): every entity with its declaration and its uses, as
         # the reference index of the Rust side holds them.
         "$R2_REF" refs "$R2_ROOT/$f" > "$want" 2>/dev/null || true
-        timeout "$R2_DEADLINE" "$R2_EXE" --refs "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
+        "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" --refs "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
       calls)
         # The call graph (R5 hand-back): the calls of each function, as the Rust side recorded them.
         "$R2_REF" calls "$R2_ROOT/$f" > "$want" 2>/dev/null || true
-        timeout "$R2_DEADLINE" "$R2_EXE" --calls "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
+        "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" --calls "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
       provenance)
         # The provenance summaries (R5 hand-back): what each function result carries, passes on and
         # reaches, and what its parameters are handed, as the Rust side solved them.
         "$R2_REF" provenance "$R2_ROOT/$f" > "$want" 2>/dev/null || true
-        timeout "$R2_DEADLINE" "$R2_EXE" --provenance "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
+        "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" --provenance "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
       coredigests)
         # The Core IR digests of each function (R5 hand-back), as inspect reports them.
         "$R2_REF" coredigests "$R2_ROOT/$f" > "$want" 2>/dev/null || true
-        timeout "$R2_DEADLINE" "$R2_EXE" --coredigests "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
+        "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" --coredigests "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
       mir)
         # The native digests (R5 hand-back): the MIR the R3 pipeline lowers, with the digest of each
@@ -179,10 +185,10 @@ for mode in $modes; do
         # end publishes: the front end is the difference. `.exact` marks an input whose MIR is also
         # `nazm mir` itself, byte for byte (the pipeline is R3, and not everything it lowers is).
         if ! "$R2_NAZM" core-ir --json "$R2_ROOT/$f" > "$R2_DIR/$name.rust.json" 2>/dev/null; then : > "$R2_DIR/$name.skip"; rm -f "$R2_DIR/$name.rust.json"; exit 0; fi
-        timeout "$R2_DEADLINE" "$R2_EXE" --coredoc "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$R2_DIR/$name.json" 2> /dev/null || true
+        "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" --coredoc "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$R2_DIR/$name.json" 2> /dev/null || true
         if [ ! -s "$R2_DIR/$name.json" ]; then : > "$R2_DIR/$name.skip"; rm -f "$R2_DIR/$name.rust.json" "$R2_DIR/$name.json"; exit 0; fi
-        timeout 60 "$R2_PIPELINE" mir "$R2_DIR/$name.rust.json" > "$want" 2> /dev/null || true
-        timeout 60 "$R2_PIPELINE" mir "$R2_DIR/$name.json" > "$got" 2> "$R2_DIR/$name.stop" || true
+        "$R2_STAGE_RUN" 60 "$R2_PIPELINE" mir "$R2_DIR/$name.rust.json" > "$want" 2> /dev/null || true
+        "$R2_STAGE_RUN" 60 "$R2_PIPELINE" mir "$R2_DIR/$name.json" > "$got" 2> "$R2_DIR/$name.stop" || true
         if "$R2_NAZM" mir "$R2_ROOT/$f" 2> /dev/null | cmp -s - "$want"; then : > "$R2_DIR/$name.exact"; fi
         rm -f "$R2_DIR/$name.json" "$R2_DIR/$name.rust.json"
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
@@ -190,16 +196,16 @@ for mode in $modes; do
         # The identities of the diagnostics (R5 hand-back): the state and each id in order, as the
         # language service indexes them.
         "$R2_REF" diagids "$R2_ROOT/$f" > "$want" 2>/dev/null || true
-        timeout "$R2_DEADLINE" "$R2_EXE" --diagids "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
+        "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" --diagids "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
       fieldtypes)
         # The declared types of the fields and payloads (R5 hand-back), as the Rust tables hold them.
         "$R2_REF" fieldtypes "$R2_ROOT/$f" > "$want" 2>/dev/null || true
-        timeout "$R2_DEADLINE" "$R2_EXE" --fieldtypes "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
+        "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" --fieldtypes "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
       syntax)
         "$R2_REF" syntax "$R2_ROOT/$f" > "$want" 2>&1 || true
-        timeout "$R2_DEADLINE" "$R2_EXE" --syntax "$R2_ROOT/$f" > "$got" 2>&1 || true ;;
+        "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" --syntax "$R2_ROOT/$f" > "$got" 2>&1 || true ;;
     esac
     if cmp -s "$want" "$got"; then
       [ -n "${R2_KEEP:-}" ] || rm -f "$want" "$got"

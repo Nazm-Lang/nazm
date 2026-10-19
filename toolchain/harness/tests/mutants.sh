@@ -12,7 +12,10 @@
 # killer that no longer catches its mutation: a finding for the catalogue, said on its line). The
 # harness is copied before the first mutation, so editing it while this runs changes nothing here.
 #
-# Environment: HARNESS_NAZM (builds and runs the harness; default the 0.10.0 release),
+# A mutation campaign is contained work (`docs/runbook.md`, *Mandatory containment*): this refuses to
+# start outside the contained runner, and runs `nazm-mutate` and the harness's tests there.
+#
+# Environment: HARNESS_NAZM (builds and runs the harness; default the checkout's `nazm`),
 # CARGO_TARGET_DIR (the scratch tree's own; default ~/.cache/nazm-target-R7-mut), and
 # MUTANTS_PER_FILE (at most this many mutations per file, the catalogue's first; default all) —
 # each mutation rebuilds `nazm` and a test binary, minutes apiece, so a sweep over many files
@@ -26,7 +29,12 @@ if [ "$tree" = "$(cd "$here/../.." && pwd)" ]; then
     echo "refusing to mutate the working tree; give a scratch copy" >&2
     exit 2
 fi
-HARNESS_NAZM=${HARNESS_NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
+. "$here/../lib/stage.sh"
+stage_name=mutants
+stage_init "$(cd "$here/../.." && pwd)" contained
+# The harness is built and run by the checkout's own `nazm` (never the scratch tree's, which each
+# mutation rebuilds): `cargo build -p nazm-cli` in the checkout first.
+HARNESS_NAZM=${HARNESS_NAZM:-$(stage_checkout_nazm "$stage_root")}
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$HOME/.cache/nazm-target-R7-mut}
 export NAZM=$CARGO_TARGET_DIR/debug/nazm
 export NAZM_HARNESS_ROOT=$tree
@@ -38,7 +46,7 @@ mkdir -p "$log/harness"
 cp -R "$here/." "$log/harness/"
 here=$log/harness
 mutate=$log/nazm-mutate
-"$HARNESS_NAZM" build "$here/mutate/main.nz" -o "$mutate" >"$log/build.out" 2>&1 || {
+stage_build "$HARNESS_NAZM" "$here/mutate/main.nz" -o "$mutate" >"$log/build.out" 2>&1 || {
     cat "$log/build.out" >&2; exit 1; }
 
 files=("$@")
@@ -48,7 +56,7 @@ fi
 
 agree=0
 differ=0
-"$mutate" list "$catalogue" >"$log/list" || exit 1
+"$STAGE_RUN" 300 "$mutate" list "$catalogue" >"$log/list" || exit 1
 for file in "${files[@]}"; do
     # name <TAB> file <TAB> killers, for the mutations a test of FILE kills.
     grep -E "	nazm-cli:test=cli_[a-z_]+:$file::" "$log/list" \
@@ -58,7 +66,7 @@ for file in "${files[@]}"; do
             case $k in nazm-cli:test=cli_*:"$file"::*) ;; *) continue ;; esac
             bin=${k#nazm-cli:test=}; bin=${bin%%:*}
             test=${k#nazm-cli:test=$bin:}
-            out=$("$mutate" apply "$tree" "$catalogue" "$name")
+            out=$("$STAGE_RUN" 300 "$mutate" apply "$tree" "$catalogue" "$name")
             if [ $? -ne 0 ]; then
                 differ=$((differ + 1)); echo "DIFFER  $name: $out"; continue
             fi
@@ -74,7 +82,7 @@ for file in "${files[@]}"; do
                 "$HARNESS_NAZM" test --filter "$test" "$here/cli/$file.nz" >"$log/n.out" 2>&1 || nazm=fail
                 grep -q "^ok    \|^FAIL  " "$log/n.out" || nazm="fail (no test named $test)"
             fi
-            "$mutate" restore "$tree" >/dev/null || { echo "could not restore $name" >&2; exit 1; }
+            "$STAGE_RUN" 300 "$mutate" restore "$tree" >/dev/null || { echo "could not restore $name" >&2; exit 1; }
             if [ "$rust" = fail ] && [ "$nazm" = fail ]; then
                 agree=$((agree + 1)); echo "agree   $name: $test caught by both"
             elif [ "$rust" = pass ] && [ "$nazm" = pass ]; then

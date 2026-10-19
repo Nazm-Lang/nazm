@@ -1,6 +1,6 @@
 #!/bin/bash
-# The R3 pipeline against the Rust toolchain: build it with $NAZM_BUILD (the 0.10.0 release), run
-# it over every input that has Core IR, and compare its MIR with `nazm mir` and its LIR with
+# The R3 pipeline against the Rust toolchain: build it with $NAZM_BUILD (the checkout's `nazm`, with
+# a heap limit of at most 2 GiB), run it over every input that has Core IR, and compare its MIR with `nazm mir` and its LIR with
 # `nazm lir` / `nazm lir --ops` (the reference `nazm`, $NAZM, built from main), byte for byte; and
 # hold the validator to its mutants. Prints each difference's file and first differing line (or the
 # pipeline's refusal), then the summary lines, over the base set and over the full set.
@@ -21,8 +21,15 @@
 # difference is a bug here or a finding to report (openspec/changes/r3-pipeline/design.md). A
 # construct not ported yet stops the unit, and counts as a difference.
 set -u
-NAZM=${NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
-NAZM_BUILD=${NAZM_BUILD:-$HOME/.local/nazm-0.10.0/bin/nazm}
+# The pipeline is a program written in Nazm, run here once or more per input: under the runbook
+# (R6) that is contained work (`cargo xtask contained run '...'`, in parallel) or, on a macOS host,
+# one program at a time through `cargo xtask host-run` (`toolchain/lib/stage.sh`).
+here=$(cd "$(dirname "$0")" && pwd)
+stage_name=pipeline
+. "$here/../../lib/stage.sh"
+stage_init "$(cd "$here/../../.." && pwd)"
+NAZM=${NAZM:-$(stage_checkout_nazm "$stage_root")}
+NAZM_BUILD=${NAZM_BUILD:-$NAZM}
 VERBOSE=0
 JOBS=4
 while [ $# -gt 0 ]; do
@@ -35,10 +42,11 @@ done
 TARGET=${TARGET:-}
 TFLAG=${TARGET:+--target $TARGET}
 export TARGET
+JOBS=$(stage_jobs "$JOBS")
 ROOT=$(pwd)
 OUT="$ROOT/toolchain/pipeline/target"
 mkdir -p "$OUT/cmp"
-"$NAZM_BUILD" build toolchain/pipeline/main.nz -o "$OUT/pipeline" > "$OUT/build.log" 2>&1 || {
+stage_build "$NAZM_BUILD" toolchain/pipeline/main.nz -o "$OUT/pipeline" > "$OUT/build.log" 2>&1 || {
     cat "$OUT/build.log"; echo "pipeline: the build failed"; exit 2; }
 if ! python3 toolchain/pipeline/tests/runtime_table.py --check; then
     echo "pipeline: runtime.nz is not the runtime's registry; run tests/runtime_table.py"; exit 2
@@ -67,13 +75,13 @@ one() {
     if ! "$NAZM" core-ir --json --with-sources "$f" > "$o.cir" 2>/dev/null; then echo "skip" >> "$r"; return; fi
     if ! "$NAZM" mir "$f" > "$o.want" 2>/dev/null; then echo "skip" >> "$r"; return; fi
     # The validator against its mutants: every one must be caught.
-    perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" $TFLAG mutants "$o.cir" > "$o.mut" 2>&1
+    "$STAGE_RUN" 300 "$OUT/pipeline" $TFLAG mutants "$o.cir" > "$o.mut" 2>&1
     grep "^missed" "$o.mut" | sed "s|^|validator: $f: |" | head -5 | sed 's/^/note /' >> "$r"
     if s=$(grep -E "^[0-9]+ mutants, [0-9]+ caught$" "$o.mut"); then
         m=${s%% mutants*}; k=${s##*, }; k=${k%% caught}
         echo "mut $m $k" >> "$r"
     fi
-    if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" $TFLAG mir "$o.cir" > "$o.got" 2> "$o.err" && cmp -s "$o.got" "$o.want"; then
+    if "$STAGE_RUN" 300 "$OUT/pipeline" $TFLAG mir "$o.cir" > "$o.got" 2> "$o.err" && cmp -s "$o.got" "$o.want"; then
         echo "mir agree" >> "$r"
     elif [ -s "$o.err" ]; then
         echo "mir differ $(head -1 "$o.err")" >> "$r"
@@ -86,9 +94,9 @@ one() {
     if ! "$NAZM" lir $TFLAG "$f" > "$o.lwant0" 2>/dev/null; then echo "noir" >> "$r"; return; fi
     python3 toolchain/pipeline/tests/tables.py < "$o.lwant0" > "$o.lwant"
     "$NAZM" lir $TFLAG --ops "$f" > "$o.owant" 2>/dev/null
-    if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" $TFLAG ops "$o.cir" > "$o.ogot" 2> "$o.oerr" && cmp -s "$o.ogot" "$o.owant"; then
+    if "$STAGE_RUN" 300 "$OUT/pipeline" $TFLAG ops "$o.cir" > "$o.ogot" 2> "$o.oerr" && cmp -s "$o.ogot" "$o.owant"; then
         echo "ops agree" >> "$r"
-        if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" $TFLAG lir "$o.cir" > "$o.fgot" 2>/dev/null && cmp -s "$o.fgot" "$o.lwant0"; then
+        if "$STAGE_RUN" 300 "$OUT/pipeline" $TFLAG lir "$o.cir" > "$o.fgot" 2>/dev/null && cmp -s "$o.fgot" "$o.lwant0"; then
             echo "doc agree" >> "$r"
         else
             echo "doc differ" >> "$r"
@@ -96,7 +104,7 @@ one() {
         # Debug information (task 4.1): the text with its positions, the variables a debugger
         # shows and the files the positions name, against `nazm lir --ops --debug`.
         "$NAZM" lir $TFLAG --ops --debug "$f" > "$o.dwant" 2>/dev/null
-        if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" $TFLAG ops-debug "$o.cir" > "$o.dgot" 2> "$o.derr" && cmp -s "$o.dgot" "$o.dwant"; then
+        if "$STAGE_RUN" 300 "$OUT/pipeline" $TFLAG ops-debug "$o.cir" > "$o.dgot" 2> "$o.derr" && cmp -s "$o.dgot" "$o.dwant"; then
             echo "dbg agree" >> "$r"
         else
             echo "dbg differ $(head -1 "$o.derr") $(cmp "$o.dwant" "$o.dgot" 2>&1 | head -1 | sed "s/.* differ: //")" >> "$r"
@@ -117,13 +125,13 @@ one() {
         # Every unit the build compiled, keyed here from its bytes, must be in the store under
         # that key, and the entry written again must be the one found, byte for byte.
         rm -rf "$o.scratch"
-        if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" objects "$OUT/cache" "$o.scratch" $TC "$o".bin.*.ll > "$o.objs" 2>&1; then
+        if "$STAGE_RUN" 300 "$OUT/pipeline" objects "$OUT/cache" "$o.scratch" $TC "$o".bin.*.ll > "$o.objs" 2>&1; then
             echo "obj agree $(wc -l < "$o.objs" | tr -d ' ')" >> "$r"
         else
             echo "obj differ $(grep -v ' hit [0-9a-f]*$' "$o.objs" | head -1 | sed "s|$OUT/cmp/||")" >> "$r"
         fi
         rm -rf "$o.scratch"
-        if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" $TFLAG runtime "$o.cir" > "$o.rgot" 2> "$o.rerr"; then
+        if "$STAGE_RUN" 300 "$OUT/pipeline" $TFLAG runtime "$o.cir" > "$o.rgot" 2> "$o.rerr"; then
             v=$(python3 toolchain/pipeline/tests/units.py "$o.rgot" "$o.bin")
         else
             v="differ $(head -1 "$o.rerr")"
@@ -131,7 +139,7 @@ one() {
         if [ "$v" = agree ]; then
             rm -rf "$o".bin*
             if NAZM_CACHE_DIR="$OUT/cache" "$NAZM" build $TFLAG $xflag --emit-ir --stack-size 1048576 --heap-limit 268435456 "$f" -o "$o.bin" > /dev/null 2>&1 \
-                && perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" $TFLAG runtime "$o.cir" 1048576 268435456 > "$o.rgot" 2> "$o.rerr"; then
+                && "$STAGE_RUN" 300 "$OUT/pipeline" $TFLAG runtime "$o.cir" 1048576 268435456 > "$o.rgot" 2> "$o.rerr"; then
                 v=$(python3 toolchain/pipeline/tests/units.py "$o.rgot" "$o.bin")
                 [ "$v" = agree ] || v="$v (with a stack size and a heap limit)"
             fi
@@ -141,7 +149,7 @@ one() {
     else
         echo "rt nobuild" >> "$r"
     fi
-    if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" $TFLAG tables "$o.cir" > "$o.lgot" 2> "$o.lerr" && cmp -s "$o.lgot" "$o.lwant"; then
+    if "$STAGE_RUN" 300 "$OUT/pipeline" $TFLAG tables "$o.cir" > "$o.lgot" 2> "$o.lerr" && cmp -s "$o.lgot" "$o.lwant"; then
         echo "tables agree" >> "$r"
     elif [ -s "$o.lerr" ]; then
         echo "tables differ $(head -1 "$o.lerr")" >> "$r"
@@ -150,7 +158,7 @@ one() {
     fi
 }
 export -f one
-export NAZM OUT TC TARGET TFLAG
+export NAZM OUT TC TARGET TFLAG STAGE_RUN STAGE_MODE STAGE_XTASK STAGE_PEAKS
 tr '\n' '\0' < "$OUT/inputs" | xargs -0 -n 1 -P "$JOBS" bash -c 'one "$0"'
 
 # The summary over a set of inputs (`base` leaves out the front end's test programs).
@@ -209,10 +217,10 @@ python3 bench/complexity/growth.py "pipeline lir" lines 1000 10 core "$NAZM" "$O
 printf 'fn main(out: OutCap) -> Int {\n    print("x");\n    0\n}\n' > "$OUT/digest.nz"
 NAZM_CACHE_DIR="$OUT/cache" "$NAZM" build "$OUT/digest.nz" -o "$OUT/digest" --provenance "$OUT/digest.json" > /dev/null 2>&1
 want=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime"]["digest"])' "$OUT/digest.json")
-got="blake3:$("$OUT/pipeline" runtime-digest)"
+got="blake3:$("$STAGE_RUN" 300 "$OUT/pipeline" runtime-digest)"
 if [ "$want" = "$got" ]; then echo "runtime digest: agree"; else echo "runtime digest: differ ($got, nazm build records $want)"; fi
 entry=$(find "$OUT/cache/native" -name '*.nzo' | head -1)
-"$OUT/pipeline" entry-check "$OUT/cache" "$(basename "$entry" .nzo)" > "$OUT/entry-check"
+"$STAGE_RUN" 300 "$OUT/pipeline" entry-check "$OUT/cache" "$(basename "$entry" .nzo)" > "$OUT/entry-check"
 if cmp -s "$OUT/entry-check" - <<'EOF'
 whole: accepted
 no header line: not a `nazm.object/1` entry: it has no header line

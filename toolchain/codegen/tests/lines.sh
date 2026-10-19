@@ -13,9 +13,15 @@
 # debug build does.
 # Prints `N agree, M differ, K refused, S skipped`.
 set -u
-NAZM=${NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
+# The generator is a program written in Nazm: built by the checkout's `nazm` with a heap limit of at
+# most 2 GiB and run through `cargo xtask host-run` on macOS (one at a time) or contained
+# (`toolchain/lib/stage.sh`; the runbook's R6 rule).
+stage_name=codegen-lines
+. "$(dirname "$0")/../../lib/stage.sh"
+stage_init "$(cd "$(dirname "$0")/../../.." && pwd)"
+NAZM=${NAZM:-$(stage_checkout_nazm "$stage_root")}
 # The reference: the Rust `nazm` built from this checkout (rebuild it when library/, crates/ or
-# the runtime change); the 0.10.0 release above only builds the generator.
+# the runtime change); the checkout's `nazm` above builds the generator.
 REF=${NAZM_REF:-$HOME/.cache/nazm-target-track9/debug/nazm}
 # `--one-thread` when the reference made the program one thread: its runtime then defines the
 # stack limit as a plain global, not a thread-local one (the generator inlines the check, 7.3).
@@ -32,7 +38,7 @@ if ! "$REF" lir --help 2>/dev/null | grep -q -- '--debug'; then
   echo "skipped: $NAZM has no \`lir --debug\`"; exit 0
 fi
 mkdir -p "$OUT"
-"$NAZM" build "$HERE/main.nz" -o "$NZCG" >"$OUT/build.log" 2>&1 || { cat "$OUT/build.log"; exit 2; }
+stage_build "$NAZM" "$HERE/main.nz" -o "$NZCG" >"$OUT/build.log" 2>&1 || { cat "$OUT/build.log"; exit 2; }
 if [ $# -gt 0 ]; then
   inputs=("$@")
 else
@@ -62,7 +68,7 @@ for src in "${inputs[@]}"; do
      ! "$REF" lir --target "$TARGET" --ops --debug "$src" >"$W/lir.txt" 2>/dev/null; then
     skipped=$((skipped+1)); echo "skipped  $rel"; continue
   fi
-  "$NZCG" --target "$TARGET" $(one_thread "$W/obj") "$W/lir.txt" "$W/gen" >/dev/null 2>"$W/gen.err"
+  "$STAGE_RUN" 300 "$NZCG" --target "$TARGET" $(one_thread "$W/obj") "$W/lir.txt" "$W/gen" >/dev/null 2>"$W/gen.err"
   st=$?
   if [ $st -eq 3 ]; then refused=$((refused+1)); echo "refused  $rel: $(head -1 "$W/gen.err")"; continue; fi
   if [ $st -ne 0 ]; then differ=$((differ+1)); echo "differ   $rel: the generator failed"; continue; fi

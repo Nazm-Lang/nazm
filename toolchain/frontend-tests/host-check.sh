@@ -8,7 +8,8 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-nazm=${NAZM:-"$HOME/.local/nazm-0.10.0/bin/nazm"}
+# The checkout's `nazm`, built by Cargo (no program written in Nazm is built or run here).
+nazm=${NAZM:-"${CARGO_TARGET_DIR:-$root/target}/debug/nazm"}
 
 fail() { printf 'host-check: %s\n' "$*" >&2; exit 1; }
 
