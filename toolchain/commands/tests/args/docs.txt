@@ -1,0 +1,37 @@
+# `nazm docs`'s command lines, run in the fixture of run.sh (`fixture docs`): the repository's docs/, linked.
+--help
+-h
+--json
+--document spec
+--index --section x
+--section
+--index --document
+--index --root
+--index --document spec --section x
+--state x --index
+--state x
+--bogus
+--ind
+-x
+--index --json --json
+--index --root . --root .
+--index --root .
+--index --json --root .
+--index --document spec --root .
+--index --document nope --root .
+--index --document nope --json --root .
+--index --document --root .
+--section spec --root .
+--section spec --json --root .
+--section spec:settled --root .
+--section grammar:expr --json --root .
+--section nope --root .
+--section nope --json --root .
+--section spec --state x --root .
+--section spec --state x --json --root .
+--section "" --root .
+--section spec --state "" --root .
+--index --root absent
+--section spec --root absent
+--index --root docs
+--index --root docs/spec.md
