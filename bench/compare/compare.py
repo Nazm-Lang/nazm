@@ -80,6 +80,8 @@ BINTREES_DEPTH = 18
 TINY = {"nbody": 1000, "bintrees": 8}
 # The parallel workload (performance leadership, multicore): run at each of worker_counts().
 PARALLEL = ["primes"]
+# Programs Nazm's interpreter is not timed on: minutes a run, and its row is never ranked.
+INTERPRETER_UNTIMED = ["nbody", "bintrees"]
 DASH = "—"
 
 # R1.5 5.1: what each variant checks — integer overflow, bounds, memory (use after free, double
@@ -589,6 +591,11 @@ def main():
                                          "compiled builds only (an interpreter would take "
                                          "minutes a run)")
                         rows.append(row)
+                    continue
+                if name in INTERPRETER_UNTIMED and label == "nazm run (interpreter)":
+                    row["status"] = ("unmeasured: Nazm's tree-walking interpreter takes minutes "
+                                     "a run here, and the interpreter row is not ranked")
+                    rows.append(row)
                     continue
                 srcs = str(src)
                 if (lang, label, name) in builds:
