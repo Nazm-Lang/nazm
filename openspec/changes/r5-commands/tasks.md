@@ -101,15 +101,20 @@
 ## 9. The agent commands and the MCP server
 - [ ] 9.1 `context`, `snapshot`, `delta`, `diagnostics`, `docs`, `repo`, `patch`, `resolve`,
       `references`, `inspect`, `interface`, the MCP server. Part done (2026-10-19): `interface` (design
-      D19; 3,342 inputs, `--hash` too: 3,342 agree, 0 differ, 0 refused; 29 command lines agree) and
+      D19; 3,342 inputs, `--hash` too: 3,342 agree, 0 differ, 0 refused; 28 command lines agree) and
       `docs` (D20; every one of the 1,498 sections by id and every form of the index: 1,652 runs
-      agree; 13 corpora each with one thing wrong: 39 runs agree; 37 command lines agree) and
+      agree; 13 corpora each with one thing wrong: 39 runs agree; 36 command lines agree) and
       `patch apply` (7.2). Not ported: `context`, `snapshot`, `delta`, `diagnostics`, `resolve`,
       `references`, `inspect`, `repo` and the MCP server, which need the reference index, the call
       graph, provenance, Core IR/MIR and the language service's diagnostic ids from `compiler/` (D20)
 
 ## 10. Packages
-- [ ] 10.1 `lock`, `update`, `publish`, `yank`, `attest`
+- [x] 10.1 `lock`, `update`, `publish`, `yank`, `attest` (design D21, 2026-10-19): `pkg.nz`, `toml.nz`,
+      `pkgcmd.nz`, `attest.nz`, `proc.nz`. Command lines over a fixture of packages, a registry of
+      published versions (made by the reference's `publish`), wrong indexes and manifests, a key pair:
+      `lock` 76, `update` 17, `publish` 35, `yank` 24 and `attest` 54 command lines, every one agreeing
+      (files written compared too); the whole `tests/args/` run: 206 of 206 agree. Refused, with status 6: a form of
+      TOML the reader does not read, a record that is not JSON (`attest sign`)
 
 ## 11. The rest
 - [x] 11.1 The command-line grammar: one `nazm` dispatching to every command, `--help`, `-V`, usage

@@ -1,0 +1,101 @@
+// Running another program to its end (R5), as `std::process::Command::output` does: standard output
+// and errors collected, the parent's environment handed over with what the caller adds.
+
+use "@std/file"
+use "util.nz"
+
+// A program run to its end: whether it started, its status (the code, or 256 and the signal),
+// what it wrote to its output and its errors, and why it did not start.
+pub struct Ran {
+    started: Bool,
+    status: Int,
+    out: Str,
+    err: Str,
+    why: Str,
+}
+
+fn collect(from: OsHandle, into: Chan[Str]) -> Int ! { io } {
+    let all = match file_read_rest(File(handle: from)) {
+        Result.Ok(value: b) => bytes_to_str(b),
+        Result.Err(error: e) => "",
+    }
+    chan_send_of(into, all)
+    0
+}
+
+// `program` with `args`, the parent's environment and `extra` (`NAME=value` entries, each replacing
+// the parent's of that name), `input` on its standard input when `has_input` and an empty one
+// otherwise.
+pub fn pr_run(io: IoCap, proc: ProcessCap, sp: SpawnCap, program: Str, args: Strs, extra: Strs, has_input: Bool, input: Str) -> Ran ! { io, spawn } {
+    let env = strs_new()
+    for i in 0..os_env_count() {
+        let e = os_env_at(i)
+        let mut replaced = false
+        for k in 0..strs_len(extra) {
+            let name = str_slice(strs_get(extra, k), 0, ut_find(strs_get(extra, k), "=", 0) + 1)
+            if str_len(e) >= str_len(name) && str_slice(e, 0, str_len(name)) == name { replaced = true }
+        }
+        if !replaced { strs_push(env, e) }
+    }
+    for k in 0..strs_len(extra) { strs_push(env, strs_get(extra, k)) }
+    let h = os_spawn_with(program, args, "", env, if has_input { 0 } else { 2 })
+    if os_status(h) < 0 { return Ran(started: false, status: 0, out: "", err: "", why: ut_os_error(os_status(h))) }
+    if has_input {
+        let inp = os_child_pipe(h, 0)
+        let data = bytes_from_str(input)
+        let mut done = 0
+        while done < bytes_len(data) {
+            let w = os_write(inp, bytes_slice(data, done, bytes_len(data)))
+            if w <= 0 {
+                done = bytes_len(data)
+            } else {
+                done += w
+            }
+        }
+        os_close(inp)
+    }
+    let errors = chan_new_of[Str](1)
+    let out = os_child_pipe(h, 1)
+    let err = os_child_pipe(h, 2)
+    let got = vec_new[Str]()
+    let mut stdout = ""
+    scope {
+        spawn collect(err, errors)
+        stdout = match file_read_rest(File(handle: out)) {
+            Result.Ok(value: b) => bytes_to_str(b),
+            Result.Err(error: e) => "",
+        }
+        chan_recv_of(errors, got);
+    }
+    os_close(out)
+    os_close(err)
+    let status = os_wait(h)
+    os_close(h)
+    Ran(started: true, status: status, out: stdout, err: if vec_len(got) > 0 { vec_get(got, 0) } else { "" }, why: "")
+}
+
+// `program` with `args` in `dir` ("" for this process's), its environment exactly `env` (`NAME=value`),
+// its standard input empty; its output and errors collected. The program is found on this process's
+// `PATH`.
+pub fn pr_run_exact(io: IoCap, proc: ProcessCap, sp: SpawnCap, program: Str, args: Strs, dir: Str, env: Strs) -> Ran ! { io, spawn } {
+    let h = os_spawn_with(program, args, dir, env, 2)
+    if os_status(h) < 0 { return Ran(started: false, status: 0, out: "", err: "", why: ut_os_error(os_status(h))) }
+    let errors = chan_new_of[Str](1)
+    let out = os_child_pipe(h, 1)
+    let err = os_child_pipe(h, 2)
+    let got = vec_new[Str]()
+    let mut stdout = ""
+    scope {
+        spawn collect(err, errors)
+        stdout = match file_read_rest(File(handle: out)) {
+            Result.Ok(value: b) => bytes_to_str(b),
+            Result.Err(error: e) => "",
+        }
+        chan_recv_of(errors, got);
+    }
+    os_close(out)
+    os_close(err)
+    let status = os_wait(h)
+    os_close(h)
+    Ran(started: true, status: status, out: stdout, err: if vec_len(got) > 0 { vec_get(got, 0) } else { "" }, why: "")
+}

@@ -1,0 +1,48 @@
+schema = "x"\nname\n
+schema = "x"\nschema = "y"\n
+schema = "nazm.package/1\n
+[package\nname = "a"\n
+schema = "nazm.package/1"\n[package]\nname = a\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\n[package]\n
+= 5\n
+schema = "nazm.package/1" x\n
+schema = "a\\q"\n
+not toml at all\n
+schema = \n
+schema = "nazm.package/1"\n[package]\nname = "a"\nname = "b"\n
+schema = "nazm.package/1"\n[package]\nname = true\n
+schema = "nazm.package/1"\n[package]\nname = [1,2]\n
+schema = "nazm.package/1"\nbogus = 1\n[package]\nname = "a"\nversion = "1.0.0"\n
+schema = "nazm.package/1"\n[package]\nname = "a"\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\nmystery = 1\n
+schema = "nazm.package/2"\n[package]\nname = "a"\nversion = "1.0.0"\n
+schema = "nazm.package/1"\n[package]\nname = "A"\nversion = "1.0.0"\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0"\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\nroot = ".."\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\nroot = "elsewhere"\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\nmain = "x.txt"\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\nmain = "lib.nz"\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\nheap-limit = "5"\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\nheap-limit = "1M"\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\nheap-limit = 5\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\nheap-limit = "2000G"\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\nheap-limit = "x"\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\nheap-limit = "99999999999999999999"\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\nprofile = "web3"\n
+# comment\nschema = "nazm.package/1" # c\n[package] # c\nname = "a"\nversion = "1.0.0"\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\n[dependencies]\nx = "1.0.0"\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\n[dependencies]\nx = { version = 1 }\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\n[dependencies]\nx = { path = "../x" }\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\n[dependencies]\na = { path = "../m1", version = "1.0.0" }\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\n[dependencies]\nBad = { path = "../m1", version = "1.0.0" }\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\n[dependencies]\nx = { path = "../m1", version = "1.0" }\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\n[dependencies]\nx = { version = "~1.x" }\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\n[dependencies]\nx = { version = "=1.2.3", extra = 1 }\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\n[registry]\nelse = "x"\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\n[registry]\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\n[features]\nf = ["g"]\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\n[features]\nx = ["y"]\ny = []\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\n[features]\ndefault = ["x"]\nx = []\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\n[features]\nBAD = []\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\n[features]\nx = [1]\n
+schema = "nazm.package/1"\n[package]\nname = "a"\nversion = "1.0.0"\n[features]\nx = "y"\n

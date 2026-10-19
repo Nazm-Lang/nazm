@@ -1,0 +1,26 @@
+# `nazm yank`'s command lines, run in the fixture of run.sh (`fixture pkg`).
+--help
+-h
+
+util@1.1.0
+util@1.1.0 --registry
+util@1.1.0 --registry reg
+util@1.1.0 --registry reg --undo
+--undo util@1.1.0 --registry reg
+util@1.0.0 --registry reg
+util@2.0.0 --registry reg --undo
+util@9.9.9 --registry reg
+nothere@1.0.0 --registry reg
+util@1.1.0 --registry absent
+util@1.1.0 --registry reg/index
+util --registry reg
+util@ --registry reg
+@1.0.0 --registry reg
+util@1.0 --registry reg
+util@01.0.0 --registry reg
+util@1.0.0@x --registry reg
+deep@1.0.0 --registry reg
+odd@1.0.0 --registry reg --undo
+broken@1.0.0 --registry reg
+dup@1.0.0 --registry reg
+badidx@1.0.0 --registry reg

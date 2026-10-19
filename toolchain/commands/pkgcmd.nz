@@ -1,0 +1,457 @@
+// `nazm lock`, `nazm update`, `nazm publish` and `nazm yank`, written in Nazm (R5,
+// `openspec/changes/r5-commands/`, task 10.1, design D21).
+//
+// A port of `crates/nazm-cli/src/package.rs` over `pkg.nz` (the port of `crates/nazm-package`). Every
+// refusal is a diagnostic printed as `package.rs`'s `report` prints it; a manifest, lockfile or
+// registry index written in a form of TOML the port's reader does not read is refused with status 6.
+
+use "cli.nz"
+use "pkg.nz"
+use "toml.nz"
+use "util.nz"
+use "../../compiler/diag.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+fn refuse(io: IoCap, why: Str) -> Int {
+    eprint("package: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+// The command lines, as `crates/nazm-cli/src/cli.rs` declares them.
+pub fn lock_cli() -> Cli {
+    let c = cli_command("lock", "Resolve a package and write its `nazm.lock` (N46): the exact package versions, sources and digests a `--locked` build "
+            + "is held to. Written only when its bytes would change", "")
+    cli_positional(c, "DIR", true, false, true, "The package's directory, holding `nazm.toml`", "")
+    c
+}
+
+pub fn update_cli() -> Cli {
+    let c = cli_command("update", "Re-resolve a package with its lockfile's registry versions no longer preferred — every one's, or only the named "
+            + "packages' — write `nazm.lock`, and print each change (N90)", "")
+    cli_positional(c, "DIR", true, false, true, "The package's directory, holding `nazm.toml`", "")
+    cli_positional(c, "NAMES", false, true, false, "The registry packages to update; none means all", "")
+    c
+}
+
+pub fn publish_cli() -> Cli {
+    let c = cli_command("publish", "Publish a package into a local registry (N56): copy its manifest and sources and record the version and its digest. "
+            + "A published version never changes", "")
+    cli_positional(c, "DIR", true, false, true, "The package's directory, holding `nazm.toml`", "")
+    cli_required_option(c, "registry", "DIR", true, "The registry's directory")
+    cli_flag(c, "", "dry-run", "Make every check a publish makes and print what it would record — one `nazm.publish-plan/1` line: the name, version, digest "
+            + "and files — writing nothing (N74)", "")
+    c
+}
+
+pub fn yank_cli() -> Cli {
+    let c = cli_command("yank", "Withdraw a published version (N56): never chosen anew, still used where a lockfile names it", "")
+    cli_positional(c, "PACKAGE", true, false, false, "`NAME@VERSION`", "")
+    cli_required_option(c, "registry", "DIR", true, "The registry's directory")
+    cli_flag(c, "", "undo", "Restore a yanked version instead", "")
+    c
+}
+
+// `report`: the refusals and their count, status 1; or, where the port cannot say what the reference
+// does, status 6.
+fn report(io: IoCap, d: Dgs) -> Int {
+    if dgs_why(d) != "" { refuse(io, dgs_why(d)) }
+    eprint(dgs_text(d))
+    exit_with(1)
+    1
+}
+
+// The graph of `dir`, or the refusals reported.
+fn resolved(io: IoCap, dir: Str, dropping: Int, names: Strs) -> Graph {
+    let d = dgs_new()
+    let g = graph_resolve(io, dir, dropping, names, d)
+    if dgs_len(d) > 0 || dgs_why(d) != "" { report(io, d) }
+    g
+}
+
+pub fn lock_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let dir = cli_value(c, 0)
+    let g = resolved(io, dir, 0 - 1, strs_new())
+    let why = strs_new()
+    let r = graph_write_lock(io, g, why)
+    let path = ut_join(dir, "nazm.lock")
+    if r == 1 {
+        eprint("nazm: wrote " + path + " (" + int_to_str(graph_len(g)) + " package" + ut_plural(graph_len(g)) + ")" + nl())
+        return 0
+    }
+    if r == 0 {
+        eprint("nazm: " + path + " is up to date" + nl())
+        return 0
+    }
+    eprint("nazm: could not write the lockfile: " + strs_get(why, 0) + nl())
+    exit_with(4)
+    4
+}
+
+// The registry packages of a graph: name and version, in name order.
+fn registry_packages(g: Graph, names: Strs, vers: Strs) -> Int {
+    for p in 0..graph_len(g) {
+        if ut_starts(strs_get(g.source, p), "registry+") {
+            strs_push(names, strs_get(g.name, p))
+            strs_push(vers, strs_get(g.version, p))
+        }
+    }
+    0
+}
+
+pub fn update_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let dir = cli_value(c, 0)
+    let names = cli_values(c, 1)
+    let b_names = strs_new()
+    let b_vers = strs_new()
+    locked_registry_versions(io, ut_join(dir, "nazm.lock"), b_names, b_vers)
+    let g = resolved(io, dir, if strs_len(names) == 0 { 0 } else { 1 }, names)
+    // `resolve_updating`: a name that is no registry package of the lockfile or the graph.
+    let a_names = strs_new()
+    let a_vers = strs_new()
+    registry_packages(g, a_names, a_vers)
+    for i in 0..strs_len(names) {
+        let n = strs_get(names, i)
+        let mut known = false
+        for k in 0..strs_len(b_names) { if strs_get(b_names, k) == n { known = true } }
+        for k in 0..strs_len(a_names) { if strs_get(a_names, k) == n { known = true } }
+        if !known {
+            let d = dgs_new()
+            dgs_add(d, "N0501", "`" + n + "` is not a registry package of this build", "`nazm update` changes registry packages; a path package is its directory")
+            return report(io, d)
+        }
+    }
+    let mut changed = 0
+    let out = strs_new()
+    for i in 0..strs_len(a_names) {
+        let n = strs_get(a_names, i)
+        let mut old = ""
+        for k in 0..strs_len(b_names) { if strs_get(b_names, k) == n { old = strs_get(b_vers, k) } }
+        if old == "" {
+            strs_push(out, n + " (new) → " + strs_get(a_vers, i) + nl())
+            changed += 1
+        } else if ver_cmp(old, strs_get(a_vers, i)) != 0 {
+            strs_push(out, n + " " + old + " → " + strs_get(a_vers, i) + nl())
+            changed += 1
+        }
+    }
+    // What the lockfile named and the build no longer uses, in name order.
+    let gone = strs_new()
+    for k in 0..strs_len(b_names) {
+        let mut still = false
+        for i in 0..strs_len(a_names) { if strs_get(a_names, i) == strs_get(b_names, k) { still = true } }
+        if !still { strs_push(gone, strs_get(b_names, k)) }
+    }
+    // `BTreeMap` order: by name.
+    let order = strs_new()
+    for k in 0..strs_len(gone) {
+        let at = insert_sorted_names(order, strs_get(gone, k))
+        strs_push(order, "")
+        let mut j = strs_len(order) - 1
+        while j > at {
+            strs_set(order, j, strs_get(order, j - 1))
+            j -= 1
+        }
+        strs_set(order, at, strs_get(gone, k))
+    }
+    for i in 0..strs_len(order) {
+        let n = strs_get(order, i)
+        for k in 0..strs_len(b_names) {
+            if strs_get(b_names, k) == n {
+                strs_push(out, n + " " + strs_get(b_vers, k) + " → (removed)" + nl())
+                changed += 1
+            }
+        }
+    }
+    print(str_join(out, ""))
+    if changed == 0 { print("no changes" + nl()) }
+    let why = strs_new()
+    if graph_write_lock(io, g, why) < 0 {
+        eprint("nazm: could not write the lockfile: " + strs_get(why, 0) + nl())
+        exit_with(4)
+        return 4
+    }
+    0
+}
+
+fn insert_sorted_names(names: Strs, name: Str) -> Int {
+    let mut at = 0
+    while at < strs_len(names) && ut_less(strs_get(names, at), name) { at += 1 }
+    at
+}
+
+// --- the registry -------------------------------------------------------------------------------------------------------------
+
+// `create_dir_all`, as `std::fs` does it: make the directory; where its parent is missing, make that first;
+// any other failure stands unless the path is a directory. The system's reason in `why` where it fails.
+fn make_dirs(io: IoCap, path: Str, why: Strs) -> Bool {
+    if path == "" { return true }
+    let r = os_mkdir(path)
+    if r == 0 { return true }
+    if r == 0 - 2 {
+        let parent = to_parent(path)
+        if parent == "" {
+            strs_push(why, "failed to create whole tree")
+            return false
+        }
+        if !make_dirs(io, parent, why) { return false }
+        let r2 = os_mkdir(path)
+        if r2 == 0 || ut_kind(io, path) == 1 { return true }
+        strs_push(why, ut_os_error(r2))
+        return false
+    }
+    if ut_kind(io, path) == 1 { return true }
+    strs_push(why, ut_os_error(r))
+    false
+}
+
+// `write_index`: an index's exact bytes, versions ascending, written by a rename.
+fn write_index(io: IoCap, registry: Str, name: Str, versions: Strs, digests: Strs, yanked: Ints, why: Strs) -> Bool {
+    let out = strs_new()
+    strs_push(out, "schema = \"nazm.registry-index/1\"" + nl() + "name = \"" + name + "\"" + nl())
+    for i in 0..strs_len(versions) {
+        strs_push(out, nl() + "[[version]]" + nl() + "version = \"" + strs_get(versions, i) + "\"" + nl() + "digest = \"" + strs_get(digests, i) + "\"" + nl()
+                + "yanked = " + (if ints_get(yanked, i) == 1 { "true" } else { "false" }) + nl())
+    }
+    let dir = ut_join(registry, "index")
+    if !make_dirs(io, dir, why) { return false }
+    let tmp = ut_join(dir, "." + name + ".toml.tmp")
+    if !ut_write_all(io, tmp, str_join(out, "")) {
+        strs_push(why, ut_os_error(os_status(os_open_write(tmp, 0))))
+        return false
+    }
+    let r = os_rename(tmp, ut_join(dir, name + ".toml"))
+    if r < 0 {
+        strs_push(why, ut_os_error(r))
+        return false
+    }
+    true
+}
+
+fn registry_error(d: Dgs, registry: Str, why: Str) -> Int {
+    dgs_add(d, "N0512", "the registry at `" + registry + "`: " + why, "")
+    0
+}
+
+// `prepare`: every check a publish makes before it writes anything. The manifest's text and its parse,
+// and the index's entries; `ok` 1 where all hold.
+fn prepare(io: IoCap, dir: Str, registry: Str, d: Dgs, text_out: Strs, ix_out: Vec[Idx]) -> Mf {
+    let bad = mf_new()
+    ints_set(bad.state, 0, 0)
+    let manifest_path = ut_join(dir, "nazm.toml")
+    if ut_read_error(io, manifest_path, true) != "" {
+        dgs_add(d, "N0501", "no manifest `" + manifest_path + "`", "")
+        return bad
+    }
+    let text = read_file(manifest_path)
+    strs_push(text_out, text)
+    let m = mf_parse(text, manifest_path, d)
+    if ints_get(m.state, 0) != 1 { return bad }
+    for k in 0..strs_len(m.d_name) {
+        if ints_get(m.d_kind, k) == 0 {
+            dgs_add(d, "N0500", "`" + mf_name(m) + "` depends on `" + strs_get(m.d_name, k) + "` by path; a published package depends only on registry packages", "")
+            return bad
+        }
+    }
+    if !only_files(io, dir, d) { return bad }
+    let index_path = ut_join(ut_join(registry, "index"), mf_name(m) + ".toml")
+    let mut ix = idx_new_empty(registry, mf_name(m))
+    if ut_kind(io, index_path) == 0 {
+        ix = idx_read(io, registry, mf_name(m), d)
+        if ints_get(ix.ok, 0) != 1 { return bad }
+    }
+    vec_push(ix_out, ix)
+    for i in 0..strs_len(ix.version) {
+        if ver_cmp(strs_get(ix.version, i), mf_version(m)) == 0 {
+            dgs_add(d, "N0512", "`" + mf_name(m) + "` " + mf_version(m) + " is already published; a published version never changes", "")
+            return bad
+        }
+    }
+    let target = ut_join(ut_join(ut_join(registry, "packages"), mf_name(m)), mf_version(m))
+    let lst = bytes_new(48)
+    if os_lstat(target, lst) == 0 {
+        dgs_add(d, "N0512", "the registry already holds `" + target + "` for `" + mf_name(m) + "` " + mf_version(m) + ", which its index does not list; remove it before publishing", "")
+        return bad
+    }
+    m
+}
+
+fn idx_new_empty(registry: Str, name: Str) -> Idx {
+    let ix = Idx(ok: ints_new(), name: strs_new(), version: strs_new(), digest: strs_new(), yanked: ints_new(), registry: strs_new())
+    ints_push(ix.ok, 1)
+    strs_push(ix.name, name)
+    strs_push(ix.registry, registry)
+    ix
+}
+
+// `published_files`: the manifest and every `.nz` file under the root, relative, in path order.
+fn published_files(io: IoCap, dir: Str, m: Mf) -> Strs {
+    let out = strs_new()
+    strs_push(out, "nazm.toml")
+    let rels = strs_new()
+    let paths = strs_new()
+    pkg_sources(io, pkg_join(dir, mf_root(m)), rels, paths)
+    for i in 0..strs_len(rels) { strs_push(out, mf_root(m) + "/" + strs_get(rels, i)) }
+    out
+}
+
+pub fn publish_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let dir = cli_value(c, 0)
+    let registry = cli_value(c, 1)
+    let dry = cli_present(c, 2)
+    let d = dgs_new()
+    let text_out = strs_new()
+    let ix_out = vec_new[Idx]()
+    let m = prepare(io, dir, registry, d, text_out, ix_out)
+    if ints_get(m.state, 0) != 1 { return report(io, d) }
+    let text = strs_get(text_out, 0)
+    let files = published_files(io, dir, m)
+    if dry {
+        let digest = pkg_digest(io, text, pkg_join(dir, mf_root(m)))
+        // `resolve(dir).ok().and_then(root package's name)`.
+        let rd = dgs_new()
+        let g = graph_resolve(io, dir, 0 - 1, strs_new(), rd)
+        if dgs_why(rd) != "" { refuse(io, dgs_why(rd)) }
+        let name = if dgs_len(rd) == 0 { json_str(strs_get(g.name, ints_get(g.root, 0))) } else { "null" }
+        let fs = strs_new()
+        for i in 0..strs_len(files) { strs_push(fs, json_str(strs_get(files, i))) }
+        print("{\"digest\":" + json_str(digest) + ",\"files\":[" + str_join(fs, ",") + "],\"name\":" + name + ",\"schema\":\"nazm.publish-plan/1\",\"version\":"
+                + json_str(mf_version(m)) + ",\"written\":false}" + nl())
+        return 0
+    }
+    // Staged in a directory this publish creates, digested there, then renamed into place.
+    let name_dir = ut_join(ut_join(registry, "packages"), mf_name(m))
+    let target = ut_join(name_dir, mf_version(m))
+    let why = strs_new()
+    if !make_dirs(io, name_dir, why) {
+        registry_error(d, registry, strs_get(why, 0))
+        return report(io, d)
+    }
+    let staged = ut_join(name_dir, ".publish-" + mf_version(m) + "-" + int_to_str(os_pid()))
+    let mk = os_mkdir(staged)
+    if mk < 0 {
+        registry_error(d, registry, ut_os_error(mk))
+        return report(io, d)
+    }
+    let mut copied = true
+    let mut reason = ""
+    for i in 0..strs_len(files) {
+        if !copied { continue }
+        let to = ut_join(staged, strs_get(files, i))
+        let parent = to_parent(to)
+        let w2 = strs_new()
+        if parent != "" && !make_dirs(io, parent, w2) {
+            copied = false
+            reason = strs_get(w2, 0)
+        } else {
+            let from = ut_join(dir, strs_get(files, i))
+            if ut_read_error(io, from, false) != "" {
+                copied = false
+                reason = ut_read_error(io, from, false)
+            } else if !ut_write_all(io, to, read_file(from)) {
+                copied = false
+                reason = ut_os_error(os_status(os_open_write(to, 0)))
+            }
+        }
+    }
+    let digest = pkg_digest(io, text, ut_join(staged, mf_root(m)))
+    let mut renamed = 0
+    if copied { renamed = os_rename(staged, target) }
+    if !copied || renamed < 0 {
+        remove_tree(io, staged)
+        registry_error(d, registry, if !copied { reason } else { ut_os_error(renamed) })
+        return report(io, d)
+    }
+    let ix = vec_get(ix_out, 0)
+    let versions = strs_new()
+    let digests = strs_new()
+    let yanked = ints_new()
+    let mut placed = false
+    for i in 0..strs_len(ix.version) {
+        if !placed && ver_cmp(mf_version(m), strs_get(ix.version, i)) < 0 {
+            strs_push(versions, mf_version(m))
+            strs_push(digests, digest)
+            ints_push(yanked, 0)
+            placed = true
+        }
+        strs_push(versions, strs_get(ix.version, i))
+        strs_push(digests, strs_get(ix.digest, i))
+        ints_push(yanked, ints_get(ix.yanked, i))
+    }
+    if !placed {
+        strs_push(versions, mf_version(m))
+        strs_push(digests, digest)
+        ints_push(yanked, 0)
+    }
+    let w3 = strs_new()
+    if !write_index(io, registry, mf_name(m), versions, digests, yanked, w3) {
+        registry_error(d, registry, strs_get(w3, 0))
+        return report(io, d)
+    }
+    eprint("nazm: published " + mf_version(m) + " into " + registry + " (" + digest + ")" + nl())
+    0
+}
+
+// The directory part of a path.
+fn to_parent(path: Str) -> Str {
+    let mut at = 0 - 1
+    for i in 0..str_len(path) { if str_byte(path, i) == 47 { at = i } }
+    if at < 0 { "" } else { str_slice(path, 0, at) }
+}
+
+// `remove_dir_all`, each failure ignored.
+fn remove_tree(io: IoCap, dir: Str) -> Int {
+    let h = os_dir_open(dir)
+    if os_status(h) < 0 { return 0 }
+    let names = strs_new()
+    let buf = bytes_new(1024)
+    let mut n = os_dir_next(h, buf)
+    while n > 0 {
+        let name = bytes_to_str(bytes_slice(buf, 0, n))
+        if name != "." && name != ".." { strs_push(names, name) }
+        n = os_dir_next(h, buf)
+    }
+    os_close(h)
+    for i in 0..strs_len(names) {
+        let path = ut_join(dir, strs_get(names, i))
+        if ut_kind(io, path) == 1 { remove_tree(io, path) } else { os_unlink(path) }
+    }
+    os_rmdir(dir)
+    0
+}
+
+pub fn yank_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let which = cli_value(c, 0)
+    let registry = cli_value(c, 1)
+    let undo = cli_present(c, 2)
+    let at = ut_find(which, "@", 0)
+    let name = if at >= 0 { str_slice(which, 0, at) } else { "" }
+    let version = if at >= 0 { str_slice(which, at + 1, str_len(which)) } else { "" }
+    if at < 0 || !ver_ok(version) {
+        eprint("nazm: `" + which + "` is not NAME@VERSION" + nl())
+        exit_with(1)
+        return 1
+    }
+    let d = dgs_new()
+    let ix = idx_read(io, registry, name, d)
+    if ints_get(ix.ok, 0) != 1 { return report(io, d) }
+    let mut found = 0 - 1
+    for i in 0..strs_len(ix.version) { if ver_cmp(strs_get(ix.version, i), version) == 0 { found = i } }
+    if found < 0 {
+        dgs_add(d, "N0501", "the registry has no `" + name + "` " + version, "")
+        return report(io, d)
+    }
+    ints_set(ix.yanked, found, if undo { 0 } else { 1 })
+    let why = strs_new()
+    if !write_index(io, registry, name, ix.version, ix.digest, ix.yanked, why) {
+        registry_error(d, registry, strs_get(why, 0))
+        return report(io, d)
+    }
+    eprint("nazm: " + (if undo { "restored" } else { "yanked" }) + " " + name + " " + strs_get(ix.version, found) + nl())
+    0
+}
