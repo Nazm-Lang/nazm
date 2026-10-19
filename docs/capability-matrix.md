@@ -5402,7 +5402,7 @@ to be the one the C compiler driver resolves for the triple.
 Run-verified means programs built for the target ran and agreed with the interpreter: on the host,
 under Rosetta, in the Linux image, under QEMU — the three boards, which `support.md` writes
 **emulator-verified**, the kind of run-verified no hardware stands behind (Q1-D-24) — under Node — each cell's test is named in the table in
-code. `x86_64-unknown-linux-gnu` is compile-only: no x86_64 Linux machine or image is here. A
+code. `x86_64-unknown-linux-gnu` is compile-only: no x86_64 Linux machine or image is here. (The Nazm-written pipeline's acceptance of the Linux triples is internal to the container self-build, with no user-facing support claim: `support.md`, 2026-10-20.) A
 freestanding target is unsupported by Cranelift, whose object writer has no format for it, and
 WebAssembly by this Cranelift build. `x86_64-pc-windows-gnu` is run-verified **on a Windows host**: a Windows 10
 laptop, by `scripts/windows-host.sh` (2026-10-15), beside Gate 3C's runs under Wine in a Linux

@@ -70,10 +70,14 @@ and `path` (`print_with_sources`): without the sources the pipeline cannot turn 
 and column, and every failure message said `:1:1` (the first contained run found 9 of 66 programs
 disagreeing only there).
 
-### 3. PROPOSED — revising the containment rule (task 7.2; for the copyright holder)
+### 3. ACCEPTED 2026-10-20 — revising the containment rule (task 7.2)
 
-**Not applied.** `runbook-draft.md` is the text that would replace part of *Mandatory containment*
-if this is accepted.
+**Accepted by the copyright holder on 2026-10-20, exactly as proposed below**, and applied:
+`runbook-draft.md` is now `docs/runbook.md`, *What may run on the host: one bounded-heap stage*; the
+runner is `cargo xtask host-run` (`xtask/src/host_run.rs`; tests `xtask/tests/host_run.rs`). The
+copyright holder also accepted keeping the pipeline's Linux triples **internal-only** (the container
+self-build), with no user-facing support claim: recorded in `docs/support.md` and the capability
+matrix. The text below is the proposal as decided; "would" reads as "does".
 
 **What it would allow on the macOS host, outside the contained runner:** running one program
 written in Nazm — a builder program (`fe`, `pl`, `cg`), a command of `toolchain/commands/`, or a
@@ -170,6 +174,6 @@ The probe (front end built with 256 MiB, on `nazm.nz`): stopped with `N0406`, st
   of span read from `crates/nazm-core/src/lower.rs`. R2 work.
 - **The runtime's units are LLVM IR text**, assembled by `clang -c`: R3 generates them as text and
   R9 does not compile LLVM IR. Nothing written in Rust is involved, but the platform's `clang` is.
-- **The self-build is Linux only.** A macOS self-build is a host run, which is what decision 3
-  asks for.
+- **The self-build is Linux only.** A macOS self-build is a host run, which decision 3 (accepted
+  2026-10-20) still keeps contained: the self-build is many stages in a row.
 - **No `nazm build` in Nazm.** The script is the driver; R5 does not carry `build`.
