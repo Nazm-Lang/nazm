@@ -9690,3 +9690,16 @@ hash prints the same at `-O0`, `-O2`, `-O2` with Cranelift and `-O2 --debug`, bu
 the store; at `-O2` on macOS every object filed is bitcode, and none at the others.
 `backend::tests::only_an_optimised_macos_build_is_optimised_whole` holds the targets and levels,
 and the probe test the keys. Measured in `docs/performance.md`, *R1.5 3.4*. Four mutants.
+
+**Amended (2026-10-19): the link generates for the target's CPU.** The code of a whole-program build
+is generated at the link by `libLTO`, which knows no CPU but its own default; the bitcode names none.
+On arm64 that was the first ARMv8.0, without the large-system extensions, so every atomic — a
+string's count, the memory report's counters, the lock-free channel's compare-and-swap — was a
+load-/store-exclusive loop where a separately optimised object has one instruction (`ldadd`,
+`casal`): the four-task allocation loop was 13% slower after 3.4, and the channel's contended
+compare-and-swap retried. The link now passes `-Wl,-mcpu,CPU` with the CPU clang compiles a
+separate object for by default on that triple — `apple-m1` for arm64, `penryn` for x86_64
+(`backend::whole_program_cpu`) — the target's baseline, never the host's, so N66 (§7.68) holds.
+`backend::tests::a_whole_program_link_generates_for_the_cpu_a_separate_object_is_compiled_for`
+holds it to what `clang -###` resolves; an `-O2` executable of the four-task loop had 28
+exclusive-loop atomics and no LSE instruction before, none and 31 after. One mutant.
