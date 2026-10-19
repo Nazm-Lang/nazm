@@ -223,9 +223,20 @@ fn run_page(page: &str, min_runs: usize, min_commands: usize) {
             String::from_utf8_lossy(&out.stderr)
         );
         // The pages show the executable as `hello` and paths as `demo/nazm.lock`; Windows names
-        // it `hello.exe` and joins a path with `\`.
+        // it `hello.exe` and joins a path with `\`. Only the lines that print a path are changed:
+        // a diagnostic quotes source text, whose `\n` is not a separator.
         let shows = if cfg!(windows) {
-            shows.replace(".exe\n", "\n").replace('\\', "/")
+            shows
+                .replace(".exe\n", "\n")
+                .split_inclusive('\n')
+                .map(|line| {
+                    if line.starts_with("nazm: ") || line.trim_start().starts_with("--> ") {
+                        line.replace('\\', "/")
+                    } else {
+                        line.to_owned()
+                    }
+                })
+                .collect::<String>()
         } else {
             shows
         };
