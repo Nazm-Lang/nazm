@@ -1,0 +1,18 @@
+# `nazm-mcp`'s command line, run by both servers from the repository's root with an empty input (part `mcp` of run.sh): one
+# line of arguments each, split at spaces. What is compared is every byte of the output and the error and the status.
+(none)
+--root
+--root nope.nz
+--root examples
+--bogus
+--root examples/max.nz
+--root examples/max.nz --source-root
+--root examples/max.nz --docs
+--root examples/max.nz --source-root nowhere
+--root examples/max.nz --docs nowhere
+--root a --root examples/max.nz
+--help
+-V
+--source-root examples
+examples/max.nz
+--docs

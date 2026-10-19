@@ -354,3 +354,61 @@ pub fn j_pretty_written(j: J) -> Str {
     j_pp(j, 0, 0, out, false)
     str_join(out, "")
 }
+
+// --- written back compactly, as `serde_json::to_string` writes a `Value` ----------------------------------
+
+fn j_cp(j: J, n: Int, out: Strs) -> Int {
+    let k = ints_get(j.kind, n)
+    if k == 4 {
+        strs_push(out, json_str(strs_get(j.text, n)))
+        return 0
+    }
+    if k != 5 && k != 6 {
+        strs_push(out, strs_get(j.text, n))
+        return 0
+    }
+    let kids = ints_new()
+    let mut c = ints_get(j.first, n)
+    while c >= 0 {
+        ints_push(kids, c)
+        c = ints_get(j.next, c)
+    }
+    let order = ints_new()
+    if k == 6 {
+        for i in 0..ints_len(kids) {
+            let me = ints_get(kids, i)
+            let mut later = false
+            for t in i + 1..ints_len(kids) {
+                if strs_get(j.key, ints_get(kids, t)) == strs_get(j.key, me) { later = true }
+            }
+            if later { continue }
+            let mut at = ints_len(order)
+            while at > 0 && j_less(strs_get(j.key, me), strs_get(j.key, ints_get(order, at - 1))) { at -= 1 }
+            ints_push(order, 0)
+            let mut t = ints_len(order) - 1
+            while t > at {
+                ints_set(order, t, ints_get(order, t - 1))
+                t -= 1
+            }
+            ints_set(order, at, me)
+        }
+    } else {
+        for i in 0..ints_len(kids) { ints_push(order, ints_get(kids, i)) }
+    }
+    strs_push(out, if k == 6 { "{" } else { "[" })
+    for i in 0..ints_len(order) {
+        let child = ints_get(order, i)
+        if i > 0 { strs_push(out, ",") }
+        if k == 6 { strs_push(out, json_str(strs_get(j.key, child)) + ":") }
+        j_cp(j, child, out)
+    }
+    strs_push(out, if k == 6 { "}" } else { "]" })
+    0
+}
+
+// `to_string` of the parsed value: keys sorted (a `BTreeMap`), nothing between the tokens.
+pub fn j_canonical(j: J) -> Str {
+    let out = strs_new()
+    j_cp(j, 0, out)
+    str_join(out, "")
+}
