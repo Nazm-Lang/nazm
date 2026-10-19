@@ -1354,7 +1354,11 @@ mod tests {
             },
         );
         let bit = module(&m, Failures::Bit, Probes::Inline, super::Code::Plain);
-        assert_eq!(bit.matches(" = notail call {i64, i1} @g(").count(), 2, "{bit}");
+        assert_eq!(
+            bit.matches(" = notail call {i64, i1} @g(").count(),
+            2,
+            "{bit}"
+        );
         assert!(bit.contains(" = call {i64, i1} @f(i64 %p0)"), "{bit}");
         assert!(bit.contains("call i32 @nz.stack_check()"), "{bit}");
         // Where failures unwind, the call into a bare failure exit is the plain one; an invoke
