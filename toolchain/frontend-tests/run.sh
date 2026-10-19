@@ -3,7 +3,7 @@
 # against the Rust toolchain, on every input.
 #
 #   toolchain/frontend-tests/run.sh [MODE...]      MODE: tokens, tree, syntax, check, render, facts,
-#                                                  core, keys, units, refs (default: the first three)
+#                                                  core, keys, units, refs, calls (default: the first three)
 #
 # `render` compares the diagnostics' text, as `nazm check` writes them (design D4, task 4.2), and
 # `facts` what `nazm doc` reads of each compilation with what `compiler/facts.nz` answers (D24),
@@ -61,7 +61,7 @@ for mode in $modes; do
     tree) driver=tree ;;
     # Diagnostics as `nazm check --json` objects (design D4): `syntax` compares the lexer's and the
     # parser's alone, `check` every one — which needs the checker, slice by slice.
-    syntax|check|render|facts|core|keys|units|refs) driver=diagnose ;;
+    syntax|check|render|facts|core|keys|units|refs|calls) driver=diagnose ;;
     *) echo "run.sh: unknown mode $mode" >&2; exit 2 ;;
   esac
   exe="$out/bin/$driver"
@@ -152,6 +152,11 @@ for mode in $modes; do
         "$R2_REF" refs "$R2_ROOT/$f" > "$want" 2>/dev/null || true
         timeout "$R2_DEADLINE" "$R2_EXE" --refs "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
+      calls)
+        # The call graph (R5 hand-back): the calls of each function, as the Rust side recorded them.
+        "$R2_REF" calls "$R2_ROOT/$f" > "$want" 2>/dev/null || true
+        timeout "$R2_DEADLINE" "$R2_EXE" --calls "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
+        [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
       syntax)
         "$R2_REF" syntax "$R2_ROOT/$f" > "$want" 2>&1 || true
         timeout "$R2_DEADLINE" "$R2_EXE" --syntax "$R2_ROOT/$f" > "$got" 2>&1 || true ;;
@@ -176,7 +181,7 @@ for mode in $modes; do
     counts=$(cat "$out/$mode"/*.count 2>/dev/null | awk '{ t += $1; c += $2; a += $3; p += $4; q += $5; d += $6; e += $7 } END { printf "%d %d %d %d %d %d %d", t, c, a, p, q, d, e }')
     set -- $counts
     echo "$mode: $agree agree, $differ differ; functions: $1, the lowering carries $2, of which $3 agree; the document's other parts: $4 carried, of which $5 agree; whole documents: $6 carried, of which $7 agree byte for byte"
-  elif [ "$mode" = check ] || [ "$mode" = render ] || [ "$mode" = facts ] || [ "$mode" = refs ]; then
+  elif [ "$mode" = check ] || [ "$mode" = render ] || [ "$mode" = facts ] || [ "$mode" = refs ] || [ "$mode" = calls ]; then
     # The inputs the checker carries whole: no `.stop` left behind; among them, a difference is a
     # defect rather than a gap.
     carried=0; carried_ok=0
