@@ -31,6 +31,9 @@ reference before R3 and R9 port that part, so the rewrite copies only what stays
       measurable and a guard page cannot keep `N0408`'s unwinding (design.md)
 - [ ] 4.2 Failures by unwinding, replacing the returned bit — decided 2026-10-15 (the bit is
       `fib`'s whole gap, design.md); to implement in the reference before R3/R9 port the convention
+- [x] 4.3 A call in a call cycle is never a tail call (`notail`, LLVM backend), so no optimiser turns
+      an unbounded recursion into a loop that spins instead of failing with `N0408` (LLVM 23 did;
+      2026-10-19, design.md)
 
 ## 5. Zero dependence on LLVM (after 1.0)
 - [ ] 5.1 Nazm's own optimiser and code generator for optimised builds, so no build needs `clang`
