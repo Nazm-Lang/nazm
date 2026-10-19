@@ -490,3 +490,59 @@ pub fn fd_diagids(f: Facts) -> Str {
     }
     str_join(out, "")
 }
+
+// The declared types of every record's fields and enum's payloads, one line a definition:
+// `record<TAB>NAME<TAB>TYPE<TAB>FIELD:TYPE;…` and `enum<TAB>NAME<TAB>TYPE<TAB>VARIANT(FIELD:TYPE,…);…`,
+// the definitions in the checker's order, each type as `Types::show` writes it, `-` for a
+// definition with no type made (what `refdump fieldtypes` prints from the reference's tables); a
+// tuple's record, which the compiler makes only applied, is left out.
+pub fn fd_fieldtypes(f: Facts) -> Str {
+    if fx_carried(f) == false { return str_concat("stops", nl()); }
+    if fx_refusal(f) != "" { return str_concat("refused", nl()); }
+    if fx_loaded(f) == false || fx_failed(f) { return str_concat("fails", nl()); }
+    let out = strs_new();
+    let c = fx_checker(f);
+    let mut r = 0;
+    while r < ck_record_count(c) {
+        // A tuple's record is the compiler's, made only applied: it has no type of its own.
+        if str_byte(ck_record_name(c, r), 0) == 40 {
+            r = r + 1;
+            continue;
+        }
+        let t = fx_record_type(f, r);
+        let fields = strs_new();
+        let mut k = 0;
+        while t >= 0 && k < ck_record_arity(c, t) {
+            strs_push(fields, cat3(ck_record_field_name(c, t, k), ":", fx_show(f, fx_record_field_ty(f, t, k))));
+            k = k + 1;
+        }
+        strs_push(out, cat5("record", tab(), ck_record_name(c, r), tab(), shown(f, t)));
+        strs_push(out, cat3(tab(), str_join(fields, ";"), nl()));
+        r = r + 1;
+    }
+    let mut e = 0;
+    while e < ck_enum_count(c) {
+        let t = fx_enum_type(f, e);
+        let variants = strs_new();
+        let mut v = 0;
+        while t >= 0 && v < ck_variant_count(c, t) {
+            let fields = strs_new();
+            let mut k = 0;
+            while k < ck_variant_arity(c, t, v) {
+                strs_push(fields, cat3(ck_payload_name(c, t, v, k), ":", fx_show(f, fx_payload_ty(f, t, v, k))));
+                k = k + 1;
+            }
+            strs_push(variants, cat5(ck_variant_name(c, t, v), "(", str_join(fields, ","), ")", ""));
+            v = v + 1;
+        }
+        strs_push(out, cat5("enum", tab(), ck_enum_name(c, e), tab(), shown(f, t)));
+        strs_push(out, cat3(tab(), str_join(variants, ";"), nl()));
+        e = e + 1;
+    }
+    str_join(out, "")
+}
+
+fn shown(f: Facts, t: Int) -> Str {
+    if t < 0 { return "-"; }
+    fx_show(f, t)
+}
