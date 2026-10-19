@@ -54,6 +54,22 @@ The one way to start it is `cargo xtask host-run [--deadline-secs N] -- EXECUTAB
 `another-stage-running` and `contained-workload-running`. Do not run a Nazm-built program on the
 host any other way.
 
+`host-run` is the program's own as far as a script can see it. Its standard output is the program's
+bytes, unchanged; its standard error is the program's, and the runner's one report line (heap
+limit, peak resident memory, instructions retired where the platform counts them, the exit) goes
+there only when no `--report FILE` is given, and is appended to FILE when it is. Its exit status is
+the program's; the statuses that are not are 1 (refused or a usage error), 70 (the rule withdrawn),
+124 (the deadline), 125 (killed by a signal) and 126 (output past `--max-output-mib`, default 4,
+at most 256: the output is cut there, never compared as a prefix without saying so).
+
+Every script under `toolchain/` that builds and runs a program written in Nazm sources
+`toolchain/lib/stage.sh`: the program is built by the checkout's `nazm` with `--heap-limit` of at
+most 2 GiB (`STAGE_HEAP`), and runs through `toolchain/lib/stage-run.sh`, which is a direct run under
+a deadline inside the contained runner and a `host-run` (one at a time, report to a file) on the
+macOS host. The scripts that run programs in parallel, built without a limit (`nazm test`), or as a
+mutation campaign (`toolchain/commands/tests/run.sh`, `toolchain/harness/tests/{run.sh,mutants.sh}`)
+refuse to start outside the contained runner.
+
 The heap limit is a ceiling the program enforces on itself: every byte its code and runtime ask
 for is counted first, and an allocation past the limit does not happen (`N0406`, status 2;
 `docs/spec.md`, *A bounded heap*). It does not count a task's stack, the image, C's own

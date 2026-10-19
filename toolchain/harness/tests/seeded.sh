@@ -16,10 +16,15 @@ if [ "$tree" = "$(cd "$here/../.." && pwd)" ]; then
     echo "refusing to seed defects into the working tree; give a scratch copy" >&2
     exit 2
 fi
-export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$HOME/.cache/nazm-target-R7-mut}
 # `nazm-check` and `nazm-mutate` are written in the checkout's language (`Chain[T]`, R1.5 D7; R8
-# slice 1), so the copy's own `nazm` builds them, with the 2 GiB heap the runbook's R6 rule asks of
-# a Nazm program run on a host; HARNESS_NAZM names another.
+# slice 1), so the copy's own `nazm` builds them (HARNESS_NAZM names another), with a heap limit of
+# 2 GiB, and they run contained or, on a macOS host, one at a time through `cargo xtask host-run`
+# (`toolchain/lib/stage.sh`; the runbook's R6 rule). The runner is built before the copy's target
+# directory is chosen, so the copy's own xtask never replaces it.
+. "$here/../lib/stage.sh"
+stage_name=seeded
+stage_init "$(cd "$here/../.." && pwd)"
+export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$HOME/.cache/nazm-target-R7-mut}
 seeds=$here/tests/seeds.toml
 
 log=$(mktemp -d "${TMPDIR:-/tmp}/r7-seeded.XXXXXX")
@@ -28,7 +33,7 @@ trap 'rm -rf "$log"' EXIT
 xtask=$CARGO_TARGET_DIR/debug/xtask
 HARNESS_NAZM=${HARNESS_NAZM:-$CARGO_TARGET_DIR/debug/nazm}
 for prog in check mutate; do
-    "$HARNESS_NAZM" build --heap-limit 2G "$here/$prog/main.nz" -o "$log/nazm-$prog" >"$log/$prog.build" 2>&1 || {
+    stage_build "$HARNESS_NAZM" "$here/$prog/main.nz" -o "$log/nazm-$prog" >"$log/$prog.build" 2>&1 || {
         cat "$log/$prog.build" >&2; exit 1; }
 done
 
@@ -43,7 +48,7 @@ block() {
 compare() {
     local label=$1
     (cd "$tree" && "$xtask" check) >"$log/rust.out" 2>&1
-    "$log/nazm-check" "$tree" >"$log/nazm.out" 2>&1
+    "$STAGE_RUN" 900 "$log/nazm-check" "$tree" >"$log/nazm.out" 2>&1
     local failed=""
     while IFS= read -r gate; do
         local r n
@@ -57,7 +62,7 @@ compare() {
     # problems, on the same tree.
     (cd "$tree" && "$xtask" mutate --plan) >"$log/rust-plan.out" 2>&1
     local rp=$?
-    "$log/nazm-mutate" plan "$tree" >"$log/nazm-plan.out" 2>&1
+    "$STAGE_RUN" 900 "$log/nazm-mutate" plan "$tree" >"$log/nazm-plan.out" 2>&1
     local np=$?
     if [ $rp -ne $np ] || ! cmp -s "$log/rust-plan.out" "$log/nazm-plan.out"; then
         failed="${failed}mutate --plan: exit $rp/$np, $(diff "$log/rust-plan.out" "$log/nazm-plan.out" | head -6 | tr '\n' '|'); "
@@ -74,12 +79,12 @@ compare() {
 
 compare "the pristine copy"
 
-"$log/nazm-mutate" list "$seeds" | cut -f1,2 >"$log/names"
+"$STAGE_RUN" 300 "$log/nazm-mutate" list "$seeds" | cut -f1,2 >"$log/names"
 # The Rust gates compile `xtask/src/rules.rs` in: a seed there rebuilds them, and so does its
 # restore. (A seed elsewhere in `xtask/src/` is a module-boundaries input, read, not built.)
 rebuild() { (cd "$tree" && cargo build -q -j "${CARGO_JOBS:-4}" -p xtask) || exit 1; }
 while IFS=$'\t' read -r name file; do
-    out=$("$log/nazm-mutate" apply "$tree" "$seeds" "$name")
+    out=$("$STAGE_RUN" 300 "$log/nazm-mutate" apply "$tree" "$seeds" "$name")
     if [ $? -ne 0 ]; then differ=$((differ + 1)); echo "DIFFER  $name: $out"; continue; fi
     made=""
     if [ "$name" = readme-says-not-pre-registered ]; then
@@ -89,7 +94,7 @@ while IFS=$'\t' read -r name file; do
     case $file in xtask/src/rules.rs) rebuild ;; esac
     compare "$name"
     [ -n "$made" ] && rm -f "$made"
-    "$log/nazm-mutate" restore "$tree" >/dev/null || { echo "could not restore $name" >&2; exit 1; }
+    "$STAGE_RUN" 300 "$log/nazm-mutate" restore "$tree" >/dev/null || { echo "could not restore $name" >&2; exit 1; }
     case $file in xtask/src/rules.rs) rebuild ;; esac
 done <"$log/names"
 

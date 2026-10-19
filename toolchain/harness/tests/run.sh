@@ -14,8 +14,7 @@
 # it must have no port (the list is revisited after the cut-over, R8).
 #
 # Environment:
-#   HARNESS_NAZM      the `nazm` that builds and runs the harness (default: the 0.10.0 release),
-#                     but `nazm-check`, which `NAZM` builds (R8 slice 1: `Chain[T]`)
+#   HARNESS_NAZM      the `nazm` that builds and runs the harness (default: `NAZM`, the tree's)
 #   CARGO_TARGET_DIR  where Cargo builds the Rust side (default: ~/.cache/nazm-target-track7)
 #   NAZM              the `nazm` under test (default: the tree's, `$CARGO_TARGET_DIR/debug/nazm`,
 #                     which is the binary the Rust tests run — so both sides test one binary)
@@ -25,9 +24,9 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 root=$(cd "$here/../.." && pwd)
 cd "$root" || exit 1
 
-HARNESS_NAZM=${HARNESS_NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$HOME/.cache/nazm-target-track7}
 export NAZM=${NAZM:-$CARGO_TARGET_DIR/debug/nazm}
+HARNESS_NAZM=${HARNESS_NAZM:-$NAZM}
 export NAZM_HARNESS_ROOT=$root
 # What `.cargo/config.toml` gives every process Cargo starts: no ported test writes to the real user
 # cache (R1.5, D12).
@@ -35,6 +34,13 @@ export NAZM_USER_CACHE_DIR=
 what=${1:-all}
 [ $# -gt 0 ] && shift
 only=("$@")
+# The gates compare one Nazm program, `nazm-check`, built with a 2 GiB heap limit: contained, or on
+# a macOS host through `cargo xtask host-run`. The test files run through `nazm test`, whose
+# programs are built without a heap limit, in the contained runner only:
+#   cargo xtask contained run 'cargo build --locked -p nazm-cli && sh toolchain/harness/tests/run.sh'
+. "$root/toolchain/lib/stage.sh"
+stage_name=harness
+if [ "$what" = checks ]; then stage_init "$root"; else stage_init "$root" contained; fi
 
 agree=0
 differ=0
@@ -94,7 +100,7 @@ compare_tests() {
     # Nazm's own code generator (R9, D15), built once from `toolchain/codegen/` by the `nazm` under
     # test, as `differential::nzcg` builds it once per test process: what `--backend nazm` runs.
     if [ "$(uname -s)" = Darwin ]; then
-        if "$NAZM" build --no-cache "$root/toolchain/codegen/main.nz" -o "$log/nzcg" >"$log/nzcg.out" 2>&1; then
+        if stage_build "$NAZM" --no-cache "$root/toolchain/codegen/main.nz" -o "$log/nzcg" >"$log/nzcg.out" 2>&1; then
             export NAZM_HARNESS_NZCG=$log/nzcg
         else
             note_differ "nzcg did not build: $(grep -m1 error "$log/nzcg.out")"
@@ -102,7 +108,7 @@ compare_tests() {
     fi
     # The harness's native tool for documents too large for the interpreted leg (design decision
     # 16), built once by the release that builds the harness.
-    if "$HARNESS_NAZM" build "$here/tools/jtool.nz" -o "$log/jtool" >"$log/jtool.out" 2>&1; then
+    if stage_build "$HARNESS_NAZM" "$here/tools/jtool.nz" -o "$log/jtool" >"$log/jtool.out" 2>&1; then
         export NAZM_HARNESS_JTOOL=$log/jtool
     else
         note_differ "jtool did not build: $(grep -m1 error "$log/jtool.out")"
@@ -166,7 +172,7 @@ compare_checks() {
         note_differ "nazm did not build: $(tail -1 "$log/build.err")"
         return
     fi
-    if ! "$NAZM" build --heap-limit 2G "$here/check/main.nz" -o "$exe" >"$log/check-build.out" 2>&1; then
+    if ! stage_build "$NAZM" "$here/check/main.nz" -o "$exe" >"$log/check-build.out" 2>&1; then
         note_differ "check/main.nz did not build: $(grep -m1 error "$log/check-build.out")"
         return
     fi
@@ -175,7 +181,7 @@ compare_checks() {
         return
     fi
     "$CARGO_TARGET_DIR/debug/xtask" check >"$log/rust-check.out" 2>&1
-    "$exe" "$root" >"$log/nazm-check.out" 2>&1
+    "$STAGE_RUN" 900 "$exe" "$root" >"$log/nazm-check.out" 2>&1
     compare_reports "the tree" "$log/rust-check.out" "$log/nazm-check.out"
 }
 

@@ -20,4 +20,4 @@ if [ -n "${TARGET:-}" ]; then extra=(-target "$TARGET"); fi
 case "$(uname -s)" in Linux) [ -z "${TARGET:-}" ] && extra=(-ffunction-sections -fdata-sections) ;; esac
 env -i ${pass[@]+"${pass[@]}"} clang -### -O0 -Wno-override-module -c ${extra[@]+"${extra[@]}"} -o "$DIR/probe.o" "$DIR/probe.ll" 2> "$DIR/probe.report"
 rm -f "$DIR/probe.ll"
-"$P" backend "$DIR/probe.report" "$DIR/probe.ll" "$DIR/probe.o"
+"${STAGE_RUN:?run this through the suite: toolchain/pipeline/tests/run.sh}" 300 "$P" backend "$DIR/probe.report" "$DIR/probe.ll" "$DIR/probe.o"
