@@ -315,7 +315,7 @@ pub fn reload_command(io: IoCap, c: Cli) -> Int {
         strs_push(items, "{\"name\":\"" + esc(strs_get(ch.name, i)) + "\",\"verdict\":\"" + strs_get(ch.verdict, i) + "\",\"why\":\"" + esc(strs_get(ch.why, i)) + "\"}")
     }
     // `nazm_lir::runtime::RUNTIME_ABI_REVISION`, which `run.sh` holds this value to.
-    print("{\"schema\":\"nazm.reload-check/1\",\"runtime_abi\":49,\"outcome\":\"" + (if restart { "restart" } else { "reloadable" }) + "\",\"changes\":["
+    print("{\"schema\":\"nazm.reload-check/1\",\"runtime_abi\":50,\"outcome\":\"" + (if restart { "restart" } else { "reloadable" }) + "\",\"changes\":["
             + str_join(items, ",") + "]}" + nl())
     if restart {
         for i in 0..strs_len(ch.name) {

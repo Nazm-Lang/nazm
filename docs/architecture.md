@@ -7708,6 +7708,19 @@ from the sender parked longest, so the order values were offered in is the order
 a select's look and offer (`nz.chq_try`, `nz.chq_offer`) go the same ways. Every function that
 locks, parks, wakes or spins is `noinline` (6.3). Runtime ABI 48 → 49.
 
+**Amended (2026-10-19): a waiter is counted out by whoever takes it off a list.** A parked waiter
+used to leave `waiting` itself, when it ran again; a woken task can wait long for its worker (a
+sleeping worker's signal, or another task's time slice), and while it was counted every send and
+receive on the channel took the mutex. In fan-in (eight producers, one receiver, a ring of 1,024)
+nearly everything did: 0.85–0.997 of the million operations on each side, almost all with nobody
+on either list, and sender parks 14,000–138,000 with up to 54,000 signals to sleeping workers —
+the 445 → 845 ms regression, bimodal by where the producers landed. `nz.chq_take` now takes the
+channel and counts the record out as it takes it, under the mutex, and the woken waiter does not.
+The count still covers every record on a list and every waiter between counting itself and
+enlisting (both under the mutex), so the argument above is unchanged; a waiter told to look again
+counts itself in again if it parks again. Counted the same way afterwards: ≥ 0.995 of each side
+without the lock, parks 800–3,100, signals 660–2,500, in ten runs. Runtime ABI 49 → 50.
+
 ## 7.85 The standard library 1.0 — N84, 2026-10-04
 
 Written before the code. Area 16 is PARTIAL: N45's foundation is 34 functions in eight modules, enough
