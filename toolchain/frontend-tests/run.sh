@@ -47,8 +47,11 @@ case $(uname -s) in Darwin) host_os=macos ;; Linux) host_os=linux ;; *) host_os=
 case $(uname -m) in arm64|aarch64) host_arch=aarch64 ;; *) host_arch=$(uname -m) ;; esac
 
 # The reference dumper, built from this checkout.
-(cd "$root/toolchain/frontend-tests/refdump" && CARGO_TARGET_DIR="$ref_target" cargo build --release --quiet) \
-  || { echo "run.sh: the reference dumper did not build" >&2; exit 2; }
+# `coresources` compares against `nazm core-ir` alone and needs no dumper.
+if [ "$modes" != coresources ]; then
+  (cd "$root/toolchain/frontend-tests/refdump" && CARGO_TARGET_DIR="$ref_target" cargo build --release --quiet) \
+    || { echo "run.sh: the reference dumper did not build" >&2; exit 2; }
+fi
 ref="$ref_target/release/nazm-r2-refdump"
 
 # The inputs, one path per line, sorted, relative to the root.
