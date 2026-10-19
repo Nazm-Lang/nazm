@@ -509,3 +509,8 @@ why = "hyperfine over release nazm builds of 0a52becf and 26e5e64a on bench/comp
 heading = "nbody and binary-trees in every language, measured (quiet window, 2026-10-19)"
 status = "dated"
 why = "one run of `bench/compare/compare.py --runs 10 --only nbody,bintrees` on this Mac, nbody begun at load 1.91 and binary-trees at 2.33 (the benchmark's own runs), no cargo, rustc or nextest running; a record of that date and machine — the script reproduces the method, not these numbers"
+
+[[claim]]
+heading = "binary-trees after the box and free-list fixes, measured (quiet window, 2026-10-19)"
+status = "dated"
+why = "one run of `bench/compare/compare.py --runs 10 --only bintrees` at 95793836 on this Mac, begun at load 1.82 with no cargo, rustc or nextest running; a record of that date and machine — the script reproduces the method, not these numbers"
