@@ -1,0 +1,4 @@
+fn add(a: Int, b: Int) -> Int { a + b }
+fn twice(n: Int) -> Int { add(n, n) }
+fn shout(io: IoCap, s: Str) -> Int ! { io } { print(s); 0 }
+fn main() -> Int { twice(2) }

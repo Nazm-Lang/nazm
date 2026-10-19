@@ -1,0 +1,6 @@
+fn add(a: Int, b: Int) -> Int { a + b }
+fn twice(n: Int) -> Int {
+    let f = fn(x: Int) -> Int { x + n };
+    f(n)
+}
+fn main() -> Int { twice(2) }

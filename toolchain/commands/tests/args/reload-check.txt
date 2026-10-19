@@ -1,0 +1,37 @@
+# `nazm reload-check`'s command lines, run in the fixture of run.sh (`fixture reload-check`): tests/reload's programs.
+--help
+-h
+--bogus base.nz base.nz
+base.nz
+base.nz base.nz base.nz
+base.nz base.nz
+base.nz body.nz
+body.nz base.nz
+base.nz signature.nz
+base.nz removed.nz
+removed.nz base.nz
+base.nz added.nz
+base.nz effects.nz
+effects.nz inferred.nz
+base.nz closure.nz
+closure.nz closure2.nz
+generic.nz generic2.nz
+foreign.nz foreign2.nz
+base.nz comment.nz
+base.nz pub.nz
+base.nz attr.nz
+base.nz crlf.nz
+params.nz params2.nz
+escapes.nz escapes2.nz
+base.nz broken.nz
+broken.nz base.nz
+broken.nz broken.nz
+base.nz syntax.nz
+syntax.nz missing.nz
+base.nz missing.nz
+base.nz absent.nz
+absent.nz base.nz
+absent.nz absent.nz
+base.nz sub
+sub base.nz
+-- base.nz body.nz
