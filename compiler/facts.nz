@@ -1003,3 +1003,14 @@ pub fn fx_diag_ids(f: Facts) -> Strs {
     }
     out
 }
+
+// --- the types of records' fields (R5 hand-back) ----------------------------------------------
+//
+// Record `r`'s (`ck_record_*`'s numbering) type, and enum `e`'s — a type for `fx_show` and for the
+// by-type readers: `fx_record_field_ty` of a record type's field `i`, `fx_payload_ty` of an enum
+// type's variant `v`'s payload field `i` (a definition's as declared, naming its parameters) —
+// or -1 where the checker made none.
+pub fn fx_record_type(f: Facts, r: Int) -> Int { ck_record_type(f.c, r) }
+pub fn fx_enum_type(f: Facts, e: Int) -> Int { ck_enum_type(f.c, e) }
+pub fn fx_record_field_ty(f: Facts, t: Int, i: Int) -> Int { ck_record_field_ty(f.c, t, i) }
+pub fn fx_payload_ty(f: Facts, t: Int, v: Int, i: Int) -> Int { ck_payload_ty(f.c, t, v, i) }

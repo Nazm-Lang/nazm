@@ -517,6 +517,63 @@ fn diagids(path: &str) -> String {
     }
 }
 
+/// The declared types of every record's fields and enum's payloads, one line a definition:
+/// `record<TAB>NAME<TAB>TYPE<TAB>FIELD:TYPE;...` and `enum<TAB>NAME<TAB>TYPE<TAB>VARIANT(FIELD:TYPE,...);...`,
+/// definitions (not applications) in the table's order, each type as `Types::show` writes it.
+fn fieldtypes(path: &str) -> String {
+    use nazm_core::sema::Type;
+    let (_, a) = match analysed(path) {
+        Ok(x) => x,
+        Err(w) => return format!("{w}\n"),
+    };
+    let res = &a.resolution;
+    let types = res.types();
+    let mut out = String::new();
+    for (i, def) in res.records().all().iter().enumerate() {
+        // A tuple's record is the compiler's, made only applied: it has no type of its own.
+        if def.instance.is_some() || def.name.starts_with('(') {
+            continue;
+        }
+        let fields: Vec<String> = def
+            .fields
+            .iter()
+            .map(|f| format!("{}:{}", f.name, types.show(f.ty)))
+            .collect();
+        let id = nazm_core::sema::RecordId::from_index(i);
+        out.push_str(&format!(
+            "record\t{}\t{}\t{}\n",
+            def.name,
+            types.show(Type::Record(id)),
+            fields.join(";")
+        ));
+    }
+    for (i, def) in res.enums().all().iter().enumerate() {
+        if def.instance.is_some() {
+            continue;
+        }
+        let variants: Vec<String> = def
+            .variants
+            .iter()
+            .map(|v| {
+                let fields: Vec<String> = v
+                    .fields
+                    .iter()
+                    .map(|f| format!("{}:{}", f.name, types.show(f.ty)))
+                    .collect();
+                format!("{}({})", v.name, fields.join(","))
+            })
+            .collect();
+        let id = nazm_core::sema::EnumId::from_index(i);
+        out.push_str(&format!(
+            "enum\t{}\t{}\t{}\n",
+            def.name,
+            types.show(Type::Enum(id)),
+            variants.join(";")
+        ));
+    }
+    out
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("builtins") {
@@ -529,7 +586,7 @@ fn main() {
     };
     if matches!(
         mode.as_str(),
-        "keys" | "refs" | "calls" | "provenance" | "coredigests" | "diagids"
+        "keys" | "refs" | "calls" | "provenance" | "coredigests" | "diagids" | "fieldtypes"
     ) {
         let path = path.clone();
         let mode = mode.clone();
@@ -541,6 +598,7 @@ fn main() {
                 "provenance" => provenance(&path),
                 "coredigests" => coredigests(&path),
                 "diagids" => diagids(&path),
+                "fieldtypes" => fieldtypes(&path),
                 _ => calls(&path),
             })
             .expect("spawn")
