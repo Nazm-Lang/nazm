@@ -89,17 +89,16 @@ jobs:
   # aarch64 and macOS on Apple Silicon, where until now the evidence was Wine in a container, a
   # container on a Mac, and the developer's own Mac. The same host-safe subset, nothing more.
   #
-  # **Evidence-gathering, not a gate.** Each job may fail without failing the run
-  # (`continue-on-error`) until it is green once; then the flag comes off and it gates like
-  # `host-safe`. A green job here is a recorded host-safe run on that host, not a target made
-  # run-verified: `docs/support.md` names what that takes, and the release gate is unchanged.
+  # A gate since 2026-10-20, when all three hosts were green together for the first time (run
+  # 39308569358, 69a5f780; Windows from 844 failing tests over CI rounds 2-5). A green job here is a
+  # recorded host-safe run on that host, not a target made run-verified: `docs/support.md` names what
+  # that takes, and the release gate is unchanged.
   platforms:
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-24.04-arm, macos-latest]
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -167,11 +166,11 @@ jobs:
   # held to what the engine must print (trusted: TLSv1.2 [http/1.1], wrote 5, read 5; another
   # name -65603; expired -65602; self-signed and the platform store -65601).
   #
-  # **Evidence-gathering, not a gate**, until it has passed once. A pass is what lets a Windows
-  # build reach TLS (lifting `N0830`, `emit_tls` binding the unit); until then it is refused.
+  # A gate since 2026-10-20 (green on every run since it first passed). Switching TLS on for Windows
+  # builds (lifting `N0830`, `emit_tls` binding the unit) is a separate decision, deferred by the
+  # copyright holder; until then a Windows build refuses TLS.
   windows-tls:
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
