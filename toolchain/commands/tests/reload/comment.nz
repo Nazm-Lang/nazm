@@ -1,0 +1,5 @@
+// a comment
+fn add(a: Int, b: Int) -> Int { a + b }
+
+fn twice(n: Int) -> Int { add(n, n) }
+fn main() -> Int { twice(2) }

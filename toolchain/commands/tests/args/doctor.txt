@@ -1,0 +1,6 @@
+# `nazm doctor`'s command lines.
+--help
+-h
+extra
+--bogus
+-- extra

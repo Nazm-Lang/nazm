@@ -2,7 +2,7 @@
 # R5's comparisons (`openspec/changes/r5-commands/design.md`): each command written in Nazm against
 # the Rust `nazm` built from this checkout, on every input.
 #
-#   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init, check, doc, fix, lsp, test, interface, docs (all by default)
+#   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init, check, doc, fix, lsp, test, interface, docs, bindgen, reload (all by default)
 #
 # The Nazm `nazm` (toolchain/commands/nazm.nz, which dispatches to CMD.nz) is built by the 0.10.0
 # release ($NAZM) and run as the reference is run, `nazm CMD ARGS`. The reference is
@@ -49,6 +49,11 @@
 #         or duplicated document, a broken link, an unclosed fence, a setext heading, a misplaced
 #         anchor, a grammar with a detached comment ...): the answers and the problems named (design D20).
 #
+#   bindgen  Every header of tests/bindgen and bench/compare, with and without `-o`: the module, the refusals,
+#         the report and the file written (design D22).
+#
+#   reload  `reload-check OLD NEW` for every pair of the programs of tests/reload, itself included (design D22).
+#
 # NAZM_PORT names a port already built from this checkout, instead of building one.
 #
 # Prints one summary line per part, after the names of the first differences. Exits 1 when
@@ -62,11 +67,11 @@ if [ "${1:-}" = "-j" ]; then jobs=$2; shift 2; fi
 parts=""
 while [ $# -gt 0 ]; do
   case $1 in
-    fmt|args|init|check|doc|fix|lsp|test|interface|docs) parts="$parts $1"; shift ;;
+    fmt|args|init|check|doc|fix|lsp|test|interface|docs|bindgen|reload) parts="$parts $1"; shift ;;
     *) break ;;
   esac
 done
-[ -n "$parts" ] || parts="fmt args init check doc fix lsp test interface docs"
+[ -n "$parts" ] || parts="fmt args init check doc fix lsp test interface docs bindgen reload"
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 nazm=${NAZM:-"$HOME/.local/nazm-0.10.0/bin/nazm"}
@@ -488,6 +493,18 @@ fixture() {
       for f in notjson badtype nosubject; do (cd "$dir" && ssh-keygen -q -Y sign -n nazm-attestation -f key "$f.json" 2>/dev/null); done
       ;;
     lock|update|publish|yank) pkg_fixture "$dir" ;;
+    bindgen)
+      printf '\r\nint64_t crlf(int64_t a);\r\nstruct H;\r\n' > "$dir/crlf.h"
+      cp "$root"/toolchain/commands/tests/bindgen/*.h "$dir/"
+      mkdir -p "$dir/sub" "$dir/out"
+      printf 'x\n' > "$dir/out/taken.txt"
+      ;;
+    reload-check)
+      printf 'fn add(a: Int, b: Int) -> Int {\r\n    a + b\r\n}\r\nfn main() -> Int { add(2, 2) }\r\n' > "$dir/crlf.nz"
+      cp "$root"/toolchain/commands/tests/reload/*.nz "$dir/"
+      cp "$root"/toolchain/commands/tests/reload-refused/*.nz "$dir/"
+      mkdir -p "$dir/sub"
+      ;;
     init)
       mkdir -p "$dir/empty" "$dir/full/sub"
       printf 'kept\n' > "$dir/full/keep.txt"
@@ -516,7 +533,7 @@ record() {
 
 part_args() {
   n=0 agree=0 differ=0 refused=0
-  for cmd in fmt init check doc fix lsp test patch interface docs attest lock update publish yank nazm; do
+  for cmd in fmt init check doc fix lsp test patch interface docs attest lock update publish yank bindgen reload-check doctor nazm; do
     # R5_ARGS names the commands whose lines to run (all by default).
     case " ${R5_ARGS:-$cmd} " in *" $cmd "*) ;; *) continue ;; esac
     file="$root/toolchain/commands/tests/args/$cmd.txt"
@@ -1108,6 +1125,73 @@ part_docs() {
   [ "$differ" -eq 0 ] && [ "$refused" -eq 0 ] || status=1
 }
 
+# --- bindgen: every header ---------------------------------------------------------------------------------
+
+part_bindgen() {
+  n=0 agree=0 differ=0 refused=0
+  # The headers, and one with CRLF line ends, written here: a tracked file would not keep its CRs.
+  mkdir -p "$work/hdr"
+  cp "$root"/toolchain/commands/tests/bindgen/*.h "$work/hdr/"
+  printf '\r\nint64_t crlf(int64_t a);\r\nstruct H;\r\n' > "$work/hdr/crlf.h"
+  for h in "$work"/hdr/*.h "$root"/bench/compare/c/chan.h "$root"/bench/compare/cpp/chan.h "$@"; do
+    [ -f "$h" ] || continue
+    for form in "" "-o OUT"; do
+      n=$((n + 1))
+      d="$work/bg/$n"
+      mkdir -p "$d/ref" "$d/got"
+      cp "$h" "$d/ref/h.h"; cp "$h" "$d/got/h.h"
+      # shellcheck disable=SC2086
+      (cd "$d/ref" && { rc=0; "$ref" bindgen h.h ${form%OUT}${form:+out.nz} > ../ref.o 2> ../ref.e || rc=$?; echo "exit $rc" > ../ref.r; })
+      # shellcheck disable=SC2086
+      (cd "$d/got" && { rc=0; "$port" bindgen h.h ${form%OUT}${form:+out.nz} > ../got.o 2> ../got.e || rc=$?; echo "exit $rc" > ../got.r; })
+      if grep -q '^exit 6$' "$d/got.r"; then
+        refused=$((refused + 1)); echo "  refused: $(basename "$h") $form: $(head -c 100 "$d/got.e")"
+      elif cmp -s "$d/ref.o" "$d/got.o" && cmp -s "$d/ref.e" "$d/got.e" && cmp -s "$d/ref.r" "$d/got.r" && diff -r "$d/ref" "$d/got" > /dev/null; then
+        agree=$((agree + 1))
+      else
+        differ=$((differ + 1)); echo "  differ: $(basename "$h") $form"
+        if [ -n "${KEEP:-}" ]; then mkdir -p "$KEEP/bindgen-$n" && cp "$d/ref.o" "$KEEP/bindgen-$n/want" && cp "$d/got.o" "$KEEP/bindgen-$n/got"; fi
+      fi
+      rm -rf "$d"
+    done
+  done
+  echo "bindgen: $agree agree, $differ differ, $refused refused (of $n runs)"
+  [ "$differ" -eq 0 ] && [ "$refused" -eq 0 ] || status=1
+}
+
+# --- reload-check: every pair of programs -----------------------------------------------------------------
+
+part_reload() {
+  n=0 agree=0 differ=0 refused=0
+  # The programs, and one with CRLF line ends, written here: a tracked file would not keep its CRs.
+  dir="$work/rlsrc"
+  mkdir -p "$dir"
+  cp "$root"/toolchain/commands/tests/reload/*.nz "$dir/"
+  printf 'fn add(a: Int, b: Int) -> Int {\r\n    a + b\r\n}\r\nfn main() -> Int { add(2, 2) }\r\n' > "$dir/crlf.nz"
+  for x in "$dir"/*.nz; do
+    for y in "$dir"/*.nz; do
+      n=$((n + 1))
+      d="$work/rl"
+      mkdir -p "$d"
+      (cd "$dir" && { rc=0; "$ref" reload-check "$(basename "$x")" "$(basename "$y")" > "$d/ref.o" 2> "$d/ref.e" || rc=$?; echo "exit $rc" > "$d/ref.r"; })
+      (cd "$dir" && { rc=0; "$port" reload-check "$(basename "$x")" "$(basename "$y")" > "$d/got.o" 2> "$d/got.e" || rc=$?; echo "exit $rc" > "$d/got.r"; })
+      if grep -q '^exit 6$' "$d/got.r"; then
+        refused=$((refused + 1)); echo "  refused: $(basename "$x") $(basename "$y"): $(head -c 100 "$d/got.e")"
+      elif cmp -s "$d/ref.o" "$d/got.o" && cmp -s "$d/ref.e" "$d/got.e" && cmp -s "$d/ref.r" "$d/got.r"; then
+        agree=$((agree + 1))
+      else
+        differ=$((differ + 1)); echo "  differ: $(basename "$x") $(basename "$y")"
+        if [ -n "${KEEP:-}" ]; then mkdir -p "$KEEP/reload-$n" && cp "$d/ref.o" "$KEEP/reload-$n/want" && cp "$d/got.o" "$KEEP/reload-$n/got"; fi
+      fi
+      rm -rf "$d"
+    done
+  done
+  # A file that is not there, a directory, the programs with a record or an enum (refused: their layout needs types
+  # `compiler/` does not publish).
+  echo "reload-check: $agree agree, $differ differ, $refused refused (of $n pairs)"
+  [ "$differ" -eq 0 ] && [ "$refused" -eq 0 ] || status=1
+}
+
 for p in $parts; do
   case $p in
     fix) part_fix "$@" ;;
@@ -1119,6 +1203,8 @@ for p in $parts; do
     lsp) part_lsp "$@" ;;
     test) part_test "$@" ;;
     docs) part_docs ;;
+    reload) part_reload ;;
+    bindgen) part_bindgen "$@" ;;
     interface) part_interface "$@" ;;
   esac
 done

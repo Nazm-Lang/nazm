@@ -1,0 +1,31 @@
+# `nazm bindgen`'s command lines, run in the fixture of run.sh (`fixture bindgen`): tests/bindgen's headers.
+--help
+-h
+--bogus basic.h
+basic.h extra.h
+basic.h
+basic.h -o
+basic.h -o out.nz
+-o out.nz basic.h
+basic.h --out out.nz
+basic.h --out=out.nz
+basic.h -oout.nz
+basic.h -o out/new.nz
+basic.h -o out
+basic.h -o absent/out.nz
+basic.h -o basic.h
+refusals.h
+refusals.h -o out.nz
+types.h -o out.nz
+decls.h -o out.nz
+keywords.h -o out.nz
+directives.h -o out.nz
+layout.h
+absent.h
+sub
+binary.h
+empty.h
+empty.h -o out.nz
+./basic.h
+sub/../basic.h
+-- basic.h

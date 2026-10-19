@@ -1,0 +1,595 @@
+// `nazm bindgen`, written in Nazm (R5, `openspec/changes/r5-commands/`, task 11.2, design D22).
+//
+// `nazm bindgen HEADER [-o FILE]`, run by the dispatcher (`nazm.nz`).
+//
+// A port of `crates/nazm-cli/src/bindgen.rs`: the supported subset of a C header as `extern "C"`
+// declarations — a parameter of `int64_t`, `bool` or `const char *`, a result of `int64_t`, `bool` or
+// `const char *`, opaque handles and C structs — every other prototype, type declaration and macro
+// refused with its reason. Each prototype's declaration is held by R2's checker (`fx_check_over` over
+// the module the reference's `check_source` would check) before it is written.
+
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/facts.nz"
+use "cli.nz"
+use "front.nz"
+use "util.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+// The command line, as `crates/nazm-cli/src/cli.rs` declares `nazm bindgen`.
+pub fn bindgen_cli() -> Cli {
+    let c = cli_command("bindgen", "Declare the supported subset of a C header as `extern \"C\"` functions (N74): prototypes of `int64_t` and `bool` "
+            + "(and `const char *` arguments). Everything else is refused with the reason, never widened. With `-o FILE`, the module is written there "
+            + "and one `nazm.bindgen/1` line is printed; exits 1 when anything was refused", "")
+    cli_positional(c, "HEADER", true, false, true, "", "")
+    cli_option(c, "o", "out", "FILE", true, "", false, "", "")
+    c
+}
+
+fn refuse(io: IoCap, why: Str) -> Int {
+    eprint("bindgen: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+// --- words ------------------------------------------------------------------------------------------------
+
+// `split_whitespace`.
+fn words(s: Str) -> Strs {
+    let out = strs_new()
+    let mut i = 0
+    let mut from = 0 - 1
+    while i < str_len(s) {
+        let w = ut_space_at(s, i)
+        if w > 0 {
+            if from >= 0 {
+                strs_push(out, str_slice(s, from, i))
+                from = 0 - 1
+            }
+            i += w
+        } else {
+            if from < 0 { from = i }
+            i += 1
+        }
+    }
+    if from >= 0 { strs_push(out, str_slice(s, from, str_len(s))) }
+    out
+}
+
+// `split_whitespace().collect::<Vec<_>>().join(" ")`.
+fn squash(s: Str) -> Str { str_join(words(s), " ") }
+
+fn contains(s: Str, p: Str) -> Bool { ut_find(s, p, 0) >= 0 }
+
+fn identifier(s: Str) -> Bool {
+    if str_len(s) == 0 { return false }
+    let f = str_byte(s, 0)
+    if !((f >= 65 && f <= 90) || (f >= 97 && f <= 122) || f == 95) { return false }
+    for i in 1..str_len(s) {
+        let b = str_byte(s, i)
+        if !((b >= 65 && b <= 90) || (b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b == 95) { return false }
+    }
+    true
+}
+
+fn strip_prefix(s: Str, p: Str) -> Str { str_slice(s, str_len(p), str_len(s)) }
+
+fn type_words() -> Strs {
+    let w = strs_new()
+    strs_push(w, "int64_t")
+    strs_push(w, "bool")
+    strs_push(w, "_Bool")
+    strs_push(w, "void")
+    strs_push(w, "char")
+    strs_push(w, "int")
+    strs_push(w, "long")
+    strs_push(w, "short")
+    strs_push(w, "unsigned")
+    strs_push(w, "signed")
+    strs_push(w, "float")
+    strs_push(w, "double")
+    strs_push(w, "const")
+    strs_push(w, "volatile")
+    strs_push(w, "*")
+    strs_push(w, "size_t")
+    w
+}
+
+fn has(xs: Strs, s: Str) -> Bool {
+    for i in 0..strs_len(xs) { if strs_get(xs, i) == s { return true } }
+    false
+}
+
+// `str::replace` of every `from` by `to`.
+fn replace(s: Str, from: Str, to: Str) -> Str {
+    let out = strs_new()
+    let mut at = 0
+    let mut i = ut_find(s, from, 0)
+    while i >= 0 {
+        strs_push(out, str_slice(s, at, i))
+        strs_push(out, to)
+        at = i + str_len(from)
+        i = ut_find(s, from, at)
+    }
+    strs_push(out, str_slice(s, at, str_len(s)))
+    str_join(out, "")
+}
+
+fn rfind(s: Str, c: Int) -> Int {
+    let mut i = str_len(s)
+    while i > 0 {
+        i -= 1
+        if str_byte(s, i) == c { return i }
+    }
+    0 - 1
+}
+
+fn find(s: Str, c: Int) -> Int {
+    for i in 0..str_len(s) { if str_byte(s, i) == c { return i } }
+    0 - 1
+}
+
+// --- the types a header has declared ----------------------------------------------------------------------
+
+struct Known {
+    handles: Strs,
+    structs: Strs,
+}
+
+// `struct S *` or `S *` naming a handle: its name, or "".
+fn handle(k: Known, ty: Str) -> Str {
+    if !ut_ends(ty, " *") { return "" }
+    let mut t = str_slice(ty, 0, str_len(ty) - 2)
+    if ut_starts(t, "struct ") { t = strip_prefix(t, "struct ") }
+    if has(k.handles, t) { t } else { "" }
+}
+
+// `const struct S *` or `const S *` naming a C struct: its name, or "".
+fn borrowed(k: Known, ty: Str) -> Str {
+    if !ut_starts(ty, "const ") || !ut_ends(ty, " *") { return "" }
+    let mut t = str_slice(ty, 6, str_len(ty) - 2)
+    if ut_starts(t, "struct ") { t = strip_prefix(t, "struct ") }
+    if has(k.structs, t) { t } else { "" }
+}
+
+// A field of a C struct: its Nazm type, or "" with the reason in `why`.
+fn field(k: Known, ty: Str, why: Strs) -> Str {
+    if ty == "int64_t" { return "Int" }
+    if ty == "bool" || ty == "_Bool" { return "Bool" }
+    let h = handle(k, ty)
+    if h != "" { return h }
+    let t = if ut_starts(ty, "struct ") { strip_prefix(ty, "struct ") } else { ty }
+    if has(k.structs, t) { return t }
+    strs_push(why, "a field of `" + ty + "`: a C struct's fields are `int64_t`, `bool`, a handle or another such struct")
+    ""
+}
+
+fn refusal(ty: Str, is_result: Bool) -> Str {
+    if ty == "void" && is_result { return "it returns nothing; a foreign function returns `Int` or `Bool`" }
+    if ut_starts(ty, "struct ") && !contains(ty, "*") { return "`" + ty + "` by value: a struct crosses only by `const` pointer, borrowed" }
+    if contains(ty, "*") {
+        return "`" + ty + "` is a pointer to nothing this header declares as a handle or a C struct; a mutable buffer C writes into does not cross"
+    }
+    if ut_starts(ty, "struct ") || ut_starts(ty, "union ") || ut_starts(ty, "enum ") { return "`" + ty + "` has no C layout Nazm promises" }
+    if ty == "float" || ty == "double" || ty == "long double" { return "`" + ty + "`: no floating-point type crosses" }
+    "`" + ty + "` is not `int64_t` or `bool`; Nazm's `Int` is exactly `int64_t`, and widening would change what C receives"
+}
+
+// What crosses as a parameter: its Nazm type, or "" with the reason in `why`.
+fn param(k: Known, ty: Str, why: Strs) -> Str {
+    if ty == "int64_t" { return "Int" }
+    if ty == "bool" || ty == "_Bool" { return "Bool" }
+    if ty == "const char *" || ty == "char const *" { return "Str" }
+    let h = handle(k, ty)
+    if h != "" { return h }
+    let b = borrowed(k, ty)
+    if b != "" { return b }
+    strs_push(why, refusal(ty, false))
+    ""
+}
+
+fn result(k: Known, ty: Str, why: Strs) -> Str {
+    if ty == "int64_t" { return "Int" }
+    if ty == "bool" || ty == "_Bool" { return "Bool" }
+    if ty == "const char *" || ty == "char const *" { return "Option[Str]" }
+    let h = handle(k, ty)
+    if h != "" { return "Option[" + h + "]" }
+    strs_push(why, refusal(ty, true))
+    ""
+}
+
+// `split_declarator`: the type and the name, if there is one ("" in `name`).
+fn split_declarator(d: Str, name: Strs) -> Str {
+    let ws = words(replace(d, "*", " * "))
+    let tagged = strs_len(ws) > 0 && (strs_get(ws, 0) == "struct" || strs_get(ws, 0) == "union" || strs_get(ws, 0) == "enum")
+    let mut named = false
+    if strs_len(ws) > (if tagged { 2 } else { 1 }) {
+        let last = strs_get(ws, strs_len(ws) - 1)
+        named = identifier(last) && !has(type_words(), last)
+    }
+    if named {
+        strs_push(name, strs_get(ws, strs_len(ws) - 1))
+        strs_pop(ws)
+    } else {
+        strs_push(name, "")
+    }
+    replace(str_join(ws, " "), "* *", "**")
+}
+
+// --- one statement ----------------------------------------------------------------------------------------------
+
+// A type declaration: kind 0 none (no type declaration at all), 1 one that crosses (`out`), 2 one already
+// known, 3 one that does not (`out` the reason).
+fn type_decl(stmt: Str, k: Known, out: Strs) -> Int {
+    let s = squash(stmt)
+    if ut_starts(s, "union ") || ut_starts(s, "enum ") || ut_starts(s, "typedef union ") {
+        if contains(s, "(") { return 0 }
+        strs_push(out, "a union or an enum: no C layout of one crosses")
+        return 3
+    }
+    if ut_starts(s, "typedef struct ") {
+        let rest = strip_prefix(s, "typedef struct ")
+        let ws = strs_new()
+        let mut from = 0
+        for i in 0..str_len(rest) + 1 {
+            if i == str_len(rest) || str_byte(rest, i) == 32 {
+                strs_push(ws, str_slice(rest, from, i))
+                from = i + 1
+            }
+        }
+        if strs_len(ws) == 2 && strs_get(ws, 0) == strs_get(ws, 1) && identifier(strs_get(ws, 0)) {
+            let a = strs_get(ws, 0)
+            if !has(k.structs, a) && !has(k.handles, a) {
+                strs_push(k.handles, a)
+                strs_push(out, "pub extern \"C\" struct " + a + ";")
+                return 1
+            }
+            return 2
+        }
+        strs_push(out, "a typedef naming a struct by another name; write `typedef struct S S;`")
+        return 3
+    }
+    if ut_starts(s, "typedef ") {
+        strs_push(out, "a typedef: only `typedef struct S S;` is read")
+        return 3
+    }
+    if !ut_starts(s, "struct ") { return 0 }
+    let rest = strip_prefix(s, "struct ")
+    if contains(s, "(") && !contains(s, "{") { return 0 }
+    // `struct S;`: incomplete, so an opaque handle.
+    if identifier(rest) {
+        if has(k.handles, rest) { return 2 }
+        strs_push(k.handles, rest)
+        strs_push(out, "pub extern \"C\" struct " + rest + ";")
+        return 1
+    }
+    let open = find(rest, 123)
+    let close = rfind(rest, 125)
+    if open < 0 || close < 0 {
+        strs_push(out, "a struct declaration that is not `struct S;` or `struct S { … }`")
+        return 3
+    }
+    let name = ut_trim(str_slice(rest, 0, open))
+    if !identifier(name) || !ut_blank(str_slice(rest, close + 1, str_len(rest))) {
+        strs_push(out, "a struct with a declarator after it, or no name")
+        return 3
+    }
+    let fields = strs_new()
+    let inner = str_slice(rest, open + 1, close)
+    let mut from = 0
+    for i in 0..str_len(inner) + 1 {
+        if i == str_len(inner) || str_byte(inner, i) == 59 {
+            let f = ut_trim(str_slice(inner, from, i))
+            from = i + 1
+            if str_len(f) == 0 { continue }
+            if contains(f, "[") || contains(f, ":") {
+                strs_push(out, "`" + name + "` has an array or a bit-field; neither crosses")
+                return 3
+            }
+            let fname = strs_new()
+            let ty = split_declarator(f, fname)
+            if !identifier(strs_get(fname, 0)) {
+                strs_push(out, "a field of `" + name + "` has no name that could be read")
+                return 3
+            }
+            let why = strs_new()
+            let nz = field(k, ty, why)
+            if strs_len(why) > 0 {
+                strs_push(out, "`" + name + "`: " + strs_get(why, 0))
+                return 3
+            }
+            strs_push(fields, strs_get(fname, 0) + ": " + nz)
+        }
+    }
+    if strs_len(fields) == 0 {
+        strs_push(out, "`" + name + "` has no fields")
+        return 3
+    }
+    // `handles.retain(|h| h != name)`.
+    let kept = strs_new()
+    for i in 0..strs_len(k.handles) { if strs_get(k.handles, i) != name { strs_push(kept, strs_get(k.handles, i)) } }
+    while strs_len(k.handles) > 0 { strs_pop(k.handles) }
+    for i in 0..strs_len(kept) { strs_push(k.handles, strs_get(kept, i)) }
+    strs_push(k.structs, name)
+    strs_push(out, "pub extern \"C\" struct " + name + " { " + str_join(fields, ", ") + " }")
+    1
+}
+
+// A prototype: its declaration in `out` (kind 1), or the reason (kind 3).
+fn prototype(stmt: Str, k: Known, out: Strs) -> Int {
+    let squashed = squash(stmt)
+    let s = if ut_starts(squashed, "extern ") { strip_prefix(squashed, "extern ") } else { squashed }
+    if ut_starts(s, "typedef ") || ((ut_starts(s, "struct ") || ut_starts(s, "union ") || ut_starts(s, "enum ")) && !contains(s, "(")) {
+        strs_push(out, "a type declaration; no C type's layout crosses")
+        return 3
+    }
+    let open = find(s, 40)
+    let close = rfind(s, 41)
+    if open < 0 || close < 0 {
+        strs_push(out, "not a function prototype")
+        return 3
+    }
+    if close + 1 != str_len(s) {
+        strs_push(out, "not a plain prototype: something follows its parameter list")
+        return 3
+    }
+    let head = ut_trim(str_slice(s, 0, open))
+    let params = ut_trim(str_slice(s, open + 1, close))
+    if contains(params, "(") {
+        strs_push(out, "a function pointer: a callback crosses only as an export's name, which a header cannot say; declare it by hand with a `fn(…) -> …` parameter")
+        return 3
+    }
+    let hname = strs_new()
+    let ret = split_declarator(head, hname)
+    let name = strs_get(hname, 0)
+    if !identifier(name) {
+        strs_push(out, "no function name could be read")
+        return 3
+    }
+    let why = strs_new()
+    let rt = result(k, ret, why)
+    if strs_len(why) > 0 {
+        strs_push(out, strs_get(why, 0))
+        return 3
+    }
+    let ps = strs_new()
+    if !(str_len(params) == 0 || params == "void") {
+        let mut from = 0
+        let mut idx = 0
+        for i in 0..str_len(params) + 1 {
+            if i == str_len(params) || str_byte(params, i) == 44 {
+                let p = ut_trim(str_slice(params, from, i))
+                from = i + 1
+                if p == "..." {
+                    strs_push(out, "variadic: a variable argument list does not cross")
+                    return 3
+                }
+                let pn = strs_new()
+                let ty = split_declarator(p, pn)
+                let w2 = strs_new()
+                let nz = param(k, ty, w2)
+                if strs_len(w2) > 0 {
+                    strs_push(out, "parameter " + int_to_str(idx + 1) + ": " + strs_get(w2, 0))
+                    return 3
+                }
+                let given = strs_get(pn, 0)
+                let pname = if identifier(given) && !ut_starts(given, "_") { given } else { "a" + int_to_str(idx) }
+                strs_push(ps, pname + ": " + nz)
+                idx += 1
+            }
+        }
+    }
+    strs_push(out, "pub extern \"C\" fn " + name + "(" + str_join(ps, ", ") + ") -> " + rt + " = \"" + name + "\";")
+    1
+}
+
+// --- the header ------------------------------------------------------------------------------------------------------
+
+// `strip`: the header without comments.
+fn strip(text: Str) -> Str {
+    let out = strs_new()
+    let n = str_len(text)
+    let mut i = 0
+    let mut from = 0
+    while i < n {
+        if i + 1 < n && str_byte(text, i) == 47 && str_byte(text, i + 1) == 42 {
+            strs_push(out, str_slice(text, from, i))
+            let e = ut_find(text, "*/", i + 2)
+            i = if e < 0 { n } else { e + 2 }
+            strs_push(out, " ")
+            from = i
+        } else if i + 1 < n && str_byte(text, i) == 47 && str_byte(text, i + 1) == 47 {
+            strs_push(out, str_slice(text, from, i))
+            let mut e = i
+            while e < n && str_byte(text, e) != 10 { e += 1 }
+            i = e
+            from = i
+        } else {
+            i += 1
+        }
+    }
+    strs_push(out, str_slice(text, from, n))
+    str_join(out, "")
+}
+
+fn starts_word(d: Str, p: Str) -> Bool { ut_starts(d, p) }
+
+// What the checker says of `source`, the first problem as `CODE MESSAGE`, or "".
+fn checked(io: IoCap, source: Str, probe: Str, library: Str) -> Str {
+    let paths = strs_new()
+    let texts = strs_new()
+    strs_push(paths, probe)
+    strs_push(texts, source)
+    let f = fx_check_over(probe, "", paths, texts, library, fe_host_os(), fe_host_arch(), io)
+    if fx_refusal(f) != "" { refuse(io, "a source root the reference refuses") }
+    if !fx_carried(f) { refuse(io, fx_why(f)) }
+    let d = fx_diags(f)
+    if fe_load_failed(f) { refuse(io, "a probe that does not load") }
+    for i in 0..dg_len(d) {
+        if dg_severity(d, i) == "error" { return strs_get(d.code, i) + " " + strs_get(d.message, i) }
+    }
+    ""
+}
+
+// A refusal's JSON: `{"c":…,"reason":…}`.
+fn refused_json(c: Str, reason: Str) -> Str { "{\"c\":" + json_str(c) + ",\"reason\":" + json_str(reason) + "}" }
+
+pub fn bindgen_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let header = cli_value(c, 0)
+    let has_out = cli_present(c, 1)
+    let out_path = cli_value(c, 1)
+    let library = os_env_get("NAZM_LIBRARY")
+    if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
+    let why = ut_read_error(io, header, true)
+    if why != "" {
+        eprint("nazm: cannot read " + header + ": " + why + nl())
+        exit_with(3)
+        return 3
+    }
+    let clean = strip(read_file(header))
+    let translated = strs_new()
+    let refused = strs_new()
+    let refused_c = strs_new()
+    let refused_why = strs_new()
+    let decls = strs_new()
+    let body = strs_new()
+    // The lines, as `str::lines` gives them.
+    let mut start = 0
+    while start < str_len(clean) {
+        let mut e = start
+        while e < str_len(clean) && str_byte(clean, e) != 10 { e += 1 }
+        let mut line = str_slice(clean, start, e)
+        start = e + 1
+        if ut_ends(line, "\r") { line = str_slice(line, 0, str_len(line) - 1) }
+        let t = ut_trim(line)
+        if ut_starts(t, "#") {
+            let d = ut_trim(strip_prefix(t, "#"))
+            let n = strs_len(words(d))
+            let allowed = starts_word(d, "ifndef") || starts_word(d, "ifdef") || (starts_word(d, "define") && n == 2) || starts_word(d, "endif")
+                    || starts_word(d, "include") || starts_word(d, "pragma once") || starts_word(d, "if ") || starts_word(d, "else")
+            if !allowed {
+                strs_push(refused_c, t)
+                strs_push(refused_why, "a preprocessor directive: a macro is not expanded or translated")
+            } else if starts_word(d, "define") && n > 2 {
+                strs_push(refused_c, t)
+                strs_push(refused_why, "a macro: not expanded or translated")
+            }
+            continue
+        }
+        strs_push(body, line + nl())
+    }
+    // `extern "C" {` blocks, written for C++ readers, change nothing here.
+    let text = replace(replace(str_join(body, ""), "extern \"C\" {", " "), "extern \"C\"{", " ")
+    // Statements end at a `;` outside braces.
+    let statements = strs_new()
+    let mut depth = 0
+    let mut from = 0
+    for i in 0..str_len(text) {
+        let b = str_byte(text, i)
+        if b == 123 {
+            depth += 1
+        } else if b == 125 {
+            if depth > 0 { depth -= 1 }
+        } else if b == 59 && depth == 0 {
+            strs_push(statements, str_slice(text, from, i))
+            from = i + 1
+        }
+    }
+    // The types first, in the header's order: a prototype may name any of them.
+    let k = Known(handles: strs_new(), structs: strs_new())
+    let types = strs_new()
+    let prototypes = strs_new()
+    let tr_c = strs_new()
+    let tr_nz = strs_new()
+    for i in 0..strs_len(statements) {
+        let mut s = ut_trim(strs_get(statements, i))
+        while ut_starts(s, "}") { s = str_slice(s, 1, str_len(s)) }
+        s = ut_trim(s)
+        if str_len(s) == 0 { continue }
+        let cc = squash(s)
+        let o = strs_new()
+        let kind = type_decl(s, k, o)
+        if kind == 1 {
+            strs_push(tr_c, cc + ";")
+            strs_push(tr_nz, strs_get(o, 0))
+            strs_push(types, strs_get(o, 0))
+        } else if kind == 3 {
+            strs_push(refused_c, cc + ";")
+            strs_push(refused_why, strs_get(o, 0))
+        } else if kind == 0 {
+            strs_push(prototypes, s)
+        }
+    }
+    let mut declared = ""
+    for i in 0..strs_len(types) {
+        strs_push(decls, strs_get(types, i))
+        declared = declared + strs_get(types, i) + nl()
+    }
+    let probe = ut_join(fe_prefix_dir(io), ".nazm-bindgen-probe.nz")
+    for i in 0..strs_len(prototypes) {
+        let s = strs_get(prototypes, i)
+        let cc = squash(s)
+        let o = strs_new()
+        let kind = prototype(s, k, o)
+        if kind == 1 {
+            // Each declaration is held by the checker on its own.
+            let problem = checked(io, declared + strs_get(o, 0) + nl() + "fn main() -> Int { 0 }" + nl(), probe, library)
+            if problem == "" {
+                strs_push(tr_c, cc + ";")
+                strs_push(tr_nz, strs_get(o, 0))
+                strs_push(decls, strs_get(o, 0))
+            } else {
+                strs_push(refused_c, cc + ";")
+                strs_push(refused_why, "the checker refuses its declaration: " + problem)
+            }
+        } else {
+            strs_push(refused_c, cc + ";")
+            strs_push(refused_why, strs_get(o, 0))
+        }
+    }
+    let file = ut_file_name(header)
+    let module = "// Generated by `nazm bindgen " + file + "`: the prototypes whose every type crosses the boundary." + nl()
+            + "// Each needs a `ForeignCap` to call, and `nazm build --link` to link C's definition." + nl() + str_join(decls_lines(decls), "")
+    // Held by the checker before anything is written.
+    let problem = checked(io, module + "fn main() -> Int { 0 }" + nl(), probe, library)
+    if problem != "" {
+        eprint("nazm: internal: a generated declaration does not check; nothing was written:" + nl())
+        eprint("  " + problem + nl())
+        exit_with(4)
+        return 4
+    }
+    let tj = strs_new()
+    for i in 0..strs_len(tr_c) { strs_push(tj, "{\"c\":" + json_str(strs_get(tr_c, i)) + ",\"nazm\":" + json_str(strs_get(tr_nz, i)) + "}") }
+    let rj = strs_new()
+    for i in 0..strs_len(refused_c) { strs_push(rj, refused_json(strs_get(refused_c, i), strs_get(refused_why, i))) }
+    if has_out {
+        if !ut_write_all(io, out_path, module) {
+            eprint("nazm: cannot write " + out_path + ": " + ut_os_error(os_status(os_open_write(out_path, 0))) + nl())
+            exit_with(4)
+            return 4
+        }
+        print("{\"header\":" + (if file == "" { "null" } else { json_str(file) }) + ",\"refused\":[" + str_join(rj, ",") + "],\"schema\":\"nazm.bindgen/1\",\"translated\":["
+                + str_join(tj, ",") + "]}" + nl())
+    } else {
+        print(module)
+        for i in 0..strs_len(refused_c) {
+            eprint("nazm: refused `" + strs_get(refused_c, i) + "`: " + strs_get(refused_why, i) + nl())
+        }
+    }
+    if strs_len(refused_c) == 0 { 0 } else {
+        exit_with(1)
+        1
+    }
+}
+
+fn decls_lines(decls: Strs) -> Strs {
+    let out = strs_new()
+    for i in 0..strs_len(decls) { strs_push(out, strs_get(decls, i) + nl()) }
+    out
+}
+
+// The working directory, absolute: where the probe file is said to be.
+fn fe_prefix_dir(io: IoCap) -> Str { fe_canonical(io, ".") }

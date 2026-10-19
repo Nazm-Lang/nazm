@@ -1,0 +1,3 @@
+fn add(a: Int, b: Int) -> Int { b + a }
+fn twice(n: Int) -> Int { add(n, n) }
+fn main() -> Int { twice(2) }

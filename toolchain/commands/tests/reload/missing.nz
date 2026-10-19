@@ -1,0 +1,2 @@
+use "gone.nz";
+fn main() -> Int { 0 }

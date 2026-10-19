@@ -1,0 +1,285 @@
+// `nazm doctor`, written in Nazm (R5, `openspec/changes/r5-commands/`, task 11.2, design D22).
+//
+// `nazm doctor`, run by the dispatcher (`nazm.nz`).
+//
+// A port of `crates/nazm-cli/src/doctor.rs`: whether this machine has what a native build needs. The
+// driver (`clang`) is asked its version and its target, with the environment a build gives it (`PATH`,
+// `TMPDIR`, `SDKROOT` … and nothing else, as `backend::PASSED` lists); a program is really linked from
+// LLVM IR in a scratch directory; on macOS `dsymutil` is asked its version. What is missing is named with
+// where to get it on this platform.
+
+use "cli.nz"
+use "front.nz"
+use "proc.nz"
+use "util.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+// The command line, as `crates/nazm-cli/src/cli.rs` declares `nazm doctor`.
+pub fn doctor_cli() -> Cli {
+    cli_command("doctor", "Say whether this machine has what `nazm build` needs: `clang`, a linker that links a program, `ar` (and `dsymutil` on macOS), "
+            + "with their versions, and where to get what is missing. Exit 4 when a native build cannot be made here", "")
+}
+
+// The variables the object compiler is allowed to see (`backend::PASSED`).
+fn passed() -> Strs {
+    let p = strs_new()
+    strs_push(p, "PATH")
+    strs_push(p, "LD_LIBRARY_PATH")
+    strs_push(p, "TMPDIR")
+    strs_push(p, "TMP")
+    strs_push(p, "TEMP")
+    strs_push(p, "SystemRoot")
+    strs_push(p, "DEVELOPER_DIR")
+    strs_push(p, "SDKROOT")
+    strs_push(p, "MACOSX_DEPLOYMENT_TARGET")
+    strs_push(p, "IPHONEOS_DEPLOYMENT_TARGET")
+    strs_push(p, "TVOS_DEPLOYMENT_TARGET")
+    strs_push(p, "WATCHOS_DEPLOYMENT_TARGET")
+    strs_push(p, "XROS_DEPLOYMENT_TARGET")
+    p
+}
+
+// The driver's environment: each variable `PASSED` names that this process has.
+fn driver_env(io: IoCap) -> Strs {
+    let env = strs_new()
+    let names = passed()
+    for i in 0..strs_len(names) {
+        if os_env_has(strs_get(names, i)) { strs_push(env, strs_get(names, i) + "=" + os_env_get(strs_get(names, i))) }
+    }
+    env
+}
+
+// The lines of `s` as `str::lines` gives them.
+fn lines_of(s: Str) -> Strs {
+    let out = strs_new()
+    let mut start = 0
+    while start < str_len(s) {
+        let mut e = start
+        while e < str_len(s) && str_byte(s, e) != 10 { e += 1 }
+        let mut line = str_slice(s, start, e)
+        start = e + 1
+        if ut_ends(line, "\r") { line = str_slice(line, 0, str_len(line) - 1) }
+        strs_push(out, line)
+    }
+    out
+}
+
+// One tool's answer.
+struct Row {
+    tool: Strs,
+    needed: Strs,
+    // 1 where it works (`said` is what it said), 0 where it does not (`said` is why not).
+    ok: Ints,
+    said: Strs,
+    required: Ints,
+}
+
+fn add_row(r: Row, tool: Str, needed: Str, ok: Bool, said: Str, required: Bool) -> Int {
+    strs_push(r.tool, tool)
+    strs_push(r.needed, needed)
+    ints_push(r.ok, if ok { 1 } else { 0 })
+    strs_push(r.said, said)
+    ints_push(r.required, if required { 1 } else { 0 })
+    0
+}
+
+fn clang_row(io: IoCap, proc: ProcessCap, sp: SpawnCap, os: Str, r: Row) -> Int ! { io, spawn } {
+    let needed = "`nazm build`, and `nazm run` and `nazm test` without `--interpret`"
+    let args = strs_new()
+    strs_push(args, "--version")
+    let v = pr_run_exact(io, proc, sp, "clang", args, "", driver_env(io))
+    if !v.started {
+        if ut_find(v.why, "No such file or directory", 0) >= 0 {
+            return add_row(r, "clang", needed, false, "`clang` was not found on PATH", true)
+        }
+        return add_row(r, "clang", needed, false, "`clang` could not be started: " + v.why, true)
+    }
+    if v.status != 0 { return add_row(r, "clang", needed, false, "`clang --version` failed", true) }
+    let ls = lines_of(ut_lossy(v.out))
+    let banner = if strs_len(ls) > 0 { ut_trim(strs_get(ls, 0)) } else { "" }
+    let a2 = strs_new()
+    strs_push(a2, "-dumpmachine")
+    let m = pr_run_exact(io, proc, sp, "clang", a2, "", driver_env(io))
+    let target = if m.started { ut_trim(ut_lossy(m.out)) } else { "" }
+    if os == "windows" && ut_find(target, "msvc", 0) >= 0 {
+        return add_row(r, "clang", needed, false, banner + " builds for " + target + ", Microsoft's toolchain; Nazm on Windows uses MinGW-w64's (a clang whose target ends in `-windows-gnu`)", true)
+    }
+    add_row(r, "clang", needed, true, banner + " (target " + target + ")", true)
+}
+
+// The first quoted string of a line, or "".
+fn first_quoted(line: Str) -> Str {
+    let t = ut_trim_start(line)
+    if !ut_starts(t, "\"") { return "" }
+    let rest = str_slice(t, 1, str_len(t))
+    let e = ut_find(rest, "\"", 0)
+    if e < 0 { rest } else { str_slice(rest, 0, e) }
+}
+
+fn link_row(io: IoCap, proc: ProcessCap, sp: SpawnCap, r: Row) -> Int ! { io, spawn } {
+    let needed = "every executable `nazm build` writes"
+    let tmp = if os_env_has("TMPDIR") && os_env_get("TMPDIR") != "" { os_env_get("TMPDIR") } else { "/tmp" }
+    // `scratch::temporary`: a private directory named by the process id, fresh.
+    let mut dir = ""
+    let mut n = 0
+    let mut why = ""
+    let mk = strs_new()
+    if !ut_make_dirs(io, tmp, mk) {
+        n = 64
+        why = strs_get(mk, 0)
+    }
+    while n < 64 && dir == "" {
+        let name = if n == 0 { "nazm-doctor-" + int_to_str(os_pid()) } else { "nazm-doctor-" + int_to_str(os_pid()) + "-" + int_to_str(n) }
+        let p = ut_join(tmp, name)
+        let m = os_mkdir(p)
+        if m == 0 {
+            dir = p
+        } else if m == 0 - 17 {
+            n += 1
+        } else {
+            why = ut_os_error(m)
+            n = 64
+        }
+    }
+    if dir == "" { return add_row(r, "linker", needed, false, "no temporary directory: " + (if why == "" { "no free scratch directory name" } else { why }), true) }
+    let ll = ut_join(dir, "probe.ll")
+    let exe = ut_join(dir, "probe")
+    let mut answer_ok = false
+    let mut answer = ""
+    if !ut_write_all(io, ll, "define i32 @main() {" + nl() + "  ret i32 0" + nl() + "}" + nl()) {
+        answer = "cannot write " + ll + ": " + ut_os_error(os_status(os_open_write(ll, 0)))
+    } else {
+        let args = strs_new()
+        strs_push(args, "-x")
+        strs_push(args, "ir")
+        strs_push(args, "-Wno-override-module")
+        strs_push(args, "-v")
+        strs_push(args, ll)
+        strs_push(args, "-o")
+        strs_push(args, exe)
+        let out = pr_run_exact(io, proc, sp, "clang", args, dir, driver_env(io))
+        if !out.started {
+            answer = "`clang` could not be started: " + out.why
+        } else {
+            let said = ut_lossy(out.err)
+            if out.status != 0 || ut_kind(io, exe) < 0 {
+                let ls = lines_of(said)
+                let mut first = "the link failed"
+                let mut i = strs_len(ls)
+                let mut found = false
+                while i > 0 && !found {
+                    i -= 1
+                    let l = strs_get(ls, i)
+                    if ut_find(l, "error", 0) >= 0 || ut_find(l, "not found", 0) >= 0 || ut_find(l, "cannot", 0) >= 0 {
+                        first = l
+                        found = true
+                    }
+                }
+                answer = "`clang` could not link a program: " + ut_trim(first)
+            } else {
+                let ls = lines_of(said)
+                let mut linker = "the driver's linker"
+                let mut i = strs_len(ls)
+                let mut found = false
+                while i > 0 && !found {
+                    i -= 1
+                    let q = first_quoted(strs_get(ls, i))
+                    if ut_starts(ut_trim_start(strs_get(ls, i)), "\"") {
+                        found = true
+                        linker = if ut_file_name(q) == "" { q } else { ut_file_name(q) }
+                    }
+                }
+                answer = "links a program through `" + linker + "`"
+                answer_ok = true
+            }
+        }
+    }
+    remove_files(io, dir)
+    add_row(r, "linker", needed, answer_ok, answer, true)
+}
+
+// `remove_dir_all` of the scratch directory, each failure ignored.
+fn remove_files(io: IoCap, dir: Str) -> Int {
+    let h = os_dir_open(dir)
+    if os_status(h) >= 0 {
+        let names = strs_new()
+        let buf = bytes_new(1024)
+        let mut n = os_dir_next(h, buf)
+        while n > 0 {
+            let name = bytes_to_str(bytes_slice(buf, 0, n))
+            if name != "." && name != ".." { strs_push(names, name) }
+            n = os_dir_next(h, buf)
+        }
+        os_close(h)
+        for i in 0..strs_len(names) { os_unlink(ut_join(dir, strs_get(names, i))) }
+    }
+    os_rmdir(dir)
+    0
+}
+
+fn dsymutil_row(io: IoCap, proc: ProcessCap, sp: SpawnCap, r: Row) -> Int ! { io, spawn } {
+    let needed = "a debug build's debug information (`--debug`)"
+    let args = strs_new()
+    strs_push(args, "--version")
+    let env = strs_new()
+    for i in 0..os_env_count() { strs_push(env, os_env_at(i)) }
+    let v = pr_run_exact(io, proc, sp, "dsymutil", args, "", env)
+    if !v.started {
+        if ut_find(v.why, "No such file or directory", 0) >= 0 { return add_row(r, "dsymutil", needed, false, "`dsymutil` was not found on PATH", false) }
+        return add_row(r, "dsymutil", needed, false, "`dsymutil` could not be started: " + v.why, false)
+    }
+    let text = ut_lossy(if str_len(v.out) == 0 { v.err } else { v.out })
+    let ls = lines_of(text)
+    let mut line = if strs_len(ls) > 0 { strs_get(ls, 0) } else { "" }
+    for i in 0..strs_len(ls) {
+        if ut_find(strs_get(ls, i), "version", 0) >= 0 {
+            line = strs_get(ls, i)
+            break
+        }
+    }
+    line = ut_trim(line)
+    add_row(r, "dsymutil", needed, true, if str_len(line) == 0 || v.status != 0 { "found" } else { line }, false)
+}
+
+fn advice(os: Str) -> Str {
+    if os == "macos" {
+        return "On macOS: `xcode-select --install` (Apple's command line tools give clang, the linker, ar and dsymutil), or Homebrew's `llvm` on PATH."
+    }
+    if os == "windows" {
+        return "On Windows: unpack llvm-mingw's `ucrt-x86_64` release (https://github.com/mstorsjo/llvm-mingw/releases, no installer and no administrator) and put its `bin` directory on PATH; it gives clang, lld and ar. Microsoft's SDK is not used."
+    }
+    "Install your distribution's clang and lld (or binutils) packages and put them on PATH."
+}
+
+pub fn doctor_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int ! { io, spawn } {
+    cli_parse(io, c)
+    let os = fe_host_os()
+    print("nazm 0.10.0 on " + os + " " + fe_host_arch() + nl())
+    let r = Row(tool: strs_new(), needed: strs_new(), ok: ints_new(), said: strs_new(), required: ints_new())
+    clang_row(io, proc, sp, os, r)
+    if ints_get(r.ok, 0) == 1 { link_row(io, proc, sp, r) }
+    if os == "macos" { dsymutil_row(io, proc, sp, r) }
+    let mut width = 0
+    for i in 0..strs_len(r.tool) { if str_len(strs_get(r.tool, i)) > width { width = str_len(strs_get(r.tool, i)) } }
+    let mut missing = false
+    let mut missing_required = false
+    for i in 0..strs_len(r.tool) {
+        let pad = cli_spaces(width - str_len(strs_get(r.tool, i)))
+        if ints_get(r.ok, i) == 1 {
+            print(strs_get(r.tool, i) + pad + "  ok       " + strs_get(r.said, i) + nl())
+        } else {
+            missing = true
+            if ints_get(r.required, i) == 1 { missing_required = true }
+            print(strs_get(r.tool, i) + pad + "  MISSING  " + strs_get(r.said, i) + " — needed for " + strs_get(r.needed, i) + nl())
+        }
+    }
+    if missing { print(advice(os) + nl()) }
+    if missing_required {
+        print("`nazm build` cannot make an executable here yet; `nazm run --interpret`, `check`, `fmt` and `test --interpret` need none of this." + nl())
+        exit_with(4)
+        return 4
+    }
+    print("`nazm build` has what it needs here." + nl())
+    0
+}

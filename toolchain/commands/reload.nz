@@ -1,0 +1,243 @@
+// `nazm reload-check`, written in Nazm (R5, `openspec/changes/r5-commands/`, task 11.2, design D22).
+//
+// `nazm reload-check OLD NEW`, run by the dispatcher (`nazm.nz`).
+//
+// A port of `live::reload_check` over R2's facts: each program checked as a module, its functions
+// (name, signature with the effects its declaration or its body gives, and the text of its declaration)
+// compared, and every change named `reloadable` or `restart` with its reason, as one `nazm.reload-check/1`
+// line; status 1 where any change needs a restart, each named on standard error. The records and enums
+// of the program are compared by their layout too, which needs the type of each field and payload —
+// not published by `compiler/sema.nz` — so a program that defines one is refused (design D5).
+
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/facts.nz"
+use "cli.nz"
+use "front.nz"
+use "util.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+// The command line, as `crates/nazm-cli/src/cli.rs` declares `nazm reload-check`.
+pub fn reload_cli() -> Cli {
+    let c = cli_command("reload-check", "Whether a running image could take a new version of a program (N65): one `nazm.reload-check/1` line naming each "
+            + "change as `reloadable` or `restart`, and why. Exits non-zero when any change needs a restart", "")
+    cli_positional(c, "OLD", true, false, true, "", "")
+    cli_positional(c, "NEW", true, false, true, "", "")
+    c
+}
+
+fn refuse(io: IoCap, why: Str) -> Int {
+    eprint("reload-check: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+// One program's functions: name, signature, declaration; `status` 0 where it is read, else the exit
+// status of the failure that was reported.
+struct Shape {
+    status: Ints,
+    name: Strs,
+    sig: Strs,
+    body: Strs,
+}
+
+fn shape_of(io: IoCap, file: Str, library: Str) -> Shape {
+    let sh = Shape(status: ints_new(), name: strs_new(), sig: strs_new(), body: strs_new())
+    ints_push(sh.status, 0)
+    let prefix = fe_prefix(io, file)
+    let f = fx_check_module(prefix + file, library, fe_host_os(), fe_host_arch(), io)
+    if fx_refusal(f) != "" {
+        let why = fx_refusal(f)
+        eprint("nazm: " + why + nl())
+        let code = if fe_starts(why, "could not read") { 3 } else { 1 }
+        ints_set(sh.status, 0, code)
+        return sh
+    }
+    if !fx_carried(f) { refuse(io, fx_why(f)) }
+    let d = fx_diags(f)
+    fe_unprefix_diags(io, d, prefix, prefix + file)
+    let names = fe_names(f, prefix)
+    let texts = fe_texts(f)
+    let bases = fe_bases(f)
+    if fe_load_failed(f) {
+        let out = strs_new()
+        let mut missing = true
+        for i in 0..dg_len(d) {
+            if strs_get(d.code, i) != "N0205" { missing = false }
+            strs_push(out, dg_render(d, i, names, texts, bases))
+        }
+        eprint(str_join(out, ""))
+        ints_set(sh.status, 0, if missing { 3 } else { 1 })
+        return sh
+    }
+    let out = strs_new()
+    let mut errors = 0
+    for i in 0..dg_len(d) {
+        if dg_severity(d, i) != "error" { continue }
+        errors += 1
+        strs_push(out, dg_render(d, i, names, texts, bases))
+    }
+    if errors > 0 {
+        eprint(str_join(out, ""))
+        ints_set(sh.status, 0, 1)
+        return sh
+    }
+    let c = fx_checker(f)
+    let t = fx_tree(f)
+    for r in 0..ck_record_count(c) {
+        if ck_record_module(c, r) == 0 { refuse(io, "a program that defines a record: its layout needs the types of its fields, which compiler/ does not publish") }
+    }
+    for e in 0..ck_enum_count(c) {
+        if ck_enum_module(c, e) == 0 { refuse(io, "a program that defines an enum: its layout needs the types of its payloads, which compiler/ does not publish") }
+    }
+    for i in 0..ck_fn_count(c) {
+        if ck_fn_module(c, i) != 0 { continue }
+        let params = ck_fn_params(c, i)
+        let declared = ck_fn_declared(c, i)
+        let required = ck_fn_required(c, i)
+        let mask = if declared >= 0 { declared } else if required >= 0 { required } else { 0 }
+        let sig = "(" + str_join(params, ", ") + ") -> " + ck_fn_ret(c, i) + " ! {" + str_join(ck_effect_names(mask), ", ") + "}"
+        let node = ck_fn_node(c, i)
+        let span = sx_field(t, node, "span")
+        let base = fx_module_base(f, 0)
+        let text = fx_module_text(f, 0)
+        let s = sx_s(t, span) - base
+        let e = sx_e(t, span) - base
+        let body = if s >= 0 && e <= str_len(text) && s <= e { str_slice(text, s, e) } else { "" }
+        // `BTreeMap::insert`: a name given again replaces the earlier.
+        let mut at = 0 - 1
+        for k in 0..strs_len(sh.name) { if strs_get(sh.name, k) == ck_fn_name(c, i) { at = k } }
+        if at >= 0 {
+            strs_set(sh.sig, at, sig)
+            strs_set(sh.body, at, body)
+        } else {
+            strs_push(sh.name, ck_fn_name(c, i))
+            strs_push(sh.sig, sig)
+            strs_push(sh.body, body)
+        }
+    }
+    sh
+}
+
+// One verdict: name, `reloadable` or `restart`, why.
+struct Changes {
+    name: Strs,
+    verdict: Strs,
+    why: Strs,
+}
+
+fn push(ch: Changes, name: Str, verdict: Str, why: Str) -> Int {
+    strs_push(ch.name, name)
+    strs_push(ch.verdict, verdict)
+    strs_push(ch.why, why)
+    0
+}
+
+// The names of a shape in `BTreeMap` order.
+fn sorted_names(sh: Shape) -> Strs {
+    let out = strs_new()
+    for i in 0..strs_len(sh.name) {
+        let mut at = 0
+        while at < strs_len(out) && ut_less(strs_get(out, at), strs_get(sh.name, i)) { at += 1 }
+        strs_push(out, "")
+        let mut j = strs_len(out) - 1
+        while j > at {
+            strs_set(out, j, strs_get(out, j - 1))
+            j -= 1
+        }
+        strs_set(out, at, strs_get(sh.name, i))
+    }
+    out
+}
+
+fn index_of(sh: Shape, name: Str) -> Int {
+    for i in 0..strs_len(sh.name) { if strs_get(sh.name, i) == name { return i } }
+    0 - 1
+}
+
+fn compare(old: Shape, new: Shape) -> Changes {
+    let ch = Changes(name: strs_new(), verdict: strs_new(), why: strs_new())
+    let o = sorted_names(old)
+    for k in 0..strs_len(o) {
+        let n = strs_get(o, k)
+        let a = index_of(old, n)
+        let b = index_of(new, n)
+        if b < 0 {
+            push(ch, n, "restart", "removed: running code may still call it")
+        } else if strs_get(new.sig, b) != strs_get(old.sig, a) {
+            push(ch, n, "restart", "its signature changed from `" + strs_get(old.sig, a) + "` to `" + strs_get(new.sig, b)
+                    + "`: every caller was compiled against the old one")
+        } else if strs_get(new.body, b) != strs_get(old.body, a) {
+            push(ch, n, "reloadable", "its body changed and its signature did not")
+        }
+    }
+    let nn = sorted_names(new)
+    for k in 0..strs_len(nn) {
+        if index_of(old, strs_get(nn, k)) < 0 { push(ch, strs_get(nn, k), "reloadable", "added: nothing running calls it yet") }
+    }
+    // Stable by name.
+    let order = ints_new()
+    for i in 0..strs_len(ch.name) {
+        let mut at = ints_len(order)
+        while at > 0 && ut_less(strs_get(ch.name, i), strs_get(ch.name, ints_get(order, at - 1))) { at -= 1 }
+        ints_push(order, 0)
+        let mut j = ints_len(order) - 1
+        while j > at {
+            ints_set(order, j, ints_get(order, j - 1))
+            j -= 1
+        }
+        ints_set(order, at, i)
+    }
+    let out = Changes(name: strs_new(), verdict: strs_new(), why: strs_new())
+    for i in 0..ints_len(order) { push(out, strs_get(ch.name, ints_get(order, i)), strs_get(ch.verdict, ints_get(order, i)), strs_get(ch.why, ints_get(order, i))) }
+    out
+}
+
+fn esc(s: Str) -> Str {
+    let out = strs_new()
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        if b == 92 { strs_push(out, "\\\\") } else if b == 34 { strs_push(out, "\\\"") } else { strs_push(out, str_from_byte(b)) }
+    }
+    str_join(out, "")
+}
+
+pub fn reload_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let old = cli_value(c, 0)
+    let new = cli_value(c, 1)
+    let library = os_env_get("NAZM_LIBRARY")
+    if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
+    let a = shape_of(io, old, library)
+    let b = shape_of(io, new, library)
+    if ints_get(a.status, 0) != 0 {
+        exit_with(ints_get(a.status, 0))
+        return ints_get(a.status, 0)
+    }
+    if ints_get(b.status, 0) != 0 {
+        exit_with(ints_get(b.status, 0))
+        return ints_get(b.status, 0)
+    }
+    let ch = compare(a, b)
+    let mut restart = false
+    for i in 0..strs_len(ch.name) { if strs_get(ch.verdict, i) == "restart" { restart = true } }
+    let items = strs_new()
+    for i in 0..strs_len(ch.name) {
+        strs_push(items, "{\"name\":\"" + esc(strs_get(ch.name, i)) + "\",\"verdict\":\"" + strs_get(ch.verdict, i) + "\",\"why\":\"" + esc(strs_get(ch.why, i)) + "\"}")
+    }
+    // `nazm_lir::runtime::RUNTIME_ABI_REVISION`, which `run.sh` holds this value to.
+    print("{\"schema\":\"nazm.reload-check/1\",\"runtime_abi\":49,\"outcome\":\"" + (if restart { "restart" } else { "reloadable" }) + "\",\"changes\":["
+            + str_join(items, ",") + "]}" + nl())
+    if restart {
+        for i in 0..strs_len(ch.name) {
+            if strs_get(ch.verdict, i) == "restart" {
+                eprint("nazm: `" + strs_get(ch.name, i) + "` needs a restart: " + strs_get(ch.why, i) + nl())
+            }
+        }
+        exit_with(1)
+        return 1
+    }
+    0
+}

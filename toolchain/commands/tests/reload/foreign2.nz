@@ -1,0 +1,2 @@
+extern "C" fn cfn(a: Int, b: Int) -> Int = "cfn";
+fn main() -> Int { 0 }

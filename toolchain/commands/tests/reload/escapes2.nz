@@ -1,0 +1,2 @@
+fn quote(s: Str) -> Str { "a\"b\\d" + s }
+fn main() -> Int { 0 }

@@ -182,7 +182,7 @@ options: none is the long help, a command its `--help`, `help help` its own text
 a command that has no commands of its own is `unrecognized subcommand` under that command's usage
 (under `help`'s own, without the closing line). The commands and their `about`s are a table in
 `nazm.nz`, in `cli.rs`'s order with `help` last; a doc comment changed in `cli.rs` shows as a
-difference in `tests/args/nazm.txt`'s lines. `fmt`, `init`, `check`, `doc`, `fix`, `lsp`, `test`, `patch`, `interface`, `docs`, `attest`, `lock`, `update`, `publish` and `yank` are carried; any other
+difference in `tests/args/nazm.txt`'s lines. `fmt`, `init`, `check`, `doc`, `fix`, `lsp`, `test`, `patch`, `interface`, `docs`, `attest`, `lock`, `update`, `publish`, `yank`, `bindgen`, `reload-check` and `doctor` are carried; any other
 command, or `help` of one, is `nazm: not carried: nazm CMD`, status 6.
 
 **D13 — `doc` is `apidoc.rs` over R2's facts; `check` runs on the same interface.**
@@ -452,6 +452,35 @@ manifests that are wrong in a way of their own (`tests/manifests.txt`) and a key
 for `attest` (`tests/args/lock.txt`, `update.txt`, `publish.txt`, `yank.txt`, `attest.txt`).
 `--locked` of `check` and `build` still refuses where a lockfile exists (D15): `pkg.nz`'s digest now
 makes it possible; the change waits for its own comparison.
+
+**D22 — `bindgen`, `reload-check` and `doctor` (task 11.2, 2026-10-19).** `bindgen.nz` is `bindgen.rs`: the
+header's comments stripped, `#` lines refused or passed by the reference's own list (a `#define` of
+more than two words is "a preprocessor directive", as the reference's dead branch has it), `extern "C" {`
+blocks read through, statements split at a `;` outside braces, the types first (an opaque handle from
+`struct S;` or `typedef struct S S;`, a C struct of `int64_t`, `bool`, handles and structs) and then each
+prototype translated or refused with its reason; each translation is held by R2's checker before it is
+written (`fx_check_over` over the module the reference's `check_source` checks, a probe file in the
+working directory that is never written), `-o FILE` writes the module and prints one
+`nazm.bindgen/1` line, without it the module goes to standard output and each refusal to standard error;
+status 1 when anything was refused. `reload-check` compares two programs' functions — each by name, its
+signature as `Types::show` writes it with the effects its declaration or its body gives, and the text of
+its declaration — and writes `nazm.reload-check/1` (the runtime ABI revision, 49, is held by `run.sh`); the
+records and enums it also compares by layout need the type of each field and payload, which
+`compiler/sema.nz` does not publish, so a program that defines one is refused (`ck_record_field_ty` and a
+record's type are the hand-back). `doctor` runs `clang --version` and `-dumpmachine` with the environment a
+build gives it (`backend::PASSED`), links a probe from LLVM IR in a scratch directory, and asks
+`dsymutil` on macOS: both sides ran with `PATH` and `TMPDIR` as they are and made wrong. `run.sh bindgen`
+runs every header of `tests/bindgen` and `bench/compare` with and without `-o`, `run.sh reload` every pair
+of the programs of `tests/reload`, and `tests/args/bindgen.txt`, `reload-check.txt` the command lines.
+
+**What 11.2 leaves, and why.** `contract`, `accel`, `obligations`, `explain-cost`, `explain-flow`, `profile`,
+`trace`, `core-ir`, `mir`, `lir` and `runtime` are answered from MIR, LIR, Core IR digests or the
+accelerator and contract runtimes (R3's pipeline and the Rust `nazm-service`), whose facts the Nazm
+front end does not yet publish; `bench` and `profile` are timings, which this track never takes;
+`repl` and `comptime` evaluate in-process through the interpreter, whose entry R4's `toolchain/interp`
+offers as a program, not as a module; `capabilities` is the build's own tables (`Intrinsic::ALL`,
+the backend's `Builtin`, `TARGET_NOTE`) of which the backend's is not in `compiler/`. They are not
+ported, and `nazm CMD` says so (`not carried`, 6).
 
 ## Risks / Trade-offs
 

@@ -1,0 +1,11 @@
+int64_t fn(int64_t let);
+int64_t let(int64_t a);
+int64_t match(int64_t a);
+int64_t write(int64_t fd);
+int64_t main(void);
+int64_t print(const char *s);
+int64_t read(int64_t a);
+int64_t Int(int64_t a);
+int64_t ok2(int64_t fn);
+int64_t a0(int64_t, int64_t);
+int64_t dup(int64_t a, int64_t a);
