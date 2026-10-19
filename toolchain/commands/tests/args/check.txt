@@ -86,3 +86,42 @@ broken/
 --source-root=. w.nz --no-cache --cache-report
 --source-root . m.nz
 --source-root . app/src/main.nz
+lk --locked
+lk/src/main.nz --locked
+lk
+--json lk --locked
+lk1 --locked
+lk2 --locked
+lk3 --locked
+lk4 --locked
+lk5 --locked
+lk6 --locked
+lk7 --locked
+lk8 --locked
+lk9 --locked
+lk10 --locked
+lk11 --locked
+lk12 --locked
+lk4/src/main.nz --locked
+--locked --json lk3
+--summary-json b.nz
+--summary-json w.nz
+--summary-json --deny-warnings w.nz
+--summary-json m.nz
+--summary-json s.nz
+--summary-json absent.nz
+--summary-json sub
+--summary-json app
+--summary-json app/src/main.nz
+--summary-json lib
+--summary-json lib/src/inner/b.nz
+--summary-json bad
+--summary-json nopkg.nz
+--summary-json broken
+--summary-json --source-root nowhere a.nz
+--summary-json --source-root a.nz a.nz
+--summary-json --source-root . b.nz
+--summary-json lk --locked
+--summary-json lk3 --locked
+--summary-json --locked a.nz
+--summary-json --profile nonesuch a.nz

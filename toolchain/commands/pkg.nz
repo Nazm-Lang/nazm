@@ -1785,3 +1785,157 @@ pub fn graph_write_lock(io: IoCap, g: Graph, why: Strs) -> Int {
     }
     1
 }
+
+// A package's enabled features, in the order they are recorded.
+fn graph_features(g: Graph, p: Int) -> Strs {
+    let out = strs_new()
+    for k in 0..ints_len(g.f_pkg) {
+        if ints_get(g.f_pkg, k) == p { strs_push(out, strs_get(g.f_name, k)) }
+    }
+    out
+}
+
+// `Graph::verify` of the lockfile at `path`, whose text is `text` — the lockfile held to the resolution:
+// the errors added to `d`, as the reference collects them; a form of TOML the reader does not read is
+// noted as unsupported.
+fn graph_verify_text(g: Graph, text: Str, d: Dgs) -> Int {
+    let lockfile = "`nazm.lock`"
+    let t = tm_parse(text)
+    if !tm_ok(t) {
+        if tm_message(t) != "" {
+            dgs_add(d, "N0506", lockfile + " cannot be read: " + tm_message(t), "")
+        } else {
+            dgs_unsupported(d, "a lockfile in TOML this port does not read (" + tm_why(t) + ")")
+        }
+        return 0
+    }
+    let o = ints_new()
+    let req = ints_new()
+    ints_push(req, 1)
+    ints_push(req, 0)
+    let bad = read_struct(t, 0, fields("schema", "package", "", "", "", ""), "sv", req, o)
+    if bad != "" {
+        dgs_add(d, "N0506", lockfile + " cannot be read: " + bad, "")
+        return 0
+    }
+    let schema = tm_text(t, ints_get(o, 0))
+    // The recorded packages: name, version, source, digest, dependencies, features.
+    let r_name = strs_new()
+    let r_version = strs_new()
+    let r_source = strs_new()
+    let r_digest = strs_new()
+    let r_deps = vec_new[Strs]()
+    let r_feats = vec_new[Strs]()
+    let mut e = if ints_get(o, 1) >= 0 { tm_first(t, ints_get(o, 1)) } else { 0 - 1 }
+    while e >= 0 {
+        if tm_kind(t, e) != tm_table() {
+            dgs_unsupported(d, "a lockfile whose package is not a table")
+            return 0
+        }
+        let eo = ints_new()
+        let ereq = ints_new()
+        for _ in 0..6 { ints_push(ereq, 1) }
+        ints_set(ereq, 4, 0)
+        ints_set(ereq, 5, 0)
+        let why = read_struct(t, e, fields("name", "version", "source", "digest", "dependencies", "features"), "sssdaa", ereq, eo)
+        if why != "" {
+            dgs_add(d, "N0506", lockfile + " cannot be read: " + why, "")
+            return 0
+        }
+        strs_push(r_name, tm_text(t, ints_get(eo, 0)))
+        strs_push(r_version, tm_text(t, ints_get(eo, 1)))
+        strs_push(r_source, tm_text(t, ints_get(eo, 2)))
+        strs_push(r_digest, tm_text(t, ints_get(eo, 3)))
+        let deps = strs_new()
+        let feats = strs_new()
+        if ints_get(eo, 4) >= 0 {
+            let mut c = tm_first(t, ints_get(eo, 4))
+            while c >= 0 {
+                strs_push(deps, tm_text(t, c))
+                c = tm_next(t, c)
+            }
+        }
+        if ints_get(eo, 5) >= 0 {
+            let mut c = tm_first(t, ints_get(eo, 5))
+            while c >= 0 {
+                strs_push(feats, tm_text(t, c))
+                c = tm_next(t, c)
+            }
+        }
+        vec_push(r_deps, deps)
+        vec_push(r_feats, feats)
+        e = tm_next(t, e)
+    }
+    if schema != "nazm.lock/1" && schema != "nazm.lock/2" {
+        dgs_add(d, "N0506", lockfile + " is `" + schema + "`, not `nazm.lock/1` or `nazm.lock/2`", "")
+        return 0
+    }
+    // `BTreeMap::insert`: a name recorded again replaces the earlier entry, and is an error.
+    let live = ints_new()
+    for i in 0..strs_len(r_name) { ints_push(live, 1) }
+    for i in 0..strs_len(r_name) {
+        for k in 0..i {
+            if ints_get(live, k) == 1 && strs_get(r_name, k) == strs_get(r_name, i) {
+                ints_set(live, k, 0)
+                dgs_add(d, "N0506", "`" + strs_get(r_name, i) + "` is recorded more than once in " + lockfile, "")
+            }
+        }
+    }
+    for p in 0..graph_len(g) {
+        let mut l = 0 - 1
+        for i in 0..strs_len(r_name) {
+            if ints_get(live, i) == 1 && strs_get(r_name, i) == strs_get(g.name, p) { l = i }
+        }
+        let name = strs_get(g.name, p)
+        let version = strs_get(g.version, p)
+        if l < 0 {
+            dgs_add(d, "N0506", "`" + name + "` " + version + " is not in " + lockfile, "")
+            continue
+        }
+        ints_set(live, l, 0)
+        let deps = strs_new()
+        for k in 0..ints_get(g.d_count, p) { strs_push(deps, strs_get(g.d_name, ints_get(g.d_first, p) + k)) }
+        let same_deps = str_join(vec_get(r_deps, l), str_from_byte(0)) == str_join(deps, str_from_byte(0)) && strs_len(vec_get(r_deps, l)) == strs_len(deps)
+        let feats = graph_features(g, p)
+        let same_feats = str_join(vec_get(r_feats, l), str_from_byte(0)) == str_join(feats, str_from_byte(0)) && strs_len(vec_get(r_feats, l)) == strs_len(feats)
+        let same_base = strs_get(r_version, l) == version && strs_get(r_source, l) == strs_get(g.source, p) && same_deps
+        if same_base && !same_feats {
+            dgs_add(d, "N0506", "`" + name + "` resolves with the features [" + str_join(feats, ", ") + "], and " + lockfile + " records ["
+                    + str_join(vec_get(r_feats, l), ", ") + "]", "")
+        } else if !same_base {
+            dgs_add(d, "N0506", "`" + name + "` resolves to " + version + " at `" + strs_get(g.source, p) + "`, and " + lockfile + " records "
+                    + strs_get(r_version, l) + " at `" + strs_get(r_source, l) + "`", "")
+        } else if strs_get(r_digest, l) != strs_get(g.digest, p) {
+            dgs_add(d, "N0507", "`" + name + "` " + version + " does not match its digest in " + lockfile
+                    + ": its manifest or sources changed after it was locked", "`nazm lock` records the packages as they are now")
+        }
+    }
+    // What the lockfile records that this build does not use, by name.
+    let rest = strs_new()
+    for i in 0..strs_len(r_name) {
+        if ints_get(live, i) == 1 {
+            let at = insert_sorted(rest, strs_get(r_name, i))
+            strs_push(rest, "")
+            let mut j = strs_len(rest) - 1
+            while j > at {
+                strs_set(rest, j, strs_get(rest, j - 1))
+                j -= 1
+            }
+            strs_set(rest, at, strs_get(r_name, i))
+        }
+    }
+    for i in 0..strs_len(rest) {
+        dgs_add(d, "N0506", lockfile + " records `" + strs_get(rest, i) + "`, which this build does not use", "")
+    }
+    0
+}
+
+// `verify_locked`: the lockfile beside the root manifest, held to the resolution. `path` is where it
+// is expected, as the reference shows it.
+pub fn graph_verify_locked(io: IoCap, g: Graph, path: Str, d: Dgs) -> Int {
+    if ut_read_error(io, path, true) != "" {
+        dgs_add(d, "N0505", "`--locked`, and there is no `" + path + "`", "`nazm lock` writes it")
+        return 0
+    }
+    graph_verify_text(g, read_file(path), d)
+}

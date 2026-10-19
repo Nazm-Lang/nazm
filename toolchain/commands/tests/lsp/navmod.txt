@@ -1,0 +1,35 @@
+# A document that imports a module: the uses of an exported function are in both files, renaming it is refused
+# (a module no open program loads may use it), and the workspace's symbols are those of both.
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"documentSymbol":{"hierarchicalDocumentSymbolSupport":true}}}}}
+{"jsonrpc":"2.0","method":"initialized","params":{}}
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/m.nz","languageId":"nazm","version":1,"text":"use \"h2.nz\";\nfn main() -> Int {\n    let q = twice(3);\n    q + twice(4)\n}\n"}}}
+{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":2,"character":13}}}
+{"jsonrpc":"2.0","id":3,"method":"textDocument/references","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":2,"character":13},"context":{"includeDeclaration":true}}}
+{"jsonrpc":"2.0","id":4,"method":"textDocument/references","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":2,"character":13},"context":{"includeDeclaration":false}}}
+{"jsonrpc":"2.0","id":5,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":2,"character":13}}}
+{"jsonrpc":"2.0","id":6,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":2,"character":13},"newName":"renamed"}}
+{"jsonrpc":"2.0","id":7,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":3,"character":9}}}
+{"jsonrpc":"2.0","id":8,"method":"textDocument/references","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":3,"character":9},"context":{"includeDeclaration":true}}}
+{"jsonrpc":"2.0","id":9,"method":"textDocument/references","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":3,"character":9},"context":{"includeDeclaration":false}}}
+{"jsonrpc":"2.0","id":10,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":3,"character":9}}}
+{"jsonrpc":"2.0","id":11,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":3,"character":9},"newName":"renamed"}}
+{"jsonrpc":"2.0","id":12,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":2,"character":8}}}
+{"jsonrpc":"2.0","id":13,"method":"textDocument/references","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":2,"character":8},"context":{"includeDeclaration":true}}}
+{"jsonrpc":"2.0","id":14,"method":"textDocument/references","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":2,"character":8},"context":{"includeDeclaration":false}}}
+{"jsonrpc":"2.0","id":15,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":2,"character":8}}}
+{"jsonrpc":"2.0","id":16,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":2,"character":8},"newName":"renamed"}}
+{"jsonrpc":"2.0","id":17,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":0,"character":6}}}
+{"jsonrpc":"2.0","id":18,"method":"textDocument/references","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":0,"character":6},"context":{"includeDeclaration":true}}}
+{"jsonrpc":"2.0","id":19,"method":"textDocument/references","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":0,"character":6},"context":{"includeDeclaration":false}}}
+{"jsonrpc":"2.0","id":20,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":0,"character":6}}}
+{"jsonrpc":"2.0","id":21,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":0,"character":6},"newName":"renamed"}}
+{"jsonrpc":"2.0","id":22,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":1,"character":3}}}
+{"jsonrpc":"2.0","id":23,"method":"textDocument/references","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":1,"character":3},"context":{"includeDeclaration":true}}}
+{"jsonrpc":"2.0","id":24,"method":"textDocument/references","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":1,"character":3},"context":{"includeDeclaration":false}}}
+{"jsonrpc":"2.0","id":25,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":1,"character":3}}}
+{"jsonrpc":"2.0","id":26,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"},"position":{"line":1,"character":3},"newName":"renamed"}}
+{"jsonrpc":"2.0","id":27,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file://@ROOT@/m.nz"}}}
+{"jsonrpc":"2.0","id":28,"method":"workspace/symbol","params":{"query":""}}
+{"jsonrpc":"2.0","id":29,"method":"workspace/symbol","params":{"query":"t"}}
+{"jsonrpc":"2.0","id":30,"method":"shutdown"}
+{"jsonrpc":"2.0","method":"exit","params":{}}

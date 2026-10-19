@@ -1,0 +1,23 @@
+# The same for a client that reads neither versioned edits nor nested symbols: a rename is refused for it after it
+# is planned, the symbols are flat.
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+{"jsonrpc":"2.0","method":"initialized","params":{}}
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/n.nz","languageId":"nazm","version":1,"text":"struct P { x: Int, y: Int }\nenum Shape { Dot, Box(w: Int) }\nfn inc(n: Int) -> Int { n + 1 }\nfn main() -> Int {\n    let p = P(x: 1, y: 2);\n    let s = Shape.Box(w: 3);\n    let t = inc(p.x);\n    t + inc(2)\n}\n"}}}
+{"jsonrpc":"2.0","id":2,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/n.nz"},"position":{"line":2,"character":4},"newName":"renamed"}}
+{"jsonrpc":"2.0","id":3,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/n.nz"},"position":{"line":6,"character":13},"newName":"renamed"}}
+{"jsonrpc":"2.0","id":4,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/n.nz"},"position":{"line":7,"character":9},"newName":"renamed"}}
+{"jsonrpc":"2.0","id":5,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/n.nz"},"position":{"line":4,"character":8},"newName":"renamed"}}
+{"jsonrpc":"2.0","id":6,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/n.nz"},"position":{"line":0,"character":7},"newName":"Renamed"}}
+{"jsonrpc":"2.0","id":7,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/n.nz"},"position":{"line":4,"character":12},"newName":"Renamed"}}
+{"jsonrpc":"2.0","id":8,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/n.nz"},"position":{"line":0,"character":11},"newName":"renamed"}}
+{"jsonrpc":"2.0","id":9,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/n.nz"},"position":{"line":6,"character":18},"newName":"renamed"}}
+{"jsonrpc":"2.0","id":10,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/n.nz"},"position":{"line":1,"character":5},"newName":"Renamed"}}
+{"jsonrpc":"2.0","id":11,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/n.nz"},"position":{"line":5,"character":12},"newName":"Renamed"}}
+{"jsonrpc":"2.0","id":12,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/n.nz"},"position":{"line":1,"character":13},"newName":"Renamed"}}
+{"jsonrpc":"2.0","id":13,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/n.nz"},"position":{"line":5,"character":20},"newName":"renamed"}}
+{"jsonrpc":"2.0","id":14,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/n.nz"},"position":{"line":3,"character":4},"newName":"renamed"}}
+{"jsonrpc":"2.0","id":15,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://@ROOT@/n.nz"},"position":{"line":2,"character":0},"newName":"renamed"}}
+{"jsonrpc":"2.0","id":16,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file://@ROOT@/n.nz"}}}
+{"jsonrpc":"2.0","id":17,"method":"workspace/symbol","params":{"query":"a"}}
+{"jsonrpc":"2.0","id":18,"method":"shutdown"}
+{"jsonrpc":"2.0","method":"exit","params":{}}

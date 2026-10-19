@@ -57,6 +57,12 @@
       cache, a profile other than `general`, `--profile-report`, `--summary-json`, `--source-root`
       outside the root module's directory or for a package's module, a directory as `fix`'s root)
 
+- [x] 5.4 `check --summary-json` and `check --locked` with a lockfile (design D23, 2026-10-19): the summary's
+      references linked to the language service's identities (`fx_diag_ids`, `fx_state_source`), `Graph::verify` of the
+      lockfile (`pkg.nz`) with the reference's words. `tests/args/check.txt` 123 of 128 command lines agree (twelve
+      lockfiles each wrong in its own way, every package shape under `--summary-json`), 0 differ, the 5 refused named in
+      5.3; 3,393 inputs of `check` each with `--summary-json`: 3,392 agree, 0 differ, 1 refused (not UTF-8)
+
 ## 6. `test`
 - [x] 6.1 The corpus runner, interpreted and compiled (design D17, 2026-10-19):
       `toolchain/commands/test.nz`, the two legs run by the `nazm` `NAZM_TEST_DRIVER` names (the port
@@ -97,6 +103,16 @@
       function, 2 a warning beside a syntax error, 2 a call through a value or with effects the facts
       do not know), 1 not UTF-8. Still refused: two open documents, completion, references,
       signature help, rename, symbols, semantic tokens, code actions, call hierarchy
+
+- [ ] 8.3 The reference index's navigation (design D23, 2026-10-19): `definition` of anything `fx_ref_*` indexes,
+      `references`, `prepareRename` and `rename` (with the candidate program re-checked and its occurrences
+      partitioned as before), `documentSymbol` and `workspace/symbol`, nested and flat. `tests/lsp/` 18 sessions: 17
+      agree, 0 differ, 1 refused (two open documents); 3,378 inputs in six sessions each: 2,730 agree, 0 differ, 647
+      refused (named in D23), 1 not UTF-8. Still refused: completion, signature help, semantic tokens, code actions, call
+      hierarchy, a rename of an exported name in a declared workspace, every index query in a compilation with errors
+      the facts' index is not promised for (hand-back to R2: after `N0203`, `N0305`, `N0334`, `N0386`, `N0610`, `N0101`
+      the index differs from the reference's; and the facts record a trait method's uses inside its own default
+      methods, which the reference does not)
 
 ## 9. The agent commands and the MCP server
 - [ ] 9.1 `context`, `snapshot`, `delta`, `diagnostics`, `docs`, `repo`, `patch`, `resolve`,

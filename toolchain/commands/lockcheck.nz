@@ -1,0 +1,19 @@
+// `--locked` (R5, design D15, D23): the package in `dir` resolved (`pkg.nz`, whose `Graph` the front end's
+// `compiler/package.nz` shares a name with, so `check.nz` cannot import it) and held to its lockfile.
+
+use "pkg.nz"
+
+// "" where the lockfile records what the resolution is; "R" and the reason where this port cannot say
+// (a form of TOML it does not read, a resolution it does not carry); "E" and the errors as the reference
+// prints them (`report`) where it does not.
+pub fn lk_verify(io: IoCap, dir: Str) -> Str {
+    let dg = dgs_new()
+    let g = graph_resolve(io, dir, 0 - 1, strs_new(), dg)
+    if dgs_why(dg) != "" { return "R" + dgs_why(dg) }
+    if dgs_len(dg) == 0 {
+        graph_verify_locked(io, g, dir + "/nazm.lock", dg)
+        if dgs_why(dg) != "" { return "R" + dgs_why(dg) }
+    }
+    if dgs_len(dg) > 0 { return "E" + dgs_text(dg) }
+    ""
+}
