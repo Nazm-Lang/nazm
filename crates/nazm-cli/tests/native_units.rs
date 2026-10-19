@@ -325,7 +325,7 @@ fn a_diamond_generates_the_shared_module_once() {
     // Four modules, plus the runtime, the small-block heap (R1.5 3.1) and the entry.
     assert_eq!(
         art.len(),
-        7,
+        7 + crate::common::PLATFORM_UNITS_LEN,
         "{:?}",
         art.iter().map(|(n, _)| n).collect::<Vec<_>>()
     );

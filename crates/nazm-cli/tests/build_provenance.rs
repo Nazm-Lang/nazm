@@ -160,9 +160,15 @@ fn a_program_nazms_own_generator_built_names_it_by_its_digest() {
 
 #[test]
 fn an_attestation_is_the_local_commands_output_and_a_failing_one_leaves_none() {
+    // Windows has no `cat` or `false`: `cmd /c type` and `cmd /c exit 1` stand in for them.
+    let (cat, fails) = if cfg!(windows) {
+        ("cmd /c type", "cmd /c exit 1")
+    } else {
+        ("cat", "false")
+    };
     let d = tempfile::tempdir().unwrap();
     // `cat` stands in for a signer: its output is the record itself, so the test knows it exactly.
-    build(d.path(), PROGRAM, &["--attest-with", "cat"]);
+    build(d.path(), PROGRAM, &["--attest-with", cat]);
     assert_eq!(
         std::fs::read(d.path().join("p.json.sig")).unwrap(),
         std::fs::read(d.path().join("p.json")).unwrap()
@@ -179,16 +185,17 @@ fn an_attestation_is_the_local_commands_output_and_a_failing_one_leaves_none() {
             "--provenance",
             "p.json",
             "--attest-with",
-            "false",
+            fails,
         ],
     );
     assert!(!o.status.success());
-    assert!(String::from_utf8_lossy(&o.stderr).contains("the attesting command `false` failed"));
+    assert!(String::from_utf8_lossy(&o.stderr)
+        .contains(&format!("the attesting command `{fails}` failed")));
     assert!(e.path().join("p.json").exists() && !e.path().join("p.json.sig").exists());
     // An attestation needs a record to attest.
     let o = nazm(
         e.path(),
-        &["build", "p.nz", "-o", "p", "--attest-with", "cat"],
+        &["build", "p.nz", "-o", "p", "--attest-with", cat],
     );
     assert!(!o.status.success());
 }

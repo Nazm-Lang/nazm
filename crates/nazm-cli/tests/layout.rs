@@ -216,7 +216,11 @@ fn the_layout_is_in_every_objects_identity() {
     };
     assert!(first.is_object() && soa.is_object(), "{first} {soa}");
     assert_eq!(compiled(&soa), Some(1), "{soa}");
-    assert_eq!(reused(&again), Some(4), "{again}");
+    assert_eq!(
+        reused(&again),
+        Some(4 + crate::common::PLATFORM_UNITS),
+        "{again}"
+    );
     // The emitted code differs, so so does every key derived from it.
     let ir = |layout: &str| {
         let o = nazm(

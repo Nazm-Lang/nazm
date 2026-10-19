@@ -154,6 +154,8 @@ fn a_short_deadline_ends_the_wait_when_it_passes() {
     agrees(&src, "20 in time\n20 in time\n0");
 }
 
+// The connect to the closed listener's port waits up to ten seconds: Windows answers a connect to a
+// closed loopback port only after retrying it for about two, and a shorter bound reads as `TimedOut`.
 #[test]
 fn failures_are_values_of_their_kind() {
     let src = prog(
@@ -168,7 +170,7 @@ fn failures_are_values_of_their_kind() {
                      tcp_listener_set_timeout(l, 50);\n\
                      line(out, match tcp_accept(l) { Result.Ok(value: c) => \"accepted\", Result.Err(error: e) => io_kind_name(e.kind), });\n\
                      tcp_listener_close(l);\n\
-                     line(out, match tcp_connect(net, addr, 2000) { Result.Ok(value: c) => \"connected\", Result.Err(error: e) => io_kind_name(e.kind), });\n\
+                     line(out, match tcp_connect(net, addr, 10000) { Result.Ok(value: c) => \"connected\", Result.Err(error: e) => io_kind_name(e.kind), });\n\
                      line(out, match tcp_accept(l) { Result.Ok(value: c) => \"accepted\", Result.Err(error: e) => io_kind_name(e.kind), });\n\
                  },\n\
                  Result.Err(error: e) => { line(out, io_error_show(e)); },\n\

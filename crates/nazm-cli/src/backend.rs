@@ -454,6 +454,9 @@ pub(crate) fn windows_libraries() -> Vec<String> {
         "-lws2_32".to_owned(),
         "-lbcrypt".to_owned(),
         format!("-Wl,--stack,{WINDOWS_MAIN_STACK}"),
+        // No build time in the executable: the same program is the same bytes (provenance and
+        // attestation record the digest, and a reproduced build is compared with it).
+        "-Wl,--no-insert-timestamp".to_owned(),
     ]
 }
 
@@ -753,7 +756,7 @@ mod tests {
         // MinGW-w64's, as `link.txt` names them (W2: a Windows host's own build links them).
         assert_eq!(
             system_libraries(Some("x86_64-pc-windows-gnu")).join(" "),
-            "-static -pthread -lws2_32 -lbcrypt -Wl,--stack,8388608"
+            "-static -pthread -lws2_32 -lbcrypt -Wl,--stack,8388608 -Wl,--no-insert-timestamp"
         );
         assert_eq!(
             system_libraries(None).is_empty(),

@@ -70,15 +70,14 @@ fn identical_input_gives_identical_artefacts_here_and_in_another_directory() {
             std::fs::write(d.join("p.nz"), PROGRAM).unwrap();
         }
         build(a.path(), backend);
-        let first: Vec<Vec<u8>> = ["p", "p.prov.json", "p.cdx.json"]
-            .iter()
-            .map(|f| read(&a.path().join(f)))
-            .collect();
+        let exe = crate::common::exe_name("p");
+        let files = [exe.as_str(), "p.prov.json", "p.cdx.json"];
+        let first: Vec<Vec<u8>> = files.iter().map(|f| read(&a.path().join(f))).collect();
         // The same input again, in place.
         build(a.path(), backend);
         // And elsewhere.
         build(&deeper, backend);
-        for (i, f) in ["p", "p.prov.json", "p.cdx.json"].iter().enumerate() {
+        for (i, f) in files.iter().enumerate() {
             assert!(
                 read(&a.path().join(f)) == first[i],
                 "{backend}: {f} changed on a rebuild"

@@ -11146,7 +11146,7 @@ declare i32 @SuspendThread(ptr)
 declare i32 @ResumeThread(ptr)
 declare i32 @GetThreadContext(ptr, ptr)
 declare i32 @SetThreadContext(ptr, ptr)
-declare void @nz_os_preempt_stub()
+declare extern_weak void @nz_os_preempt_stub()
 
 define hidden void @nz.text_lo() section ".text$nA" {
 entry:

@@ -209,7 +209,13 @@ int main(void) {
         assert_eq!(b.code, Some(0), "{backend} -O{opt}: {}", b.stderr);
         let c = Command::new("clang")
             .current_dir(d.path())
-            .args(["host.c", "libnz.a", "-o", "host"])
+            .args([
+                "host.c",
+                "libnz.a",
+                "-o",
+                crate::common::exe_name("host").as_str(),
+            ])
+            .args(common::c_host_libs())
             .output()
             .unwrap();
         assert!(c.status.success(), "{}", String::from_utf8_lossy(&c.stderr));
@@ -411,6 +417,10 @@ fn main(out: OutCap, f: ForeignCap) -> Int ! {io, foreign} {
     }
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "Windows keeps the failure bit (Target::failures): `{T, i1}` returns and joins, no landing pads, until its unwinding is verified; this test reads the hosted unwinding IR"
+)]
 #[test]
 fn hosted_code_unwinds_and_the_boards_and_webassembly_keep_the_bit() {
     // 4.2, by target. Hosted: no Nazm function returns a `{T, i1}` pair; a call into a bare
