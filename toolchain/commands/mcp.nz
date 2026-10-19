@@ -1,0 +1,668 @@
+// `nazm-mcp`, written in Nazm (R5, `openspec/changes/r5-commands/`, design D25): the read-only Model
+// Context Protocol server over standard input and output, as `crates/nazm-mcp/src/main.rs` serves it.
+//
+//     nazm-mcp --root <file.nz> [--source-root <dir>] [--docs <repository>]
+//
+// It is its own program, as the reference's is. Its protocol is the SDK's (`rmcp`), one JSON-RPC message
+// to a line: `initialize` (the protocol version it answers is the client's where the SDK knows it, else
+// the latest), `ping`, `tools/list` (the eleven tools exactly as the reference lists them, `mcptools.nz`),
+// `tools/call`, and a method not found for the rest. A tool's arguments are checked as `serde` checks
+// them, in `serde`'s own words (`-32602`); its answer is what the command of the same name prints with
+// `--json`, as one result's `structuredContent`, with `isError` where its `status` is not `available`.
+//
+// The commands are asked, not called: each tool runs `nazm` (the program `NAZM_EXE` names) with the
+// arguments that command takes, so a call reads the root from disk as it is at that moment and keeps
+// nothing, as the reference does. `nazm.semantic_delta` is asked in this process (`delta_compute`), its baseline
+// being data. Refused (status 6), counted and named, because the commands behind them are not
+// carried: `nazm.semantic_context`, `nazm.repository_map`, `nazm.task_context`; and what the reference
+// answers with a transport error rather than a result (a root that does not open), a message the
+// reference reads in a way this port does not (a line that is not JSON, an `id` that is not an integer or a
+// string), and a first message that is not `initialize`. The service's check summary and the command's differ in
+// two places (`service_summary`, `unreadable_of`), which this port makes the service's.
+
+use "../../compiler/diag.nz"
+use "jsonin.nz"
+use "proc.nz"
+use "util.nz"
+use "mcptools.nz"
+use "semantic.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+fn refuse(io: IoCap, why: Str) -> Int {
+    eprint("nazm-mcp: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+fn usage() -> Str { "usage: nazm-mcp --root <file.nz> [--source-root <dir>] [--docs <repository>]" }
+
+fn fail_usage(io: IoCap, why: Str) -> Int {
+    eprint("nazm-mcp: " + why + nl() + usage() + nl())
+    exit_with(2)
+    0
+}
+
+// What the server was started with.
+struct Server {
+    root: Str,
+    source_root: Str,
+    has_source_root: Bool,
+    docs: Str,
+    has_docs: Bool,
+    exe: Str,
+}
+
+fn send(io: IoCap, line: Str) -> Int {
+    print(line + nl())
+    0
+}
+
+fn fail(io: IoCap, id: Str, code: Int, message: Str) -> Int {
+    send(io, "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + int_to_str(code) + ",\"message\":" + json_str(message) + "}}")
+}
+
+fn succeed(io: IoCap, id: Str, result: Str) -> Int {
+    send(io, "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":" + result + "}")
+}
+
+// One line of standard input, its line break included; "" at the end.
+fn read_line(h: OsHandle) -> Str {
+    let out = strs_new()
+    let buf = bytes_new(4096)
+    while true {
+        let n = os_read_line(h, buf)
+        if n <= 0 { return str_join(out, "") }
+        let piece = bytes_to_str(bytes_slice(buf, 0, n))
+        strs_push(out, piece)
+        if str_byte(piece, n - 1) == 10 { return str_join(out, "") }
+    }
+    ""
+}
+
+// --- reading what `serde` reads -------------------------------------------------------------------------
+
+fn is_digit(b: Int) -> Bool { b >= 48 && b <= 57 }
+
+// A number as JSON writes one (no leading zero, no bare sign or dot), the only kind this port reads.
+fn strict_number(t: Str) -> Bool {
+    let n = str_len(t)
+    let mut i = 0
+    if i < n && str_byte(t, i) == 45 { i += 1 }
+    if i >= n || !is_digit(str_byte(t, i)) { return false }
+    if str_byte(t, i) == 48 {
+        i += 1
+    } else {
+        while i < n && is_digit(str_byte(t, i)) { i += 1 }
+    }
+    if i < n && str_byte(t, i) == 46 {
+        i += 1
+        if i >= n || !is_digit(str_byte(t, i)) { return false }
+        while i < n && is_digit(str_byte(t, i)) { i += 1 }
+    }
+    if i < n && (str_byte(t, i) == 101 || str_byte(t, i) == 69) {
+        i += 1
+        if i < n && (str_byte(t, i) == 43 || str_byte(t, i) == 45) { i += 1 }
+        if i >= n || !is_digit(str_byte(t, i)) { return false }
+        while i < n && is_digit(str_byte(t, i)) { i += 1 }
+    }
+    i == n
+}
+
+fn is_integer(t: Str) -> Bool {
+    for i in 0..str_len(t) {
+        let b = str_byte(t, i)
+        if !(is_digit(b) || (i == 0 && b == 45)) { return false }
+    }
+    true
+}
+
+// Every object of the tree, and its members, name no key twice: what a map of `serde_json` would keep once.
+fn no_repeats(j: J) -> Bool {
+    for n in 0..ints_len(j.kind) {
+        if j_kind(j, n) == 6 && j_twice(j, n) { return false }
+        if j_kind(j, n) == 3 && !strict_number(j_str(j, n)) { return false }
+    }
+    true
+}
+
+// The members of object `n`, their names in the order a `BTreeMap` iterates them.
+fn sorted_keys(j: J, n: Int) -> Strs {
+    let out = strs_new()
+    if j_kind(j, n) != 6 { return out }
+    let mut c = ints_get(j.first, n)
+    while c >= 0 {
+        let k = strs_get(j.key, c)
+        let mut at = strs_len(out)
+        while at > 0 && ut_less(k, strs_get(out, at - 1)) { at -= 1 }
+        strs_push(out, "")
+        let mut t = strs_len(out) - 1
+        while t > at {
+            strs_set(out, t, strs_get(out, t - 1))
+            t -= 1
+        }
+        strs_set(out, at, k)
+        c = ints_get(j.next, c)
+    }
+    out
+}
+
+// `serde`'s `Unexpected` of a value, as `invalid type: ...` writes it. "" where this port does not know
+// how it is written (a float it cannot spell as Rust does, an integer beyond what it checks).
+fn unexpected(j: J, n: Int) -> Str {
+    let k = j_kind(j, n)
+    if k == 0 { return "null" }
+    if k == 1 { return "boolean `true`" }
+    if k == 2 { return "boolean `false`" }
+    if k == 5 { return "sequence" }
+    if k == 6 { return "map" }
+    let t = j_str(j, n)
+    if k == 4 {
+        // Rust's `Debug` of a string, for the plain ones.
+        let parts = strs_new()
+        for i in 0..str_len(t) {
+            let b = str_byte(t, i)
+            if b >= 128 { return "" }
+            if b == 34 {
+                strs_push(parts, "\\\"")
+            } else if b == 92 {
+                strs_push(parts, "\\\\")
+            } else if b == 10 {
+                strs_push(parts, "\\n")
+            } else if b == 13 {
+                strs_push(parts, "\\r")
+            } else if b == 9 {
+                strs_push(parts, "\\t")
+            } else if b < 32 || b == 127 {
+                return ""
+            } else {
+                strs_push(parts, str_from_byte(b))
+            }
+        }
+        return "string \"" + str_join(parts, "") + "\""
+    }
+    if is_integer(t) {
+        if str_len(t) > 19 { return "" }
+        return "integer `" + t + "`"
+    }
+    // A float: one that Rust writes as it is written here, `digits.digits` with no trailing zero but `.0`.
+    if ut_contains(t, "e") || ut_contains(t, "E") { return "" }
+    let dot = ut_find(t, ".", 0)
+    if dot < 0 || str_len(t) > 16 { return "" }
+    let frac = str_slice(t, dot + 1, str_len(t))
+    if str_len(frac) > 1 && str_byte(frac, str_len(frac) - 1) == 48 { return "" }
+    "floating point `" + t + "`"
+}
+
+fn quoted(names: Strs) -> Str {
+    let out = strs_new()
+    for i in 0..strs_len(names) { strs_push(out, "`" + strs_get(names, i) + "`") }
+    if strs_len(out) == 1 { return strs_get(out, 0) }
+    if strs_len(out) == 2 { return strs_get(out, 0) + " or " + strs_get(out, 1) }
+    "one of " + str_join(out, ", ")
+}
+
+// The fields a struct of `serde` with `deny_unknown_fields` reads from the object `obj` of `j`, named in
+// order with a kind each (`s` a string, `u` a `u32`, `o` an optional string), skipping `skip` (a tag):
+// "" where they are all as asked, else `serde`'s error. "?" where the error is one this port cannot word.
+fn check_fields(j: J, obj: Int, names: Strs, kinds: Strs, required: Ints, skip: Str) -> Str {
+    let keys = sorted_keys(j, obj)
+    for i in 0..strs_len(keys) {
+        let key = strs_get(keys, i)
+        if key == skip && skip != "" { continue }
+        let mut at = 0 - 1
+        for t in 0..strs_len(names) {
+            if strs_get(names, t) == key { at = t }
+        }
+        if at < 0 {
+            if strs_len(names) == 0 { return "unknown field `" + key + "`, there are no fields" }
+            return "unknown field `" + key + "`, expected " + quoted(names)
+        }
+        let v = j_get(j, obj, key)
+        let kind = strs_get(kinds, at)
+        if kind == "o" && j_kind(j, v) == 0 { continue }
+        if kind == "s" || kind == "o" {
+            if j_kind(j, v) != 4 {
+                let u = unexpected(j, v)
+                if u == "" { return "?" }
+                return "invalid type: " + u + ", expected a string"
+            }
+        } else {
+            let t = j_str(j, v)
+            let mut small = false
+            if j_kind(j, v) == 3 && is_integer(t) && str_byte(t, 0) != 45 && str_len(t) <= 10 { small = j_int(j, v) <= 4294967295 }
+            if !small {
+                let u = unexpected(j, v)
+                if u == "" { return "?" }
+                if j_kind(j, v) == 3 && is_integer(t) { return "invalid value: " + u + ", expected u32" }
+                return "invalid type: " + u + ", expected u32"
+            }
+        }
+    }
+    for t in 0..strs_len(names) {
+        if ints_get(required, t) == 1 && j_get(j, obj, strs_get(names, t)) < 0 { return "missing field `" + strs_get(names, t) + "`" }
+    }
+    ""
+}
+
+// The variant a tag names, or why not: "" and the variant, else `serde`'s error (or "?").
+fn check_tag(j: J, obj: Int, variants: Strs, why: Strs) -> Str {
+    let at = j_get(j, obj, "operation")
+    if at < 0 {
+        strs_push(why, "missing field `operation`")
+        return ""
+    }
+    if j_kind(j, at) != 4 {
+        let u = unexpected(j, at)
+        if u == "" || j_kind(j, at) == 3 && !is_integer(j_str(j, at)) {
+            strs_push(why, "?")
+        } else {
+            strs_push(why, "invalid type: " + u + ", expected variant identifier")
+        }
+        return ""
+    }
+    let v = j_str(j, at)
+    for i in 0..strs_len(variants) {
+        if strs_get(variants, i) == v { return v }
+    }
+    strs_push(why, "unknown variant `" + v + "`, expected " + quoted(variants))
+    ""
+}
+
+// --- the commands ---------------------------------------------------------------------------------------
+
+// `nazm` with `args`, its answer: the JSON it printed, and whether that is a success of the tool.
+// The commands that did not run, or did not print a result, are refused.
+fn run_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, s: Server, args: Strs, has_input: Bool, input: Str, name: Str) -> Str {
+    if s.exe == "" { refuse(io, "the commands behind the tools are `nazm` (set NAZM_EXE to its program)") }
+    let ran = pr_run(io, proc, sp, s.exe, args, strs_new(), has_input, input)
+    if !ran.started { refuse(io, "`nazm` did not start: " + ran.why) }
+    let text = ut_trim_end(ran.out)
+    let j = j_parse(text)
+    if !j_ok(j) || j_kind(j, 0) != 6 {
+        refuse(io, name + " answers with an error rather than a result: " + ut_trim_end(ran.err))
+    }
+    text
+}
+
+fn answer(io: IoCap, id: Str, text: Str, always_ok: Bool) -> Int {
+    let j = j_parse(text)
+    let at = j_get(j, 0, "status")
+    let ok = always_ok || (at >= 0 && j_str(j, at) == "available")
+    succeed(io, id, "{\"content\":[],\"structuredContent\":" + j_canonical(j) + ",\"isError\":" + (if ok { "false" } else { "true" }) + "}")
+}
+
+fn source_args(s: Server, out: Strs) -> Int {
+    if s.has_source_root { strs_push(out, "--source-root=" + s.source_root) }
+    0
+}
+
+fn root_args(s: Server, command: Str, out: Strs) -> Int {
+    strs_push(out, command)
+    strs_push(out, "--json")
+    strs_push(out, "--root=" + s.root)
+    source_args(s, out)
+    0
+}
+
+// The root module's name as the compilation's files are named, which is what a patch's `file` is
+// matched with: the diagnostics' index says it. "" where there is none.
+fn root_module(io: IoCap, proc: ProcessCap, sp: SpawnCap, s: Server) -> Str {
+    let args = strs_new()
+    root_args(s, "diagnostics", args)
+    let j = j_parse(run_command(io, proc, sp, s, args, false, "", "nazm.diagnostics"))
+    let m = j_get(j, j_get(j, 0, "root"), "module")
+    if m < 0 || j_kind(j, m) != 4 { return "" }
+    j_str(j, m)
+}
+
+// `text` with the first `from` written `to`.
+fn replaced(text: Str, from: Str, to: Str) -> Str {
+    let at = ut_find(text, from, 0)
+    if at < 0 { return text }
+    str_slice(text, 0, at) + to + str_slice(text, at + str_len(from), str_len(text))
+}
+
+// A root whose source root cannot be decided (a manifest that is wrong, a `--source-root` that does not hold it) is
+// `refused`, status 1, to `nazm check`; the service's own summary, which this tool answers with, calls it `unreadable`,
+// status 3.
+fn unreadable_of(text: Str) -> Str {
+    let j = j_parse(text)
+    if j_get(j, 0, "status") < 0 || j_str(j, j_get(j, 0, "status")) != "refused" { return text }
+    replaced(replaced(text, "\"exit_code\":1", "\"exit_code\":3"), "\"status\":\"refused\"", "\"status\":\"unreadable\"")
+}
+
+// The service's check summary lists the errors the analysis found, not the checker's warnings, which `nazm check
+// --summary-json` lists beside them: the warnings are dropped and the counts are of what is left.
+fn service_summary(text: Str) -> Str {
+    let j = j_parse(text)
+    let ds = j_get(j, 0, "diagnostics")
+    if ds < 0 || j_kind(j, ds) != 5 { return text }
+    let kept = strs_new()
+    let mut errors = 0
+    let mut with_fixes = 0
+    let mut automatic = 0
+    let mut review = 0
+    let mut c = ints_get(j.first, ds)
+    while c >= 0 {
+        let sev = j_get(j, c, "severity")
+        if sev >= 0 && j_str(j, sev) == "error" {
+            strs_push(kept, j_canonical(subtree(j, c)))
+            errors += 1
+            let fx = j_get(j, c, "fixes")
+            if j_int(j, j_get(j, fx, "total")) > 0 { with_fixes += 1 }
+            automatic += j_int(j, j_get(j, fx, "automatic"))
+            review += j_int(j, j_get(j, fx, "needs_review"))
+        }
+        c = ints_get(j.next, c)
+    }
+    let parts = strs_new()
+    let keys = strs_new()
+    strs_push(keys, "artifact")
+    strs_push(keys, "command")
+    strs_push(keys, "exit_code")
+    strs_push(keys, "root")
+    strs_push(keys, "schema")
+    strs_push(keys, "state")
+    strs_push(keys, "status")
+    for i in 0..strs_len(keys) {
+        let n = j_get(j, 0, strs_get(keys, i))
+        strs_push(parts, json_str(strs_get(keys, i)) + ":" + (if n < 0 { "null" } else { j_canonical(subtree(j, n)) }))
+    }
+    "{" + str_join(parts, ",") + ",\"counts\":{\"diagnostics\":" + int_to_str(errors) + ",\"error\":" + int_to_str(errors) + ",\"with_fixes\":"
+            + int_to_str(with_fixes) + ",\"automatic_fixes\":" + int_to_str(automatic) + ",\"needs_review_fixes\":" + int_to_str(review)
+            + "},\"diagnostics\":[" + str_join(kept, ",") + "]}"
+}
+
+fn call_tool(io: IoCap, proc: ProcessCap, sp: SpawnCap, s: Server, id: Str, j: J, params: Int) -> Int {
+    if j_kind(j, params) != 6 || j_kind(j, j_get(j, params, "name")) != 4 { return fail(io, id, 0 - 32601, "tools/call") }
+    let argn = j_get(j, params, "arguments")
+    if argn >= 0 && j_kind(j, argn) != 0 && j_kind(j, argn) != 6 { return fail(io, id, 0 - 32601, "tools/call") }
+    let name = j_str(j, j_get(j, params, "name"))
+    let mut known = false
+    for i in 0..mt_count() {
+        if mt_name(i) == name { known = true }
+    }
+    if !known { return fail(io, id, 0 - 32602, "tool not found") }
+    let keys = sorted_keys(j, argn)
+    let args = strs_new()
+    if name == "nazm.semantic_context" { refuse(io, "`nazm context` (the packet's effects and tests are not published)") }
+    if name == "nazm.repository_map" || name == "nazm.task_context" { refuse(io, "`nazm repo`") }
+    if name == "nazm.semantic_snapshot" || name == "nazm.diagnostics" {
+        if strs_len(keys) > 0 { return fail(io, id, 0 - 32602, "unexpected argument `" + strs_get(keys, 0) + "`") }
+        root_args(s, if name == "nazm.semantic_snapshot" { "snapshot" } else { "diagnostics" }, args)
+        return answer(io, id, run_command(io, proc, sp, s, args, false, "", name), false)
+    }
+    if name == "nazm.semantic_delta" {
+        let b = j_get(j, argn, "baseline")
+        if b < 0 { return fail(io, id, 0 - 32602, "`baseline` is required") }
+        for i in 0..strs_len(keys) {
+            if strs_get(keys, i) != "baseline" { return fail(io, id, 0 - 32602, "unexpected argument `" + strs_get(keys, i) + "`") }
+        }
+        // In this process: the baseline is data, and no program is asked to read it from anywhere.
+        return answer(io, id, delta_compute(io, s.root, s.has_source_root, s.source_root, baseline_text(j, b)), false)
+    }
+    if name == "nazm.command_summary" {
+        let why = strs_new()
+        let variants = strs_new()
+        strs_push(variants, "check")
+        check_tag(j, argn, variants, why)
+        if strs_len(why) == 0 { strs_push(why, check_fields(j, argn, strs_new(), strs_new(), ints_new(), "operation")) }
+        if strs_get(why, 0) == "?" { refuse(io, "an argument error `serde` words in a way this port does not") }
+        if strs_get(why, 0) != "" { return fail(io, id, 0 - 32602, strs_get(why, 0)) }
+        strs_push(args, "check")
+        strs_push(args, "--summary-json")
+        strs_push(args, "--no-cache")
+        source_args(s, args)
+        strs_push(args, s.root)
+        return answer(io, id, service_summary(unreadable_of(run_command(io, proc, sp, s, args, false, "", name))), true)
+    }
+    if name == "nazm.diagnostic_detail" {
+        let names = words2("id", "state")
+        let kinds = words2("s", "s")
+        let req = ints_new()
+        ints_push(req, 1)
+        ints_push(req, 1)
+        let why = check_fields(j, argn, names, kinds, req, "")
+        if why == "?" { refuse(io, "an argument error `serde` words in a way this port does not") }
+        if why != "" { return fail(io, id, 0 - 32602, why) }
+        root_args(s, "diagnostics", args)
+        strs_push(args, "--detail=" + j_str(j, j_get(j, argn, "id")))
+        strs_push(args, "--state=" + j_str(j, j_get(j, argn, "state")))
+        return answer(io, id, run_command(io, proc, sp, s, args, false, "", name), false)
+    }
+    if name == "nazm.semantic_patch" {
+        let why = strs_new()
+        let variants = words2("rename", "diagnostic_fix")
+        let op = check_tag(j, argn, variants, why)
+        if strs_len(why) > 0 {
+            if strs_get(why, 0) == "?" { refuse(io, "an argument error `serde` words in a way this port does not") }
+            return fail(io, id, 0 - 32602, strs_get(why, 0))
+        }
+        let names = strs_new()
+        let kinds = strs_new()
+        let req = ints_new()
+        strs_push(names, "file")
+        strs_push(names, "byte_offset")
+        strs_push(kinds, "s")
+        strs_push(kinds, "u")
+        ints_push(req, 1)
+        ints_push(req, 1)
+        if op == "rename" {
+            strs_push(names, "new_name")
+            strs_push(kinds, "s")
+        } else {
+            strs_push(names, "fix")
+            strs_push(kinds, "u")
+        }
+        ints_push(req, 1)
+        let bad = check_fields(j, argn, names, kinds, req, "operation")
+        if bad == "?" { refuse(io, "an argument error `serde` words in a way this port does not") }
+        if bad != "" { return fail(io, id, 0 - 32602, bad) }
+        // The root module is the one file this port plans a patch in (`patchplan.nz`).
+        let file = j_str(j, j_get(j, argn, "file"))
+        let module = root_module(io, proc, sp, s)
+        if module == "" || file != module { refuse(io, "a patch in a file other than the root module") }
+        strs_push(args, "patch")
+        strs_push(args, if op == "rename" { "rename" } else { "fix" })
+        strs_push(args, "--json")
+        strs_push(args, "--root=" + s.root)
+        strs_push(args, "--file=" + s.root)
+        strs_push(args, "--byte=" + j_str(j, j_get(j, argn, "byte_offset")))
+        if op == "rename" {
+            strs_push(args, "--new-name=" + j_str(j, j_get(j, argn, "new_name")))
+        } else {
+            strs_push(args, "--fix=" + j_str(j, j_get(j, argn, "fix")))
+        }
+        source_args(s, args)
+        return answer(io, id, run_command(io, proc, sp, s, args, false, "", name), false)
+    }
+    // The two documentation tools.
+    if !s.has_docs { refuse(io, "the repository this binary was built from (name one with `--docs`)") }
+    let names = strs_new()
+    let kinds = strs_new()
+    let req = ints_new()
+    if name == "nazm.docs_index" {
+        strs_push(names, "document")
+        strs_push(kinds, "o")
+        ints_push(req, 0)
+    } else {
+        strs_push(names, "id")
+        strs_push(names, "state")
+        strs_push(kinds, "s")
+        strs_push(kinds, "s")
+        ints_push(req, 1)
+        ints_push(req, 1)
+    }
+    let why = check_fields(j, argn, names, kinds, req, "")
+    if why == "?" { refuse(io, "an argument error `serde` words in a way this port does not") }
+    if why != "" { return fail(io, id, 0 - 32602, why) }
+    strs_push(args, "docs")
+    strs_push(args, "--json")
+    strs_push(args, "--root=" + s.docs)
+    if name == "nazm.docs_index" {
+        strs_push(args, "--index")
+        let d = j_get(j, argn, "document")
+        if d >= 0 && j_kind(j, d) == 4 { strs_push(args, "--document=" + j_str(j, d)) }
+    } else {
+        strs_push(args, "--section=" + j_str(j, j_get(j, argn, "id")))
+        strs_push(args, "--state=" + j_str(j, j_get(j, argn, "state")))
+    }
+    answer(io, id, run_command(io, proc, sp, s, args, false, "", name), false)
+}
+
+fn words2(a: Str, b: Str) -> Strs {
+    let out = strs_new()
+    strs_push(out, a)
+    strs_push(out, b)
+    out
+}
+
+// The baseline, written back: its members by key as a `Value` keeps them.
+fn baseline_text(j: J, n: Int) -> Str { j_pretty(subtree(j, n)) }
+
+// A tree of its own whose root is node `n` of `j`.
+fn subtree(j: J, n: Int) -> J {
+    let out = J(kind: ints_new(), text: strs_new(), key: strs_new(), first: ints_new(), next: ints_new(), src: strs_new(), at: ints_new(), bad: ints_new())
+    strs_push(out.src, "")
+    ints_push(out.at, 0)
+    ints_push(out.bad, 0)
+    copy_node(j, n, out)
+    out
+}
+
+fn copy_node(j: J, n: Int, out: J) -> Int {
+    let me = j_node(out, j_kind(j, n), j_str(j, n))
+    let mut last = 0 - 1
+    let mut c = ints_get(j.first, n)
+    while c >= 0 {
+        let k = copy_node(j, c, out)
+        strs_set(out.key, k, strs_get(j.key, c))
+        if last < 0 { ints_set(out.first, me, k) } else { ints_set(out.next, last, k) }
+        last = k
+        c = ints_get(j.next, c)
+    }
+    me
+}
+
+// --- the protocol ---------------------------------------------------------------------------------------
+
+fn known_version(v: Str) -> Bool {
+    v == "2024-11-05" || v == "2025-03-26" || v == "2025-06-18" || v == "2025-11-25"
+}
+
+// `initialize`'s parameters as the SDK reads them: the version, the capabilities and the client.
+fn initialize_ok(j: J, params: Int) -> Bool {
+    if j_kind(j, params) != 6 { return false }
+    if j_kind(j, j_get(j, params, "protocolVersion")) != 4 { return false }
+    if j_kind(j, j_get(j, params, "capabilities")) != 6 { return false }
+    let info = j_get(j, params, "clientInfo")
+    if j_kind(j, info) != 6 { return false }
+    j_kind(j, j_get(j, info, "name")) == 4 && j_kind(j, j_get(j, info, "version")) == 4
+}
+
+fn initialize_result(j: J, params: Int) -> Str {
+    let v = j_str(j, j_get(j, params, "protocolVersion"))
+    let version = if known_version(v) { v } else { "2025-11-25" }
+    "{\"protocolVersion\":" + json_str(version) + ",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"nazm-mcp\",\"version\":\"0.10.0\"},\"instructions\":"
+            + json_str(mt_instructions()) + "}"
+}
+
+fn tools_list() -> Str {
+    let out = strs_new()
+    for i in 0..mt_count() { strs_push(out, mt_tool(i)) }
+    "{\"tools\":[" + str_join(out, ",") + "]}"
+}
+
+// One message: answered, or ignored where it is a notification.
+fn handle(io: IoCap, proc: ProcessCap, sp: SpawnCap, s: Server, line: Str, first: Bool) -> Int {
+    let j = j_parse(line)
+    if !j_ok(j) || j_kind(j, 0) != 6 || !no_repeats(j) { refuse(io, "a message this port does not parse as the reference does") }
+    let rpc = j_get(j, 0, "jsonrpc")
+    if j_kind(j, rpc) != 4 || j_str(j, rpc) != "2.0" { refuse(io, "a message that is not JSON-RPC 2.0") }
+    let m = j_get(j, 0, "method")
+    if j_kind(j, m) != 4 { refuse(io, "a message that is not a request or a notification") }
+    let method = j_str(j, m)
+    let idn = j_get(j, 0, "id")
+    let params = j_get(j, 0, "params")
+    if idn < 0 {
+        if first { refuse(io, "a first message that is not the `initialize` request") }
+        return 0
+    }
+    let mut id = ""
+    if j_kind(j, idn) == 4 {
+        id = json_str(j_str(j, idn))
+    } else if j_kind(j, idn) == 3 && is_integer(j_str(j, idn)) && str_len(j_str(j, idn)) <= 15 {
+        id = j_str(j, idn)
+    } else {
+        refuse(io, "a request `id` that is not an integer or a string")
+    }
+    if first && method != "initialize" { refuse(io, "a first message that is not the `initialize` request") }
+    if method == "initialize" {
+        if !initialize_ok(j, params) {
+            if first { refuse(io, "an `initialize` this port does not read as the reference does") }
+            return fail(io, id, 0 - 32601, "initialize")
+        }
+        return succeed(io, id, initialize_result(j, params))
+    }
+    if method == "ping" { return succeed(io, id, "{}") }
+    if method == "tools/list" {
+        if params >= 0 && j_kind(j, params) != 0 && j_kind(j, params) != 6 { refuse(io, "`tools/list` with parameters that are not an object") }
+        return succeed(io, id, tools_list())
+    }
+    if method == "tools/call" { return call_tool(io, proc, sp, s, id, j, params) }
+    fail(io, id, 0 - 32601, method)
+}
+
+fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap) -> Int {
+    let mut root = ""
+    let mut has_root = false
+    let mut source_root = ""
+    let mut has_source = false
+    let mut docs = ""
+    let mut has_docs = false
+    let n = args_count()
+    let mut i = 0
+    while i < n {
+        let a = arg(i)
+        i += 1
+        if a == "--root" {
+            if i >= n { fail_usage(io, "--root needs a file") }
+            root = arg(i)
+            has_root = true
+            i += 1
+        } else if a == "--source-root" {
+            if i >= n { fail_usage(io, "--source-root needs a directory") }
+            source_root = arg(i)
+            has_source = true
+            i += 1
+        } else if a == "--docs" {
+            if i >= n { fail_usage(io, "--docs needs a repository directory") }
+            docs = arg(i)
+            has_docs = true
+            i += 1
+        } else {
+            fail_usage(io, "unexpected argument `" + a + "`")
+        }
+    }
+    if !has_root { fail_usage(io, "--root is required") }
+    if ut_kind(io, root) != 0 {
+        eprint("nazm-mcp: " + root + " is not a file" + nl())
+        exit_with(2)
+    }
+    let s = Server(root: root, source_root: source_root, has_source_root: has_source, docs: docs, has_docs: has_docs, exe: os_env_get("NAZM_EXE"))
+    let h = os_stdin()
+    let mut first = true
+    while true {
+        let line = read_line(h)
+        if line == "" { break }
+        if ut_blank(line) { continue }
+        handle(io, proc, sp, s, line, first)
+        first = false
+    }
+    if first {
+        eprint("nazm-mcp: connection closed: initialize request" + nl())
+        exit_with(1)
+    }
+    0
+}

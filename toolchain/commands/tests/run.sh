@@ -2,7 +2,7 @@
 # R5's comparisons (`openspec/changes/r5-commands/design.md`): each command written in Nazm against
 # the Rust `nazm` built from this checkout, on every input.
 #
-#   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init, check, doc, fix, lsp, test, interface, docs, bindgen, reload, agent (all by default)
+#   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init, check, doc, fix, lsp, test, interface, docs, bindgen, reload, agent, mcp (all by default)
 #
 # The Nazm `nazm` (toolchain/commands/nazm.nz, which dispatches to CMD.nz) is built by the 0.10.0
 # release ($NAZM) and run as the reference is run, `nazm CMD ARGS`. The reference is
@@ -59,6 +59,11 @@
 #         against the reference's snapshot and two baselines made wrong, `patch rename` at six names and `patch fix` at the
 #         diagnostics that carry a fix (design D24).
 #
+#   mcp   `nazm-mcp` (toolchain/commands/mcp.nz, built unless NAZM_MCP_PORT names one; the reference is NAZM_MCP_REF, by default beside
+#         the reference's `nazm`) in sessions over stdio (tests/mcp-compare.py; design D25): the scripted session of tests/mcp/protocol.txt
+#         and the documentation's sections, then for every input of check the snapshot, diagnostics, check summary, deltas, details and
+#         patches, each answer compared byte for byte.
+#
 # NAZM_PORT names a port already built from this checkout, instead of building one.
 #
 # Prints one summary line per part, after the names of the first differences. Exits 1 when
@@ -72,11 +77,11 @@ if [ "${1:-}" = "-j" ]; then jobs=$2; shift 2; fi
 parts=""
 while [ $# -gt 0 ]; do
   case $1 in
-    fmt|args|init|check|doc|fix|lsp|test|interface|docs|bindgen|reload|agent) parts="$parts $1"; shift ;;
+    fmt|args|init|check|doc|fix|lsp|test|interface|docs|bindgen|reload|agent|mcp) parts="$parts $1"; shift ;;
     *) break ;;
   esac
 done
-[ -n "$parts" ] || parts="fmt args init check doc fix lsp test interface docs bindgen reload agent"
+[ -n "$parts" ] || parts="fmt args init check doc fix lsp test interface docs bindgen reload agent mcp"
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 nazm=${NAZM:-"$HOME/.local/nazm-0.10.0/bin/nazm"}
@@ -1368,6 +1373,63 @@ part_agent() {
   [ "$differ" -eq 0 ] && [ "$timeout" -eq 0 ] || status=1
 }
 
+# --- mcp: the server over stdio ---------------------------------------------------------------------------------
+
+part_mcp() {
+  mref=${NAZM_MCP_REF:-"$(dirname "$ref")/nazm-mcp"}
+  [ -x "$mref" ] || { echo "run.sh mcp: no nazm-mcp at $mref (set NAZM_MCP_REF)" >&2; status=1; return; }
+  if [ -n "${NAZM_MCP_PORT:-}" ]; then
+    mport=$NAZM_MCP_PORT
+  else
+    "$nazm" build --stack-size 256M "$root/toolchain/commands/mcp.nz" -o "$work/bin/nazm-mcp" > "$work/build-mcp.log" 2>&1 \
+      || { cat "$work/build-mcp.log" >&2; echo "run.sh: toolchain/commands/mcp.nz did not build" >&2; exit 2; }
+    mport="$work/bin/nazm-mcp"
+  fi
+  command -v python3 > /dev/null || { echo "run.sh mcp: python3 is needed" >&2; status=1; return; }
+  list="$work/mcp-inputs.txt"
+  if [ $# -gt 0 ]; then
+    printf '%s\n' "$@" > "$list"
+  else
+    (cd "$root" && { git ls-files '*.nz'; find toolchain/frontend-tests/inputs toolchain/commands -name '*.nz' -type f; } | LC_ALL=C sort -u) > "$list"
+  fi
+  total=$(wc -l < "$list" | tr -d ' ')
+  mkdir -p "$work/mres"
+  export NAZM_REF="$ref" NAZM_PORT="$port" R5_ROOT="$root" R5_MREF="$mref" R5_MPORT="$mport" R5_WORK="$work"
+  (cd "$root" && python3 -I "$root/toolchain/commands/tests/mcp-compare.py" protocol "$mref" "$mport" "$root") > "$work/mres-protocol" 2>&1 || true
+  echo "  protocol: $(head -1 "$work/mres-protocol")"
+  # The command line: every line of tests/args/mcp.txt, both servers started with it and an empty input.
+  cn=0 ca=0
+  while IFS= read -r line; do
+    case $line in '#'*|'') continue ;; esac
+    cn=$((cn + 1))
+    set -f
+    if [ "$line" = "(none)" ]; then set --; else set -- $line; fi
+    set +f
+    (cd "$root" && { rc=0; "$mref" "$@" < /dev/null > "$work/c.ref" 2> "$work/c.ref.e" || rc=$?; echo "exit $rc" >> "$work/c.ref"; })
+    (cd "$root" && { rc=0; "$mport" "$@" < /dev/null > "$work/c.got" 2> "$work/c.got.e" || rc=$?; echo "exit $rc" >> "$work/c.got"; })
+    if cmp -s "$work/c.ref" "$work/c.got" && cmp -s "$work/c.ref.e" "$work/c.got.e"; then ca=$((ca + 1)); else echo "  differ: nazm-mcp $line"; fi
+  done < "$root/toolchain/commands/tests/args/mcp.txt"
+  echo "  command lines: $ca of $cn agree"
+  [ "$ca" -eq "$cn" ] || status=1
+  # shellcheck disable=SC2016
+  tr '\n' '\0' < "$list" | xargs -0 -n 1 -P "$jobs" sh -c '
+    f=$1
+    name=$(printf "%s" "$f" | tr "/" "_")
+    (cd "$R5_ROOT" && python3 -I "$R5_ROOT/toolchain/commands/tests/mcp-compare.py" file "$R5_MREF" "$R5_MPORT" "$R5_ROOT" "$f") > "$R5_WORK/mres/$name" 2>&1 || true
+  ' sh
+  agree=$(grep -l '^agree$' "$work/mres/"* 2>/dev/null | wc -l | tr -d ' ')
+  differ=$(grep -l '^differ' "$work/mres/"* 2>/dev/null | wc -l | tr -d ' ')
+  refused=$(grep -l '^refused' "$work/mres/"* 2>/dev/null | wc -l | tr -d ' ')
+  for r in $(grep -l '^differ' "$work/mres/"* 2>/dev/null | head -20); do
+    echo "  differ: $(basename "$r")"; head -3 "$r" | cut -c1-300
+  done
+  for r in "$work/mres/"*; do case $(head -1 "$r") in refused*) head -1 "$r" ;; esac; done \
+    | sed 's/^refused: //; s/^nazm[.a-z_]* answers with an error rather than a result: //; s/^[a-z]*: not carried: //' | cut -c1-90 | sort | uniq -c | sort -rn | head -12 | sed 's/^/  refused:/'
+  other=$((total - agree - differ - refused))
+  echo "mcp: $agree agree, $differ differ, $refused refused, $other other (of $total inputs); the protocol session: $(head -1 "$work/mres-protocol" | cut -c1-20)"
+  [ "$differ" -eq 0 ] && [ "$other" -eq 0 ] && [ "$(head -1 "$work/mres-protocol")" = agree ] || status=1
+}
+
 for p in $parts; do
   case $p in
     fix) part_fix "$@" ;;
@@ -1383,6 +1445,7 @@ for p in $parts; do
     bindgen) part_bindgen "$@" ;;
     interface) part_interface "$@" ;;
     agent) part_agent "$@" ;;
+    mcp) part_mcp "$@" ;;
   esac
 done
 exit $status
