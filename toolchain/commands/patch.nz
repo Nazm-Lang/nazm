@@ -15,6 +15,7 @@ use "../../compiler/diag.nz"
 use "cli.nz"
 use "group.nz"
 use "jsonin.nz"
+use "patchplan.nz"
 use "util.nz"
 
 fn nl() -> Str { str_from_byte(10) }
@@ -242,18 +243,8 @@ fn patch_apply(io: IoCap, c: Cli) -> Int {
 
 // --- rename and fix -------------------------------------------------------------------------------------
 
-// The root is read as `open_from_disk` reads it; past that the plan needs the snapshot.
-fn patch_plan(io: IoCap, c: Cli, what: Str) -> Int {
-    cli_parse(io, c)
-    let root = cli_value(c, 0)
-    let why = read_error(io, root, true)
-    if why != "" {
-        eprint("nazm patch: " + root + ": " + why + nl())
-        exit_with(4)
-        return 4
-    }
-    refuse(io, "`patch " + what + "` plans bind to the root's semantic snapshot (digests of references, callers and provenance), which compiler/ does not publish")
-}
+// `rename` and `fix`: the plan, bound to the root's snapshot (`patchplan.nz`).
+fn patch_plan(io: IoCap, c: Cli, what: Str) -> Int { pp_run(io, c, what) }
 
 // `nazm patch`, the group's own commands read from the argument after its name.
 pub fn patch_command(io: IoCap, g: Group) -> Int {

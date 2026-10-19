@@ -2,7 +2,7 @@
 # R5's comparisons (`openspec/changes/r5-commands/design.md`): each command written in Nazm against
 # the Rust `nazm` built from this checkout, on every input.
 #
-#   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init, check, doc, fix, lsp, test, interface, docs, bindgen, reload (all by default)
+#   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init, check, doc, fix, lsp, test, interface, docs, bindgen, reload, agent (all by default)
 #
 # The Nazm `nazm` (toolchain/commands/nazm.nz, which dispatches to CMD.nz) is built by the 0.10.0
 # release ($NAZM) and run as the reference is run, `nazm CMD ARGS`. The reference is
@@ -54,6 +54,11 @@
 #
 #   reload  `reload-check OLD NEW` for every pair of the programs of tests/reload, itself included (design D22).
 #
+#   agent  For every input of check, `snapshot` and `diagnostics` (compact and indented), `resolve` and `references` of the first three
+#         definitions (each side with a cold check cache of its own: the answer is the cache's), `diagnostics --detail`, `delta`
+#         against the reference's snapshot and two baselines made wrong, `patch rename` at six names and `patch fix` at the
+#         diagnostics that carry a fix (design D24).
+#
 # NAZM_PORT names a port already built from this checkout, instead of building one.
 #
 # Prints one summary line per part, after the names of the first differences. Exits 1 when
@@ -67,11 +72,11 @@ if [ "${1:-}" = "-j" ]; then jobs=$2; shift 2; fi
 parts=""
 while [ $# -gt 0 ]; do
   case $1 in
-    fmt|args|init|check|doc|fix|lsp|test|interface|docs|bindgen|reload) parts="$parts $1"; shift ;;
+    fmt|args|init|check|doc|fix|lsp|test|interface|docs|bindgen|reload|agent) parts="$parts $1"; shift ;;
     *) break ;;
   esac
 done
-[ -n "$parts" ] || parts="fmt args init check doc fix lsp test interface docs bindgen reload"
+[ -n "$parts" ] || parts="fmt args init check doc fix lsp test interface docs bindgen reload agent"
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 nazm=${NAZM:-"$HOME/.local/nazm-0.10.0/bin/nazm"}
@@ -516,6 +521,29 @@ fixture() {
       for f in notjson badtype nosubject; do (cd "$dir" && ssh-keygen -q -Y sign -n nazm-attestation -f key "$f.json" 2>/dev/null); done
       ;;
     lock|update|publish|yank) pkg_fixture "$dir" ;;
+    snapshot|delta|diagnostics|resolve|references)
+      # check's files and packages, mut.nz (an error with a fix), and the snapshots delta compares with: base.json is the
+      # reference's of a.nz, and each other one is it made wrong in a way of its own.
+      fixture check "$dir"
+      printf 'fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x\n}\n' > "$dir/mut.nz"
+      (
+        cd "$dir"
+        "$ref" snapshot --json --root a.nz > base.json
+        "$ref" snapshot --json --root b.nz > other.json
+        "$ref" snapshot --json --root mut.nz > mutbase.json
+        sed 's/"shape":"[0-9a-f]/"shape":"f/' base.json > tweak.json
+        sed 's/"identity":"a.nz::fn main"/"identity":"a.nz::fn mainz"/' base.json > renamed.json
+        sed 's/"source":"[0-9a-f]/"source":"X/' base.json > invalid_digest.json
+        sed 's|nazm.snapshot/3","status":"available"|nazm.snapshot/2","status":"available"|' base.json > wrongschema.json
+        printf '{"schema":"nazm.snapshot/3","status":"unavailable","reason":"incomplete_compilation"}\n' > unavail.json
+        printf 'not json' > notjson.json
+        printf '{}' > empty.json
+        sed 's/nazm 0.10.0/nazm 0.9.0/' base.json > wrongcompiler.json
+        sed 's/"untracked"/"extra":1,"untracked"/' base.json > extra.json
+        sed 's/"kind":"function"/"kind":"functio"/' base.json > kind.json
+        sed 's/"identity":"a.nz::fn main"/"identity":"a.nz::fn  main"/' base.json > badid.json
+      )
+      ;;
     bindgen)
       printf '\r\nint64_t crlf(int64_t a);\r\nstruct H;\r\n' > "$dir/crlf.h"
       cp "$root"/toolchain/commands/tests/bindgen/*.h "$dir/"
@@ -525,7 +553,6 @@ fixture() {
     reload-check)
       printf 'fn add(a: Int, b: Int) -> Int {\r\n    a + b\r\n}\r\nfn main() -> Int { add(2, 2) }\r\n' > "$dir/crlf.nz"
       cp "$root"/toolchain/commands/tests/reload/*.nz "$dir/"
-      cp "$root"/toolchain/commands/tests/reload-refused/*.nz "$dir/"
       mkdir -p "$dir/sub"
       ;;
     init)
@@ -546,7 +573,7 @@ tree_record() {
 # `record DIR CMD -- ARGS...`: run in DIR, then the status, output, error and tree, to DIR.record.
 record() {
   dir=$1; shift
-  (cd "$dir" && { rc=0; "$@" < /dev/null > "$dir.out" 2> "$dir.err" || rc=$?; echo "exit $rc" > "$dir.record"; })
+  (cd "$dir" && { rc=0; NAZM_CACHE_DIR="$dir.cache" "$@" < /dev/null > "$dir.out" 2> "$dir.err" || rc=$?; echo "exit $rc" > "$dir.record"; })
   # A package's modules are named by their canonical paths, which hold the side's own directory.
   canon=$(cd "$dir" && pwd -P)
   { echo "[stdout]"; sed "s|$canon|DIR|g" "$dir.out"; echo "[stderr]"; sed "s|$canon|DIR|g" "$dir.err"; echo "[tree]"; tree_record "$dir"; } >> "$dir.record"
@@ -556,7 +583,7 @@ record() {
 
 part_args() {
   n=0 agree=0 differ=0 refused=0
-  for cmd in fmt init check doc fix lsp test patch interface docs attest lock update publish yank bindgen reload-check doctor nazm; do
+  for cmd in fmt init check doc fix lsp test patch interface docs attest lock update publish yank bindgen reload-check doctor snapshot delta diagnostics resolve references nazm; do
     # R5_ARGS names the commands whose lines to run (all by default).
     case " ${R5_ARGS:-$cmd} " in *" $cmd "*) ;; *) continue ;; esac
     file="$root/toolchain/commands/tests/args/$cmd.txt"
@@ -1212,10 +1239,133 @@ part_reload() {
       rm -rf "$d"
     done
   done
-  # A file that is not there, a directory, the programs with a record or an enum (refused: their layout needs types
-  # `compiler/` does not publish).
+  # Records and enums are compared by their layout too; a generic one is refused (the reference lists it for each instance).
   echo "reload-check: $agree agree, $differ differ, $refused refused (of $n pairs)"
   [ "$differ" -eq 0 ] && [ "$refused" -eq 0 ] || status=1
+}
+
+# --- agent: the commands that answer from the language service's packets -----------------------------------------
+
+# For every input of check (or the FILEs named), from the repository's root: `snapshot` and `diagnostics` (compact and indented),
+# `diagnostics --detail` of up to three of the index's ids, `delta` against the snapshot the reference wrote and against two
+# baselines made wrong (a digest changed, a definition renamed), and — `patch.nz` — `patch rename` at six names and `patch fix`
+# at up to three diagnostics that carry a fix (design D24).
+part_agent() {
+  list="$work/agent-inputs.txt"
+  if [ $# -gt 0 ]; then
+    printf '%s\n' "$@" > "$list"
+  else
+    (cd "$root" && { git ls-files '*.nz'; find toolchain/frontend-tests/inputs toolchain/commands -name '*.nz' -type f; } | LC_ALL=C sort -u) > "$list"
+  fi
+  total=$(wc -l < "$list" | tr -d ' ')
+  mkdir -p "$work/ares" "$work/akeys"
+  export R5_ROOT="$root" R5_REF="$ref" R5_PORT="$port" R5_WORK="$work" R5_DEADLINE="${R5_DEADLINE:-60}"
+  # shellcheck disable=SC2016
+  tr '\n' '\0' < "$list" | xargs -0 -n 1 -P "$jobs" sh -c '
+    f=$1
+    name=$(printf "%s" "$f" | tr "/" "_")
+    d="$R5_WORK/a-$name"
+    mkdir -p "$d"
+    keys=""
+    run() {
+      out=$1; shift
+      (cd "$R5_ROOT" && { rc=0; "$@" > "$out.o" 2> "$out.e" || rc=$?; echo "exit $rc" > "$out"; cat "$out.o" "$out.e" >> "$out"; })
+    }
+    # `ask KEY ARGS...`: the command on each side, to be compared.
+    ask() {
+      key=$1; shift
+      run "$d/ref.$key" "$R5_REF" "$@"
+      run "$d/got.$key" timeout "$R5_DEADLINE" "$R5_PORT" "$@"
+      keys="$keys $key"
+    }
+    ask snap snapshot --json --root "$f"
+    ask snapi snapshot --root "$f"
+    ask diag diagnostics --json --root "$f"
+    ask diagi diagnostics --root "$f"
+    # `askc`: as `ask`, each side with a cold check cache of its own (`resolve` and `references` run the cached check).
+    askc() {
+      key=$1; shift
+      rm -rf "$d/cr" "$d/cg"
+      run "$d/ref.$key" env NAZM_CACHE_DIR="$d/cr" "$R5_REF" "$@"
+      run "$d/got.$key" env NAZM_CACHE_DIR="$d/cg" timeout "$R5_DEADLINE" "$R5_PORT" "$@"
+      keys="$keys $key"
+    }
+    askc resolve resolve "$f"
+    (cd "$R5_ROOT" && "$R5_REF" snapshot --json --root "$f" > "$d/base.json" 2> /dev/null)
+    if [ -s "$d/base.json" ]; then
+      # `references` of the first three definitions the reference lists (and of a variant of one that is not there).
+      grep -o "\"identity\":\"[^\"]*\"" "$d/base.json" | head -3 | sed "s/\"identity\":\"\(.*\)\"/\1/" > "$d/ids"
+      n=0
+      while IFS= read -r id; do
+        n=$((n + 1))
+        askc "refs$n" references "$id" "$f"
+      done < "$d/ids"
+      # A baseline with the first digest changed, and one whose first definition has another name.
+      sed "s/\"source\":\"\([0-9a-e]\)/\"source\":\"f/" "$d/base.json" > "$d/tweak.json"
+      sed "s/\"identity\":\"\([^\"]*\)::fn \([a-z_]*\)\"/\"identity\":\"\1::fn zz_\2\"/" "$d/base.json" > "$d/renamed.json"
+      ask delta delta --json --root "$f" --baseline "$d/base.json"
+      ask deltat delta --root "$f" --baseline "$d/tweak.json"
+      ask deltar delta --json --root "$f" --baseline "$d/renamed.json"
+    fi
+    (cd "$R5_ROOT" && "$R5_REF" diagnostics --json --root "$f" > "$d/index.json" 2> /dev/null)
+    state=$(grep -o "\"source\":\"[0-9a-f]*\"" "$d/index.json" | head -1 | sed "s/\"source\":\"\(.*\)\"/\1/")
+    if [ -n "$state" ]; then
+      n=0
+      for id in $(grep -o "\"id\":\"[^\"]*\"" "$d/index.json" | head -3 | sed "s/\"id\":\"\(.*\)\"/\1/"); do
+        n=$((n + 1))
+        ask "detail$n" diagnostics --json --root "$f" --detail "$id" --state "$state"
+      done
+    fi
+    # The positions: names to rename, diagnostics with a fix.
+    if command -v python3 > /dev/null; then
+      (cd "$R5_ROOT" && "$R5_REF" check --json --no-cache "$f" 2>&1 >/dev/null | python3 -I "$R5_ROOT/toolchain/commands/tests/patch-positions.py" "$R5_ROOT/$f") > "$d/positions" 2> /dev/null || true
+      n=0
+      while read -r kind byte new; do
+        [ -n "$kind" ] || continue
+        n=$((n + 1))
+        if [ "$kind" = rename ]; then ask "rename$n" patch rename --json --root "$f" --file "$f" --byte "$byte" --new-name "$new"; fi
+        if [ "$kind" = fix ]; then ask "fix$n" patch fix --json --root "$f" --file "$f" --byte "$byte"; fi
+      done < "$d/positions"
+    fi
+    # Each command compared on its own: differ over timeout over refused over agree is the verdict on the input.
+    verdict=agree
+    why=""
+    : > "$R5_WORK/akeys/$name"
+    for k in $keys; do
+      v=agree
+      if grep -q "^exit 6$" "$d/got.$k"; then
+        v=refused
+        [ -n "$why" ] || why=$(head -1 "$d/got.$k.e")
+      elif grep -q "^exit 124$" "$d/got.$k"; then
+        v=timeout
+      elif ! cmp -s "$d/ref.$k" "$d/got.$k"; then
+        v=differ
+        if [ -n "${KEEP:-}" ]; then mkdir -p "$KEEP/agent-$name" && cp "$d/ref.$k" "$KEEP/agent-$name/want.$k" && cp "$d/got.$k" "$KEEP/agent-$name/got.$k"; fi
+      fi
+      echo "$(printf "%s" "$k" | sed "s/[0-9]*$//") $v" >> "$R5_WORK/akeys/$name"
+      case $v in
+        differ) verdict=differ ;;
+        timeout) [ "$verdict" = differ ] || verdict=timeout ;;
+        refused) [ "$verdict" = agree ] && verdict=refused ;;
+      esac
+    done
+    printf "%s\n%s\n" "$verdict" "$why" > "$R5_WORK/ares/$name"
+    rm -rf "$d"
+  ' sh
+
+  agree=$(grep -l '^agree$' "$work/ares/"* 2>/dev/null | wc -l | tr -d ' ')
+  differ=$(grep -l '^differ$' "$work/ares/"* 2>/dev/null | wc -l | tr -d ' ')
+  refused=$(grep -l '^refused$' "$work/ares/"* 2>/dev/null | wc -l | tr -d ' ')
+  timeout=$(grep -l '^timeout$' "$work/ares/"* 2>/dev/null | wc -l | tr -d ' ')
+  for r in $(grep -l -E '^(differ|timeout)$' "$work/ares/"* 2>/dev/null | head -20); do
+    echo "  $(head -1 "$r"): $(basename "$r")"
+  done
+  for r in "$work/ares/"*; do [ "$(head -1 "$r")" = refused ] && sed -n 2p "$r"; done \
+    | sed 's/^[a-z]*: not carried: //' | cut -c1-90 | sort | uniq -c | sort -rn | head -12 | sed 's/^/  refused:/'
+  echo "agent: $agree agree, $differ differ, $refused refused, $timeout timed out (of $total inputs)"
+  # And by command: each run of a command on an input.
+  cat "$work/akeys/"* | awk '{ n[$1] ++; v[$1 " " $2] ++ } END { for (k in n) printf "  %-10s %6d runs: %d agree, %d differ, %d refused, %d timed out\n", k, n[k], v[k " agree"], v[k " differ"], v[k " refused"], v[k " timeout"] }' | sort
+  [ "$differ" -eq 0 ] && [ "$timeout" -eq 0 ] || status=1
 }
 
 for p in $parts; do
@@ -1232,6 +1382,7 @@ for p in $parts; do
     reload) part_reload ;;
     bindgen) part_bindgen "$@" ;;
     interface) part_interface "$@" ;;
+    agent) part_agent "$@" ;;
   esac
 done
 exit $status

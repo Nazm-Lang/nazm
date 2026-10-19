@@ -1,0 +1,421 @@
+// The language service's rename (`nazm_service::rename`, R5 design D24): the entity at a name of the document, whether it
+// may be renamed, and the edits that rename it — checked as the reference checks them (the new name lexed as one
+// identifier, the candidate program checked again with the edits applied, its occurrences partitioned into entities
+// as the program's own were) — over R2's facts. Shared by `nazm patch rename` and the language server's rename.
+//
+// An answer is a code, `""` for a plan or one of the reference's refusals (`no_entity`, `incomplete_coverage`,
+// `toolchain_owned`, `exported`, `not_clean`, `invalid_name`, `unchanged`, `rejected`, `meaning_changed`, `internal`)
+// with the words `Refusal`'s `Display` gives it; where the facts cannot say what the reference would, `why`
+// says so and the caller refuses.
+
+use "../../compiler/lex.nz"
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/package.nz"
+use "../../compiler/facts.nz"
+use "front.nz"
+
+// The entity the identifier at `st..en` of the document (module 0, whose offsets are the compilation's)
+// is of — its declaration or one of its uses — or -1 (`ReferenceIndex::target`).
+fn entity_at(f: Facts, st: Int, en: Int) -> Int {
+    let n = fx_ref_count(f)
+    for i in 0..n {
+        if fx_ref_decl_start(f, i) == st && fx_ref_decl_end(f, i) == en { return i }
+    }
+    for i in 0..n {
+        for k in 0..fx_ref_use_count(f, i) {
+            if fx_ref_use_start(f, i, k) == st && fx_ref_use_end(f, i, k) == en { return i }
+        }
+    }
+    0 - 1
+}
+
+// Whether the entity's owning top-level definition is exported (`exported`): a function, record or enum with
+// `pub`, or a field, variant or payload field of one; a local or a constant never. An entity the tables
+// do not have is taken to be exported.
+fn exported(f: Facts, kind: Str, ds: Int) -> Bool {
+    let c = fx_checker(f)
+    if kind == "local" || kind == "constant" { return false }
+    let m = fx_module_at(f, ds)
+    let local = ds - fx_module_base(f, m)
+    if kind == "function" {
+        for i in 0..ck_fn_count(c) {
+            if ck_fn_name_start(c, i) == ds && !ck_fn_closure(c, i) { return ck_fn_public(c, i) }
+        }
+        return true
+    }
+    let t = fx_tree(f)
+    if kind == "record" || kind == "field" {
+        for r in 0..ck_record_count(c) {
+            let node = ck_record_node(c, r)
+            if ck_record_module(c, r) != m || node < 0 { continue }
+            let span = sx_field(t, node, "span")
+            if kind == "record" && ck_record_name_start(c, r) == ds { return ck_record_public(c, r) }
+            if kind == "field" && fx_start(f, span) <= local && local < fx_end(f, span) { return ck_record_public(c, r) }
+        }
+        return true
+    }
+    for e in 0..ck_enum_count(c) {
+        let node = ck_enum_node(c, e)
+        if ck_enum_module(c, e) != m || node < 0 { continue }
+        let span = sx_field(t, node, "span")
+        if kind == "enum" && ck_enum_name_start(c, e) == ds { return ck_enum_public(c, e) }
+        if kind != "enum" && fx_start(f, span) <= local && local < fx_end(f, span) { return ck_enum_public(c, e) }
+    }
+    true
+}
+
+// `valid_name`: the reason `name` is no identifier, "" where it is one.
+fn invalid_name(name: Str) -> Str {
+    if name == "" { return "is empty" }
+    if name == "_" { return "is `_`, which discards rather than names" }
+    let kinds = ints_new()
+    let starts = ints_new()
+    let ends = ints_new()
+    let texts = strs_new()
+    let d = dg_new()
+    lex_all(name, kinds, starts, ends, texts, d)
+    if dg_len(d) > 0 { return "is not a token" }
+    let real = ints_len(kinds)
+    let only = real - 1
+    if real == 1 && ints_get(kinds, only) == k_ident() && ints_get(starts, only) == 0 && ints_get(ends, only) == str_len(name) { return "" }
+    if real == 1 && ints_get(kinds, only) != k_ident() { return "is a keyword or a symbol, not an identifier" }
+    "is not one identifier"
+}
+
+// How a compilation's occurrences group into entities: for each entity, its kind and the sorted places of
+// its declaration and uses, the groups sorted and each once. `edits` (starts, ends, replacement lengths of
+// module `shifted`, ordered) moves that module's offsets past a rename's edits.
+fn partition(f: Facts, shifted: Int, e_start: Ints, e_end: Ints, e_len: Ints) -> Strs {
+    let groups = strs_new()
+    for i in 0..fx_ref_count(f) {
+        let places = strs_new()
+        let ds = fx_ref_decl_start(f, i)
+        if ds >= 0 { strs_push(places, place_of(f, ds, fx_ref_decl_end(f, i), shifted, e_start, e_end, e_len)) }
+        for k in 0..fx_ref_use_count(f, i) {
+            strs_push(places, place_of(f, fx_ref_use_start(f, i, k), fx_ref_use_end(f, i, k), shifted, e_start, e_end, e_len))
+        }
+        strs_push(groups, fx_ref_kind(f, i) + "|" + str_join(sort_places(places), ";"))
+    }
+    sort_unique(groups)
+}
+
+// `moved`: a span's place after the edits (ordered, disjoint) are applied: `NAME:START-END`, zero-padded so
+// that places sort as (name, start, end) do.
+fn place_of(f: Facts, a: Int, b: Int, shifted: Int, e_start: Ints, e_end: Ints, e_len: Ints) -> Str {
+    let m = fx_module_at(f, a)
+    let base = fx_module_base(f, m)
+    let mut s = a - base
+    let mut e = b - base
+    if m == shifted {
+        let mut delta = 0
+        let mut done = false
+        for k in 0..ints_len(e_start) {
+            if !done {
+                let grew = ints_get(e_len, k) - ints_get(e_end, k) + ints_get(e_start, k)
+                if ints_get(e_start, k) == s && ints_get(e_end, k) == e {
+                    s = s + delta
+                    e = s + ints_get(e_len, k)
+                    done = true
+                } else if ints_get(e_end, k) <= s {
+                    delta += grew
+                }
+            }
+        }
+        if !done {
+            s = s + delta
+            e = e + delta
+        }
+    }
+    fx_module_name(f, m) + str_from_byte(0) + pad(s) + "-" + pad(e)
+}
+
+fn pad(n: Int) -> Str {
+    let t = int_to_str(n)
+    let mut z = ""
+    for i in 0..12 - str_len(t) { z = z + "0" }
+    z + t
+}
+
+fn sort_strs(xs: Strs) -> Strs {
+    let n = strs_len(xs)
+    if n < 2 { return xs }
+    let mid = n / 2
+    let left = strs_new()
+    let right = strs_new()
+    for i in 0..mid { strs_push(left, strs_get(xs, i)) }
+    for i in mid..n { strs_push(right, strs_get(xs, i)) }
+    let a = sort_strs(left)
+    let b = sort_strs(right)
+    let out = strs_new()
+    let mut i = 0
+    let mut k = 0
+    while i < strs_len(a) && k < strs_len(b) {
+        if fe_str_less(strs_get(b, k), strs_get(a, i)) {
+            strs_push(out, strs_get(b, k))
+            k += 1
+        } else {
+            strs_push(out, strs_get(a, i))
+            i += 1
+        }
+    }
+    while i < strs_len(a) {
+        strs_push(out, strs_get(a, i))
+        i += 1
+    }
+    while k < strs_len(b) {
+        strs_push(out, strs_get(b, k))
+        k += 1
+    }
+    out
+}
+
+fn sort_unique(xs: Strs) -> Strs {
+    let sorted = sort_strs(xs)
+    let out = strs_new()
+    for i in 0..strs_len(sorted) {
+        if i == 0 || strs_get(sorted, i) != strs_get(sorted, i - 1) { strs_push(out, strs_get(sorted, i)) }
+    }
+    out
+}
+
+fn same_strs(a: Strs, b: Strs) -> Bool {
+    if strs_len(a) != strs_len(b) { return false }
+    for i in 0..strs_len(a) {
+        if strs_get(a, i) != strs_get(b, i) { return false }
+    }
+    true
+}
+
+// The first diagnostic of a module's analysis (the program's missing `main` is no part of it), or -1.
+fn first_error(f: Facts) -> Int {
+    let d = fx_diags(f)
+    for i in 0..dg_len(d) {
+        if dg_severity(d, i) == "error" && dg_code(d, i) != "N0204" { return i }
+    }
+    0 - 1
+}
+
+// Whether the facts' reference index may differ from the reference's for this compilation: a parser stage
+// reported, or a diagnostic of a kind after which the checker leaves out what the reference still records (an
+// item it refuses to declare, a closure it does not check, a trait it does not know).
+fn unreliable(f: Facts) -> Bool {
+    let d = fx_diags(f)
+    for i in 0..dg_len(d) {
+        if ints_get(d.file, i) >= 0 { return true }
+        let c = dg_code(d, i)
+        if c == "N0203" || c == "N0386" || c == "N0305" || c == "N0101" || c == "N0334" || c == "N0610" { return true }
+    }
+    false
+}
+
+fn num(s: Str) -> Int {
+    let mut n = 0
+    for i in 0..str_len(s) { n = n * 10 + str_byte(s, i) - 48 }
+    n
+}
+
+fn sort_places(xs: Strs) -> Strs { sort_strs(xs) }
+
+// --- the answer ---------------------------------------------------------------------------------------------------
+
+pub struct Rn {
+    code: Strs,
+    msg: Strs,
+    why: Strs,
+    // The entity (`fx_ref_*`'s numbering) and where it is declared (module, local start and end), its name; the declaring
+    // module's text; the occurrences to change.
+    entity: Ints,
+    decl: Ints,
+    old: Strs,
+    text: Strs,
+    starts: Ints,
+    ends: Ints,
+}
+
+fn rn_new() -> Rn {
+    let r = Rn(code: strs_new(), msg: strs_new(), why: strs_new(), entity: ints_new(), decl: ints_new(), old: strs_new(), text: strs_new(), starts: ints_new(), ends: ints_new())
+    strs_push(r.code, "")
+    strs_push(r.msg, "")
+    strs_push(r.why, "")
+    ints_push(r.entity, 0 - 1)
+    strs_push(r.old, "")
+    strs_push(r.text, "")
+    r
+}
+
+pub fn rn_code(r: Rn) -> Str { strs_get(r.code, 0) }
+pub fn rn_msg(r: Rn) -> Str { strs_get(r.msg, 0) }
+pub fn rn_why(r: Rn) -> Str { strs_get(r.why, 0) }
+pub fn rn_entity(r: Rn) -> Int { ints_get(r.entity, 0) }
+pub fn rn_old(r: Rn) -> Str { strs_get(r.old, 0) }
+pub fn rn_text(r: Rn) -> Str { strs_get(r.text, 0) }
+pub fn rn_count(r: Rn) -> Int { ints_len(r.starts) }
+pub fn rn_start(r: Rn, i: Int) -> Int { ints_get(r.starts, i) }
+pub fn rn_end(r: Rn, i: Int) -> Int { ints_get(r.ends, i) }
+pub fn rn_decl_module(r: Rn) -> Int { ints_get(r.decl, 0) }
+pub fn rn_decl_start(r: Rn) -> Int { ints_get(r.decl, 1) }
+pub fn rn_decl_end(r: Rn) -> Int { ints_get(r.decl, 2) }
+
+fn rn_fail(r: Rn, code: Str, msg: Str) -> Rn {
+    strs_set(r.code, 0, code)
+    strs_set(r.msg, 0, msg)
+    r
+}
+
+fn rn_unsure(r: Rn, why: Str) -> Rn {
+    if strs_get(r.why, 0) == "" { strs_set(r.why, 0, why) }
+    r
+}
+
+// The identifier of `text` holding byte `at` or ending there: its start and end and the kind of the token before it;
+// -1 for none, and -2 where the text does not lex.
+pub fn rn_name_at(text: Str, at: Int) -> Ints {
+    let kinds = ints_new()
+    let starts = ints_new()
+    let ends = ints_new()
+    let texts = strs_new()
+    let d = dg_new()
+    lex_all(text, kinds, starts, ends, texts, d)
+    let out = ints_new()
+    if dg_len(d) > 0 {
+        ints_push(out, 0 - 2)
+        ints_push(out, 0 - 2)
+        ints_push(out, 0 - 2)
+        return out
+    }
+    for k in 0..ints_len(kinds) {
+        if ints_get(starts, k) <= at && at < ints_get(ends, k) {
+            if ints_get(kinds, k) == k_ident() {
+                ints_push(out, ints_get(starts, k))
+                ints_push(out, ints_get(ends, k))
+                ints_push(out, if k > 0 { ints_get(kinds, k - 1) } else { 0 - 1 })
+                return out
+            }
+        }
+    }
+    for k in 0..ints_len(kinds) {
+        if ints_get(kinds, k) == k_ident() && ints_get(ends, k) == at {
+            ints_push(out, ints_get(starts, k))
+            ints_push(out, ints_get(ends, k))
+            ints_push(out, if k > 0 { ints_get(kinds, k - 1) } else { 0 - 1 })
+            return out
+        }
+    }
+    ints_push(out, 0 - 1)
+    ints_push(out, 0 - 1)
+    ints_push(out, 0 - 1)
+    out
+}
+
+pub fn rn_unreliable(f: Facts) -> Bool { unreliable(f) }
+pub fn rn_first_error(f: Facts) -> Int { first_error(f) }
+
+// Whether the entity at the name `st..en` of the document (module 0 of `f`, the file `path`) may be renamed, as `renameable`
+// answers: every rule but the new name's.
+pub fn rn_renameable(io: IoCap, f: Facts, path: Str, given: Str, st: Int, en: Int) -> Rn {
+    let r = rn_new()
+    let e = entity_at(f, st, en)
+    if e < 0 { return rn_fail(r, "no_entity", "nothing a program declared is named here") }
+    ints_set(r.entity, 0, e)
+    let kind = fx_ref_kind(f, e)
+    if kind == "trait" || kind == "trait method" {
+        return rn_fail(r, "incomplete_coverage", "not every occurrence is known: a trait's methods are written again in every impl of it")
+    }
+    let ds = fx_ref_decl_start(f, e)
+    let toolchain = "this is the core prelude's, which the toolchain owns"
+    if ds < 0 { return rn_fail(r, "toolchain_owned", toolchain) }
+    let m = fx_module_at(f, ds)
+    if fx_module_name(f, m) == "@core/prelude.nz" { return rn_fail(r, "toolchain_owned", toolchain) }
+    if exported(f, kind, ds) {
+        // Within a declared workspace every module that can name it is searched: not carried.
+        let root = pk_decide(path, io)
+        if given != "" || pk_root_how(root) != 0 { return rn_unsure(r, "a rename of an exported name within a declared workspace") }
+        return rn_fail(r, "exported", "this is exported, and a module no open program loads may use it, so every occurrence cannot be known; "
+                + "declare a workspace (a `nazm.root` marker or `--source-root`) and every module under it is searched")
+    }
+    if first_error(f) >= 0 { return rn_fail(r, "not_clean", "a program containing this has errors, so its uses are not all known") }
+    let base = fx_module_base(f, m)
+    ints_push(r.decl, m)
+    ints_push(r.decl, ds - base)
+    ints_push(r.decl, fx_ref_decl_end(f, e) - base)
+    strs_set(r.old, 0, str_slice(fx_module_text(f, m), ds - base, fx_ref_decl_end(f, e) - base))
+    r
+}
+
+// The rename of the entity at `st..en` to `new_name`: the occurrences to change, or the refusal.
+pub fn rn_plan(io: IoCap, f: Facts, path: Str, given: Str, library: Str, st: Int, en: Int, new_name: Str) -> Rn {
+    let r = rn_renameable(io, f, path, given, st, en)
+    if rn_code(r) != "" || rn_why(r) != "" { return r }
+    let bad = invalid_name(new_name)
+    if bad != "" { return rn_fail(r, "invalid_name", "the new name " + bad) }
+    let old = rn_old(r)
+    if new_name == old { return rn_fail(r, "unchanged", "the new name is the current one") }
+    let e = entity_at(f, st, en)
+    let m = rn_decl_module(r)
+    if m != 0 { return rn_unsure(r, "a rename that edits another file than the document") }
+    let text = fx_module_text(f, m)
+    let base = fx_module_base(f, m)
+    // The declaration and every use, in the declaring file, ordered.
+    let starts = ints_new()
+    let ends = ints_new()
+    ints_push(starts, rn_decl_start(r))
+    ints_push(ends, rn_decl_end(r))
+    for k in 0..fx_ref_use_count(f, e) {
+        let a = fx_ref_use_start(f, e, k)
+        if fx_module_at(f, a) != m { return rn_fail(r, "internal", "refused: a use outside the declaring file") }
+        let mut at = ints_len(starts)
+        while at > 0 && (ints_get(starts, at - 1) > a - base || (ints_get(starts, at - 1) == a - base && ints_get(ends, at - 1) > fx_ref_use_end(f, e, k) - base)) { at -= 1 }
+        ints_push(starts, 0)
+        ints_push(ends, 0)
+        let mut q = ints_len(starts) - 1
+        while q > at {
+            ints_set(starts, q, ints_get(starts, q - 1))
+            ints_set(ends, q, ints_get(ends, q - 1))
+            q -= 1
+        }
+        ints_set(starts, at, a - base)
+        ints_set(ends, at, fx_ref_use_end(f, e, k) - base)
+    }
+    // Written under a name a re-export gave it, an occurrence keeps its spelling.
+    let e_start = ints_new()
+    let e_end = ints_new()
+    let e_len = ints_new()
+    for k in 0..ints_len(starts) {
+        if str_slice(text, ints_get(starts, k), ints_get(ends, k)) != old { continue }
+        if ints_len(e_end) > 0 && ints_get(e_end, ints_len(e_end) - 1) > ints_get(starts, k) { return rn_fail(r, "internal", "refused: two occurrences overlap") }
+        ints_push(e_start, ints_get(starts, k))
+        ints_push(e_end, ints_get(ends, k))
+        ints_push(e_len, str_len(new_name))
+    }
+    // The candidate program: the document with the edits, checked as the document is.
+    let parts = strs_new()
+    let mut cut = 0
+    for k in 0..ints_len(e_start) {
+        strs_push(parts, str_slice(text, cut, ints_get(e_start, k)))
+        strs_push(parts, new_name)
+        cut = ints_get(e_end, k)
+    }
+    strs_push(parts, str_slice(text, cut, str_len(text)))
+    let over_paths = strs_new()
+    let over_texts = strs_new()
+    strs_push(over_paths, path)
+    strs_push(over_texts, str_join(parts, ""))
+    let g = fx_check_over(path, given, over_paths, over_texts, library, fe_host_os(), fe_host_arch(), io)
+    if fx_refusal(g) != "" { return rn_unsure(r, "a source root the reference refuses") }
+    if fe_load_failed(g) { return rn_unsure(r, "a candidate program that does not load") }
+    if !fx_carried(g) { return rn_unsure(r, fx_why(g)) }
+    if first_error(g) >= 0 {
+        return rn_fail(r, "rejected", "the renamed program would not check: " + strs_get(fx_diags(g).message, first_error(g)))
+    }
+    if !same_strs(partition(f, m, e_start, e_end, e_len), partition(g, 0 - 1, ints_new(), ints_new(), ints_new())) {
+        return rn_fail(r, "meaning_changed", "the renamed program would mean something else: a use would refer to a different definition")
+    }
+    strs_set(r.text, 0, text)
+    for k in 0..ints_len(e_start) {
+        ints_push(r.starts, ints_get(e_start, k))
+        ints_push(r.ends, ints_get(e_end, k))
+    }
+    r
+}

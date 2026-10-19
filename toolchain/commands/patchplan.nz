@@ -1,0 +1,271 @@
+// `nazm patch rename` and `nazm patch fix` (R5, design D24): a semantic patch plan, `nazm.patch/1`, as
+// `crates/nazm-service/src/patch.rs` plans it, over R2's facts — the rename of `rename.nz`, the fixes the checker
+// attached to the diagnostics at a byte, bound to the root's semantic snapshot (`snap.nz`), each edited file's digest and each
+// edit's expected bytes.
+//
+// Carried for the file the root names: the plan is of the root compilation's own document. A file of the
+// compilation other than its root, whose own compilation the reference analyses, is refused (design D5).
+
+use "@std/blake3"
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/package.nz"
+use "../../compiler/facts.nz"
+use "../../compiler/builtins.nz"
+use "cli.nz"
+use "front.nz"
+use "jsonin.nz"
+use "rename.nz"
+use "snap.nz"
+use "util.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+fn refuse(io: IoCap, why: Str) -> Int {
+    eprint("patch: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+fn unavailable(reason: Str) -> Str {
+    "{\"schema\":\"nazm.patch/1\",\"status\":\"unavailable\",\"reason\":" + json_str(reason) + "}"
+}
+
+// What the reference prints a patch result as: compact with `--json`, else indented.
+fn show(text: Str, json: Bool) -> Str {
+    if json { return text + nl() }
+    j_pretty(j_parse(text)) + nl()
+}
+
+// The result, then the status: 0 for a plan, 1 for the reason there is none.
+fn finish(io: IoCap, text: Str, json: Bool, status: Int) -> Int {
+    print(show(text, json))
+    if status != 0 { exit_with(status) }
+    0
+}
+
+// A decimal number as written on the command line (`u32` or `usize`, already checked), saturated.
+fn number(s: Str) -> Int {
+    let mut n = 0
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        if b >= 48 && b <= 57 {
+            if n > 100000000000000000 { return 1000000000000000000 }
+            n = n * 10 + b - 48
+        }
+    }
+    n
+}
+
+// The one edited file as `PatchFile` writes it: its path, the digest of the text the edits were planned from, the edits.
+fn files_json(path: Str, text: Str, starts: Ints, ends: Ints, expected: Strs, replacement: Strs) -> Str {
+    let edits = strs_new()
+    for i in 0..ints_len(starts) {
+        strs_push(edits, "{\"start\":" + int_to_str(ints_get(starts, i)) + ",\"end\":" + int_to_str(ints_get(ends, i)) + ",\"expected\":" + json_str(strs_get(expected, i))
+                + ",\"replacement\":" + json_str(strs_get(replacement, i)) + "}")
+    }
+    "[{\"path\":" + json_str(path) + ",\"digest\":" + json_str(blake3_hex(bytes_from_str(text))) + ",\"edits\":[" + str_join(edits, ",") + "]}]"
+}
+
+// The file a diagnostic's primary span is in: the one a stage said, else the last beginning at or before it.
+fn diag_module(f: Facts, i: Int) -> Int {
+    let d = fx_diags(f)
+    if dg_file(d, i) >= 0 { return dg_file(d, i) }
+    let mut found = 0
+    for m in 0..fx_modules(f) {
+        if fx_module_base(f, m) <= dg_start(d, i) { found = m }
+    }
+    found
+}
+
+// The plans of the document's diagnostics at byte `at` (`fix_plans`): each fix of each error whose primary span, in the
+// root's own file, touches the byte, in the order the compiler attached them, where its span is a range of the file the
+// analysis read — which is the file as the disk holds it, or no fix is planned. `diag` and `index`.
+pub fn pp_fix_plans(f: Facts, disk: Str, at: Int, diag: Ints, index: Ints) -> Int {
+    let d = fx_diags(f)
+    let text = fx_module_text(f, 0)
+    if text != disk { return 0 }
+    for k in 0..dg_len(d) {
+        if dg_severity(d, k) != "error" || dg_code(d, k) == "N0204" { continue }
+        if diag_module(f, k) != 0 { continue }
+        if !(dg_start(d, k) <= at && at <= dg_end(d, k)) { continue }
+        for i in 0..dg_fix_total(d, k) {
+            let a = dg_fix_span_start(d, k, i)
+            let b = dg_fix_span_end(d, k, i)
+            if a < 0 || b > str_len(text) || a > b || diag_module(f, k) != 0 { continue }
+            ints_push(diag, k)
+            ints_push(index, i)
+        }
+    }
+    0
+}
+
+// The word the patch names an entity's kind with.
+fn kind_word(kind: Str) -> Str {
+    if kind == "payload field" { return "payload_field" }
+    if kind == "trait method" { return "trait_method" }
+    kind
+}
+
+// The identity of function `g`'s module-qualified definition, or "" where it has none.
+fn function_identity(f: Facts, g: Int) -> Str {
+    if fx_module_key(f, ck_fn_module(fx_checker(f), g)) == "" { return "" }
+    fx_fn_identity(f, g)
+}
+
+// `nazm patch rename|fix` (`what`), its arguments read into `c`.
+pub fn pp_run(io: IoCap, c: Cli, what: Str) -> Int {
+    cli_parse(io, c)
+    let root = cli_value(c, 0)
+    let file = cli_value(c, 1)
+    let byte = number(cli_value(c, 2))
+    let rename = what == "rename"
+    let json = cli_present(c, 4)
+    let given_set = cli_present(c, 5)
+    let why = ut_read_error(io, root, true)
+    if why != "" {
+        eprint("nazm patch: " + root + ": " + why + nl())
+        exit_with(4)
+    }
+    let library = os_env_get("NAZM_LIBRARY")
+    if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
+    let prefix = fe_prefix(io, root)
+    let given = if given_set { fe_prefix(io, cli_value(c, 5)) + cli_value(c, 5) } else { "" }
+    let path = prefix + root
+    let f = fx_check_module_in(path, given, library, fe_host_os(), fe_host_arch(), io)
+    // The file, among those the root's compilation loaded — by identity.
+    let want = fe_canonical(io, fe_prefix(io, file) + file)
+    let is_root = want != "" && want == fe_canonical(io, path)
+    let mut elsewhere = false
+    if !is_root && want != "" && fx_refusal(f) == "" && fx_carried(f) {
+        for m in 1..fx_modules(f) {
+            if fe_starts(fx_module_name(f, m), "/") && fe_canonical(io, fx_module_name(f, m)) == want { elsewhere = true }
+        }
+    }
+    if elsewhere { refuse(io, "a file of the compilation other than its root, whose own compilation the plan is made in") }
+    if !is_root {
+        // A root the reference cannot analyse has no file but the root itself.
+        finish(io, unavailable("not_in_compilation"), json, 1)
+        return 1
+    }
+    if fx_refusal(f) != "" {
+        finish(io, unavailable("incomplete_compilation"), json, 1)
+        return 1
+    }
+    if !fx_carried(f) { refuse(io, fx_why(f)) }
+    let s = snap_build(f)
+    if snap_reason(s) == "incomplete_compilation" {
+        finish(io, unavailable("incomplete_compilation"), json, 1)
+        return 1
+    }
+    if snap_why(s) != "" { refuse(io, snap_why(s)) }
+    let text = fx_module_text(f, 0)
+    if byte > str_len(text) {
+        finish(io, unavailable("out_of_range"), json, 1)
+        return 1
+    }
+    if snap_reason(s) != "" {
+        finish(io, unavailable(snap_reason(s)), json, 1)
+        return 1
+    }
+    let baseline = blake3_hex(bytes_from_str(snap_json(s)))
+    let root_json = "{\"module\":" + json_str(snap_root(s)) + ",\"compiler\":" + json_str(snap_compiler(s)) + "}"
+    let disk = read_file(path)
+    let starts = ints_new()
+    let ends = ints_new()
+    let expected = strs_new()
+    let replacement = strs_new()
+    if rename {
+        let at = rn_name_at(disk, byte)
+        if ints_get(at, 0) == 0 - 2 { refuse(io, "a position in a document that does not lex") }
+        if rn_unreliable(f) { refuse(io, "a rename in a compilation whose errors leave the facts' index unlike the reference's") }
+        let new_name = cli_value(c, 3)
+        if ints_get(at, 0) < 0 {
+            finish(io, unavailable("no_entity"), json, 1)
+            return 1
+        }
+        let r = rn_plan(io, f, path, given, library, ints_get(at, 0), ints_get(at, 1), new_name)
+        if rn_why(r) != "" { refuse(io, rn_why(r)) }
+        if rn_code(r) != "" {
+            finish(io, unavailable(rn_code(r)), json, 1)
+            return 1
+        }
+        // The target, read from the root's compilation at the entity's declaration.
+        let e = rn_entity(r)
+        let kind = fx_ref_kind(f, e)
+        let ents = ents_new(f)
+        let ds = rn_decl_start(r)
+        let de = rn_decl_end(r)
+        let hasdef = ints_get(ents.hasdef, e) == 1
+        let identity = "{\"definition\":" + (if hasdef { json_str(strs_get(ents.def, e)) } else { "null" }) + ",\"member\":"
+                + (if ints_get(ents.hasmem, e) == 1 { json_str(strs_get(ents.mem, e)) } else { "null" }) + "}"
+        let mut within = "null"
+        if kind == "local" {
+            // The function the local is declared in: the innermost whose body holds it.
+            let cc = fx_checker(f)
+            let t = fx_tree(f)
+            let mut best = 0 - 1
+            let mut width = 0
+            for g in 0..ck_fn_count(cc) {
+                if ck_fn_module(cc, g) != 0 { continue }
+                let node = ck_fn_node(cc, g)
+                if node < 0 { continue }
+                let span = sx_field(t, node, "span")
+                if fx_start(f, span) <= ds && de <= fx_end(f, span) {
+                    let w = fx_end(f, span) - fx_start(f, span)
+                    if best < 0 || w < width {
+                        best = g
+                        width = w
+                    }
+                }
+            }
+            if best < 0 || ck_fn_closure(cc, best) { refuse(io, "a local declared in a closure or in no function") }
+            let id = function_identity(f, best)
+            within = if id == "" { "null" } else { json_str(id) }
+        }
+        let target = "{\"kind\":" + json_str(kind_word(kind)) + ",\"durable\":" + (if hasdef { "true" } else { "false" }) + ",\"identity\":"
+                + (if kind == "local" { "null" } else { identity }) + ",\"declaration\":{\"file\":" + json_str(fx_file_path(f, 0)) + ",\"start\":" + int_to_str(ds)
+                + ",\"end\":" + int_to_str(de) + "},\"within\":" + within + "}"
+        for i in 0..rn_count(r) {
+            ints_push(starts, rn_start(r, i))
+            ints_push(ends, rn_end(r, i))
+            strs_push(expected, rn_old(r))
+            strs_push(replacement, new_name)
+        }
+        finish(io, "{\"schema\":\"nazm.patch/1\",\"status\":\"available\",\"operation\":{\"kind\":\"rename\",\"target\":" + target + ",\"old_name\":" + json_str(rn_old(r))
+                + ",\"new_name\":" + json_str(new_name) + "},\"root\":" + root_json + ",\"baseline\":{\"snapshot\":" + json_str(baseline) + "},\"files\":"
+                + files_json(fx_file_path(f, 0), rn_text(r), starts, ends, expected, replacement) + ",\"validation\":\"reanalysed\"}", json, 0)
+        return 0
+    }
+    let diag = ints_new()
+    let index = ints_new()
+    pp_fix_plans(f, disk, byte, diag, index)
+    let fix = number(cli_value(c, 3))
+    if fix >= ints_len(diag) {
+        finish(io, unavailable("no_such_fix"), json, 1)
+        return 1
+    }
+    let d = fx_diags(f)
+    let k = ints_get(diag, fix)
+    let i = ints_get(index, fix)
+    let a = dg_fix_span_start(d, k, i)
+    let b = dg_fix_span_end(d, k, i)
+    let at = ints_get(d.fix_first, k) + i
+    let was = str_slice(text, a, b)
+    if was == strs_get(d.fix_replacement, at) {
+        finish(io, unavailable("empty_edit"), json, 1)
+        return 1
+    }
+    ints_push(starts, a)
+    ints_push(ends, b)
+    strs_push(expected, was)
+    strs_push(replacement, strs_get(d.fix_replacement, at))
+    finish(io, "{\"schema\":\"nazm.patch/1\",\"status\":\"available\",\"operation\":{\"kind\":\"diagnostic_fix\",\"diagnostic\":{\"code\":" + json_str(dg_code(d, k))
+            + ",\"file\":" + json_str(fx_file_path(f, 0)) + ",\"start\":" + int_to_str(dg_start(d, k)) + ",\"end\":" + int_to_str(dg_end(d, k)) + "},\"fix\":" + int_to_str(fix)
+            + ",\"alternatives\":" + int_to_str(ints_len(diag)) + ",\"applicability\":" + json_str(strs_get(d.fix_applicability, at)) + ",\"precondition\":"
+            + json_str(strs_get(d.fix_precondition, at)) + ",\"description\":" + json_str(strs_get(d.fix_description, at)) + "},\"root\":" + root_json
+            + ",\"baseline\":{\"snapshot\":" + json_str(baseline) + "},\"files\":" + files_json(fx_file_path(f, 0), text, starts, ends, expected, replacement)
+            + ",\"validation\":\"compiler_fix\"}", json, 0)
+    0
+}
