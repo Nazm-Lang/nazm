@@ -321,3 +321,34 @@ fn str_less(a: Str, b: Str) -> Bool {
 
 fn cat3(a: Str, b: Str, c: Str) -> Str { str_concat(str_concat(a, b), c) }
 fn cat5(a: Str, b: Str, c: Str, d: Str, e: Str) -> Str { str_concat(cat3(a, b, c), str_concat(d, e)) }
+
+// The reference index, one line per entity as `facts.nz` holds it: `KIND<TAB>DECLARATION<TAB>USES`, a
+// span written `start-end` over the whole compilation's text, the uses in order and a space
+// apart, `-` for a declaration the index does not hold (what `refdump refs` prints from the
+// reference's `ReferenceIndex`). `stops`, `refused` or `fails` where there is none.
+pub fn fd_refs(f: Facts) -> Str {
+    if fx_carried(f) == false { return str_concat("stops", nl()); }
+    if fx_refusal(f) != "" { return str_concat("refused", nl()); }
+    if fx_loaded(f) == false || fx_failed(f) { return str_concat("fails", nl()); }
+    let out = strs_new();
+    let mut i = 0;
+    while i < fx_ref_count(f) {
+        strs_push(out, fx_ref_kind(f, i));
+        strs_push(out, tab());
+        if fx_ref_decl_start(f, i) < 0 {
+            strs_push(out, "-");
+        } else {
+            strs_push(out, cat3(int_to_str(fx_ref_decl_start(f, i)), "-", int_to_str(fx_ref_decl_end(f, i))));
+        }
+        strs_push(out, tab());
+        let mut k = 0;
+        while k < fx_ref_use_count(f, i) {
+            if k > 0 { strs_push(out, " "); }
+            strs_push(out, cat3(int_to_str(fx_ref_use_start(f, i, k)), "-", int_to_str(fx_ref_use_end(f, i, k))));
+            k = k + 1;
+        }
+        strs_push(out, nl());
+        i = i + 1;
+    }
+    str_join(out, "")
+}
