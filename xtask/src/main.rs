@@ -14,6 +14,7 @@ mod evidence;
 mod gate;
 mod governance;
 mod guide;
+mod host_run;
 mod metadata;
 mod mutate;
 mod notices;
@@ -171,6 +172,11 @@ fn main() -> ExitCode {
             let rest: Vec<String> = args.collect();
             run_contained(&rest)
         }
+        // One bounded-heap stage on the macOS host (docs/runbook.md, R6): checked, not declared.
+        Some("host-run") => {
+            let rest: Vec<String> = args.collect();
+            host_run::host_run(&rest)
+        }
         Some("evidence") => {
             let rest: Vec<String> = args.collect();
             evidence::run(&rest)
@@ -233,6 +239,9 @@ fn help() {
                            --verify-killers   also verify every decided mutant's catalogued\n  \
                                               killers in the same session, around the\n  \
                                               one injection its verdict is taken from\n  \
+           host-run        [--deadline-secs N] -- EXE [ARGS]: run ONE Nazm-built program on the\n  \
+                           macOS host, only if it links the counted heap with a limit of at most\n  \
+                           2 GiB and no other host stage runs; deadline; records its peak RSS\n  \
            mutate-recover  repair a tree an interrupted mutation run left mutated;\n  \
                            needs --confirm-no-writers, and read what it prints first\n  \
            help            this message\n"

@@ -21224,3 +21224,108 @@ file = "crates/nazm-lir/src/op/llvm.rs"
 find = '''        let kw = if p.notail { "notail call" } else { "call" };'''
 replace = '''        let kw = "call";'''
 killers = [{ package = "nazm-lir", lib = true, name = "op::llvm::tests::a_function_in_a_cycle_makes_no_call_a_tail_call" }]
+
+[[mutation]]
+name = "r6-host-run-links-no-counted-heap"
+why = "a program without the counted heap is admitted to the host"
+file = "xtask/src/host_run.rs"
+find = """    if !contains(image, SYMBOL) {"""
+replace = """    if false {"""
+killers = [{ package = "xtask", bin = "xtask", name = "host_run::tests::a_program_without_the_counted_heap_is_refused" }]
+
+[[mutation]]
+name = "r6-host-run-limit-over-2-gib"
+why = "a heap limit over 2 GiB is admitted to the host"
+file = "xtask/src/host_run.rs"
+find = """        [one] if *one > MAX_LIMIT => Err(Refusal::LimitTooLarge(*one)),"""
+replace = """        [one] if *one > MAX_LIMIT * 2 => Err(Refusal::LimitTooLarge(*one)),"""
+killers = [{ package = "xtask", bin = "xtask", name = "host_run::tests::a_limit_over_two_gib_is_refused" }]
+
+[[mutation]]
+name = "r6-host-run-several-limits"
+why = "a program that names several limits is admitted on the first"
+file = "xtask/src/host_run.rs"
+find = """        _ => Err(Refusal::AmbiguousLimit(found)),"""
+replace = """        _ => Ok(found.first().copied().unwrap_or(0)),"""
+killers = [{ package = "xtask", bin = "xtask", name = "host_run::tests::two_different_limits_are_refused" }]
+
+[[mutation]]
+name = "r6-host-run-peak-margin"
+why = "a peak resident memory past the limit and its margin is not the withdrawal condition"
+file = "xtask/src/host_run.rs"
+find = """    if peak > limit.saturating_add(margin) {"""
+replace = """    if peak > limit.saturating_add(margin).saturating_mul(2) {"""
+killers = [{ package = "xtask", bin = "xtask", name = "host_run::tests::a_peak_past_the_limit_and_margin_withdraws_the_rule" }]
+
+[[mutation]]
+name = "r6-host-run-n0406-not-stopping"
+why = "an N0406 that did not stop the program is not the withdrawal condition"
+file = "xtask/src/host_run.rs"
+find = """    if stderr.contains(N0406) && code != Some(2) {"""
+replace = """    if stderr.contains(N0406) && false {"""
+killers = [{ package = "xtask", bin = "xtask", name = "host_run::tests::an_n0406_that_did_not_stop_the_program_withdraws_the_rule" }]
+
+[[mutation]]
+name = "r6-host-run-contained-listing"
+why = "a contained workload's container in `docker ps` is not seen"
+file = "xtask/src/host_run.rs"
+find = """    ps_quiet.lines().any(|l| !l.trim().is_empty())"""
+replace = """    ps_quiet.lines().any(|l| l.trim().is_empty())"""
+killers = [{ package = "xtask", bin = "xtask", name = "host_run::tests::a_contained_workload_is_seen_in_docker_ps_output" }]
+
+[[mutation]]
+name = "r6-host-run-margin-only-tightens"
+why = "the breach margin may be raised past 256 MiB by an argument"
+file = "xtask/src/host_run.rs"
+find = """                    .filter(|n| *n <= MARGIN)
+"""
+replace = """"""
+killers = [{ package = "xtask", bin = "xtask", name = "host_run::tests::the_margin_may_only_be_tightened" }]
+
+[[mutation]]
+name = "r6-host-run-deadline-bound"
+why = "a deadline of any length is accepted"
+file = "xtask/src/host_run.rs"
+find = """                    .filter(|n| (1..=MAX_DEADLINE).contains(n))"""
+replace = """                    .filter(|n| *n >= 1)"""
+killers = [{ package = "xtask", bin = "xtask", name = "host_run::tests::the_margin_may_only_be_tightened" }]
+
+[[mutation]]
+name = "r6-host-run-second-stage"
+why = "a second host stage starts while one runs"
+file = "xtask/src/host_run.rs"
+find = """    if lock.try_lock().is_err() {"""
+replace = """    if false && lock.try_lock().is_err() {"""
+killers = [{ package = "xtask", test = "host_run", name = "a_second_stage_is_refused_while_one_runs" }]
+
+[[mutation]]
+name = "r6-host-run-withdrawal-marker"
+why = "a withdrawn rule is not remembered: the next host run starts"
+file = "xtask/src/host_run.rs"
+find = """    if let Ok(why) = fs::read_to_string(&marker) {"""
+replace = """    if let Ok(why) = fs::read_to_string(dir.join("no-such-marker")) {"""
+killers = [{ package = "xtask", test = "host_run", name = "a_peak_past_the_limit_is_the_withdrawal_condition_and_later_runs_are_refused" }]
+
+[[mutation]]
+name = "r6-host-run-host-environment"
+why = "a host that declares containment is run on"
+file = "xtask/src/host_run.rs"
+find = """        return Err(Refusal::HostEnvironment(m));"""
+replace = """        let _ = m;"""
+killers = [{ package = "xtask", test = "host_run", name = "a_host_that_declares_containment_is_refused_by_name" }]
+
+[[mutation]]
+name = "r6-host-run-deadline"
+why = "a stage past its deadline is left running"
+file = "xtask/src/host_run.rs"
+find = """        if start.elapsed() >= Duration::from_secs(opts.deadline) {"""
+replace = """        if false && start.elapsed() >= Duration::from_secs(opts.deadline) {"""
+killers = [{ package = "xtask", test = "host_run", name = "a_stage_past_its_deadline_is_killed_with_its_children" }]
+
+[[mutation]]
+name = "r6-host-run-not-executable"
+why = "a file that is not executable is read as a stage"
+file = "xtask/src/host_run.rs"
+find = """& 0o111 == 0 {"""
+replace = """& 0o111 == 0o1000 {"""
+killers = [{ package = "xtask", test = "host_run", name = "a_missing_or_non_executable_file_is_refused_by_name" }]
