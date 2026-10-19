@@ -182,7 +182,7 @@ options: none is the long help, a command its `--help`, `help help` its own text
 a command that has no commands of its own is `unrecognized subcommand` under that command's usage
 (under `help`'s own, without the closing line). The commands and their `about`s are a table in
 `nazm.nz`, in `cli.rs`'s order with `help` last; a doc comment changed in `cli.rs` shows as a
-difference in `tests/args/nazm.txt`'s lines. `fmt`, `init`, `check`, `doc`, `fix`, `lsp`, `test` and `patch` are carried; any other
+difference in `tests/args/nazm.txt`'s lines. `fmt`, `init`, `check`, `doc`, `fix`, `lsp`, `test`, `patch`, `interface` and `docs` are carried; any other
 command, or `help` of one, is `nazm: not carried: nazm CMD`, status 6.
 
 **D13 — `doc` is `apidoc.rs` over R2's facts; `check` runs on the same interface.**
@@ -379,6 +379,47 @@ and with it the `unavailable` reasons the service gives after binding (`not_in_c
 `incomplete_compilation`, `out_of_range`, `no_such_fix`), cannot be said exactly, so none is guessed.
 `tests/args/patch.txt` runs the command lines and the plans `apply` carries out or refuses, in a
 fixture whose plan is the reference's own.
+
+**D19 — `interface` is `interface.rs` over R2's published interface (task 9.1, 2026-10-19).**
+`toolchain/commands/interface.nz` checks the root as a module (`fx_check_module_in`, `Entry::Absent`,
+the source root as `check` decides it) and prints what `compiler/sema.nz` publishes of the root
+module (`ck_interface_json`: the bytes the check cache keys on, `nazm.interface/13`), or with `--hash`
+`blake3-256` and their BLAKE3 (`InterfaceHash::of_bytes`). A compilation that does not load is the
+loader's diagnostics (3 when every one is `N0205`, else 1), one that fails is its errors rendered and
+`nazm: N errors` (1), a dependency outside the source root is `nazm: a module it imports has no
+durable identity, so this interface could not name its dependencies` (1). Refused, as `check`'s
+`--source-root` is (D15): a source root that is not an ancestor of the root module as written.
+`run.sh interface` runs `interface FILE` and `--hash` over every input of `check`.
+
+**D20 — `docs` is `nazm-docs` and `docs.rs` (task 9.1, 2026-10-19).** `toolchain/commands/docs.nz`
+reads the corpus of `manifest.rs` from `--root` as the crate does — a document missing or not UTF-8
+is its problem, ATX headings outside fences and comments with their explicit anchors, labels and
+slugs for a section's local id, a duplicate id, a setext or HTML heading, an unclosed fence or
+comment refused by kind and line; the grammar's productions with their attached comments,
+`@example`s and references; each section's BLAKE3 digest and the corpus `state` (length-prefixed
+framing of every document's id, path and bytes); every link resolved against the corpus (a path
+joined to the document's directory and normalised, a fragment the way GitHub numbers repeats) and
+the guide's generated sections attached to their productions. The answers are the crate's: the
+`nazm.docs-index/1` and `nazm.docs-section/1` objects in declaration order, `not_found`,
+`stale_state` and `unavailable` with its problems; `--json` is the compact line, without it the
+index is a tab-separated line of id and title for each section and a section is its exact text, and
+any other answer is the same object indented, its members in the order the structs declare them.
+`cli.nz` gained the required group (`ArgGroup`, `<--index|--section <SECTION>>` in usage and in the
+missing-argument error). The default root is the repository the reference binary was built from, which
+a port cannot know: without `--root` the command refuses (6). The reference classifies a heading's
+characters with Unicode tables (`is_alphanumeric`, `to_lowercase`); the port knows ASCII and the
+punctuation the corpus's headings use and refuses a heading holding any other character. `run.sh
+docs` runs `--index` in each form and every one of the corpus's sections by id (`--json`, and the
+text of every tenth), then thirteen corpora each with one thing wrong; `tests/args/docs.txt` the
+command lines.
+
+**What 9.1 leaves, and why.** `context`, `snapshot`, `delta`, `diagnostics`, `resolve`, `references`,
+`inspect`, `repo` and the MCP server answer from `nazm-service`, whose packets are digests of the
+reference index (every occurrence of a definition), the call graph (callers, callees), provenance
+summaries, Core IR and MIR, and the language service's diagnostic ids and source state — none of
+which `compiler/facts.nz` publishes. They are not ported, and `nazm CMD` says so (`not carried`, 6):
+the hand-back to R2 is the reference index first (it also unblocks `patch`'s plans, D18, and
+`lsp`'s references, rename and symbols), then the call graph and provenance.
 
 ## Risks / Trade-offs
 

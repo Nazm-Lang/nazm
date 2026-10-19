@@ -1,0 +1,1428 @@
+// `nazm docs`, written in Nazm (R5, `openspec/changes/r5-commands/`, task 9.1, design D20).
+//
+// `nazm docs (--index [--document ID] | --section ID [--state STATE]) [--json] --root DIR`, run by the
+// dispatcher (`nazm.nz`).
+//
+// A port of `crates/nazm-docs` (`lib.rs`, `markdown.rs`, `grammar.rs`, `manifest.rs`) and of
+// `crates/nazm-cli/src/docs.rs`: Nazm's own documentation, read as it is on disk into sections — ATX
+// headings with their anchors and labels, or one section per grammar production — each with its
+// BLAKE3 digest, its links resolved against the corpus, and the corpus `state`; answered as the
+// compact `nazm.docs-index/1` or `nazm.docs-section/1` line, the same object indented with its keys
+// sorted, or (without `--json`) the index's ids and titles and a section's exact text.
+//
+// The default root is the repository the reference binary was built from, which a port cannot
+// know: without `--root` the command says so and exits 6 (design D5). The reference classifies a
+// heading's characters with Unicode tables (`char::is_alphanumeric`, `to_lowercase`); the port
+// knows ASCII and the punctuation the corpus's headings use (— · – → …) and refuses a heading
+// holding any other non-ASCII character rather than guess.
+
+use "@std/blake3"
+use "@std/hash"
+use "@std/hashmap"
+use "../../compiler/diag.nz"
+use "cli.nz"
+use "jsonin.nz"
+use "util.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+// The command line, as `crates/nazm-cli/src/cli.rs` declares `nazm docs`.
+pub fn docs_cli() -> Cli {
+    let c = cli_command("docs", "Retrieve Nazm's own documentation by section: a compact index, `nazm.docs-index/1`, or one section's exact "
+            + "canonical text, `nazm.docs-section/1`",
+            "Retrieve Nazm's own documentation by section: a compact index, `nazm.docs-index/1`, or one section's exact canonical "
+            + "text, `nazm.docs-section/1`." + nl() + nl()
+            + "The index lists every document of the corpus with its authority — normative, goal, planning, evidence and the rest — "
+            + "and every section's stable id, title, parent and digest, with no body. `--section ID` returns that section's own text "
+            + "byte for byte, never its subsections', and never a paraphrase; `--state` binds the request to the corpus an index "
+            + "described. Read from the repository's documentation as it is now; ids are exact, with no search. "
+            + "`docs/architecture.md` §7.34.")
+    let index = cli_flag(c, "", "index", "Print the index", "")
+    let document = cli_option(c, "", "document", "DOCUMENT", false, "", false, "Only this document's sections, by its id", "")
+    let section = cli_option(c, "", "section", "SECTION", false, "", false, "Print one section, by its exact id", "")
+    let state = cli_option(c, "", "state", "STATE", false, "", false, "The index's `state`: refuse the section if the corpus has changed since", "")
+    cli_flag(c, "", "json", "The one canonical compact serialisation. Without it, a section's text or the index's ids and titles", "")
+    cli_option(c, "", "root", "ROOT", true, "", false, "The repository whose `docs/` to read. Without it, the one this binary was built from", "")
+    cli_conflicts(c, document, section)
+    cli_conflicts(c, state, index)
+    cli_require_one(c, index, section)
+    c
+}
+
+fn refuse(io: IoCap, why: Str) -> Int {
+    eprint("docs: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+// --- the corpus -----------------------------------------------------------------------------------
+
+struct Corp {
+    d_id: Strs,
+    d_path: Strs,
+    d_auth: Strs,
+    d_fmt: Strs,
+    d_text: Strs,
+    d_digest: Strs,
+    s_doc: Ints,
+    s_id: Strs,
+    // 0 document, 1 heading, 2 production.
+    s_kind: Ints,
+    s_title: Strs,
+    s_has_title: Ints,
+    s_level: Ints,
+    s_parent: Strs,
+    s_has_parent: Ints,
+    s_rs: Ints,
+    s_re: Ints,
+    s_l0: Ints,
+    s_l1: Ints,
+    s_digest: Strs,
+    s_frag: Strs,
+    s_has_frag: Ints,
+    s_prod: Strs,
+    s_has_prod: Ints,
+    c_sec: Ints,
+    c_id: Strs,
+    k_sec: Ints,
+    k_rel: Strs,
+    k_href: Strs,
+    k_has_href: Ints,
+    k_target: Strs,
+    k_has_target: Ints,
+    k_scope: Strs,
+    e_sec: Ints,
+    e_text: Strs,
+    p_kind: Strs,
+    p_doc: Strs,
+    p_line: Ints,
+    p_value: Strs,
+    state: Strs,
+}
+
+fn corp_new() -> Corp {
+    Corp(d_id: strs_new(), d_path: strs_new(), d_auth: strs_new(), d_fmt: strs_new(), d_text: strs_new(), d_digest: strs_new(),
+            s_doc: ints_new(), s_id: strs_new(), s_kind: ints_new(), s_title: strs_new(), s_has_title: ints_new(), s_level: ints_new(),
+            s_parent: strs_new(), s_has_parent: ints_new(), s_rs: ints_new(), s_re: ints_new(), s_l0: ints_new(), s_l1: ints_new(),
+            s_digest: strs_new(), s_frag: strs_new(), s_has_frag: ints_new(), s_prod: strs_new(), s_has_prod: ints_new(),
+            c_sec: ints_new(), c_id: strs_new(), k_sec: ints_new(), k_rel: strs_new(), k_href: strs_new(), k_has_href: ints_new(),
+            k_target: strs_new(), k_has_target: ints_new(), k_scope: strs_new(), e_sec: ints_new(), e_text: strs_new(),
+            p_kind: strs_new(), p_doc: strs_new(), p_line: ints_new(), p_value: strs_new(), state: strs_new())
+}
+
+// The manifest (`manifest.rs`), in corpus order: id, path, authority, format.
+fn manifest() -> Strs {
+    let m = strs_new()
+    strs_push(m, "goals")
+    strs_push(m, "docs/NAZM_LANGUAGE_GOALS.md")
+    strs_push(m, "goal")
+    strs_push(m, "markdown")
+    strs_push(m, "master")
+    strs_push(m, "docs/master-architecture.md")
+    strs_push(m, "law")
+    strs_push(m, "markdown")
+    strs_push(m, "architecture")
+    strs_push(m, "docs/architecture.md")
+    strs_push(m, "architecture")
+    strs_push(m, "markdown")
+    strs_push(m, "spec")
+    strs_push(m, "docs/spec.md")
+    strs_push(m, "normative")
+    strs_push(m, "markdown")
+    strs_push(m, "capabilities")
+    strs_push(m, "docs/capability-matrix.md")
+    strs_push(m, "evidence")
+    strs_push(m, "markdown")
+    strs_push(m, "roadmap")
+    strs_push(m, "docs/roadmap.md")
+    strs_push(m, "planning")
+    strs_push(m, "markdown")
+    strs_push(m, "research")
+    strs_push(m, "docs/research-register.md")
+    strs_push(m, "research")
+    strs_push(m, "markdown")
+    strs_push(m, "bootstrap")
+    strs_push(m, "docs/bootstrap.md")
+    strs_push(m, "evidence")
+    strs_push(m, "markdown")
+    strs_push(m, "diagnostics")
+    strs_push(m, "docs/diagnostics.md")
+    strs_push(m, "interface")
+    strs_push(m, "markdown")
+    strs_push(m, "mcp")
+    strs_push(m, "docs/mcp.md")
+    strs_push(m, "interface")
+    strs_push(m, "markdown")
+    strs_push(m, "performance")
+    strs_push(m, "docs/performance.md")
+    strs_push(m, "evidence")
+    strs_push(m, "markdown")
+    strs_push(m, "runbook")
+    strs_push(m, "docs/runbook.md")
+    strs_push(m, "operational")
+    strs_push(m, "markdown")
+    strs_push(m, "guide")
+    strs_push(m, "docs/guide.md")
+    strs_push(m, "guide")
+    strs_push(m, "markdown")
+    strs_push(m, "grammar")
+    strs_push(m, "docs/grammar.ebnf")
+    strs_push(m, "grammar")
+    strs_push(m, "ebnf")
+    m
+}
+
+// --- text helpers -----------------------------------------------------------------------------------
+
+fn starts_at(s: Str, at: Int, p: Str) -> Bool {
+    at >= 0 && at + str_len(p) <= str_len(s) && str_slice(s, at, at + str_len(p)) == p
+}
+
+fn starts(s: Str, p: Str) -> Bool { starts_at(s, 0, p) }
+
+fn ends(s: Str, p: Str) -> Bool { str_len(s) >= str_len(p) && str_slice(s, str_len(s) - str_len(p), str_len(s)) == p }
+
+// The first index of `p` in `s` at or after `from`, or -1.
+fn find(s: Str, p: Str, from: Int) -> Int {
+    let n = str_len(p)
+    let mut i = from
+    while i + n <= str_len(s) {
+        if str_slice(s, i, i + n) == p { return i }
+        i += 1
+    }
+    0 - 1
+}
+
+// Non-overlapping occurrences of `p` in `s` (`str::matches`).
+fn count_of(s: Str, p: Str) -> Int {
+    let mut n = 0
+    let mut at = find(s, p, 0)
+    while at >= 0 {
+        n += 1
+        at = find(s, p, at + str_len(p))
+    }
+    n
+}
+
+fn is_digit(b: Int) -> Bool { b >= 48 && b <= 57 }
+fn is_lower(b: Int) -> Bool { b >= 97 && b <= 122 }
+fn is_upper(b: Int) -> Bool { b >= 65 && b <= 90 }
+fn is_alpha(b: Int) -> Bool { is_lower(b) || is_upper(b) }
+
+// A line's text as `str::lines` gives it: without its `\n`, and without a `\r` before that.
+fn trim_eol(s: Str) -> Str {
+    let mut e = str_len(s)
+    while e > 0 && (str_byte(s, e - 1) == 10 || str_byte(s, e - 1) == 13) { e -= 1 }
+    str_slice(s, 0, e)
+}
+
+// --- Unicode, as far as the corpus's headings need it ------------------------------------------------
+
+// The code point and width of the character at `i`.
+fn cp_at(s: Str, i: Int) -> Ints {
+    let out = ints_new()
+    let b = str_byte(s, i)
+    let mut w = 1
+    let mut cp = b
+    if b >= 240 {
+        w = 4
+        cp = (b - 240) * 262144
+    } else if b >= 224 {
+        w = 3
+        cp = (b - 224) * 4096
+    } else if b >= 192 {
+        w = 2
+        cp = (b - 192) * 64
+    }
+    if w >= 2 { cp += (str_byte(s, i + 1) - 128) * (if w == 2 { 1 } else if w == 3 { 64 } else { 4096 }) }
+    if w >= 3 { cp += (str_byte(s, i + 2) - 128) * (if w == 3 { 1 } else { 64 }) }
+    if w == 4 { cp += str_byte(s, i + 3) - 128 }
+    ints_push(out, cp)
+    ints_push(out, w)
+    out
+}
+
+// Whether a non-ASCII character is one this port knows to be no letter or digit (so `is_alphanumeric`
+// is false and `to_lowercase` leaves it): — – · → ← … ‘ ’ “ ” • × ≈ ≤ ≥ § − ± ⇒ and a no-break space.
+fn known_symbol(cp: Int) -> Bool {
+    cp == 8212 || cp == 8211 || cp == 183 || cp == 8594 || cp == 8592 || cp == 8230 || cp == 8216 || cp == 8217 || cp == 8220
+            || cp == 8221 || cp == 8226 || cp == 215 || cp == 8776 || cp == 8804 || cp == 8805 || cp == 167 || cp == 8722
+            || cp == 177 || cp == 8658 || cp == 160
+}
+
+// A heading's text must hold no character this port cannot classify.
+fn classifiable(s: Str) -> Bool {
+    let mut i = 0
+    while i < str_len(s) {
+        if str_byte(s, i) < 128 {
+            i += 1
+        } else {
+            let c = cp_at(s, i)
+            if !known_symbol(ints_get(c, 0)) { return false }
+            i += ints_get(c, 1)
+        }
+    }
+    true
+}
+
+// `markdown::github_slug`.
+fn github_slug(title: Str) -> Str {
+    let out = strs_new()
+    let mut i = 0
+    while i < str_len(title) {
+        let b = str_byte(title, i)
+        if b >= 128 {
+            i += ints_get(cp_at(title, i), 1)
+        } else {
+            if is_alpha(b) || is_digit(b) || b == 45 || b == 95 {
+                strs_push(out, str_from_byte(if is_upper(b) { b + 32 } else { b }))
+            } else if b == 32 {
+                strs_push(out, "-")
+            }
+            i += 1
+        }
+    }
+    str_join(out, "")
+}
+
+// `markdown::slug`.
+fn slug(title: Str) -> Str {
+    let out = strs_new()
+    let mut empty = true
+    let mut gap = false
+    let mut i = 0
+    while i < str_len(title) {
+        let b = str_byte(title, i)
+        if b >= 128 {
+            gap = true
+            i += ints_get(cp_at(title, i), 1)
+        } else {
+            if is_alpha(b) || is_digit(b) {
+                if gap && !empty { strs_push(out, "-") }
+                gap = false
+                empty = false
+                strs_push(out, str_from_byte(if is_upper(b) { b + 32 } else { b }))
+            } else {
+                gap = true
+            }
+            i += 1
+        }
+    }
+    str_join(out, "")
+}
+
+// Past any `.digits` groups from `at` (`dotted`).
+fn dotted(t: Str, start: Int) -> Int {
+    let mut at = start
+    while at < str_len(t) && str_byte(t, at) == 46 {
+        let mut n = 0
+        while at + 1 + n < str_len(t) && is_digit(str_byte(t, at + 1 + n)) { n += 1 }
+        if n == 0 { return at }
+        at += 1 + n
+    }
+    at
+}
+
+// A heading's own label (`label`), or "".
+fn lbl(t: Str) -> Str {
+    let mut digits = 0
+    while digits < str_len(t) && is_digit(str_byte(t, digits)) { digits += 1 }
+    if digits > 0 {
+        let mut end = digits
+        if end < str_len(t) && is_alpha(str_byte(t, end)) { end += 1 }
+        end = dotted(t, end)
+        let mut rest = end
+        if rest < str_len(t) && str_byte(t, rest) == 46 { rest += 1 }
+        if rest < str_len(t) && str_byte(t, rest) == 32 { return str_slice(t, 0, end) }
+    }
+    if str_len(t) > 0 && is_upper(str_byte(t, 0)) {
+        let mut d = 0
+        while 1 + d < str_len(t) && is_digit(str_byte(t, 1 + d)) { d += 1 }
+        if d > 0 {
+            let end = dotted(t, 1 + d)
+            if end < str_len(t) && str_byte(t, end) == 32 {
+                let r = end + 1
+                // — (U+2014), · (U+00B7) or `- `.
+                if starts_at(t, r, str_from_byte(226) + str_from_byte(128) + str_from_byte(148)) || starts_at(t, r, str_from_byte(194) + str_from_byte(183))
+                        || starts_at(t, r, "- ") {
+                    return str_slice(t, 0, end)
+                }
+            }
+        }
+    }
+    ""
+}
+
+// --- hashing -----------------------------------------------------------------------------------------
+
+fn le8(n: Int) -> Str {
+    let parts = strs_new()
+    let mut v = n
+    for _ in 0..8 {
+        strs_push(parts, str_from_byte(v % 256))
+        v = v / 256
+    }
+    str_join(parts, "")
+}
+
+fn framed(parts: Strs) -> Str {
+    let out = strs_new()
+    for i in 0..strs_len(parts) {
+        strs_push(out, le8(str_len(strs_get(parts, i))))
+        strs_push(out, strs_get(parts, i))
+    }
+    str_join(out, "")
+}
+
+fn hash_of(parts: Strs) -> Str { blake3_hex(bytes_from_str(framed(parts))) }
+
+fn digest(document: Str, id: Str, body: Str) -> Str {
+    let p = strs_new()
+    strs_push(p, "nazm.docs-section/1")
+    strs_push(p, document)
+    strs_push(p, id)
+    strs_push(p, body)
+    hash_of(p)
+}
+
+// --- problems ----------------------------------------------------------------------------------------
+
+fn problem_at(c: Corp, kind: Str, doc: Str, line: Int, value: Str) -> Int {
+    strs_push(c.p_kind, kind)
+    strs_push(c.p_doc, doc)
+    ints_push(c.p_line, line + 1)
+    strs_push(c.p_value, value)
+    0
+}
+
+fn problem_of(c: Corp, kind: Str, doc: Str) -> Int {
+    strs_push(c.p_kind, kind)
+    strs_push(c.p_doc, doc)
+    ints_push(c.p_line, 0)
+    strs_push(c.p_value, "")
+    0
+}
+
+// --- markdown ----------------------------------------------------------------------------------------
+
+// A fence opening at `trimmed`: its character and length packed as `c * 1000000 + n`, or 0.
+fn opens(t: Str) -> Int {
+    if str_len(t) == 0 { return 0 }
+    let c = str_byte(t, 0)
+    if c != 96 && c != 126 { return 0 }
+    let mut n = 0
+    while n < str_len(t) && str_byte(t, n) == c { n += 1 }
+    if n >= 3 { c * 1000000 + n } else { 0 }
+}
+
+fn closes(t: Str, c: Int, n: Int) -> Bool {
+    let mut run = 0
+    while run < str_len(t) && str_byte(t, run) == c { run += 1 }
+    run >= n && ut_blank(str_slice(t, run, str_len(t)))
+}
+
+// `atx`: the level (0 for none) and, in `title`, the heading's text.
+fn atx(l: Str, title: Strs) -> Int {
+    let mut indent = 0
+    while indent < str_len(l) && str_byte(l, indent) == 32 { indent += 1 }
+    if indent > 3 { return 0 }
+    let mut hashes = 0
+    while indent + hashes < str_len(l) && str_byte(l, indent + hashes) == 35 { hashes += 1 }
+    if hashes < 1 || hashes > 6 { return 0 }
+    let after = str_slice(l, indent + hashes, str_len(l))
+    if !(str_len(after) == 0 || str_byte(after, 0) == 32 || str_byte(after, 0) == 9) { return 0 }
+    let mut t = ut_trim(after)
+    // An optional closing sequence: `#`s preceded by a space.
+    let mut e = str_len(t)
+    while e > 0 && str_byte(t, e - 1) == 35 { e -= 1 }
+    if e < str_len(t) && (e == 0 || str_byte(t, e - 1) == 32) { t = ut_trim_end(str_slice(t, 0, e)) }
+    strs_push(title, t)
+    hashes
+}
+
+// `anchor_name`: the name in `<!-- id: NAME -->`, or "".
+fn anchor_name(trimmed: Str) -> Str {
+    let t = ut_trim_end(trimmed)
+    if !starts(t, "<!-- id:") || !ends(t, "-->") { return "" }
+    if str_len(t) < 8 + 3 { return "" }
+    let inner = str_slice(t, 8, str_len(t) - 3)
+    if !starts(inner, " ") || !ends(inner, " ") || str_len(inner) < 2 { return "" }
+    let name = str_slice(inner, 1, str_len(inner) - 1)
+    if str_len(name) == 0 || !is_lower(str_byte(name, 0)) { return "" }
+    for i in 0..str_len(name) {
+        let b = str_byte(name, i)
+        if !(is_lower(b) || is_digit(b) || b == 45) { return "" }
+    }
+    if ends(name, "-") { "" } else { name }
+}
+
+fn html_heading(t: Str) -> Bool {
+    if str_len(t) < 4 { return false }
+    let b0 = str_byte(t, 0)
+    let b1 = str_byte(t, 1)
+    let b2 = str_byte(t, 2)
+    let b3 = str_byte(t, 3)
+    // `trimmed.get(..4)` is none inside a multi-byte character.
+    if b1 >= 128 || b2 >= 128 || b3 >= 128 { return false }
+    b0 == 60 && (b1 == 104 || b1 == 72) && b2 >= 49 && b2 <= 54 && (b3 == 62 || b3 == 32)
+}
+
+fn underline(l: Str) -> Bool {
+    let t = ut_trim(l)
+    if str_len(t) == 0 { return false }
+    let mut eqs = true
+    let mut dashes = true
+    for i in 0..str_len(t) {
+        if str_byte(t, i) != 61 { eqs = false }
+        if str_byte(t, i) != 45 { dashes = false }
+    }
+    eqs || (str_len(t) >= 3 && dashes)
+}
+
+fn could_be_paragraph(l: Str) -> Bool {
+    let t = ut_trim_start(l)
+    if str_len(t) == 0 || str_len(l) - str_len(t) > 3 { return false }
+    let mut listed = starts(t, "- ") || starts(t, "* ") || starts(t, "+ ")
+    if !listed {
+        // `split_once(['.', ')'])`: the first of either, with only digits before it.
+        let mut at = 0 - 1
+        for i in 0..str_len(t) {
+            if at < 0 && (str_byte(t, i) == 46 || str_byte(t, i) == 41) { at = i }
+        }
+        if at > 0 {
+            listed = true
+            for i in 0..at {
+                if !is_digit(str_byte(t, i)) { listed = false }
+            }
+        }
+    }
+    let first = str_byte(t, 0)
+    !(listed || first == 124 || first == 62 || first == 60)
+}
+
+// The headings of `text`: per heading its level, title, start, line (from zero) and anchor ("" for
+// none). False, with the problems added, where the text is not the structure this corpus uses.
+fn headings(c: Corp, doc: Str, text: Str, h_level: Ints, h_title: Strs, h_start: Ints, h_line: Ints, h_anchor: Strs) -> Bool {
+    let before = ints_len(c.p_line)
+    let mut fence = 0
+    let mut comment = false
+    let mut paragraph = false
+    let mut previous_heading = false
+    let mut start = 0
+    let mut line = 0
+    while start < str_len(text) {
+        let mut e = start
+        while e < str_len(text) && str_byte(text, e) != 10 { e += 1 }
+        let here = start
+        let l = trim_eol(str_slice(text, start, if e < str_len(text) { e + 1 } else { e }))
+        start = if e < str_len(text) { e + 1 } else { e }
+        let ln = line
+        line += 1
+        let trimmed = ut_trim_start(l)
+        let was_heading = previous_heading
+        previous_heading = false
+        let was_paragraph = paragraph
+        paragraph = false
+        if fence > 0 {
+            if closes(trimmed, fence / 1000000, fence % 1000000) { fence = 0 }
+            continue
+        }
+        if comment {
+            if find(l, "-->", 0) >= 0 { comment = false }
+            continue
+        }
+        let o = opens(trimmed)
+        if o > 0 {
+            fence = o
+            continue
+        }
+        if starts(trimmed, "<!-- id:") || starts(trimmed, "<!--id:") {
+            let name = anchor_name(trimmed)
+            if was_heading {
+                if name != "" {
+                    strs_set(h_anchor, strs_len(h_anchor) - 1, name)
+                } else {
+                    problem_at(c, "malformed_anchor", doc, ln, l)
+                }
+            } else {
+                problem_at(c, "misplaced_anchor", doc, ln, l)
+            }
+            continue
+        }
+        let open = find(l, "<!--", 0)
+        if open >= 0 && find(l, "-->", open) < 0 {
+            comment = true
+            continue
+        }
+        let t = strs_new()
+        let level = atx(l, t)
+        if level > 0 {
+            ints_push(h_level, level)
+            strs_push(h_title, strs_get(t, 0))
+            ints_push(h_start, here)
+            ints_push(h_line, ln)
+            strs_push(h_anchor, "")
+            previous_heading = true
+            continue
+        }
+        if html_heading(trimmed) || (was_paragraph && underline(l)) {
+            problem_at(c, "unsupported_heading", doc, ln, l)
+            continue
+        }
+        paragraph = could_be_paragraph(l)
+    }
+    if fence > 0 { problem_of(c, "unclosed_fence", doc) }
+    if comment { problem_of(c, "unclosed_comment", doc) }
+    ints_len(c.p_line) == before
+}
+
+// `markdown::links`: the targets of `](target)` outside code, in order.
+fn md_links(body: Str, out: Strs) -> Int {
+    let mut fence = 0
+    let mut start = 0
+    while start < str_len(body) {
+        let mut e = start
+        while e < str_len(body) && str_byte(body, e) != 10 { e += 1 }
+        let mut raw = str_slice(body, start, e)
+        start = e + 1
+        if ends(raw, "\r") { raw = str_slice(raw, 0, str_len(raw) - 1) }
+        let trimmed = ut_trim_start(raw)
+        if fence > 0 {
+            if closes(trimmed, fence / 1000000, fence % 1000000) { fence = 0 }
+            continue
+        }
+        let o = opens(trimmed)
+        if o > 0 {
+            fence = o
+            continue
+        }
+        let prose = without_code(raw)
+        let mut rest = prose
+        let mut i = find(rest, "](", 0)
+        while i >= 0 {
+            let after = str_slice(rest, i + 2, str_len(rest))
+            let mut t = 0
+            while t < str_len(after) && str_byte(after, t) != 41 && ut_space_at(after, t) == 0 { t += 1 }
+            if t > 0 && t < str_len(after) && str_byte(after, t) == 41 { strs_push(out, str_slice(after, 0, t)) }
+            rest = after
+            i = find(rest, "](", 0)
+        }
+    }
+    0
+}
+
+fn without_code(line: Str) -> Str {
+    let out = strs_new()
+    let n = str_len(line)
+    let mut i = 0
+    let mut from = 0
+    while i < n {
+        if str_byte(line, i) == 96 {
+            let mut run = 0
+            while i + run < n && str_byte(line, i + run) == 96 { run += 1 }
+            let mut j = i + run
+            let mut closed = 0 - 1
+            while j < n && closed < 0 {
+                if str_byte(line, j) == 96 {
+                    let mut m = 0
+                    while j + m < n && str_byte(line, j + m) == 96 { m += 1 }
+                    if m == run { closed = j + m } else { j += m }
+                } else {
+                    j += 1
+                }
+            }
+            if closed >= 0 {
+                strs_push(out, str_slice(line, from, i))
+                i = closed
+                from = i
+            } else {
+                i += run
+            }
+        } else {
+            i += 1
+        }
+    }
+    strs_push(out, str_slice(line, from, n))
+    str_join(out, "")
+}
+
+fn add_section(c: Corp, doc: Int, id: Str, kind: Int, title: Str, has_title: Bool, level: Int, parent: Str, has_parent: Bool,
+        rs: Int, re: Int, l0: Int, l1: Int) -> Int {
+    ints_push(c.s_doc, doc)
+    strs_push(c.s_id, id)
+    ints_push(c.s_kind, kind)
+    strs_push(c.s_title, title)
+    ints_push(c.s_has_title, if has_title { 1 } else { 0 })
+    ints_push(c.s_level, level)
+    strs_push(c.s_parent, parent)
+    ints_push(c.s_has_parent, if has_parent { 1 } else { 0 })
+    ints_push(c.s_rs, rs)
+    ints_push(c.s_re, re)
+    ints_push(c.s_l0, l0)
+    ints_push(c.s_l1, l1)
+    strs_push(c.s_digest, "")
+    strs_push(c.s_frag, "")
+    ints_push(c.s_has_frag, 0)
+    strs_push(c.s_prod, "")
+    ints_push(c.s_has_prod, 0)
+    strs_len(c.s_id) - 1
+}
+
+fn add_link(c: Corp, sec: Int, rel: Str, href: Str, has_href: Bool, target: Str, has_target: Bool, sc: Str) -> Int {
+    ints_push(c.k_sec, sec)
+    strs_push(c.k_rel, rel)
+    strs_push(c.k_href, href)
+    ints_push(c.k_has_href, if has_href { 1 } else { 0 })
+    strs_push(c.k_target, target)
+    ints_push(c.k_has_target, if has_target { 1 } else { 0 })
+    strs_push(c.k_scope, sc)
+    0
+}
+
+// `markdown_sections`. False where the document has problems (added).
+fn markdown_sections(io: IoCap, c: Corp, di: Int) -> Bool {
+    let doc = strs_get(c.d_id, di)
+    let text = strs_get(c.d_text, di)
+    let h_level = ints_new()
+    let h_title = strs_new()
+    let h_start = ints_new()
+    let h_line = ints_new()
+    let h_anchor = strs_new()
+    if !headings(c, doc, text, h_level, h_title, h_start, h_line, h_anchor) { return false }
+    if ints_len(h_level) == 0 || ints_get(h_level, 0) != 1 || ints_get(h_start, 0) != 0 {
+        problem_of(c, "no_title", doc)
+        return false
+    }
+    for i in 0..strs_len(h_title) {
+        if !classifiable(strs_get(h_title, i)) {
+            refuse(io, "a heading with a character this port cannot classify (docs/" + doc + ")")
+        }
+    }
+    let before = ints_len(c.p_line)
+    if strs_get(h_anchor, 0) != "" { problem_at(c, "misplaced_anchor", doc, ints_get(h_line, 0), "") }
+    let n = ints_len(h_level)
+    let mut last_line = 1
+    let mut te = str_len(text)
+    while te > 0 && str_byte(text, te - 1) == 10 { te -= 1 }
+    for i in 0..te { if str_byte(text, i) == 10 { last_line += 1 } }
+    let first_sec = strs_len(c.s_id)
+    // The document's own section.
+    let end0 = if n > 1 { ints_get(h_start, 1) } else { str_len(text) }
+    let l0 = ints_get(h_line, 0) + 1
+    let l1 = if n > 1 { ints_get(h_line, 1) } else { last_line }
+    add_section(c, di, doc, 0, strs_get(h_title, 0), true, 1, "", false, 0, end0, l0, if l1 > l0 { l1 } else { l0 })
+    ints_set(c.s_has_frag, first_sec, 1)
+    strs_set(c.s_frag, first_sec, github_slug(strs_get(h_title, 0)))
+    // Open ancestors: level, local id, index in the sections.
+    let st_level = ints_new()
+    let st_local = strs_new()
+    let st_sec = ints_new()
+    let seen = hashmap_new[Str, Int]()
+    for i in 1..n {
+        let level = ints_get(h_level, i)
+        let title = strs_get(h_title, i)
+        while ints_len(st_level) > 0 && ints_get(st_level, ints_len(st_level) - 1) >= level {
+            ints_pop(st_level)
+            strs_pop(st_local)
+            ints_pop(st_sec)
+        }
+        let mut local = ""
+        let mut skip = false
+        if strs_get(h_anchor, i) != "" {
+            local = strs_get(h_anchor, i)
+        } else if lbl(title) != "" {
+            local = lbl(title)
+        } else {
+            let segment = slug(title)
+            if segment == "" {
+                problem_at(c, "empty_identity", doc, ints_get(h_line, i), title)
+                skip = true
+            } else if strs_len(st_local) > 0 {
+                local = strs_get(st_local, strs_len(st_local) - 1) + "/" + segment
+            } else {
+                local = segment
+            }
+        }
+        if skip { continue }
+        let id = doc + ":" + local
+        if hashmap_has(seen, id) {
+            problem_at(c, "duplicate_id", doc, ints_get(h_line, i), id)
+            continue
+        }
+        hashmap_set(seen, id, ints_get(h_line, i))
+        let parent_index = if ints_len(st_sec) > 0 { ints_get(st_sec, ints_len(st_sec) - 1) } else { first_sec }
+        let parent = strs_get(c.s_id, parent_index)
+        let me = strs_len(c.s_id)
+        ints_push(c.c_sec, parent_index)
+        strs_push(c.c_id, id)
+        let end = if i + 1 < n { ints_get(h_start, i + 1) } else { str_len(text) }
+        let a = ints_get(h_line, i) + 1
+        let b = if i + 1 < n { ints_get(h_line, i + 1) } else { last_line }
+        add_section(c, di, id, 1, title, true, level, parent, true, ints_get(h_start, i), end, a, if b > a { b } else { a })
+        ints_set(c.s_has_frag, me, 1)
+        strs_set(c.s_frag, me, github_slug(title))
+        ints_push(st_level, level)
+        strs_push(st_local, local)
+        ints_push(st_sec, me)
+    }
+    if ints_len(c.p_line) > before { return false }
+    // GitHub numbers a repeated anchor `-1`, `-2`, … in document order; each section's digest and links.
+    let used = hashmap_new[Str, Int]()
+    for s in first_sec..strs_len(c.s_id) {
+        let f = strs_get(c.s_frag, s)
+        let k = hashmap_at_or(used, f, 0)
+        if k > 0 { strs_set(c.s_frag, s, f + "-" + int_to_str(k)) }
+        hashmap_set(used, f, k + 1)
+        let body = str_slice(text, ints_get(c.s_rs, s), ints_get(c.s_re, s))
+        strs_set(c.s_digest, s, digest(doc, strs_get(c.s_id, s), body))
+        let hs = strs_new()
+        md_links(body, hs)
+        for t in 0..strs_len(hs) { add_link(c, s, "link", strs_get(hs, t), true, "", false, "outside") }
+    }
+    true
+}
+
+// --- the grammar ----------------------------------------------------------------------------------------
+
+fn is_nonterminal(name: Str) -> Bool {
+    if str_len(name) == 0 || !is_lower(str_byte(name, 0)) { return false }
+    for i in 1..str_len(name) {
+        let b = str_byte(name, i)
+        if !(is_lower(b) || is_digit(b) || b == 95) { return false }
+    }
+    true
+}
+
+// `terminator`: where `;` ends the production in `t` outside a quoted terminal (`quote[0]` carries
+// whether a quote is open): the index, -1 for none, -2 where anything but whitespace follows it or a
+// comment opens inside the production.
+fn terminator(t: Str, quote: Ints) -> Int {
+    let mut previous = 0
+    let mut i = 0
+    while i < str_len(t) {
+        let c = str_byte(t, i)
+        if c == 34 {
+            ints_set(quote, 0, 1 - ints_get(quote, 0))
+        } else if ints_get(quote, 0) == 0 {
+            if previous == 40 && c == 42 { return 0 - 2 }
+            if c == 59 {
+                if ut_blank(str_slice(t, i + 1, str_len(t))) { return i }
+                return 0 - 2
+            }
+        }
+        previous = c
+        i += 1
+    }
+    0 - 1
+}
+
+// `example`: the `@example` a comment line carries, in `examples`.
+fn example(trimmed: Str, examples: Strs) -> Int {
+    let mut rest = ""
+    let mut found = false
+    if starts(trimmed, "(* @example ") {
+        rest = str_slice(trimmed, 12, str_len(trimmed))
+        found = true
+    } else if starts(trimmed, "* @example ") {
+        rest = str_slice(trimmed, 11, str_len(trimmed))
+        found = true
+    }
+    if found {
+        while ends(rest, "*)") { rest = str_slice(rest, 0, str_len(rest) - 2) }
+        strs_push(examples, ut_trim(rest))
+    }
+    0
+}
+
+// `references`: the nonterminals the body names outside quoted terminals, once each, but `name`.
+fn references(name: Str, body: Str, out: Strs) -> Int {
+    let mut quoted = false
+    let mut from = 0 - 1
+    for i in 0..str_len(body) + 1 {
+        let b = if i < str_len(body) { str_byte(body, i) } else { 0 }
+        let word = !quoted && i < str_len(body) && (is_alpha(b) || is_digit(b) || b == 95)
+        if word {
+            if from < 0 { from = i }
+        } else {
+            if from >= 0 {
+                let w = str_slice(body, from, i)
+                if is_nonterminal(w) && w != name {
+                    let mut dup = false
+                    for k in 0..strs_len(out) { if strs_get(out, k) == w { dup = true } }
+                    if !dup { strs_push(out, w) }
+                }
+                from = 0 - 1
+            }
+            if i < str_len(body) && b == 34 { quoted = !quoted }
+        }
+    }
+    0
+}
+
+// A rule: its name, its block, its production, its first line, its examples, its references.
+struct Rules {
+    name: Strs,
+    bs: Ints,
+    be: Ints,
+    ps: Ints,
+    pe: Ints,
+    line: Ints,
+    ex_rule: Ints,
+    ex_text: Strs,
+    ref_rule: Ints,
+    ref_name: Strs,
+}
+
+fn finish_rule(r: Rules, name: Str, block: Int, ps: Int, pe: Int, line_end: Int, line: Int, body: Str, examples: Strs) -> Int {
+    strs_push(r.name, name)
+    ints_push(r.bs, block)
+    ints_push(r.be, line_end)
+    ints_push(r.ps, ps)
+    ints_push(r.pe, pe)
+    ints_push(r.line, line)
+    let k = strs_len(r.name) - 1
+    for i in 0..strs_len(examples) {
+        ints_push(r.ex_rule, k)
+        strs_push(r.ex_text, strs_get(examples, i))
+    }
+    while strs_len(examples) > 0 { strs_pop(examples) }
+    let refs = strs_new()
+    references(name, body, refs)
+    for i in 0..strs_len(refs) {
+        ints_push(r.ref_rule, k)
+        strs_push(r.ref_name, strs_get(refs, i))
+    }
+    0
+}
+
+fn lines_of(text: Str, rs: Int, re: Int) -> Ints {
+    let mut first = 1
+    for i in 0..rs { if str_byte(text, i) == 10 { first += 1 } }
+    let mut te = re
+    while te > rs && str_byte(text, te - 1) == 10 { te -= 1 }
+    let mut last = first
+    for i in rs..te { if str_byte(text, i) == 10 { last += 1 } }
+    let out = ints_new()
+    ints_push(out, first)
+    ints_push(out, if last > first { last } else { first })
+    out
+}
+
+// `grammar_sections`. False where the document has problems (added).
+fn grammar_sections(c: Corp, di: Int) -> Bool {
+    let doc = strs_get(c.d_id, di)
+    let text = strs_get(c.d_text, di)
+    let before = ints_len(c.p_line)
+    let r = Rules(name: strs_new(), bs: ints_new(), be: ints_new(), ps: ints_new(), pe: ints_new(), line: ints_new(), ex_rule: ints_new(),
+            ex_text: strs_new(), ref_rule: ints_new(), ref_name: strs_new())
+    let examples = strs_new()
+    let mut header_end = 0 - 1
+    let mut attached = 0 - 1
+    let mut attached_line = 0
+    let mut in_comment = false
+    let mut open = false
+    let mut o_name = ""
+    let mut o_block = 0
+    let mut o_prod = 0
+    let mut o_line = 0
+    let mut o_body = ""
+    let quote = ints_new()
+    ints_push(quote, 0)
+    let mut offset = 0
+    let mut line = 0
+    while offset < str_len(text) {
+        let mut e = offset
+        while e < str_len(text) && str_byte(text, e) != 10 { e += 1 }
+        let here = offset
+        offset = if e < str_len(text) { e + 1 } else { e }
+        let ln = line
+        line += 1
+        let l = trim_eol(str_slice(text, here, offset))
+        let trimmed = ut_trim(l)
+        if open {
+            let t = terminator(l, quote)
+            if t >= 0 {
+                let body = o_body + str_slice(l, 0, t)
+                finish_rule(r, o_name, o_block, o_prod, here + t + 1, offset, o_line, body, examples)
+                open = false
+            } else if t == 0 - 2 {
+                problem_at(c, "grammar_syntax", doc, ln, l)
+                open = false
+            } else {
+                o_body = o_body + l + nl()
+            }
+            continue
+        }
+        if in_comment {
+            example(trimmed, examples)
+            if ends(trimmed, "*)") { in_comment = false }
+            continue
+        }
+        if starts(trimmed, "(*") {
+            if attached < 0 {
+                attached = here
+                attached_line = ln
+            }
+            example(trimmed, examples)
+            if !ends(trimmed, "*)") { in_comment = true }
+            continue
+        }
+        if str_len(trimmed) == 0 {
+            if attached >= 0 {
+                if strs_len(r.name) == 0 && header_end < 0 {
+                    header_end = offset
+                } else {
+                    problem_at(c, "detached_comment", doc, attached_line, "")
+                }
+                while strs_len(examples) > 0 { strs_pop(examples) }
+                attached = 0 - 1
+            }
+            continue
+        }
+        // A production starts: `name = …`.
+        let eq = find(l, "=", 0)
+        if eq < 0 {
+            problem_at(c, "grammar_syntax", doc, ln, l)
+            continue
+        }
+        let name = ut_trim(str_slice(l, 0, eq))
+        if !is_nonterminal(name) || (str_len(l) > 0 && ut_space_at(l, 0) > 0) {
+            problem_at(c, "grammar_syntax", doc, ln, l)
+            continue
+        }
+        let block = if attached >= 0 { attached } else { here }
+        let first_line = if attached >= 0 { attached_line } else { ln }
+        attached = 0 - 1
+        let rest = str_slice(l, eq + 1, str_len(l))
+        let rest_at = eq + 1
+        ints_set(quote, 0, 0)
+        let t = terminator(rest, quote)
+        if t >= 0 {
+            finish_rule(r, name, block, here, here + rest_at + t + 1, offset, first_line, str_slice(rest, 0, t), examples)
+        } else if t == 0 - 2 {
+            problem_at(c, "grammar_syntax", doc, ln, l)
+        } else {
+            open = true
+            o_name = name
+            o_block = block
+            o_prod = here
+            o_line = first_line
+            o_body = rest + nl()
+        }
+    }
+    if open || in_comment { problem_of(c, "grammar_syntax", doc) }
+    if attached >= 0 { problem_at(c, "detached_comment", doc, attached_line, "") }
+    let n = strs_len(r.name)
+    for i in 0..n {
+        let name = strs_get(r.name, i)
+        for k in 0..i {
+            if strs_get(r.name, k) == name {
+                problem_at(c, "duplicate_id", doc, ints_get(r.line, i), name)
+                break
+            }
+        }
+        for k in 0..strs_len(r.ref_name) {
+            if ints_get(r.ref_rule, k) != i { continue }
+            let want = strs_get(r.ref_name, k)
+            let mut defined = false
+            for t in 0..n { if strs_get(r.name, t) == want { defined = true } }
+            if !defined { problem_at(c, "undefined_reference", doc, ints_get(r.line, i), want) }
+        }
+    }
+    if ints_len(c.p_line) > before { return false }
+    let first = if n > 0 { ints_get(r.bs, 0) } else { str_len(text) }
+    let hend = if header_end >= 0 { header_end } else { first }
+    let header = if hend < first { hend } else { first }
+    let root = add_section(c, di, doc, 0, "", false, 1, "", false, 0, header, 0, 0)
+    let rl = lines_of(text, 0, header)
+    ints_set(c.s_l0, root, ints_get(rl, 0))
+    ints_set(c.s_l1, root, ints_get(rl, 1))
+    strs_set(c.s_digest, root, digest(doc, doc, str_slice(text, 0, header)))
+    for i in 0..n {
+        let id = doc + ":" + strs_get(r.name, i)
+        ints_push(c.c_sec, root)
+        strs_push(c.c_id, id)
+        let s = add_section(c, di, id, 2, strs_get(r.name, i), true, 2, doc, true, ints_get(r.bs, i), ints_get(r.be, i), 0, 0)
+        let sl = lines_of(text, ints_get(r.bs, i), ints_get(r.be, i))
+        ints_set(c.s_l0, s, ints_get(sl, 0))
+        ints_set(c.s_l1, s, ints_get(sl, 1))
+        strs_set(c.s_digest, s, digest(doc, id, str_slice(text, ints_get(r.bs, i), ints_get(r.be, i))))
+        for k in 0..strs_len(r.ref_name) {
+            if ints_get(r.ref_rule, k) == i { add_link(c, s, "references", "", false, doc + ":" + strs_get(r.ref_name, k), true, "corpus") }
+        }
+        ints_set(c.s_has_prod, s, 1)
+        strs_set(c.s_prod, s, str_slice(text, ints_get(r.ps, i), ints_get(r.pe, i)))
+        for k in 0..strs_len(r.ex_text) {
+            if ints_get(r.ex_rule, k) == i {
+                ints_push(c.e_sec, s)
+                strs_push(c.e_text, strs_get(r.ex_text, k))
+            }
+        }
+    }
+    true
+}
+
+// --- loading and resolving ----------------------------------------------------------------------------
+
+// `normal`: `path` without `.` and `..`, or "" where it climbs out of the repository.
+fn normal(path: Str) -> Str {
+    let parts = strs_new()
+    let mut from = 0
+    for i in 0..str_len(path) + 1 {
+        if i == str_len(path) || str_byte(path, i) == 47 {
+            let seg = str_slice(path, from, i)
+            from = i + 1
+            if seg == "" || seg == "." { continue }
+            if seg == ".." {
+                if strs_len(parts) == 0 { return "" }
+                strs_pop(parts)
+            } else {
+                strs_push(parts, seg)
+            }
+        }
+    }
+    str_join(parts, "/")
+}
+
+// The directory part of a repository path (`Path::parent`), "" at the top.
+fn parent_dir(path: Str) -> Str {
+    let mut at = 0 - 1
+    for i in 0..str_len(path) { if str_byte(path, i) == 47 { at = i } }
+    if at < 0 { "" } else { str_slice(path, 0, at) }
+}
+
+// `resolve`: every written link against the corpus, and each generated guide section attached to
+// its production.
+fn resolve(c: Corp) -> Int {
+    let nd = strs_len(c.d_id)
+    let frags = hashmap_new[Str, Str]()
+    let ids = hashmap_new[Str, Int]()
+    for s in 0..strs_len(c.s_id) {
+        if ints_get(c.s_has_frag, s) == 1 {
+            hashmap_set(frags, strs_get(c.d_id, ints_get(c.s_doc, s)) + "#" + strs_get(c.s_frag, s), strs_get(c.s_id, s))
+        }
+        hashmap_set(ids, strs_get(c.s_id, s), 1)
+    }
+    let mut grammar = ""
+    for d in 0..nd { if strs_get(c.d_fmt, d) == "ebnf" && grammar == "" { grammar = strs_get(c.d_id, d) } }
+    let begin = "<!-- generated from docs/grammar.ebnf: begin -->"
+    let finish = "<!-- generated from docs/grammar.ebnf: end -->"
+    // The sections of each document, in order; links are appended per section in creation order.
+    let nk = ints_len(c.k_sec)
+    let mut gb = 0 - 1
+    let mut ge = 0 - 1
+    let mut generated = false
+    let mut cur_doc = 0 - 1
+    for s in 0..strs_len(c.s_id) {
+        let d = ints_get(c.s_doc, s)
+        let text = strs_get(c.d_text, d)
+        if d != cur_doc {
+            cur_doc = d
+            generated = false
+            if strs_get(c.d_auth, d) == "guide" {
+                let b = find(text, begin, 0)
+                let e = find(text, finish, 0)
+                if b >= 0 && e >= 0 && grammar != "" && b < e && count_of(text, begin) == 1 && count_of(text, finish) == 1 {
+                    generated = true
+                    gb = b
+                    ge = e
+                } else {
+                    problem_of(c, "generated_region", strs_get(c.d_id, d))
+                }
+            }
+        }
+        let base = parent_dir(strs_get(c.d_path, d))
+        for k in 0..nk {
+            if ints_get(c.k_sec, k) != s || ints_get(c.k_has_href, k) == 0 { continue }
+            let href = strs_get(c.k_href, k)
+            if find(href, "://", 0) >= 0 || starts(href, "mailto:") {
+                strs_set(c.k_scope, k, "external")
+                continue
+            }
+            let hash = find(href, "#", 0)
+            let path = if hash >= 0 { str_slice(href, 0, hash) } else { href }
+            let mut target_doc = ""
+            if path == "" {
+                target_doc = strs_get(c.d_id, d)
+            } else {
+                let joined = if starts(path, "/") { path } else if base == "" { path } else { base + "/" + path }
+                let n = if starts(path, "/") { "" } else { normal(joined) }
+                for t in 0..nd {
+                    if n != "" && strs_get(c.d_path, t) == n { target_doc = strs_get(c.d_id, t) }
+                }
+            }
+            if target_doc == "" { continue }
+            let mut target = ""
+            let mut has = false
+            if hash < 0 {
+                target = target_doc
+                has = true
+            } else {
+                let key = target_doc + "#" + str_slice(href, hash + 1, str_len(href))
+                if hashmap_has(frags, key) {
+                    target = hashmap_at_or(frags, key, "")
+                    has = true
+                }
+            }
+            if has {
+                strs_set(c.k_target, k, target)
+                ints_set(c.k_has_target, k, 1)
+                strs_set(c.k_scope, k, "corpus")
+            } else {
+                problem_at(c, "broken_link", strs_get(c.d_id, d), ints_get(c.s_l0, s) - 1, href)
+            }
+        }
+        if generated && ints_get(c.s_has_title, s) == 1 {
+            let title = strs_get(c.s_title, s)
+            if starts(title, "`") && ends(title, "`") && str_len(title) >= 2 {
+                let name = str_slice(title, 1, str_len(title) - 1)
+                if ints_get(c.s_rs, s) > gb && ints_get(c.s_rs, s) < ge {
+                    let target = grammar + ":" + name
+                    if hashmap_has(ids, target) {
+                        add_link(c, s, "generated_from", "", false, target, true, "corpus")
+                    } else {
+                        problem_at(c, "broken_generated_from", strs_get(c.d_id, d), ints_get(c.s_l0, s) - 1, target)
+                    }
+                }
+            }
+        }
+    }
+    0
+}
+
+// `Corpus::load`: the documents read and sectioned, or every problem (`c.p_kind` not empty).
+fn load(io: IoCap, root: Str) -> Corp {
+    let c = corp_new()
+    let m = manifest()
+    let texts = strs_new()
+    let mut i = 0
+    while i < strs_len(m) {
+        let id = strs_get(m, i)
+        let path = strs_get(m, i + 1)
+        let full = ut_join(root, path)
+        let kind = ut_kind(io, full)
+        let mut text = ""
+        let mut ok = false
+        if kind == 0 {
+            let h = os_open_read(full)
+            if os_status(h) >= 0 {
+                os_close(h)
+                text = read_file(full)
+                ok = true
+            }
+        }
+        if !ok {
+            problem_of(c, "missing_document", id)
+        } else if !ut_utf8_ok(text) {
+            problem_of(c, "unreadable_document", id)
+        } else {
+            strs_push(c.d_id, id)
+            strs_push(c.d_path, path)
+            strs_push(c.d_auth, strs_get(m, i + 2))
+            strs_push(c.d_fmt, strs_get(m, i + 3))
+            strs_push(c.d_text, text)
+            strs_push(texts, text)
+        }
+        i += 4
+    }
+    if ints_len(c.p_line) > 0 { return c }
+    let corpus = strs_new()
+    strs_push(corpus, "nazm.docs-corpus/1")
+    for d in 0..strs_len(c.d_id) {
+        strs_push(corpus, strs_get(c.d_id, d))
+        strs_push(corpus, strs_get(c.d_path, d))
+        strs_push(corpus, strs_get(c.d_text, d))
+        let p = strs_new()
+        strs_push(p, "nazm.docs-document/1")
+        strs_push(p, strs_get(c.d_id, d))
+        strs_push(p, strs_get(c.d_path, d))
+        strs_push(p, strs_get(c.d_text, d))
+        strs_push(c.d_digest, hash_of(p))
+    }
+    for d in 0..strs_len(c.d_id) {
+        if strs_get(c.d_fmt, d) == "markdown" { markdown_sections(io, c, d) } else { grammar_sections(c, d) }
+    }
+    if ints_len(c.p_line) > 0 { return c }
+    resolve(c)
+    strs_push(c.state, hash_of(corpus))
+    c
+}
+
+// --- the answers --------------------------------------------------------------------------------------------
+
+fn opt_str(has: Bool, s: Str) -> Str { if has { json_str(s) } else { "null" } }
+
+fn problems_json(c: Corp, schema: Str) -> Str {
+    let out = strs_new()
+    strs_push(out, "{\"schema\":" + json_str(schema) + ",\"status\":\"unavailable\",\"problems\":[")
+    for i in 0..ints_len(c.p_line) {
+        if i > 0 { strs_push(out, ",") }
+        let line = ints_get(c.p_line, i)
+        strs_push(out, "{\"kind\":" + json_str(strs_get(c.p_kind, i)) + ",\"document\":" + json_str(strs_get(c.p_doc, i)))
+        strs_push(out, ",\"line\":" + (if line > 0 { int_to_str(line) } else { "null" }))
+        strs_push(out, ",\"value\":" + opt_str(strs_get(c.p_value, i) != "", strs_get(c.p_value, i)) + "}")
+    }
+    strs_push(out, "]}")
+    str_join(out, "")
+}
+
+fn kind_name(k: Int) -> Str { if k == 0 { "document" } else if k == 1 { "heading" } else { "production" } }
+
+fn state_of(c: Corp) -> Str { strs_get(c.state, 0) }
+
+// The index as `nazm.docs-index/1` writes it, and in `ok[0]` whether it is an available one.
+fn index_json(c: Corp, has_doc: Bool, document: Str, ok: Ints) -> Str {
+    if ints_get(ok, 1) == 1 { return problems_json(c, "nazm.docs-index/1") }
+    let mut found = !has_doc
+    for d in 0..strs_len(c.d_id) { if strs_get(c.d_id, d) == document { found = true } }
+    if !found {
+        ints_set(ok, 0, 0)
+        return "{\"schema\":\"nazm.docs-index/1\",\"status\":\"not_found\",\"state\":" + json_str(state_of(c)) + ",\"document\":" + json_str(document) + "}"
+    }
+    ints_set(ok, 0, 1)
+    let mut bytes = 0
+    for d in 0..strs_len(c.d_id) { bytes += str_len(strs_get(c.d_text, d)) }
+    let out = strs_new()
+    strs_push(out, "{\"schema\":\"nazm.docs-index/1\",\"status\":\"available\",\"state\":" + json_str(state_of(c)) + ",\"corpus\":{\"documents\":"
+            + int_to_str(strs_len(c.d_id)) + ",\"sections\":" + int_to_str(ints_len(c.s_doc)) + ",\"bytes\":" + int_to_str(bytes) + "},\"documents\":[")
+    let mut first = true
+    for d in 0..strs_len(c.d_id) {
+        if has_doc && strs_get(c.d_id, d) != document { continue }
+        if !first { strs_push(out, ",") }
+        first = false
+        strs_push(out, "{\"id\":" + json_str(strs_get(c.d_id, d)) + ",\"path\":" + json_str(strs_get(c.d_path, d)) + ",\"authority\":"
+                + json_str(strs_get(c.d_auth, d)) + ",\"format\":" + json_str(strs_get(c.d_fmt, d)) + ",\"bytes\":" + int_to_str(str_len(strs_get(c.d_text, d)))
+                + ",\"digest\":" + json_str(strs_get(c.d_digest, d)) + ",\"sections\":[")
+        let mut f2 = true
+        for s in 0..strs_len(c.s_id) {
+            if ints_get(c.s_doc, s) != d { continue }
+            if !f2 { strs_push(out, ",") }
+            f2 = false
+            strs_push(out, "{\"id\":" + json_str(strs_get(c.s_id, s)) + ",\"kind\":" + json_str(kind_name(ints_get(c.s_kind, s))) + ",\"title\":"
+                    + opt_str(ints_get(c.s_has_title, s) == 1, strs_get(c.s_title, s)) + ",\"level\":" + int_to_str(ints_get(c.s_level, s)) + ",\"parent\":"
+                    + opt_str(ints_get(c.s_has_parent, s) == 1, strs_get(c.s_parent, s)) + ",\"digest\":" + json_str(strs_get(c.s_digest, s)) + "}")
+        }
+        strs_push(out, "]}")
+    }
+    strs_push(out, "]}")
+    str_join(out, "")
+}
+
+// The index in text: each section's id and title, tab-separated, a line each, the last break dropped.
+fn index_text(c: Corp, has_doc: Bool, document: Str) -> Str {
+    let out = strs_new()
+    for d in 0..strs_len(c.d_id) {
+        if has_doc && strs_get(c.d_id, d) != document { continue }
+        for s in 0..strs_len(c.s_id) {
+            if ints_get(c.s_doc, s) != d { continue }
+            strs_push(out, strs_get(c.s_id, s) + str_from_byte(9) + (if ints_get(c.s_has_title, s) == 1 { strs_get(c.s_title, s) } else { "" }) + nl())
+        }
+    }
+    let all = str_join(out, "")
+    if str_len(all) > 0 { str_slice(all, 0, str_len(all) - 1) } else { all }
+}
+
+// A section: its answer (`ok[0]` 1 available) and, where it is, its body in `body`.
+fn section_json(c: Corp, id: Str, has_state: Bool, state: Str, ok: Ints, body: Strs) -> Str {
+    if ints_get(ok, 1) == 1 { return problems_json(c, "nazm.docs-section/1") }
+    ints_set(ok, 0, 0)
+    if has_state && state != state_of(c) {
+        return "{\"schema\":\"nazm.docs-section/1\",\"status\":\"stale_state\",\"state\":" + json_str(state_of(c)) + ",\"id\":" + json_str(id) + "}"
+    }
+    let mut s = 0 - 1
+    for i in 0..strs_len(c.s_id) {
+        if s < 0 && strs_get(c.s_id, i) == id { s = i }
+    }
+    if s < 0 {
+        return "{\"schema\":\"nazm.docs-section/1\",\"status\":\"not_found\",\"state\":" + json_str(state_of(c)) + ",\"id\":" + json_str(id) + "}"
+    }
+    ints_set(ok, 0, 1)
+    let d = ints_get(c.s_doc, s)
+    let text = strs_get(c.d_text, d)
+    let text_body = str_slice(text, ints_get(c.s_rs, s), ints_get(c.s_re, s))
+    strs_push(body, text_body)
+    let out = strs_new()
+    strs_push(out, "{\"schema\":\"nazm.docs-section/1\",\"status\":\"available\",\"state\":" + json_str(state_of(c)) + ",\"id\":" + json_str(id))
+    strs_push(out, ",\"document\":" + json_str(strs_get(c.d_id, d)) + ",\"authority\":" + json_str(strs_get(c.d_auth, d)) + ",\"format\":" + json_str(strs_get(c.d_fmt, d)))
+    strs_push(out, ",\"kind\":" + json_str(kind_name(ints_get(c.s_kind, s))) + ",\"title\":" + opt_str(ints_get(c.s_has_title, s) == 1, strs_get(c.s_title, s)))
+    strs_push(out, ",\"level\":" + int_to_str(ints_get(c.s_level, s)) + ",\"parent\":" + opt_str(ints_get(c.s_has_parent, s) == 1, strs_get(c.s_parent, s)))
+    strs_push(out, ",\"children\":[")
+    let mut first = true
+    for k in 0..ints_len(c.c_sec) {
+        if ints_get(c.c_sec, k) != s { continue }
+        if !first { strs_push(out, ",") }
+        first = false
+        strs_push(out, json_str(strs_get(c.c_id, k)))
+    }
+    strs_push(out, "],\"source\":{\"path\":" + json_str(strs_get(c.d_path, d)) + ",\"lines\":[" + int_to_str(ints_get(c.s_l0, s)) + "," + int_to_str(ints_get(c.s_l1, s)) + "]}")
+    strs_push(out, ",\"body\":" + json_str(text_body) + ",\"digest\":" + json_str(strs_get(c.s_digest, s)) + ",\"links\":[")
+    first = true
+    for k in 0..ints_len(c.k_sec) {
+        if ints_get(c.k_sec, k) != s { continue }
+        if !first { strs_push(out, ",") }
+        first = false
+        strs_push(out, "{\"relation\":" + json_str(strs_get(c.k_rel, k)) + ",\"href\":" + opt_str(ints_get(c.k_has_href, k) == 1, strs_get(c.k_href, k))
+                + ",\"target\":" + opt_str(ints_get(c.k_has_target, k) == 1, strs_get(c.k_target, k)) + ",\"scope\":" + json_str(strs_get(c.k_scope, k)) + "}")
+    }
+    strs_push(out, "],\"production\":")
+    if ints_get(c.s_has_prod, s) == 1 {
+        strs_push(out, "{\"text\":" + json_str(strs_get(c.s_prod, s)) + ",\"examples\":[")
+        first = true
+        for k in 0..ints_len(c.e_sec) {
+            if ints_get(c.e_sec, k) != s { continue }
+            if !first { strs_push(out, ",") }
+            first = false
+            strs_push(out, json_str(strs_get(c.e_text, k)))
+        }
+        strs_push(out, "]}")
+    } else {
+        strs_push(out, "null")
+    }
+    strs_push(out, "}")
+    str_join(out, "")
+}
+
+// The same object indented, its members in the order the structs declare them (`to_string_pretty` of the answer itself).
+fn pretty(compact: Str) -> Str { j_pretty_written(j_parse(compact)) }
+
+// `nazm docs`, its arguments read into `c` (`docs_cli`) from where `cli_from` says.
+pub fn docs_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let index = cli_present(c, 0)
+    let has_doc = cli_present(c, 1)
+    let document = cli_value(c, 1)
+    let section = cli_value(c, 2)
+    let has_state = cli_present(c, 3)
+    let state = cli_value(c, 3)
+    let json = cli_present(c, 4)
+    if !cli_present(c, 5) { refuse(io, "the repository this binary was built from (name one with `--root`)") }
+    let corp = load(io, cli_value(c, 5))
+    // ok[0]: an available answer; ok[1]: the corpus has problems.
+    let ok = ints_new()
+    ints_push(ok, 0)
+    ints_push(ok, if ints_len(corp.p_line) > 0 { 1 } else { 0 })
+    if index {
+        let line = index_json(corp, has_doc, document, ok)
+        if json {
+            print(line + nl())
+        } else if ints_get(ok, 0) == 1 {
+            print(index_text(corp, has_doc, document) + nl())
+        } else {
+            print(pretty(line) + nl())
+        }
+    } else {
+        let body = strs_new()
+        let line = section_json(corp, section, has_state, state, ok, body)
+        if json {
+            print(line + nl())
+        } else if ints_get(ok, 0) == 1 {
+            print(strs_get(body, 0))
+        } else {
+            print(pretty(line) + nl())
+        }
+    }
+    if ints_get(ok, 0) == 1 { 0 } else {
+        exit_with(1)
+        1
+    }
+}

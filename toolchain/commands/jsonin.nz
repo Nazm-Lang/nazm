@@ -284,7 +284,7 @@ fn j_less(a: Str, b: Str) -> Bool {
     str_len(a) < str_len(b)
 }
 
-fn j_pp(j: J, n: Int, depth: Int, out: Strs) -> Int {
+fn j_pp(j: J, n: Int, depth: Int, out: Strs, sorted: Bool) -> Int {
     let k = ints_get(j.kind, n)
     if k == 4 {
         strs_push(out, json_str(strs_get(j.text, n)))
@@ -302,7 +302,7 @@ fn j_pp(j: J, n: Int, depth: Int, out: Strs) -> Int {
         c = ints_get(j.next, c)
     }
     let order = ints_new()
-    if k == 6 {
+    if k == 6 && sorted {
         for i in 0..ints_len(kids) {
             let me = ints_get(kids, i)
             let mut later = false
@@ -334,7 +334,7 @@ fn j_pp(j: J, n: Int, depth: Int, out: Strs) -> Int {
         let child = ints_get(order, i)
         strs_push(out, j_spaces(depth + 1))
         if k == 6 { strs_push(out, json_str(strs_get(j.key, child)) + ": ") }
-        j_pp(j, child, depth + 1, out)
+        j_pp(j, child, depth + 1, out, sorted)
         strs_push(out, if i + 1 < ints_len(order) { "," + str_from_byte(10) } else { str_from_byte(10) })
     }
     strs_push(out, j_spaces(depth) + close)
@@ -344,6 +344,13 @@ fn j_pp(j: J, n: Int, depth: Int, out: Strs) -> Int {
 // `to_string_pretty` of the parsed value: keys sorted (a `BTreeMap`), two spaces, no trailing newline.
 pub fn j_pretty(j: J) -> Str {
     let out = strs_new()
-    j_pp(j, 0, 0, out)
+    j_pp(j, 0, 0, out, true)
+    str_join(out, "")
+}
+
+// `to_string_pretty` of a value in its own order (a struct serialised directly): members as written.
+pub fn j_pretty_written(j: J) -> Str {
+    let out = strs_new()
+    j_pp(j, 0, 0, out, false)
     str_join(out, "")
 }

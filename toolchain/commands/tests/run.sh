@@ -2,7 +2,7 @@
 # R5's comparisons (`openspec/changes/r5-commands/design.md`): each command written in Nazm against
 # the Rust `nazm` built from this checkout, on every input.
 #
-#   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init, check, doc, fix, lsp, test (all by default)
+#   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init, check, doc, fix, lsp, test, interface, docs (all by default)
 #
 # The Nazm `nazm` (toolchain/commands/nazm.nz, which dispatches to CMD.nz) is built by the 0.10.0
 # release ($NAZM) and run as the reference is run, `nazm CMD ARGS`. The reference is
@@ -41,6 +41,14 @@
 #
 #   (`patch` has no part of its own: its command lines, with the plans it applies, are tests/args/patch.txt.)
 #
+#   interface  For every input of check, `interface FILE` and `interface --hash FILE` from the
+#         repository's root (design D19).
+#
+#   docs  `docs --index` in each form and every section of the corpus by its id (`--section ID
+#         --json`, the text of every tenth), then corpora with one thing wrong (a missing, non-UTF-8
+#         or duplicated document, a broken link, an unclosed fence, a setext heading, a misplaced
+#         anchor, a grammar with a detached comment ...): the answers and the problems named (design D20).
+#
 # NAZM_PORT names a port already built from this checkout, instead of building one.
 #
 # Prints one summary line per part, after the names of the first differences. Exits 1 when
@@ -54,11 +62,11 @@ if [ "${1:-}" = "-j" ]; then jobs=$2; shift 2; fi
 parts=""
 while [ $# -gt 0 ]; do
   case $1 in
-    fmt|args|init|check|doc|fix|lsp|test) parts="$parts $1"; shift ;;
+    fmt|args|init|check|doc|fix|lsp|test|interface|docs) parts="$parts $1"; shift ;;
     *) break ;;
   esac
 done
-[ -n "$parts" ] || parts="fmt args init check doc fix lsp test"
+[ -n "$parts" ] || parts="fmt args init check doc fix lsp test interface docs"
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 nazm=${NAZM:-"$HOME/.local/nazm-0.10.0/bin/nazm"}
@@ -297,6 +305,22 @@ fixture() {
         printf '[1,2]\n' > array.json
       })
       ;;
+    interface)
+      printf 'pub struct P { x: Int }\npub fn add(a: Int, b: Int) -> Int { a + b }\nfn main() -> Int { 0 }\n' > "$dir/i.nz"
+      printf 'fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x\n}\n' > "$dir/mut.nz"
+      printf 'fn main() -> Int { 1 + }\n' > "$dir/s.nz"
+      printf 'enum E { A, B, C }\nfn main() -> Int {\n    match E.A {\n        E.A => 0,\n        _ => 1,\n    }\n}\n' > "$dir/w.nz"
+      printf 'use "helper.nz";\npub fn g() -> Int { h() }\n' > "$dir/imp.nz"
+      printf 'pub fn h() -> Int { 1 }\n' > "$dir/helper.nz"
+      printf 'use "../outside.nz";\npub fn g() -> Int { 0 }\n' > "$dir/out.nz"
+      printf 'x\n' > "$dir/outside.nz"
+      mkdir -p "$dir/sub"
+      printf 'pub fn q() -> Int { 0 }\n' > "$dir/sub/q.nz"
+      ;;
+    docs)
+      # The repository's documentation, linked: the corpus every line reads with `--root .`.
+      ln -s "$root/docs" "$dir/docs"
+      ;;
     init)
       mkdir -p "$dir/empty" "$dir/full/sub"
       printf 'kept\n' > "$dir/full/keep.txt"
@@ -325,7 +349,7 @@ record() {
 
 part_args() {
   n=0 agree=0 differ=0 refused=0
-  for cmd in fmt init check doc fix lsp test patch nazm; do
+  for cmd in fmt init check doc fix lsp test patch interface docs nazm; do
     file="$root/toolchain/commands/tests/args/$cmd.txt"
     [ -f "$file" ] || continue
     while IFS= read -r line; do
@@ -778,6 +802,143 @@ part_test() {
   [ "$differ" -eq 0 ] && [ "$refused" -eq 0 ] || status=1
 }
 
+# --- interface: every input -----------------------------------------------------------------------------
+
+part_interface() {
+  list="$work/interface-inputs.txt"
+  if [ $# -gt 0 ]; then
+    printf '%s\n' "$@" > "$list"
+  else
+    (cd "$root" && { git ls-files '*.nz'; find toolchain/frontend-tests/inputs toolchain/commands -name '*.nz' -type f; } | LC_ALL=C sort -u) > "$list"
+  fi
+  total=$(wc -l < "$list" | tr -d ' ')
+  mkdir -p "$work/ires"
+  export R5_ROOT="$root" R5_REF="$ref" R5_PORT="$port" R5_WORK="$work" R5_DEADLINE="${R5_DEADLINE:-60}"
+  # One input: `interface FILE` and `interface --hash FILE` from the repository's root.
+  # shellcheck disable=SC2016
+  tr '\n' '\0' < "$list" | xargs -0 -n 1 -P "$jobs" sh -c '
+    f=$1
+    name=$(printf "%s" "$f" | tr "/" "_")
+    d="$R5_WORK/i-$name"
+    mkdir -p "$d"
+    run() {
+      out=$1; shift
+      (cd "$R5_ROOT" && { rc=0; "$@" > "$out.o" 2> "$out.e" || rc=$?; echo "exit $rc" > "$out"; cat "$out.o" "$out.e" >> "$out"; })
+    }
+    run "$d/ref.text" "$R5_REF" interface "$f"
+    run "$d/ref.hash" "$R5_REF" interface --hash "$f"
+    run "$d/got.text" timeout "$R5_DEADLINE" "$R5_PORT" interface "$f"
+    run "$d/got.hash" timeout "$R5_DEADLINE" "$R5_PORT" interface --hash "$f"
+    verdict=agree
+    why=""
+    for k in text hash; do
+      if grep -q "^exit 6$" "$d/got.$k"; then verdict=refused; why=$(cat "$d/got.$k.e"); break; fi
+      if grep -q "^exit 124$" "$d/got.$k"; then verdict=timeout; break; fi
+      cmp -s "$d/ref.$k" "$d/got.$k" || verdict=differ
+    done
+    printf "%s\n%s\n" "$verdict" "$why" > "$R5_WORK/ires/$name"
+    if [ "$verdict" = differ ] || [ "$verdict" = timeout ]; then
+      if [ -n "${KEEP:-}" ]; then
+        mkdir -p "$KEEP/interface-$name" && for k in text hash; do cp "$d/ref.$k" "$KEEP/interface-$name/want.$k"; cp "$d/got.$k" "$KEEP/interface-$name/got.$k"; done
+      fi
+    fi
+    rm -rf "$d"
+  ' sh
+
+  agree=$(grep -l '^agree$' "$work/ires/"* 2>/dev/null | wc -l | tr -d ' ')
+  differ=$(grep -l '^differ$' "$work/ires/"* 2>/dev/null | wc -l | tr -d ' ')
+  refused=$(grep -l '^refused$' "$work/ires/"* 2>/dev/null | wc -l | tr -d ' ')
+  timeout=$(grep -l '^timeout$' "$work/ires/"* 2>/dev/null | wc -l | tr -d ' ')
+  for r in $(grep -l -E '^(differ|timeout)$' "$work/ires/"* 2>/dev/null | head -20); do
+    echo "  $(head -1 "$r"): $(basename "$r")"
+  done
+  for r in "$work/ires/"*; do [ "$(head -1 "$r")" = refused ] && sed -n 2p "$r"; done \
+    | sed 's/^interface: not carried: //' | cut -c1-90 | sort | uniq -c | sort -rn | head -12 | sed 's/^/  refused:/'
+  echo "interface: $agree agree, $differ differ, $refused refused, $timeout timed out (of $total inputs)"
+  [ "$differ" -eq 0 ] && [ "$timeout" -eq 0 ] || status=1
+}
+
+# --- docs: every section, and corpora with something wrong ---------------------------------------------
+
+part_docs() {
+  n=0 agree=0 differ=0 refused=0
+  ids="$work/docs-ids.txt"
+  "$ref" docs --index --root "$root" | cut -f1 | LC_ALL=C sort -u > "$ids"
+  total=$(wc -l < "$ids" | tr -d ' ')
+  mkdir -p "$work/docres"
+  export R5_ROOT="$root" R5_REF="$ref" R5_PORT="$port" R5_WORK="$work" R5_DEADLINE="${R5_DEADLINE:-120}"
+  # The whole index in each form, then every section of the corpus by its id: `--section ID --json`,
+  # and the text form of every tenth.
+  # shellcheck disable=SC2016
+  { printf '%s\n' "--index --json" "--index" "--index --document spec" "--index --document nope" "--index --document grammar --json"; \
+    i=0; while IFS= read -r id; do i=$((i + 1)); printf '%s\n' "--section $id --json"; [ $((i % 10)) -eq 0 ] && printf '%s\n' "--section $id"; done < "$ids"; } \
+    | tr '\n' '\0' | xargs -0 -n 1 -P "$jobs" sh -c '
+    line=$1
+    name=$(printf "%s" "$line" | tr " /:" "___")
+    d="$R5_WORK/docres/$name"
+    mkdir -p "$d"
+    # shellcheck disable=SC2086
+    (cd "$R5_ROOT" && { rc=0; "$R5_REF" docs $line --root "$R5_ROOT" > "$d/ref.o" 2> "$d/ref.e" || rc=$?; echo "exit $rc" > "$d/ref.r"; })
+    # shellcheck disable=SC2086
+    (cd "$R5_ROOT" && { rc=0; timeout "$R5_DEADLINE" "$R5_PORT" docs $line --root "$R5_ROOT" > "$d/got.o" 2> "$d/got.e" || rc=$?; echo "exit $rc" > "$d/got.r"; })
+    if grep -q "^exit 6$" "$d/got.r"; then v=refused
+    elif cmp -s "$d/ref.o" "$d/got.o" && cmp -s "$d/ref.e" "$d/got.e" && cmp -s "$d/ref.r" "$d/got.r"; then v=agree
+    else
+      v=differ
+      if [ -n "${KEEP:-}" ]; then mkdir -p "$KEEP/docs-$name" && cp "$d/ref.o" "$KEEP/docs-$name/want" && cp "$d/got.o" "$KEEP/docs-$name/got"; fi
+    fi
+    echo "$v" > "$R5_WORK/docres/$name.v"
+    rm -rf "$d"
+  ' sh
+  agree=$(grep -l '^agree$' "$work/docres/"*.v 2>/dev/null | wc -l | tr -d ' ')
+  differ=$(grep -l '^differ$' "$work/docres/"*.v 2>/dev/null | wc -l | tr -d ' ')
+  refused=$(grep -l '^refused$' "$work/docres/"*.v 2>/dev/null | wc -l | tr -d ' ')
+  for r in $(grep -l '^differ$' "$work/docres/"*.v 2>/dev/null | head -20); do echo "  differ: $(basename "$r" .v)"; done
+  echo "docs: $agree agree, $differ differ, $refused refused (of $((agree + differ + refused)) runs over $total sections)"
+  [ "$differ" -eq 0 ] && [ "$refused" -eq 0 ] || status=1
+
+  # Corpora with one thing wrong: each document's problem, as the reference names it.
+  n=0 agree=0 differ=0 refused=0
+  for variant in missing nonutf8 duplicate broken-link fence setext anchor no-title grammar generated empty-identity detached lettered; do
+    n=$((n + 1))
+    d="$work/dv/$variant"
+    mkdir -p "$d/docs"
+    cp "$root"/docs/*.md "$root/docs/grammar.ebnf" "$d/docs/"
+    case $variant in
+      missing) rm "$d/docs/mcp.md" ;;
+      nonutf8) printf '\377\n' >> "$d/docs/runbook.md" ;;
+      duplicate) printf '\n## Settled\n\ntext\n' >> "$d/docs/spec.md" ;;
+      broken-link) printf '\n[x](spec.md#nope-nothing)\n' >> "$d/docs/runbook.md" ;;
+      fence) printf '\n```\ncode\n' >> "$d/docs/mcp.md" ;;
+      setext) printf '\nsome text\nTitle\n=====\n' >> "$d/docs/bootstrap.md" ;;
+      anchor) printf '\n<!-- id: foo -->\n' >> "$d/docs/mcp.md" ;;
+      no-title) { printf 'x\n'; cat "$root/docs/runbook.md"; } > "$d/docs/runbook.md" ;;
+      grammar) printf '\nbad line\n' >> "$d/docs/grammar.ebnf" ;;
+      generated) sed 's/generated from docs\/grammar.ebnf: begin/generated: begin/' "$root/docs/guide.md" > "$d/docs/guide.md" ;;
+      empty-identity) printf '\n## —\n\ntext\n' >> "$d/docs/mcp.md" ;;
+      detached) printf '\n(* a comment\n   alone *)\n\n(* another *)\nzz = "a" ;\n' >> "$d/docs/grammar.ebnf" ;;
+      lettered) printf '\n## A1 — a lettered label\n\ntext\n\n## A1 — the same again\n\ntext\n' >> "$d/docs/mcp.md" ;;
+    esac
+    for form in "--index --json" "--section spec" "--section mcp:x --json"; do
+      # shellcheck disable=SC2086
+      (cd "$d" && { rc=0; "$ref" docs $form --root . > ref.o 2> ref.e || rc=$?; echo "exit $rc" > ref.r; })
+      # shellcheck disable=SC2086
+      (cd "$d" && { rc=0; "$port" docs $form --root . > got.o 2> got.e || rc=$?; echo "exit $rc" > got.r; })
+      if grep -q '^exit 6$' "$d/got.r"; then
+        refused=$((refused + 1)); echo "  refused: $variant $form: $(head -c 120 "$d/got.e")"
+      elif cmp -s "$d/ref.o" "$d/got.o" && cmp -s "$d/ref.e" "$d/got.e" && cmp -s "$d/ref.r" "$d/got.r"; then
+        agree=$((agree + 1))
+      else
+        differ=$((differ + 1)); echo "  differ: $variant $form"
+        if [ -n "${KEEP:-}" ]; then mkdir -p "$KEEP/docsv-$variant" && cp "$d/ref.o" "$KEEP/docsv-$variant/want" && cp "$d/got.o" "$KEEP/docsv-$variant/got"; fi
+      fi
+    done
+    rm -rf "$d"
+  done
+  echo "docs corpora: $agree agree, $differ differ, $refused refused (of $((n * 3)) runs over $n variants)"
+  [ "$differ" -eq 0 ] && [ "$refused" -eq 0 ] || status=1
+}
+
 for p in $parts; do
   case $p in
     fix) part_fix "$@" ;;
@@ -788,6 +949,8 @@ for p in $parts; do
     doc) part_doc "$@" ;;
     lsp) part_lsp "$@" ;;
     test) part_test "$@" ;;
+    docs) part_docs ;;
+    interface) part_interface "$@" ;;
   esac
 done
 exit $status

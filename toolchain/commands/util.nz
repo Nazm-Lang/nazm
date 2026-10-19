@@ -288,3 +288,35 @@ pub fn ut_contains(s: Str, part: Str) -> Bool {
 pub fn ut_plural(n: Int) -> Str { if n == 1 { "" } else { "s" } }
 
 pub fn ut_bool(b: Bool) -> Str { if b { "true" } else { "false" } }
+
+// The width of the whitespace character at `i` in `s` (`char::is_whitespace`), or 0.
+pub fn ut_space_at(s: Str, i: Int) -> Int { space_at(s, i) }
+
+// The first index of `p` in `s` at or after `from`, or -1.
+pub fn ut_find(s: Str, p: Str, from: Int) -> Int {
+    let n = str_len(p)
+    let mut i = from
+    while i + n <= str_len(s) {
+        if str_slice(s, i, i + n) == p { return i }
+        i += 1
+    }
+    0 - 1
+}
+
+pub fn ut_starts(s: Str, p: Str) -> Bool { str_len(s) >= str_len(p) && str_slice(s, 0, str_len(p)) == p }
+
+pub fn ut_ends(s: Str, p: Str) -> Bool { str_len(s) >= str_len(p) && str_slice(s, str_len(s) - str_len(p), str_len(s)) == p }
+
+// Why `fs::read_to_string` (`utf8`) or `fs::read` of `path` fails, as `io::Error` displays it, or ""
+// where it does not.
+pub fn ut_read_error(io: IoCap, path: Str, utf8: Bool) -> Str {
+    let st = bytes_new(32)
+    let s = os_stat(path, st)
+    if s < 0 { return ut_os_error(s) }
+    if bytes_read_le[Int](st, 8) == 1 { return "Is a directory (os error 21)" }
+    let h = os_open_read(path)
+    if os_status(h) < 0 { return ut_os_error(os_status(h)) }
+    os_close(h)
+    if utf8 && !ut_utf8_ok(read_file(path)) { return "stream did not contain valid UTF-8" }
+    ""
+}

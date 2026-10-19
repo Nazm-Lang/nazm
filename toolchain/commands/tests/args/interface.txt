@@ -1,0 +1,29 @@
+# `nazm interface`'s command lines, run in the fixture of run.sh (`fixture interface`).
+--help
+-h
+--bogus i.nz
+--hasn i.nz
+i.nz extra
+i.nz
+--hash i.nz
+i.nz --hash
+--hash --hash i.nz
+--hash=x i.nz
+i.nz --source-root .
+i.nz --source-root=.
+--source-root . i.nz
+i.nz --source-root nothere
+i.nz --source-root i.nz
+sub/q.nz
+sub/q.nz --source-root .
+--hash sub/q.nz --source-root .
+mut.nz
+--hash mut.nz
+s.nz
+w.nz
+imp.nz
+--hash imp.nz
+out.nz
+nothere.nz
+sub
+-- i.nz
