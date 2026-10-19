@@ -106,6 +106,33 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
                 )),
             )
         }
+        // R6 (`rewrite-in-nazm` 7.1): the Nazm toolchain builds itself — the seed builds the
+        // builder (front end, pipeline, code generator, each written in Nazm), and each stage's
+        // builder builds the next, under the bounded heap, to a fixpoint. The seed is built
+        // here for the reason the bootstrap's is.
+        // `selfbuild stages=N` narrows a run for a slice's diagnosis; nothing else is passed.
+        Some("selfbuild") => {
+            bounds.deadline = Duration::from_secs(3600);
+            let mut settings = String::new();
+            for a in args.get(1..).unwrap_or_default() {
+                let ok = a
+                    .strip_prefix("stages=")
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+                if !ok {
+                    eprintln!("contained: selfbuild takes only `stages=N`, not {a:?}");
+                    return ExitCode::FAILURE;
+                }
+                settings.push(' ');
+                settings.push_str(a);
+            }
+            (
+                "selfbuild",
+                shell(&format!(
+                    "cargo build --locked -p nazm-cli --jobs {j} \
+                     && bash toolchain/selfbuild/selfbuild.sh /work/selfbuild{settings}"
+                )),
+            )
+        }
         // A scheduled profile runs the same binaries through `xtask workspace-tests`, built
         // here in the same target; any other runs `cargo test --workspace` as it always did.
         // Either way the container's memory peak is reported after the suite (N32-H3).
@@ -454,7 +481,7 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
         }
         other => {
             eprintln!(
-                "contained: unknown workload {:?}\n  probe | tests | selfhost | bootstrap | bench | mutate | fuzz [SECONDS] [TARGET...] | archive | run <command>",
+                "contained: unknown workload {:?}\n  probe | tests | selfhost | bootstrap | selfbuild | bench | mutate | fuzz [SECONDS] [TARGET...] | archive | run <command>",
                 other.unwrap_or("<none>")
             );
             return ExitCode::FAILURE;
@@ -824,6 +851,7 @@ mod tests {
         for w in [
             "mutate",
             "bootstrap",
+            "selfbuild",
             "bench",
             "release",
             "probe",

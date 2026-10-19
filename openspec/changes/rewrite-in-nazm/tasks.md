@@ -35,8 +35,11 @@
       `bench`/`profile`, the command-line grammar
 
 ## 7. R6 — host qualification
-- [ ] 7.1 The Nazm toolchain builds itself on a host under a bounded heap, with recorded peak memory
-- [ ] 7.2 A recorded decision revising the runbook's containment rule
+- [x] 7.1 The Nazm toolchain builds itself on a host under a bounded heap, with recorded peak memory
+      (2026-10-20, `r6-host-qualification`: contained, Linux aarch64, 2 GiB heap; stages 1–3
+      identical; the interpreter and `nazm-check` wait on their move off 0.10.0)
+- [ ] 7.2 A recorded decision revising the runbook's containment rule (proposed in
+      `r6-host-qualification`, design decision 3 and `runbook-draft.md`; the copyright holder decides)
 
 ## 8. R7 — harness and tests
 - [ ] 8.1 The `cargo xtask` checks, the mutation runner and catalogue, the contained runner, bench, fuzz

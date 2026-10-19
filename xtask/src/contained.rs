@@ -254,7 +254,7 @@ pub(crate) fn cache_key(f: &CacheFields) -> String {
 pub(crate) fn cache_namespace(workload: &str) -> Option<&'static str> {
     match workload {
         "mutate" => Some("mutate"),
-        "tests" | "selfhost" | "bootstrap" => Some("src"),
+        "tests" | "selfhost" | "bootstrap" | "selfbuild" => Some("src"),
         _ => None,
     }
 }
@@ -1324,7 +1324,7 @@ mod tests {
     fn a_mutation_session_and_the_checkouts_workloads_never_share_a_target() {
         let mutate = cache_namespace("mutate");
         assert!(mutate.is_some());
-        for w in ["tests", "selfhost", "bootstrap"] {
+        for w in ["tests", "selfhost", "bootstrap", "selfbuild"] {
             assert_eq!(cache_namespace(w), Some("src"), "{w}");
             assert_ne!(cache_namespace(w), mutate, "{w}");
         }
