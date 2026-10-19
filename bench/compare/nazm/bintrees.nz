@@ -1,0 +1,41 @@
+use "@std/text"
+
+enum Tree { Leaf, Node(left: Box[Tree], right: Box[Tree]) }
+
+fn make(depth: Int) -> Tree {
+    if depth > 0 {
+        Tree.Node(left: box_new(make(depth - 1)), right: box_new(make(depth - 1)))
+    } else {
+        Tree.Leaf
+    }
+}
+
+fn check(t: Tree) -> Int {
+    match t {
+        Tree.Leaf => 1,
+        Tree.Node(left: l, right: r) => 1 + check(box_get(l)) + check(box_get(r)),
+    }
+}
+
+fn main(io: IoCap) {
+    let min_depth = 4
+    let arg = match text_parse_int(arg(0)) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => 10,
+    }
+    let max_depth = if arg < min_depth + 2 { min_depth + 2 } else { arg }
+    let stretch = max_depth + 1
+    println(f"stretch tree of depth {stretch}\t check: {check(make(stretch))}")
+    let long_lived = make(max_depth)
+    let mut d = min_depth
+    while d <= max_depth {
+        let iterations = 1 << (max_depth - d + min_depth)
+        let mut total = 0
+        for i in 0..iterations {
+            total += check(make(d))
+        }
+        println(f"{iterations}\t trees of depth {d}\t check: {total}")
+        d += 2
+    }
+    println(f"long lived tree of depth {max_depth}\t check: {check(long_lived)}")
+}
