@@ -9,6 +9,12 @@ short as is natural there:
     words  counts the words of a generated file with the language's standard hash map and prints
            the number of distinct words, then the ten most frequent as `word count`, most frequent
            first, ties by word ascending (words.expected; the input is gen_words.py's)
+    nbody  the Computer Language Benchmarks Game's n-body (floating point): five bodies, 5,000,000
+           steps of 0.01, printing the energy before and after to 9 decimals
+    bintrees  the benchmarks game's binary-trees (allocation): depth 18, a stretch tree, a
+           long-lived tree and the checks, as tab-separated lines. Both are sized for C -O2 at
+           about 100-300 ms; `--tiny` runs them at 1,000 steps and depth 8, to check every
+           language's output without measuring anything
     primes the parallel workload (performance leadership, multicore; Nazm, C, Go and Rust):
            counts the primes below 3,000,000 by trial division, printing 216816, on W workers —
            blocks of 1,000 numbers dealt round robin, block b to worker b mod W, each worker
@@ -65,7 +71,13 @@ RUNS = 10
 SLOW_RUNS = 3  # for a program whose checking run took longer than SLOW_SECONDS
 SLOW_SECONDS = 2.0
 BUILD_RUNS = 3
-WORKLOADS = ["hello", "fib", "words"]
+WORKLOADS = ["hello", "fib", "words", "nbody", "bintrees"]
+# Sizes of the two newer programs, as the argument each is run with. The default is sized for C
+# -O2 at roughly 100-300 ms (the Computer Language Benchmarks Game's figures, scaled; not timed
+# here); `--tiny` runs a small size, for checking every language's output without a benchmark.
+NBODY_STEPS = 5_000_000
+BINTREES_DEPTH = 18
+TINY = {"nbody": 1000, "bintrees": 8}
 # The parallel workload (performance leadership, multicore): run at each of worker_counts().
 PARALLEL = ["primes"]
 DASH = "—"
@@ -101,6 +113,27 @@ SAFETY = {
     "cobc -x -O2": "none (size errors only where ON SIZE ERROR is written)",
     "clang (hand-written aarch64 assembly)": "none",
 }
+
+
+def nbody_expected(steps):
+    """Energy before and after `steps` steps of 0.01: the benchmarks game's own figures."""
+    after = {1000: "-0.169087605", 5_000_000: "-0.169083134"}[steps]
+    return "-0.169075164\n" + after
+
+
+def bintrees_expected(max_depth, min_depth=4):
+    """The binary-trees output, which is arithmetic: a tree of depth d has 2^(d+1)-1 nodes."""
+    max_depth = max(max_depth, min_depth + 2)
+
+    def nodes(d):
+        return 2 ** (d + 1) - 1
+
+    out = [f"stretch tree of depth {max_depth + 1}\t check: {nodes(max_depth + 1)}"]
+    for d in range(min_depth, max_depth + 1, 2):
+        n = 1 << (max_depth - d + min_depth)
+        out.append(f"{n}\t trees of depth {d}\t check: {n * nodes(d)}")
+    out.append(f"long lived tree of depth {max_depth}\t check: {nodes(max_depth)}")
+    return "\n".join(out)
 
 
 def worker_counts():
@@ -430,6 +463,9 @@ def main():
         del args[i:i + 2]
     # A quick development pass (`--runs 1` or 2) skips the warm-up runs.
     warmup = WARMUP if runs >= 3 else 0
+    tiny = "--tiny" in args
+    if tiny:
+        args.remove("--tiny")
     if len(args) != 2:
         print(__doc__)
         return 2
@@ -456,6 +492,11 @@ def main():
         "words": (HERE / "words.expected").read_text().strip(),
         "primes": "216816",
     }
+    steps = TINY["nbody"] if tiny else NBODY_STEPS
+    depth = TINY["bintrees"] if tiny else BINTREES_DEPTH
+    expected["nbody"] = nbody_expected(steps)
+    expected["bintrees"] = bintrees_expected(depth)
+    sized = {"nbody": [str(steps)], "bintrees": [str(depth)]}
 
     def tool_version(name, cmd, venv=env):
         return version(cmd, venv) if tools.get(name) or name == "nazm" else None
@@ -508,7 +549,8 @@ def main():
     langs = languages(nazm, tools, work, env, goenv, zigenv, gnatenv)
     # Each timed run: (the record's key, the program, its arguments). The parallel workload is one
     # program run at each worker count, built once.
-    plan = [(name, name, [str(words_txt)] if name == "words" else []) for name in WORKLOADS]
+    plan = [(name, name, [str(words_txt)] if name == "words" else sized.get(name, []))
+            for name in WORKLOADS]
     plan += [(f"primes W={w}", "primes", [str(w)]) for w in worker_counts()]
     if only is not None:
         plan = [p for p in plan if p[1] in only]
