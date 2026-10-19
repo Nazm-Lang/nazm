@@ -345,6 +345,11 @@ struct Pr<'m> {
     /// Where failures unwind, the call being printed fails to a bare failure exit: a plain call,
     /// which an unwind passes through, with no landing pad (4.2).
     bare: bool,
+    /// The function checks its stack because it is in a call cycle (N49), so each call it makes
+    /// to a Nazm function is `notail`: LLVM's tail-recursion elimination turns only a call marked
+    /// `tail` into a loop, and a recursion turned into a loop never grows the stack its check
+    /// measures — an unbounded one spins instead of failing with `N0408` (2026-10-19).
+    notail: bool,
 }
 
 impl Pr<'_> {
@@ -458,6 +463,16 @@ fn nazm_call(m: &Module, i: &Inst) -> bool {
     }
 }
 
+/// Whether `f` checks its stack on entry (N49): it is in a call cycle, or calls through a value.
+fn checks_stack(m: &Module, f: &Function) -> bool {
+    f.blocks.iter().any(|b| {
+        b.insts.iter().any(|i| {
+            matches!(i, Inst::Call { callee, args, .. }
+                if args.is_empty() && m.symbol(*callee).is_some_and(|s| s.name == "nz.stack_check"))
+        })
+    })
+}
+
 #[allow(clippy::too_many_lines)]
 fn function(
     out: &mut String,
@@ -520,6 +535,7 @@ fn function(
         temp: 0,
         failures,
         bare: false,
+        notail: checks_stack(m, f),
     };
     let cold = f.cold_blocks(m);
     for (bi, b) in f.blocks.iter().enumerate() {
@@ -1024,10 +1040,16 @@ fn call(
         unwinding_call(out, p, s, &format!("{r} {callee}({a})"), dst, failed);
         return;
     }
+    // A Nazm callee can fail; one in this function's cycle always can (its own stack check).
+    let call = if p.notail && s.fails() {
+        "notail call"
+    } else {
+        "call"
+    };
     match (s.ret, s.fails()) {
         (Some(c), true) => {
             let t = p.temp();
-            let _ = writeln!(out, "  {t} = call {r} {callee}({a})");
+            let _ = writeln!(out, "  {t} = {call} {r} {callee}({a})");
             if let Some(d) = dst {
                 let d = p.named(d, c);
                 let _ = writeln!(out, "  {d} = extractvalue {r} {t}, 0");
@@ -1040,20 +1062,20 @@ fn call(
         (None, true) => match failed {
             Some(f) => {
                 let f = p.named(f, Class::Bit);
-                let _ = writeln!(out, "  {f} = call {r} {callee}({a})");
+                let _ = writeln!(out, "  {f} = {call} {r} {callee}({a})");
             }
             None => {
-                let _ = writeln!(out, "  call {r} {callee}({a})");
+                let _ = writeln!(out, "  {call} {r} {callee}({a})");
             }
         },
         (Some(c), false) if dst.is_some() => {
             if let Some(d) = dst {
                 let d = p.named(d, c);
-                let _ = writeln!(out, "  {d} = call {r} {callee}({a})");
+                let _ = writeln!(out, "  {d} = {call} {r} {callee}({a})");
             }
         }
         _ => {
-            let _ = writeln!(out, "  call {r} {callee}({a})");
+            let _ = writeln!(out, "  {call} {r} {callee}({a})");
         }
     }
 }
@@ -1081,9 +1103,11 @@ fn unwinding_call(
         if let Some(fv) = failed {
             p.alias(fv, "false".to_owned(), Class::Bit);
         }
+        // An `invoke` is never a tail call; a plain one in a cycle is kept from becoming one.
+        let kw = if p.notail { "notail call" } else { "call" };
         let _ = match &named {
-            Some((d, _)) => writeln!(out, "  {d} = call {call}"),
-            None => writeln!(out, "  call {call}"),
+            Some((d, _)) => writeln!(out, "  {d} = {kw} {call}"),
+            None => writeln!(out, "  {kw} {call}"),
         };
         return;
     }
@@ -1300,6 +1324,49 @@ mod tests {
             !unwind.contains(", i1} @f") && !unwind.contains(", i1} @g"),
             "{unwind}"
         );
+    }
+
+    /// A function in a call cycle checks its stack (N49), and each call it makes to a Nazm
+    /// function is `notail`, so LLVM cannot turn a recursion into a loop that never grows the
+    /// stack the check measures (LLVM 23 did, and an unbounded recursion spun). A function that
+    /// does not check, `h`, calls as before.
+    #[test]
+    fn a_function_in_a_cycle_makes_no_call_a_tail_call() {
+        let mut m = calls();
+        m.symbols.push(Symbol {
+            name: "nz.stack_check".to_owned(),
+            linkage: Linkage::Import,
+            kind: SymKind::Func {
+                sig: Sig {
+                    params: Vec::new(),
+                    ret: Some(Class::I32),
+                    conv: Conv::Plain,
+                },
+            },
+        });
+        m.functions[0].blocks[0].insts.insert(
+            1,
+            Inst::Call {
+                dst: Some(V(6)),
+                failed: None,
+                callee: SymId(3),
+                args: Vec::new(),
+            },
+        );
+        let bit = module(&m, Failures::Bit, Probes::Inline, super::Code::Plain);
+        assert_eq!(bit.matches(" = notail call {i64, i1} @g(").count(), 2, "{bit}");
+        assert!(bit.contains(" = call {i64, i1} @f(i64 %p0)"), "{bit}");
+        assert!(bit.contains("call i32 @nz.stack_check()"), "{bit}");
+        // Where failures unwind, the call into a bare failure exit is the plain one; an invoke
+        // is never a tail call.
+        let unwind = module(&m, Failures::Unwind, Probes::Inline, super::Code::Plain);
+        assert!(
+            unwind.contains("  %v1 = notail call i64 @g(i64 %p0)\n"),
+            "{unwind}"
+        );
+        // Without the check, nothing is `notail`.
+        let plain = module(&calls(), Failures::Bit, Probes::Inline, super::Code::Plain);
+        assert!(!plain.contains("notail"), "{plain}");
     }
 
     /// Q1-A1-01 on Windows: every definition probes inline, except where the platform's probe

@@ -598,3 +598,35 @@ retains and releases the same two boxes three times over (a match's copy of the 
 names, each child's copy as an argument), because MIR has no move — every operand is borrowed and
 every copy counted. Those pairs are now inline and cheap, not gone; removing them is a MIR change
 (moves out of a place that dies), the next lever for binary-trees' time.
+
+### Unbounded recursion that LLVM 23 turned into a loop (2026-10-19)
+
+`fn down(n: Int) -> Int { down(n + 1) + 1 }` at `-O1` and above spun forever on Windows, where
+failures return a bit: no path returns normally without the call returning normally first, so
+LLVM's interprocedural constant propagation proved the call's only result the failure, the call was
+then in tail position, and tail-recursion elimination turned it into a loop. The stack check in
+the loop compares one frame's address with the limit forever. (Where failures unwind the same
+recursion stayed a call; but a tail recursion became a loop there too: LLVM 23's `opt -O2` over
+the emitted units eliminated the recursion of `examples/bad/mutual_recursion.nz` — unbounded —
+and of `deep_recursion.nz` and `runaway_recursion.nz`.)
+
+**What Nazm promises.** The spec's *Native recursion*: unbounded recursion meets a check, and tail
+calls are ordinary calls — no tail-call optimisation is performed. A call that never returns fails
+with `N0408`; it does not hang.
+
+**Options weighed.** `"disable-tail-calls"` on every function costs every tail call everywhere. A
+call-depth counter in every function of a cycle costs a load, a store and a compare per call
+(thread-local, a call on macOS, in a program with tasks), and blocks the elimination anyway. A guard
+only where the optimiser made a loop with no progress cannot be placed: the loop is LLVM's, made
+after the IR is written.
+
+**Decided.** Every call a function in a call cycle makes to a Nazm function is `notail` (LLVM
+backend, `nazm_lir::op::llvm`): tail-recursion elimination turns only a call marked `tail` into a
+loop, and `notail` forbids the mark. It costs no instruction: the only things given up are the
+elimination itself — which the spec already says is not performed — and a sibling call's jump in
+place of a call and return, in functions of a cycle only. LLVM 23's `opt -O2` over the 20 programs
+of `bench/compare/nazm` and `bench/programs` eliminated no recursion before the change, so no
+benchmark loses a loop it had; over `examples`, `corpus` and `tests/compat/v1` it eliminated the
+three recursions above and nothing else. Cranelift and Nazm's own code generator do not eliminate
+tail calls. `usability::unbounded_recursion_reports_n0408_instead_of_crashing` holds the plain
+cases again — direct, mutual and tail — at `-O0` and `-O2` and on Cranelift.
