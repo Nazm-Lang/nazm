@@ -35,3 +35,20 @@ absent.nz absent.nz
 base.nz sub
 sub base.nz
 -- base.nz body.nz
+record.nz record2.nz
+record.nz record3.nz
+record.nz record4.nz
+record.nz record5.nz
+record5.nz record.nz
+record.nz base.nz
+base.nz record.nz
+record.nz both.nz
+both.nz record.nz
+enumeration.nz enumeration2.nz
+enumeration2.nz enumeration3.nz
+enumeration2.nz enumeration4.nz
+enumeration.nz enumeration5.nz
+both.nz enumeration.nz
+genericrec.nz base.nz
+genericenum.nz base.nz
+base.nz genericrec.nz

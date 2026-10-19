@@ -170,9 +170,10 @@
 - [ ] 11.2 `bindgen`, `contract`, `accel`, `bench`, `profile`, `explain-cost`, `explain-flow`,
       `obligations`, `trace`, `reload-check`, `repl`, `comptime`, `capabilities`. Part done
       (design D22, 2026-10-19): `bindgen` (every header of `tests/bindgen` and `bench/compare`, with
-      and without `-o`: 28 runs agree; 30 command lines agree), `reload-check` (every pair of 24
-      programs: 576 agree; the programs with a record or an enum refused, the types of their fields
-      not being published; 36 command lines agree) and `doctor` (5 command lines, and with `PATH`
+      and without `-o`: 28 runs agree; 30 command lines agree), `reload-check` (every pair of 37
+      programs, itself included, records and enums compared by their layout since R2 publishes the type of each
+      field and payload (design D24): 1,225 agree, 0 differ, 144 refused (a generic record or enum, which the
+      reference lists once for every instance it makes); 53 command lines agree) and `doctor` (5 command lines, and with `PATH`
       and `TMPDIR` made wrong: agree). Not ported: `contract`, `accel`, `obligations`,
       `explain-cost`, `explain-flow`, `profile`, `trace` (MIR, LIR, Core IR digests and the
       runtimes), `bench` (timings), `repl`, `comptime` (the interpreter in-process),
