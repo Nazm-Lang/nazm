@@ -3,7 +3,7 @@
 # against the Rust toolchain, on every input.
 #
 #   toolchain/frontend-tests/run.sh [MODE...]      MODE: tokens, tree, syntax, check, render, facts,
-#                                                  core, keys, units, refs, calls, provenance, coredigests, mir, diagids, fieldtypes (default: the first three)
+#                                                  core, keys, units, refs, calls, provenance, coredigests, coresources, mir, diagids, fieldtypes (default: the first three)
 #
 # `render` compares the diagnostics' text, as `nazm check` writes them (design D4, task 4.2), and
 # `facts` what `nazm doc` reads of each compilation with what `compiler/facts.nz` answers (D24),
@@ -67,7 +67,7 @@ for mode in $modes; do
     tree) driver=tree ;;
     # Diagnostics as `nazm check --json` objects (design D4): `syntax` compares the lexer's and the
     # parser's alone, `check` every one — which needs the checker, slice by slice.
-    syntax|check|render|facts|core|keys|units|refs|calls|provenance|coredigests|mir|diagids|fieldtypes) driver=diagnose ;;
+    syntax|check|render|facts|core|keys|units|refs|calls|provenance|coredigests|coresources|mir|diagids|fieldtypes) driver=diagnose ;;
     *) echo "run.sh: unknown mode $mode" >&2; exit 2 ;;
   esac
   exe="$out/bin/$driver"
@@ -179,6 +179,13 @@ for mode in $modes; do
         "$R2_REF" coredigests "$R2_ROOT/$f" > "$want" 2>/dev/null || true
         "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" --coredigests "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
+      coresources)
+        # The whole Core IR document with each module source (--with-sources, what the self-build
+        # gives the pipeline), byte for byte, callee_at and payload binding at included (R6 gap 2).
+        # An input the reference refuses, or the Nazm lowering does not carry whole, is skipped.
+        if ! "$R2_NAZM" core-ir --with-sources "$R2_ROOT/$f" > "$want" 2>/dev/null; then : > "$R2_DIR/$name.skip"; rm -f "$want"; exit 0; fi
+        "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" --coredoc-sources "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> /dev/null || true
+        if [ ! -s "$got" ]; then : > "$R2_DIR/$name.skip"; rm -f "$want" "$got"; exit 0; fi ;;
       mir)
         # The native digests (R5 hand-back): the MIR the R3 pipeline lowers, with the digest of each
         # function, from the Core IR document the Rust toolchain prints and from the one the Nazm front
@@ -227,6 +234,9 @@ for mode in $modes; do
     counts=$(cat "$out/$mode"/*.count 2>/dev/null | awk '{ t += $1; c += $2; a += $3; p += $4; q += $5; d += $6; e += $7 } END { printf "%d %d %d %d %d %d %d", t, c, a, p, q, d, e }')
     set -- $counts
     echo "$mode: $agree agree, $differ differ; functions: $1, the lowering carries $2, of which $3 agree; the document's other parts: $4 carried, of which $5 agree; whole documents: $6 carried, of which $7 agree byte for byte"
+  elif [ "$mode" = coresources ]; then
+    skipped=$(find "$out/$mode" -name '*.skip' | wc -l | tr -d ' ')
+    echo "$mode: $agree agree, $differ differ ($skipped without a whole document to compare)"
   elif [ "$mode" = mir ]; then
     # Inputs with no MIR to compare (a program that does not check, one the Core IR document does
     # not carry whole) are not this comparison's.

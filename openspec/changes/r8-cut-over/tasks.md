@@ -33,7 +33,7 @@
       unexecuted here)
 
 ## 3. Slice 3 — R6 gap 2
-- [ ] 3.1 `callee_at` (`call`, `call_indirect`, `call_trait`) and a payload binding's `at` in
+- [x] 3.1 `callee_at` (`call`, `call_indirect`, `call_trait`) and a payload binding's `at` in
       `--coredoc-sources`; the self-build compares Core IR whole (`r6-host-qualification` 1.8)
 
 ## 4. Slice 4 — `nazm build` in Nazm: the driver
