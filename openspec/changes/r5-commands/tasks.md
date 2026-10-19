@@ -76,12 +76,15 @@
       `toolchain/commands/fix.nz`. 2026-10-15, 3,098 inputs: 3,091 agree, 0 differ, 7 refused (6
       the checker's stops, 1 not UTF-8), 17 of them applied on a copy; `tests/args/fix.txt` 22 of 23
       agree, 1 refused (a directory as the root, which `compiler/load.nz` traps on)
-- [ ] 7.2 The plan form, `nazm patch fix` (`--root`, `--file`, `--byte`, `--fix`), with `patch`
-      (design D18, 2026-10-19), part done: `patch.nz` carries the whole command line (`group.nz`) and
-      `patch apply` (plan read, digests, expected bytes, all-or-nothing writes); `tests/args/patch.txt`
-      63 command lines, 63 agree. `patch fix` and `patch rename` read the root and refuse (status 6):
-      their plans are bound to `nazm.snapshot/3`, whose reference index, call graph and provenance
-      summaries `compiler/facts.nz` does not publish (hand-back to R2)
+- [x] 7.2 The plan form, `nazm patch fix` (`--root`, `--file`, `--byte`, `--fix`) and `patch rename`, with `patch`
+      (design D18, D24, 2026-10-19): `patch.nz` carries the whole command line (`group.nz`) and `patch apply` (plan read,
+      digests, expected bytes, all-or-nothing writes); `patchplan.nz` plans a rename (`rename.nz`, the engine the language
+      server's rename shares) and a fix over R2's reference index, call graph and provenance, bound to `nazm.snapshot/3`
+      (`snap.nz`). Measured on the checkout 2026-10-19 (R5d): `run.sh agent` over 3,399 inputs, `patch rename` at six names
+      each, 19,999 runs: 19,237 agree, 0 differ, 762 refused; `patch fix` at three diagnostics with a fix, 52 runs: 52
+      agree; `tests/args/patch.txt` 63 command lines agree. Refused, counted and named (status 6): a plan in a file other
+      than the root, a rename of an exported name in a declared workspace, a local declared in a closure or in no
+      function, a compilation after which the facts' index differs from the reference's (D24)
 
 ## 8. `lsp`
 - [x] 8.1 The Language Server over stdin/stdout, compared by scripted sessions (design D16,

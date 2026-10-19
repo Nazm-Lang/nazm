@@ -1,0 +1,981 @@
+// The semantic snapshot (`nazm.snapshot/3`, `nazm_service::snapshot`, R5 design D24): one root compilation as a
+// manifest of its durable definitions, each with a BLAKE3 digest per section — source, shape, dependencies, related
+// types, references, callers, callees, diagnostics, effects, provenance — over R2's facts (`compiler/facts.nz`):
+// the reference index (`fx_ref_*`), the call graph (`fx_call_*`) and the provenance summaries (`fx_prov_*`).
+//
+// `snap_build` takes the facts of the root checked as a module (`fx_check_module_in`, which is what the language
+// service analyses) and either describes why it has no snapshot or holds one (`snap_json`). Where the facts do not
+// carry what the reference reads (a parser stage reported, a function whose label they do not spell) the reason is
+// `snap_why` and the caller refuses.
+
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/package.nz"
+use "../../compiler/facts.nz"
+use "../../compiler/builtins.nz"
+use "front.nz"
+use "sym.nz"
+use "@std/blake3"
+
+fn sn_nl() -> Str { str_from_byte(10) }
+
+fn sn_has(s: Str, part: Str) -> Bool {
+    let n = str_len(part)
+    let mut i = 0
+    while i + n <= str_len(s) {
+        if str_slice(s, i, i + n) == part { return true }
+        i += 1
+    }
+    false
+}
+
+// --- digests: `<n>:<bytes>` fields under the schema and a section's name ---------------------------------
+
+fn dig_field(out: Strs, v: Str) -> Int {
+    strs_push(out, int_to_str(str_len(v)) + ":" + v)
+    0
+}
+
+fn dig_new(section: Str) -> Strs {
+    let out = strs_new()
+    dig_field(out, "nazm.snapshot/3")
+    dig_field(out, section)
+    out
+}
+
+fn dig_number(out: Strs, n: Int) -> Int { dig_field(out, int_to_str(n)) }
+
+fn dig_option(out: Strs, has: Bool, v: Str) -> Int {
+    if has {
+        dig_field(out, "+")
+        dig_field(out, v)
+    } else {
+        dig_field(out, "-")
+    }
+    0
+}
+
+fn dig_hex(out: Strs) -> Str { blake3_hex(bytes_from_str(str_join(out, ""))) }
+
+// --- sorting ----------------------------------------------------------------------------------------------
+
+pub fn sn_sort(xs: Strs) -> Strs {
+    let n = strs_len(xs)
+    if n < 2 { return xs }
+    let mid = n / 2
+    let left = strs_new()
+    let right = strs_new()
+    for i in 0..mid { strs_push(left, strs_get(xs, i)) }
+    for i in mid..n { strs_push(right, strs_get(xs, i)) }
+    let a = sn_sort(left)
+    let b = sn_sort(right)
+    let out = strs_new()
+    let mut i = 0
+    let mut k = 0
+    while i < strs_len(a) && k < strs_len(b) {
+        if fe_str_less(strs_get(b, k), strs_get(a, i)) {
+            strs_push(out, strs_get(b, k))
+            k += 1
+        } else {
+            strs_push(out, strs_get(a, i))
+            i += 1
+        }
+    }
+    while i < strs_len(a) {
+        strs_push(out, strs_get(a, i))
+        i += 1
+    }
+    while k < strs_len(b) {
+        strs_push(out, strs_get(b, k))
+        k += 1
+    }
+    out
+}
+
+// The positions of `keys` in ascending order of their values (stable).
+fn order_of(keys: Ints) -> Ints {
+    let n = ints_len(keys)
+    let out = ints_new()
+    for i in 0..n { ints_push(out, i) }
+    sort_ints(out, keys, 0, n)
+    out
+}
+
+// Merge sort of `order[lo..hi]` by `keys`.
+fn sort_ints(order: Ints, keys: Ints, lo: Int, hi: Int) -> Int {
+    if hi - lo < 2 { return 0 }
+    let mid = (lo + hi) / 2
+    sort_ints(order, keys, lo, mid)
+    sort_ints(order, keys, mid, hi)
+    let merged = ints_new()
+    let mut i = lo
+    let mut k = mid
+    while i < mid && k < hi {
+        if ints_get(keys, ints_get(order, k)) < ints_get(keys, ints_get(order, i)) {
+            ints_push(merged, ints_get(order, k))
+            k += 1
+        } else {
+            ints_push(merged, ints_get(order, i))
+            i += 1
+        }
+    }
+    while i < mid {
+        ints_push(merged, ints_get(order, i))
+        i += 1
+    }
+    while k < hi {
+        ints_push(merged, ints_get(order, k))
+        k += 1
+    }
+    for j in 0..ints_len(merged) { ints_set(order, lo + j, ints_get(merged, j)) }
+    0
+}
+
+// The first position `p` of `order` whose key is at least `want`.
+fn lower_bound(keys: Ints, order: Ints, want: Int) -> Int {
+    let mut lo = 0
+    let mut hi = ints_len(order)
+    while lo < hi {
+        let mid = (lo + hi) / 2
+        if ints_get(keys, ints_get(order, mid)) < want { lo = mid + 1 } else { hi = mid }
+    }
+    lo
+}
+
+// --- the entities of the reference index ------------------------------------------------------------------
+
+// Each entity (`fx_ref_*`'s numbering) as a snapshot's relationship digests name it: its kind's rank, its durable
+// identity (`definition` and `member`, each possibly absent), and — only where it has no definition key — the
+// root-relative file it is declared in; `key` is the three as one string that sorts as the tuple does.
+pub struct Ents {
+    rank: Ints,
+    def: Strs,
+    hasdef: Ints,
+    mem: Strs,
+    hasmem: Ints,
+    file: Strs,
+    hasfile: Ints,
+    // Declared in a file of the compilation, and no local: what a dependency is.
+    linked: Ints,
+    key: Strs,
+}
+
+fn rank_of(kind: Str) -> Int {
+    if kind == "function" { return 0 }
+    if kind == "record" { return 1 }
+    if kind == "enum" { return 2 }
+    if kind == "field" { return 3 }
+    if kind == "variant" { return 4 }
+    if kind == "payload field" { return 5 }
+    if kind == "local" { return 6 }
+    if kind == "trait" { return 7 }
+    if kind == "trait method" { return 8 }
+    9
+}
+
+fn pad3(n: Int) -> Str {
+    let t = int_to_str(n)
+    let mut z = ""
+    for i in 0..3 - str_len(t) { z = z + "0" }
+    z + t
+}
+
+fn opt_key(has: Bool, v: Str) -> Str { if has { "1" + v } else { "0" } }
+
+// The key of an entity's tuple: rank (three digits), definition, member, file, each with its presence.
+pub fn sn_key(rank: Int, hasdef: Bool, def: Str, hasmem: Bool, mem: Str, hasfile: Bool, file: Str) -> Str {
+    pad3(rank) + str_from_byte(0) + opt_key(hasdef, def) + str_from_byte(0) + opt_key(hasmem, mem) + str_from_byte(0) + opt_key(hasfile, file)
+}
+
+// The definitions of the compilation as sorted lookups by where their names are (absolute).
+struct Look {
+    fn_order: Ints,
+    fn_start: Ints,
+    rec_order: Ints,
+    rec_start: Ints,
+    rec_end: Ints,
+    enu_order: Ints,
+    enu_start: Ints,
+    enu_end: Ints,
+    trt_order: Ints,
+    trt_start: Ints,
+    trt_end: Ints,
+    trt_name: Strs,
+    trt_mod: Ints,
+}
+
+fn node_range(f: Facts, m: Int, node: Int, starts: Ints, ends: Ints) -> Int {
+    if node < 0 {
+        ints_push(starts, 0 - 1)
+        ints_push(ends, 0 - 1)
+        return 0
+    }
+    let span = sx_field(fx_tree(f), node, "span")
+    ints_push(starts, fx_module_base(f, m) + fx_start(f, span))
+    ints_push(ends, fx_module_base(f, m) + fx_end(f, span))
+    0
+}
+
+fn look_new(f: Facts) -> Look {
+    let c = fx_checker(f)
+    let t = fx_tree(f)
+    let fs = ints_new()
+    for i in 0..ck_fn_count(c) { ints_push(fs, ck_fn_name_start(c, i)) }
+    let rs = ints_new()
+    let re = ints_new()
+    for r in 0..ck_record_count(c) {
+        let m = ck_record_module(c, r)
+        node_range(f, m, if m >= 0 && m < fx_modules(f) { ck_record_node(c, r) } else { 0 - 1 }, rs, re)
+    }
+    let es = ints_new()
+    let ee = ints_new()
+    for e in 0..ck_enum_count(c) {
+        let m = ck_enum_module(c, e)
+        node_range(f, m, if m >= 0 && m < fx_modules(f) { ck_enum_node(c, e) } else { 0 - 1 }, es, ee)
+    }
+    // The traits, from the syntax: the checker publishes a trait's name and not where its body is.
+    let ts = ints_new()
+    let te = ints_new()
+    let tn = strs_new()
+    let tm = ints_new()
+    for m in 0..fx_modules(f) {
+        let prog = fx_module_program(f, m)
+        if prog < 0 { continue }
+        let traits = sx_items(t, sx_field(t, prog, "traits"))
+        for k in 0..ints_len(traits) {
+            let node = ints_get(traits, k)
+            let span = sx_field(t, node, "span")
+            ints_push(ts, fx_module_base(f, m) + fx_start(f, span))
+            ints_push(te, fx_module_base(f, m) + fx_end(f, span))
+            strs_push(tn, sx_name(t, node, "name"))
+            ints_push(tm, m)
+        }
+    }
+    Look(fn_order: order_of(fs), fn_start: fs, rec_order: order_of(rs), rec_start: rs, rec_end: re, enu_order: order_of(es), enu_start: es, enu_end: ee,
+            trt_order: order_of(ts), trt_start: ts, trt_end: te, trt_name: tn, trt_mod: tm)
+}
+
+// The item of `starts`/`ends` (absolute ranges, -1 for none) that holds `at`, by its place in them, or -1.
+fn holding(order: Ints, starts: Ints, ends: Ints, at: Int) -> Int {
+    let p = lower_bound(starts, order, at + 1)
+    let mut k = p - 1
+    while k >= 0 {
+        let i = ints_get(order, k)
+        if ints_get(starts, i) >= 0 {
+            if ints_get(starts, i) <= at && at < ints_get(ends, i) { return i }
+            return 0 - 1
+        }
+        k -= 1
+    }
+    0 - 1
+}
+
+// The function whose name is written at `at` (absolute), or -1.
+fn fn_at(l: Look, at: Int) -> Int {
+    let p = lower_bound(l.fn_start, l.fn_order, at)
+    if p < ints_len(l.fn_order) && ints_get(l.fn_start, ints_get(l.fn_order, p)) == at { return ints_get(l.fn_order, p) }
+    0 - 1
+}
+
+// The record whose name is written at `at`, or -1: a record's node starts at its keyword, so its name is inside.
+fn module_text_at(f: Facts, m: Int, a: Int, b: Int) -> Str {
+    let base = fx_module_base(f, m)
+    str_slice(fx_module_text(f, m), a - base, b - base)
+}
+
+pub fn ents_new(f: Facts) -> Ents {
+    let c = fx_checker(f)
+    let t = fx_tree(f)
+    let l = look_new(f)
+    let n = fx_ref_count(f)
+    let y = Ents(rank: ints_new(), def: strs_new(), hasdef: ints_new(), mem: strs_new(), hasmem: ints_new(), file: strs_new(), hasfile: ints_new(), linked: ints_new(), key: strs_new())
+    for i in 0..n {
+        let kind = fx_ref_kind(f, i)
+        let ds = fx_ref_decl_start(f, i)
+        let de = fx_ref_decl_end(f, i)
+        let rank = rank_of(kind)
+        let mut hasdef = false
+        let mut def = ""
+        let mut hasmem = false
+        let mut mem = ""
+        let mut m = 0 - 1
+        if ds >= 0 { m = fx_module_at(f, ds) }
+        let keyed = m >= 0 && fx_module_key(f, m) != ""
+        if ds >= 0 && m >= 0 {
+            if kind == "function" {
+                let g = fn_at(l, ds)
+                if g >= 0 && keyed {
+                    hasdef = true
+                    def = fx_fn_identity(f, g)
+                }
+            } else if kind == "record" || kind == "field" {
+                let r = holding(l.rec_order, l.rec_start, l.rec_end, ds)
+                if r >= 0 {
+                    if keyed {
+                        hasdef = true
+                        def = fx_record_identity(f, r)
+                    }
+                    if kind == "field" {
+                        hasmem = true
+                        mem = module_text_at(f, m, ds, de)
+                        // An opaque handle (`extern "C" struct Box;`) has one field, which the facts place at the name.
+                        if ds == ck_record_name_start(c, r) && de == ck_record_name_end(c, r) { mem = "#pointer" }
+                    }
+                }
+            } else if kind == "enum" || kind == "variant" || kind == "payload field" {
+                let e = holding(l.enu_order, l.enu_start, l.enu_end, ds)
+                if e >= 0 {
+                    if keyed {
+                        hasdef = true
+                        def = fx_enum_identity(f, e)
+                    }
+                    if kind == "variant" {
+                        hasmem = true
+                        mem = module_text_at(f, m, ds, de)
+                    }
+                    if kind == "payload field" {
+                        // `Variant.field`: the variant written around it.
+                        let node = ck_enum_node(c, e)
+                        let variants = sx_items(t, sx_field(t, node, "variants"))
+                        let base = fx_module_base(f, m)
+                        for v in 0..ints_len(variants) {
+                            let vs = sx_field(t, ints_get(variants, v), "span")
+                            if base + fx_start(f, vs) <= ds && ds < base + fx_end(f, vs) {
+                                hasmem = true
+                                mem = sx_name(t, ints_get(variants, v), "name") + "." + module_text_at(f, m, ds, de)
+                            }
+                        }
+                    }
+                }
+            } else if kind == "trait" || kind == "trait method" {
+                // The trait whose body holds the name.
+                let mut found = 0 - 1
+                for q in 0..ints_len(l.trt_start) {
+                    if ints_get(l.trt_start, q) <= ds && ds < ints_get(l.trt_end, q) && ints_get(l.trt_mod, q) == m { found = q }
+                }
+                if found >= 0 {
+                    if keyed {
+                        hasdef = true
+                        def = fx_module_identity(f, m) + "::trait " + strs_get(l.trt_name, found)
+                    }
+                    if kind == "trait method" {
+                        hasmem = true
+                        mem = module_text_at(f, m, ds, de)
+                    }
+                }
+            }
+        }
+        let mut file = ""
+        let mut hasfile = false
+        if !hasdef && ds >= 0 && m >= 0 && fx_file_known(f, m) {
+            hasfile = true
+            file = fx_file_path(f, m)
+        }
+        ints_push(y.rank, rank)
+        strs_push(y.def, def)
+        ints_push(y.hasdef, if hasdef { 1 } else { 0 })
+        strs_push(y.mem, mem)
+        ints_push(y.hasmem, if hasmem { 1 } else { 0 })
+        strs_push(y.file, file)
+        ints_push(y.hasfile, if hasfile { 1 } else { 0 })
+        ints_push(y.linked, if kind != "local" && ds >= 0 && m >= 0 && fx_file_known(f, m) { 1 } else { 0 })
+        strs_push(y.key, sn_key(rank, hasdef, def, hasmem, mem, hasfile, file))
+    }
+    y
+}
+
+// --- the snapshot -------------------------------------------------------------------------------------------
+
+pub struct Snap {
+    // Why there is none: "" for a snapshot, else `incomplete_compilation` or `no_durable_root`.
+    reason: Strs,
+    // Why the facts cannot say: "" where they can.
+    why: Strs,
+    root: Strs,
+    compiler: Strs,
+    untracked: Ints,
+    // The definitions, in identity order: identity, kind, declaration (file, start, end) and the digests (source,
+    // shape, dependencies, related types, references, callers, callees, diagnostics, effects, provenance; "" for none).
+    identity: Strs,
+    kind: Strs,
+    file: Strs,
+    start: Ints,
+    end: Ints,
+    digest: Vec[Strs],
+}
+
+pub fn snap_why(s: Snap) -> Str { strs_get(s.why, 0) }
+pub fn snap_reason(s: Snap) -> Str { strs_get(s.reason, 0) }
+pub fn snap_count(s: Snap) -> Int { strs_len(s.identity) }
+pub fn snap_root(s: Snap) -> Str { strs_get(s.root, 0) }
+pub fn snap_compiler(s: Snap) -> Str { strs_get(s.compiler, 0) }
+pub fn snap_untracked(s: Snap) -> Int { ints_get(s.untracked, 0) }
+pub fn snap_identity(s: Snap, i: Int) -> Str { strs_get(s.identity, i) }
+pub fn snap_kind(s: Snap, i: Int) -> Str { strs_get(s.kind, i) }
+pub fn snap_file(s: Snap, i: Int) -> Str { strs_get(s.file, i) }
+pub fn snap_start(s: Snap, i: Int) -> Int { ints_get(s.start, i) }
+pub fn snap_end(s: Snap, i: Int) -> Int { ints_get(s.end, i) }
+pub fn snap_digest(s: Snap, i: Int, k: Int) -> Str { strs_get(vec_get(s.digest, i), k) }
+
+pub fn snap_sections() -> Strs {
+    let out = strs_new()
+    strs_push(out, "source")
+    strs_push(out, "shape")
+    strs_push(out, "dependencies")
+    strs_push(out, "related_types")
+    strs_push(out, "references")
+    strs_push(out, "callers")
+    strs_push(out, "callees")
+    strs_push(out, "diagnostics")
+    strs_push(out, "effects")
+    strs_push(out, "provenance")
+    out
+}
+
+fn snap_new() -> Snap {
+    let s = Snap(reason: strs_new(), why: strs_new(), root: strs_new(), compiler: strs_new(), untracked: ints_new(), identity: strs_new(), kind: strs_new(), file: strs_new(),
+            start: ints_new(), end: ints_new(), digest: vec_new[Strs]())
+    strs_push(s.reason, "")
+    strs_push(s.why, "")
+    strs_push(s.root, "")
+    strs_push(s.compiler, "")
+    ints_push(s.untracked, 0)
+    s
+}
+
+fn snap_fail(s: Snap, why: Str) -> Snap {
+    strs_set(s.why, 0, why)
+    s
+}
+
+fn num_of(s: Str) -> Int {
+    let mut n = 0
+    for i in 0..str_len(s) { n = n * 10 + str_byte(s, i) - 48 }
+    n
+}
+
+// A key's rank, then each field's presence flag and text.
+fn key_parts(k: Str) -> Strs {
+    let out = strs_new()
+    let mut from = 0
+    let mut n = 0
+    for i in 0..str_len(k) + 1 {
+        if i == str_len(k) || str_byte(k, i) == 0 {
+            let piece = str_slice(k, from, i)
+            if n == 0 {
+                strs_push(out, piece)
+            } else {
+                strs_push(out, str_slice(piece, 0, 1))
+                strs_push(out, str_slice(piece, 1, str_len(piece)))
+            }
+            n += 1
+            from = i + 1
+        }
+    }
+    out
+}
+
+// A section of counted keys (`counts`): how many distinct, then each key's rank, definition, member and file and
+// how many times it was met.
+fn counts(section: Str, keys: Strs) -> Str {
+    let sorted = sn_sort(keys)
+    let out = dig_new(section)
+    let mut distinct = 0
+    for i in 0..strs_len(sorted) {
+        if i == 0 || strs_get(sorted, i) != strs_get(sorted, i - 1) { distinct += 1 }
+    }
+    dig_number(out, distinct)
+    let mut i = 0
+    while i < strs_len(sorted) {
+        let mut j = i
+        while j < strs_len(sorted) && strs_get(sorted, j) == strs_get(sorted, i) { j += 1 }
+        let p = key_parts(strs_get(sorted, i))
+        dig_number(out, num_of(strs_get(p, 0)))
+        dig_option(out, strs_get(p, 1) == "1", strs_get(p, 2))
+        dig_option(out, strs_get(p, 3) == "1", strs_get(p, 4))
+        dig_option(out, strs_get(p, 5) == "1", strs_get(p, 6))
+        dig_number(out, j - i)
+        i = j
+    }
+    dig_hex(out)
+}
+
+// `names` (an effect set or an origin set, by id) as `h.field(..)`s.
+fn dig_names(out: Strs, names: Strs) -> Int {
+    dig_number(out, strs_len(names))
+    for i in 0..strs_len(names) { dig_field(out, strs_get(names, i)) }
+    0
+}
+
+// The members of a record or the variants of an enum as the reference lists them (`members`): in the order the
+// checker lays them out, which is by name — except a record C sees, which keeps its declaration.
+fn by_name_order(names: Strs, sorted: Bool) -> Ints {
+    let order = ints_new()
+    for i in 0..strs_len(names) {
+        let mut at = ints_len(order)
+        if sorted {
+            while at > 0 && fe_str_less(strs_get(names, i), strs_get(names, ints_get(order, at - 1))) { at -= 1 }
+        }
+        ints_push(order, 0)
+        let mut k = ints_len(order) - 1
+        while k > at {
+            ints_set(order, k, ints_get(order, k - 1))
+            k -= 1
+        }
+        ints_set(order, at, i)
+    }
+    order
+}
+
+fn shape_digest(f: Facts, y: Sy, i: Int, exp: Bool, record: Int) -> Str {
+    let c = fx_checker(f)
+    let kind = sy_kind(y, i)
+    let out = dig_new("shape")
+    dig_field(out, if kind == 1 { "function" } else if kind == 2 { "record" } else { "enum" })
+    dig_field(out, if exp { "pub" } else { "private" })
+    if kind == 1 {
+        dig_field(out, "signature")
+        dig_field(out, sy_detail(y, i))
+    }
+    if kind == 2 {
+        let kids = sy_kids(y, i)
+        let names = strs_new()
+        for k in 0..ints_len(kids) { strs_push(names, sy_name(y, ints_get(kids, k))) }
+        let rt = fx_record_type(f, record)
+        let order = by_name_order(names, ck_cross_in(c, rt) == "")
+        dig_field(out, "fields")
+        dig_number(out, ints_len(kids))
+        for k in 0..ints_len(order) {
+            let q = ints_get(kids, ints_get(order, k))
+            dig_field(out, sy_name(y, q))
+            dig_field(out, sy_detail(y, q))
+        }
+    }
+    if kind == 3 {
+        let kids = sy_kids(y, i)
+        let names = strs_new()
+        for k in 0..ints_len(kids) { strs_push(names, sy_name(y, ints_get(kids, k))) }
+        let order = by_name_order(names, true)
+        dig_field(out, "variants")
+        dig_number(out, ints_len(kids))
+        for k in 0..ints_len(order) {
+            let v = ints_get(kids, ints_get(order, k))
+            let pk = sy_kids(y, v)
+            let pn = strs_new()
+            for q in 0..ints_len(pk) { strs_push(pn, sy_name(y, ints_get(pk, q))) }
+            let porder = by_name_order(pn, true)
+            dig_field(out, sy_name(y, v))
+            dig_number(out, ints_len(pk))
+            for q in 0..ints_len(porder) {
+                let w = ints_get(pk, ints_get(porder, q))
+                dig_field(out, sy_name(y, w))
+                dig_field(out, sy_detail(y, w))
+            }
+        }
+    }
+    dig_hex(out)
+}
+
+fn effects_digest(f: Facts, g: Int) -> Str {
+    let c = fx_checker(f)
+    let out = dig_new("effects")
+    let declared = ck_fn_declared(c, g)
+    if declared >= 0 {
+        dig_field(out, "declared")
+        dig_names(out, ck_effect_names(declared))
+    } else {
+        dig_field(out, "undeclared")
+    }
+    let required = ck_fn_required(c, g)
+    if required >= 0 {
+        dig_field(out, "required")
+        dig_names(out, ck_effect_names(required))
+    } else {
+        dig_field(out, "unchecked")
+    }
+    dig_hex(out)
+}
+
+fn provenance_digest(f: Facts, g: Int) -> Str {
+    let c = fx_checker(f)
+    let out = dig_new("provenance")
+    if fx_prov_has(f, g) {
+        dig_field(out, "origins")
+        dig_names(out, fx_prov_origins(f, g))
+        let passes = fx_prov_passes_on(f, g)
+        dig_field(out, "params")
+        dig_number(out, ints_len(passes))
+        for k in 0..ints_len(passes) { dig_number(out, ints_get(passes, k)) }
+        let reaches = fx_prov_reaches(f, g)
+        dig_field(out, "reaches")
+        dig_number(out, ints_len(reaches))
+        for k in 0..ints_len(reaches) { dig_number(out, ints_get(reaches, k)) }
+        let n = strs_len(ck_fn_params(c, g))
+        dig_field(out, "receives")
+        dig_number(out, n)
+        for k in 0..n { dig_names(out, fx_prov_receives(f, g, k)) }
+    } else {
+        dig_field(out, "unsolved")
+    }
+    dig_hex(out)
+}
+
+fn key_parts_plain(k: Str) -> Strs {
+    let out = strs_new()
+    let mut from = 0
+    for i in 0..str_len(k) + 1 {
+        if i == str_len(k) || str_byte(k, i) == 0 {
+            strs_push(out, str_slice(k, from, i))
+            from = i + 1
+        }
+    }
+    out
+}
+
+// The diagnostics inside one declaration as a digest: code, severity, range relative to the declaration and
+// how many fixes, in the order of (start, end, code, fixes). Each row is `START\0END\0CODE\0FIXES`, the numbers
+// zero-padded so that they sort as numbers.
+fn diagnostics_digest(rows: Strs) -> Str {
+    let sorted = sn_sort(rows)
+    let out = dig_new("diagnostics")
+    dig_number(out, strs_len(sorted))
+    for i in 0..strs_len(sorted) {
+        let p = key_parts_plain(strs_get(sorted, i))
+        dig_field(out, strs_get(p, 2))
+        dig_field(out, "error")
+        dig_number(out, num_of(strs_get(p, 0)))
+        dig_number(out, num_of(strs_get(p, 1)))
+        dig_number(out, num_of(strs_get(p, 3)))
+    }
+    dig_hex(out)
+}
+
+fn pad12(n: Int) -> Str {
+    let t = int_to_str(n)
+    let mut z = ""
+    for i in 0..12 - str_len(t) { z = z + "0" }
+    z + t
+}
+
+// The declaration holding the span `a..b` of module `m` (local offsets), or -1.
+fn owner_of(order: Ints, keys: Ints, starts: Ints, ends: Ints, m: Int, a: Int, b: Int) -> Int {
+    let p = lower_bound(keys, order, m * 4294967296 + a + 1) - 1
+    if p < 0 { return 0 - 1 }
+    let k = ints_get(order, p)
+    if ints_get(keys, k) / 4294967296 != m { return 0 - 1 }
+    if ints_get(starts, k) <= a && b <= ints_get(ends, k) { return k }
+    0 - 1
+}
+
+// The file a diagnostic's primary span is in: the one a stage said, else the last beginning at or before it.
+fn diag_file(f: Facts, i: Int) -> Int {
+    let d = fx_diags(f)
+    if dg_file(d, i) >= 0 { return dg_file(d, i) }
+    let mut found = 0
+    for m in 0..fx_modules(f) {
+        if fx_module_base(f, m) <= dg_start(d, i) { found = m }
+    }
+    found
+}
+
+// How many diagnostics the stages before the checker reported (the parser, the attributes): the facts' diagnostics that the
+// checker's own are not.
+pub fn early_errors(f: Facts) -> Int {
+    if !fx_carried(f) || fe_load_failed(f) { return 0 }
+    let d = fx_diags(f)
+    let own = ck_diags(fx_checker(f))
+    let mut n0204 = 0
+    for i in 0..dg_len(own) {
+        if dg_code(own, i) == "N0204" { n0204 += 1 }
+    }
+    dg_len(d) - (dg_len(own) - n0204)
+}
+
+// The compilation as a snapshot: `f` is the root checked as a module (`fx_check_module_in`).
+pub fn snap_build(f: Facts) -> Snap {
+    let s = snap_new()
+    // A root outside the source root it is given: the loader's refusal, which the service reports as a module that is not found.
+    if !fx_carried(f) && sn_has(fx_why(f), "is not inside the source root") {
+        strs_set(s.reason, 0, "incomplete_compilation")
+        return s
+    }
+    if !fx_carried(f) { return snap_fail(s, fx_why(f)) }
+    if fx_refusal(f) != "" { return snap_fail(s, "a source root the reference refuses") }
+    let d = fx_diags(f)
+    // A compilation that needed syntax recovery, or could not load a module, has no snapshot.
+    let mut incomplete = early_errors(f) > 0
+    for i in 0..dg_len(d) {
+        if dg_code(d, i) == "N0205" { incomplete = true }
+    }
+    if incomplete {
+        strs_set(s.reason, 0, "incomplete_compilation")
+        return s
+    }
+    if fe_load_failed(f) { return snap_fail(s, "a compilation that does not load") }
+    // After these errors the checker leaves out what the reference's index still records (design D23).
+    for i in 0..dg_len(d) {
+        let code = dg_code(d, i)
+        if code == "N0203" || code == "N0386" || code == "N0305" || code == "N0101" || code == "N0334" || code == "N0610" {
+            return snap_fail(s, "a compilation whose errors leave the facts' index unlike the reference's")
+        }
+    }
+    if fx_module_key(f, 0) == "" {
+        strs_set(s.reason, 0, "no_durable_root")
+        return s
+    }
+    strs_set(s.root, 0, fx_module_key(f, 0))
+    strs_set(s.compiler, 0, "nazm " + strs_get(bi_identity(), 1))
+    let c = fx_checker(f)
+    let ents = ents_new(f)
+    let n = fx_ref_count(f)
+
+    // --- the declarations: every function, record and enum of every file that has a path ---
+    let dm = ints_new()
+    let dstart = ints_new()
+    let dend = ints_new()
+    let dkind = ints_new()
+    let ddef = ints_new()
+    let dent = ints_new()
+    let dsrc = strs_new()
+    let dshape = strs_new()
+    let starts_ent = ints_new()
+    for i in 0..n { ints_push(starts_ent, fx_ref_decl_start(f, i)) }
+    let eorder = order_of(starts_ent)
+    for m in 0..fx_modules(f) {
+        if !fx_file_known(f, m) { continue }
+        let y = symbols_of(f, m, true)
+        if sy_why(y) != "" { return snap_fail(s, sy_why(y)) }
+        let base = fx_module_base(f, m)
+        for i in 0..sy_len(y) {
+            let kind = sy_kind(y, i)
+            if kind > 3 { continue }
+            let word = if kind == 1 { "function" } else if kind == 2 { "record" } else { "enum" }
+            // The entity declared at the name.
+            let at = base + sy_name_start(y, i)
+            let mut e = 0 - 1
+            let mut p = lower_bound(starts_ent, eorder, at)
+            while p < ints_len(eorder) && ints_get(starts_ent, ints_get(eorder, p)) == at {
+                if fx_ref_kind(f, ints_get(eorder, p)) == word && e < 0 { e = ints_get(eorder, p) }
+                p += 1
+            }
+            let def = sy_def(y, i)
+            let exp = if kind == 1 { ck_fn_public(c, def) } else if kind == 2 { ck_record_public(c, def) } else { ck_enum_public(c, def) }
+            ints_push(dm, m)
+            ints_push(dstart, sy_start(y, i))
+            ints_push(dend, sy_end(y, i))
+            ints_push(dkind, kind)
+            ints_push(ddef, def)
+            ints_push(dent, e)
+            let text = fx_module_text(f, m)
+            let src = dig_new("source")
+            dig_field(src, str_slice(text, sy_start(y, i), sy_end(y, i)))
+            strs_push(dsrc, dig_hex(src))
+            strs_push(dshape, shape_digest(f, y, i, exp, def))
+        }
+    }
+    let nd = ints_len(dm)
+    // The key of each declaration (its entity's), and the declaration of each entity and function.
+    let dkey = strs_new()
+    let decl_of_ent = ints_new()
+    for i in 0..n { ints_push(decl_of_ent, 0 - 1) }
+    let decl_of_fn = ints_new()
+    for i in 0..ck_fn_count(c) { ints_push(decl_of_fn, 0 - 1) }
+    for k in 0..nd {
+        let e = ints_get(dent, k)
+        if e >= 0 {
+            strs_push(dkey, strs_get(ents.key, e))
+            ints_set(decl_of_ent, e, k)
+        } else {
+            strs_push(dkey, "")
+        }
+        if ints_get(dkind, k) == 1 { ints_set(decl_of_fn, ints_get(ddef, k), k) }
+    }
+    // The declaration holding a span: by module and offset (top-level declarations do not overlap).
+    let okeys = ints_new()
+    for k in 0..nd { ints_push(okeys, ints_get(dm, k) * 4294967296 + ints_get(dstart, k)) }
+    let oorder = order_of(okeys)
+
+    let deps = vec_new[Strs]()
+    let rels = vec_new[Strs]()
+    let refs = vec_new[Strs]()
+    let callers = vec_new[Strs]()
+    let callees = vec_new[Strs]()
+    let diags = vec_new[Strs]()
+    for k in 0..nd {
+        vec_push(deps, strs_new())
+        vec_push(rels, strs_new())
+        vec_push(refs, strs_new())
+        vec_push(callers, strs_new())
+        vec_push(callees, strs_new())
+        vec_push(diags, strs_new())
+    }
+
+    // --- one pass over the reference index ---
+    for t in 0..n {
+        let linked = ints_get(ents.linked, t) == 1
+        let kind = fx_ref_kind(f, t)
+        let typed_kind = kind == "record" || kind == "enum"
+        let target = ints_get(decl_of_ent, t)
+        for u in 0..fx_ref_use_count(f, t) {
+            let a = fx_ref_use_start(f, t, u)
+            let b = fx_ref_use_end(f, t, u)
+            let um = fx_module_at(f, a)
+            let base = fx_module_base(f, um)
+            let owner = owner_of(oorder, okeys, dstart, dend, um, a - base, b - base)
+            if owner >= 0 && linked {
+                if ints_get(dent, owner) != t {
+                    strs_push(vec_get(deps, owner), strs_get(ents.key, t))
+                    if typed_kind && ck_type_name_at(c, a, b) >= 0 { strs_push(vec_get(rels, owner), strs_get(ents.key, t)) }
+                }
+            }
+            if target >= 0 {
+                if !fx_file_known(f, um) { continue }
+                let from = if owner >= 0 { strs_get(dkey, owner) } else { sn_key(255, false, "", false, "", true, fx_file_path(f, um)) }
+                strs_push(vec_get(refs, target), from)
+            }
+        }
+    }
+
+    // --- the direct checked calls between source functions, each call span once ---
+    let edges = strs_new()
+    for k in 0..nd {
+        if ints_get(dkind, k) != 1 { continue }
+        let g = ints_get(ddef, k)
+        for q in 0..fx_call_count(f, g) {
+            if fx_call_kind(f, g, q) != "function" { continue }
+            let to = ints_get(decl_of_fn, fx_call_function(f, g, q))
+            if to < 0 { continue }
+            strs_push(edges, int_to_str(k) + str_from_byte(0) + int_to_str(to) + str_from_byte(0) + int_to_str(fx_call_start(f, g, q)) + str_from_byte(0) + int_to_str(fx_call_end(f, g, q)))
+        }
+    }
+    let unique = sn_sort(edges)
+    for i in 0..strs_len(unique) {
+        if i > 0 && strs_get(unique, i) == strs_get(unique, i - 1) { continue }
+        let p = key_parts_plain(strs_get(unique, i))
+        let from = num_of(strs_get(p, 0))
+        let to = num_of(strs_get(p, 1))
+        strs_push(vec_get(callers, to), strs_get(dkey, from))
+        strs_push(vec_get(callees, from), strs_get(dkey, to))
+    }
+
+    // --- the diagnostics of the compilation, each in the declaration holding its primary span ---
+    for i in 0..dg_len(d) {
+        if dg_severity(d, i) != "error" || dg_code(d, i) == "N0204" { continue }
+        let m = diag_file(f, i)
+        let base = fx_module_base(f, m)
+        let a = dg_start(d, i) - base
+        let b = dg_end(d, i) - base
+        let owner = owner_of(oorder, okeys, dstart, dend, m, a, b)
+        if owner < 0 { continue }
+        strs_push(vec_get(diags, owner), pad12(a - ints_get(dstart, owner)) + str_from_byte(0) + pad12(b - ints_get(dstart, owner)) + str_from_byte(0) + dg_code(d, i)
+                + str_from_byte(0) + pad12(dg_fix_total(d, i)))
+    }
+
+    // --- the definitions, by identity ---
+    let mut untracked = 0
+    let idents = strs_new()
+    let hasid = ints_new()
+    for k in 0..nd {
+        let e = ints_get(dent, k)
+        if e >= 0 && ints_get(ents.hasdef, e) == 1 {
+            strs_push(idents, strs_get(ents.def, e))
+            ints_push(hasid, 1)
+        } else {
+            strs_push(idents, "")
+            ints_push(hasid, 0)
+            untracked += 1
+        }
+    }
+    let loose = snap_new()
+    for k in 0..nd {
+        if ints_get(hasid, k) == 0 { continue }
+        let mut same = 0
+        for q in 0..nd {
+            if ints_get(hasid, q) == 1 && strs_get(idents, q) == strs_get(idents, k) { same += 1 }
+        }
+        // One key given to two declarations is not a durable identity for either.
+        if same > 1 {
+            untracked += 1
+            continue
+        }
+        let function = ints_get(dkind, k) == 1
+        let g = ints_get(ddef, k)
+        let sec = strs_new()
+        strs_push(sec, strs_get(dsrc, k))
+        strs_push(sec, strs_get(dshape, k))
+        strs_push(sec, counts("dependencies", vec_get(deps, k)))
+        strs_push(sec, counts("related_types", vec_get(rels, k)))
+        strs_push(sec, counts("references", vec_get(refs, k)))
+        strs_push(sec, if function { counts("callers", vec_get(callers, k)) } else { "" })
+        strs_push(sec, if function { counts("callees", vec_get(callees, k)) } else { "" })
+        strs_push(sec, diagnostics_digest(vec_get(diags, k)))
+        strs_push(sec, if function { effects_digest(f, g) } else { "" })
+        strs_push(sec, if function { provenance_digest(f, g) } else { "" })
+        let word = if function { "function" } else if ints_get(dkind, k) == 2 { "record" } else { "enum" }
+        vec_push(loose.digest, sec)
+        strs_push(loose.identity, strs_get(idents, k))
+        strs_push(loose.kind, word)
+        strs_push(loose.file, fx_file_path(f, ints_get(dm, k)))
+        ints_push(loose.start, ints_get(dstart, k))
+        ints_push(loose.end, ints_get(dend, k))
+    }
+    strs_set(loose.root, 0, strs_get(s.root, 0))
+    strs_set(loose.compiler, 0, strs_get(s.compiler, 0))
+    ints_set(loose.untracked, 0, untracked)
+    snap_order(loose)
+}
+
+// The definitions ordered by identity (the snapshot lists them so).
+fn snap_order(s: Snap) -> Snap {
+    let n = strs_len(s.identity)
+    let rows = strs_new()
+    for i in 0..n { strs_push(rows, strs_get(s.identity, i) + str_from_byte(1) + int_to_str(i)) }
+    let sorted = sn_sort(rows)
+    let out = snap_new()
+    strs_set(out.reason, 0, strs_get(s.reason, 0))
+    strs_set(out.why, 0, strs_get(s.why, 0))
+    strs_set(out.root, 0, strs_get(s.root, 0))
+    strs_set(out.compiler, 0, strs_get(s.compiler, 0))
+    ints_set(out.untracked, 0, ints_get(s.untracked, 0))
+    for r in 0..strs_len(sorted) {
+        let row = strs_get(sorted, r)
+        let mut cut = str_len(row) - 1
+        while str_byte(row, cut) != 1 { cut -= 1 }
+        let i = num_of(str_slice(row, cut + 1, str_len(row)))
+        strs_push(out.identity, strs_get(s.identity, i))
+        strs_push(out.kind, strs_get(s.kind, i))
+        strs_push(out.file, strs_get(s.file, i))
+        ints_push(out.start, ints_get(s.start, i))
+        ints_push(out.end, ints_get(s.end, i))
+        vec_push(out.digest, vec_get(s.digest, i))
+    }
+    out
+}
+
+fn opt_hex(h: Str) -> Str { if h == "" { "null" } else { json_str(h) } }
+
+// The result as `nazm.snapshot/3` serialises it, compact.
+pub fn snap_json(s: Snap) -> Str {
+    if snap_reason(s) != "" {
+        return "{\"schema\":\"nazm.snapshot/3\",\"status\":\"unavailable\",\"reason\":" + json_str(snap_reason(s)) + "}"
+    }
+    let defs = strs_new()
+    for i in 0..snap_count(s) {
+        let dg = strs_new()
+        let names = snap_sections()
+        for k in 0..strs_len(names) { strs_push(dg, "\"" + strs_get(names, k) + "\":" + opt_hex(snap_digest(s, i, k))) }
+        strs_push(defs, "{\"identity\":" + json_str(snap_identity(s, i)) + ",\"kind\":" + json_str(snap_kind(s, i)) + ",\"declaration\":{\"file\":" + json_str(snap_file(s, i))
+                + ",\"start\":" + int_to_str(snap_start(s, i)) + ",\"end\":" + int_to_str(snap_end(s, i)) + "},\"digests\":{" + str_join(dg, ",") + "}}")
+    }
+    "{\"schema\":\"nazm.snapshot/3\",\"status\":\"available\",\"root\":{\"module\":" + json_str(snap_root(s)) + ",\"compiler\":" + json_str(snap_compiler(s))
+            + "},\"definitions\":[" + str_join(defs, ",") + "],\"untracked\":" + int_to_str(snap_untracked(s))
+            + ",\"unsupported\":[\"capabilities\",\"tests\",\"semantic_history\",\"behavioural_equivalence\"]}"
+}
+
+// The result of a root the service cannot analyse: no snapshot, an incomplete compilation.
+pub fn snap_incomplete() -> Snap {
+    let s = snap_new()
+    strs_set(s.reason, 0, "incomplete_compilation")
+    s
+}

@@ -1,0 +1,214 @@
+// What the language service's outline (`nazm_service::symbols`) says of a compilation, over R2's facts: the
+// declarations of a module — functions, records, enums, their fields, variants and payload fields — in source
+// order, with the signature, field and payload types as the renderers write them. Shared by the language server
+// (`lsp.nz`) and the commands that answer from the service's packets (`snap.nz`).
+//
+// Where the facts do not spell something the reference's renderer does (a foreign function's label, a generic
+// function's effect parameter, a record whose fields they do not publish) the reason is put in `why` and the
+// caller refuses: nothing is guessed.
+
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/facts.nz"
+
+// An effect set as `EffectSet`'s `Display` writes it: `{}`, or `{ io, spawn }`.
+pub fn effect_set(mask: Int) -> Str {
+    let names = ck_effect_names(mask)
+    if strs_len(names) == 0 { return "{}" }
+    "{ " + str_join(names, ", ") + " }"
+}
+
+// The declarations of one file, with those it holds: kind (1 function, 2 record, 3 enum, 4 variant, 5 field,
+// 6 payload field), name, its whole declaration and its name (local offsets), what it is (`detail`, with
+// `has` saying there is one), the symbol it is declared in (-1 for none) and the entity-independent number of the
+// function, record or enum it is (`def`, the checker's own numbering; -1 for a member).
+pub struct Sy {
+    kind: Ints,
+    name: Strs,
+    start: Ints,
+    end: Ints,
+    ns: Ints,
+    ne: Ints,
+    detail: Strs,
+    has: Ints,
+    parent: Ints,
+    def: Ints,
+    why: Strs,
+}
+
+pub fn sy_new() -> Sy {
+    Sy(kind: ints_new(), name: strs_new(), start: ints_new(), end: ints_new(), ns: ints_new(), ne: ints_new(), detail: strs_new(), has: ints_new(), parent: ints_new(),
+            def: ints_new(), why: strs_new())
+}
+
+pub fn sy_len(y: Sy) -> Int { ints_len(y.kind) }
+pub fn sy_kind(y: Sy, i: Int) -> Int { ints_get(y.kind, i) }
+pub fn sy_name(y: Sy, i: Int) -> Str { strs_get(y.name, i) }
+pub fn sy_start(y: Sy, i: Int) -> Int { ints_get(y.start, i) }
+pub fn sy_end(y: Sy, i: Int) -> Int { ints_get(y.end, i) }
+pub fn sy_name_start(y: Sy, i: Int) -> Int { ints_get(y.ns, i) }
+pub fn sy_name_end(y: Sy, i: Int) -> Int { ints_get(y.ne, i) }
+pub fn sy_detail(y: Sy, i: Int) -> Str { strs_get(y.detail, i) }
+pub fn sy_has_detail(y: Sy, i: Int) -> Bool { ints_get(y.has, i) == 1 }
+pub fn sy_parent(y: Sy, i: Int) -> Int { ints_get(y.parent, i) }
+pub fn sy_def(y: Sy, i: Int) -> Int { ints_get(y.def, i) }
+// Why the facts could not spell what was asked, "" where they could.
+pub fn sy_why(y: Sy) -> Str { if strs_len(y.why) > 0 { strs_get(y.why, 0) } else { "" } }
+
+fn sy_fail(y: Sy, why: Str) -> Int {
+    if strs_len(y.why) == 0 { strs_push(y.why, why) }
+    0
+}
+
+pub fn sy_add(y: Sy, kind: Int, name: Str, s: Int, e: Int, ns: Int, ne: Int, detail: Str, has: Bool, parent: Int, def: Int) -> Int {
+    ints_push(y.kind, kind)
+    strs_push(y.name, name)
+    ints_push(y.start, s)
+    ints_push(y.end, e)
+    ints_push(y.ns, ns)
+    ints_push(y.ne, ne)
+    strs_push(y.detail, detail)
+    ints_push(y.has, if has { 1 } else { 0 })
+    ints_push(y.parent, parent)
+    ints_push(y.def, def)
+    ints_len(y.kind) - 1
+}
+
+// The symbols declared in `parent` (-1 for the top level), in source order.
+pub fn sy_kids(y: Sy, parent: Int) -> Ints {
+    let out = ints_new()
+    for i in 0..ints_len(y.kind) {
+        if ints_get(y.parent, i) != parent { continue }
+        let mut at = ints_len(out)
+        while at > 0 && (ints_get(y.start, ints_get(out, at - 1)) > ints_get(y.start, i)
+                || (ints_get(y.start, ints_get(out, at - 1)) == ints_get(y.start, i) && ints_get(y.ns, ints_get(out, at - 1)) > ints_get(y.ns, i))) { at -= 1 }
+        ints_push(out, 0)
+        let mut k = ints_len(out) - 1
+        while k > at {
+            ints_set(out, k, ints_get(out, k - 1))
+            k -= 1
+        }
+        ints_set(out, at, i)
+    }
+    out
+}
+
+// `fn NAME[T: Equality](a: T) -> R ! { … }`: the declared signature of function `i`, as `Signature::render`
+// spells it; "" and a reason in `why` for a function whose label the facts do not spell.
+pub fn fn_label(f: Facts, i: Int, why: Strs) -> Str {
+    let c = fx_checker(f)
+    let t = fx_tree(f)
+    let node = ck_fn_node(c, i)
+    let params = sx_items(t, sx_field(t, node, "params"))
+    let tys = ck_fn_params(c, i)
+    let shown = strs_new()
+    // `main`'s `out` is written nowhere: the checker gives it first.
+    let implicit = strs_len(tys) - ints_len(params)
+    if implicit < 0 || implicit > 1 {
+        strs_push(why, "a function whose parameters the facts do not name")
+        return ""
+    }
+    if implicit == 1 { strs_push(shown, "out: " + strs_get(tys, 0)) }
+    for k in 0..ints_len(params) {
+        let p = sx_name(t, ints_get(params, k), "name")
+        if p == "" {
+            strs_push(why, "a function whose parameters the facts do not name")
+            return ""
+        }
+        strs_push(shown, p + ": " + strs_get(tys, k + implicit))
+    }
+    let foreign = ck_fn_foreign(c, i)
+    let mut sig = (if foreign != "" { "extern \"C\" fn " } else { "fn " }) + ck_fn_name(c, i)
+    let tps = sx_items(t, sx_field(t, node, "type_params"))
+    if ints_len(tps) > 0 {
+        let names = strs_new()
+        for k in 0..ints_len(tps) {
+            let tp = ints_get(tps, k)
+            if sx_text(t, sx_field(t, tp, "effect")) == "true" {
+                strs_push(why, "a function with an effect parameter")
+                return ""
+            }
+            let req = sx_field(t, tp, "requires")
+            strs_push(names, sx_name(t, tp, "name") + (if sx_is_some(t, req) && sx_name(t, sx_unwrap(t, req), "name") == "Equality" { ": Equality" } else { "" }))
+        }
+        sig = sig + "[" + str_join(names, ", ") + "]"
+    }
+    sig = sig + "(" + str_join(shown, ", ") + ") -> " + ck_fn_ret(c, i)
+    if foreign != "" { return sig + " = \"" + foreign + "\"" }
+    let declared = ck_fn_declared(c, i)
+    if declared >= 0 { sig = sig + " ! " + effect_set(declared) }
+    sig
+}
+
+// The symbols of module `m` (`declared_in`): functions, then records, then enums; each in source order within
+// its parent. `details` asks for the labels (a document's outline).
+pub fn symbols_of(f: Facts, m: Int, details: Bool) -> Sy {
+    let c = fx_checker(f)
+    let t = fx_tree(f)
+    let y = sy_new()
+    let base = fx_module_base(f, m)
+    for i in 0..ck_fn_count(c) {
+        if ck_fn_module(c, i) != m || ck_fn_closure(c, i) { continue }
+        let node = ck_fn_node(c, i)
+        if node < 0 { continue }
+        let span = sx_field(t, node, "span")
+        let sig = if details { fn_label(f, i, y.why) } else { "" }
+        sy_add(y, 1, ck_fn_name(c, i), fx_start(f, span), fx_end(f, span), ck_fn_name_start(c, i) - base, ck_fn_name_end(c, i) - base, sig, details, 0 - 1, i)
+    }
+    for r in 0..ck_record_count(c) {
+        if ck_record_module(c, r) != m { continue }
+        let node = ck_record_node(c, r)
+        if node < 0 { continue }
+        let span = sx_field(t, node, "span")
+        let at = sy_add(y, 2, ck_record_name(c, r), fx_start(f, span), fx_end(f, span), ck_record_name_start(c, r) - base, ck_record_name_end(c, r) - base, "", false, 0 - 1, r)
+        let rt = fx_record_type(f, r)
+        let fields = sx_items(t, sx_field(t, node, "fields"))
+        if rt < 0 || ck_record_arity(c, rt) != ints_len(fields) {
+            sy_fail(y, "a record whose fields the facts do not publish")
+            continue
+        }
+        for k in 0..ints_len(fields) {
+            let fd = ints_get(fields, k)
+            let fs = sx_field(t, fd, "span")
+            let ns = sx_field(t, fd, "name_span")
+            sy_add(y, 5, ck_record_field_name(c, rt, k), fx_start(f, fs), fx_end(f, fs), fx_start(f, ns), fx_end(f, ns),
+                    fx_show(f, fx_record_field_ty(f, rt, k)), true, at, 0 - 1)
+        }
+    }
+    for e in 0..ck_enum_count(c) {
+        if ck_enum_module(c, e) != m { continue }
+        let node = ck_enum_node(c, e)
+        if node < 0 { continue }
+        let span = sx_field(t, node, "span")
+        let at = sy_add(y, 3, ck_enum_name(c, e), fx_start(f, span), fx_end(f, span), ck_enum_name_start(c, e) - base, ck_enum_name_end(c, e) - base, "", false, 0 - 1, e)
+        let et = fx_enum_type(f, e)
+        let variants = sx_items(t, sx_field(t, node, "variants"))
+        if et < 0 || ck_variant_count(c, et) != ints_len(variants) {
+            sy_fail(y, "an enum whose variants the facts do not publish")
+            continue
+        }
+        for v in 0..ints_len(variants) {
+            let vn = ints_get(variants, v)
+            let vs = sx_field(t, vn, "span")
+            let vns = sx_field(t, vn, "name_span")
+            let payload = sx_items(t, sx_field(t, vn, "fields"))
+            if ck_variant_arity(c, et, v) != ints_len(payload) {
+                sy_fail(y, "a variant whose payload the facts do not publish")
+                continue
+            }
+            let listed = strs_new()
+            for k in 0..ints_len(payload) { strs_push(listed, ck_payload_name(c, et, v, k) + ": " + fx_show(f, fx_payload_ty(f, et, v, k))) }
+            let vname = ck_variant_name(c, et, v)
+            let vat = sy_add(y, 4, vname, fx_start(f, vs), fx_end(f, vs), fx_start(f, vns), fx_end(f, vns), vname + "(" + str_join(listed, ", ") + ")", ints_len(payload) > 0, at, 0 - 1)
+            for k in 0..ints_len(payload) {
+                let pn = ints_get(payload, k)
+                let ps = sx_field(t, pn, "span")
+                let pns = sx_field(t, pn, "name_span")
+                sy_add(y, 6, ck_payload_name(c, et, v, k), fx_start(f, ps), fx_end(f, ps), fx_start(f, pns), fx_end(f, pns),
+                        fx_show(f, fx_payload_ty(f, et, v, k)), true, vat, 0 - 1)
+            }
+        }
+    }
+    y
+}

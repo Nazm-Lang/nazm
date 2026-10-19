@@ -369,7 +369,8 @@ of its own (`toolchain/commands/group.nz`: `help` and `-h` in short and long for
 unknown command with its similar one, `help CMD`, `--` before a command), and `cli.nz` gained the
 required option and `usize`.
 
-`patch rename` and `patch fix` read their arguments and the root as `open_from_disk` reads it (a
+(Superseded by D24: the plans of `patch rename` and `patch fix` are carried since R2 published what they bind to.
+What follows is what this decision found and handed back.) `patch rename` and `patch fix` read their arguments and the root as `open_from_disk` reads it (a
 root that cannot be read is `nazm patch: ROOT: REASON`, status 4) and then refuse: every plan
 `nazm.patch/1` prints is bound to the root's `nazm.snapshot/3` — a BLAKE3 over digests of each
 definition's dependencies, related types, references, callers, callees, effects and provenance —
