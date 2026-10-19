@@ -221,11 +221,11 @@ fn peak(exe: &Path) -> f64 {
         .unwrap()
 }
 
-#[test]
 #[cfg_attr(
     windows,
     ignore = "measures peak resident memory with /usr/bin/time, which Windows does not have"
 )]
+#[test]
 fn blocks_freed_on_another_thread_go_back_to_c_past_the_bound() {
     // Without the bound, `main`'s list would keep every block the task allocated — 200,000 of
     // 224 bytes, some 45 MB — while the task, its own list empty, asked C for each new one.
