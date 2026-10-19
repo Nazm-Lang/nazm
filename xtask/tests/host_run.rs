@@ -98,6 +98,138 @@ fn a_stage_within_its_limit_runs_and_its_peak_is_recorded() {
 
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "the host runner is macOS only")]
+fn the_programs_exit_status_is_the_runners_and_its_report_is_not_on_stdout() {
+    let d = tempfile::tempdir().unwrap();
+    for code in [0, 1, 2, 7, 255] {
+        let exe = script(
+            d.path(),
+            "status",
+            true,
+            Some("4194304"),
+            &format!("echo out-line\necho err-line >&2\nexit {code}\n"),
+        );
+        let o = host_run(d.path(), &["--", exe.to_str().unwrap()]);
+        assert_eq!(o.status.code(), Some(code), "{}", text(&o));
+        // Standard output is the program's, byte for byte; the report is apart from it.
+        assert_eq!(String::from_utf8_lossy(&o.stdout), "out-line\n");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(err.starts_with("err-line\n"), "{err}");
+        assert!(
+            err.contains("host-run: heap limit 4194304 bytes; peak resident "),
+            "{err}"
+        );
+        assert!(err.contains(&format!("exit Some({code})")), "{err}");
+        assert!(!d.path().join("withdrawn").exists());
+    }
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the host runner is macOS only")]
+fn a_report_file_leaves_standard_error_the_programs_alone() {
+    let d = tempfile::tempdir().unwrap();
+    let exe = script(
+        d.path(),
+        "status",
+        true,
+        Some("4194304"),
+        "echo out-line\necho err-line >&2\nexit 3\n",
+    );
+    let report = d.path().join("peaks.log");
+    for _ in 0..2 {
+        let o = host_run(
+            d.path(),
+            &[
+                "--report",
+                report.to_str().unwrap(),
+                "--",
+                exe.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(o.status.code(), Some(3), "{}", text(&o));
+        assert_eq!(String::from_utf8_lossy(&o.stdout), "out-line\n");
+        assert_eq!(String::from_utf8_lossy(&o.stderr), "err-line\n");
+    }
+    // Appended, one line per run.
+    let log = fs::read_to_string(&report).unwrap();
+    assert_eq!(log.lines().count(), 2, "{log}");
+    assert!(
+        log.lines()
+            .all(|l| l.contains("heap limit 4194304 bytes; peak resident ")
+                && l.contains("exit Some(3)")),
+        "{log}"
+    );
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the host runner is macOS only")]
+fn output_is_passed_as_bytes_and_a_truncation_is_a_failure_of_its_own() {
+    let d = tempfile::tempdir().unwrap();
+    // Bytes that are not UTF-8 arrive as they were written.
+    let raw = script(
+        d.path(),
+        "raw",
+        true,
+        Some("4194304"),
+        "printf '\\377\\376ok\\n'\n",
+    );
+    let o = host_run(d.path(), &["--", raw.to_str().unwrap()]);
+    assert!(o.status.success(), "{}", text(&o));
+    assert_eq!(o.stdout, b"\xff\xfeok\n");
+    // Output past the cap is dropped, and the run says so with a status that is not the program's.
+    let big = script(
+        d.path(),
+        "big",
+        true,
+        Some("4194304"),
+        "yes 0123456789abcdef | head -c 2097152\n",
+    );
+    let o = host_run(
+        d.path(),
+        &["--max-output-mib", "1", "--", big.to_str().unwrap()],
+    );
+    assert_eq!(o.status.code(), Some(126), "{}", text(&o));
+    assert_eq!(o.stdout.len(), 1024 * 1024);
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("OUTPUT TRUNCATED at 1048576 bytes"),
+        "{}",
+        text(&o)
+    );
+    let o = host_run(
+        d.path(),
+        &["--max-output-mib", "3", "--", big.to_str().unwrap()],
+    );
+    assert!(o.status.success(), "{}", text(&o));
+    assert_eq!(o.stdout.len(), 2 * 1024 * 1024);
+    refused_as(
+        &host_run(
+            d.path(),
+            &["--max-output-mib", "257", "--", big.to_str().unwrap()],
+        ),
+        "usage",
+    );
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the host runner is macOS only")]
+fn a_refusal_and_a_deadline_have_statuses_of_their_own() {
+    let d = tempfile::tempdir().unwrap();
+    let plain = script(d.path(), "plain", false, Some("4194304"), "exit 0\n");
+    assert_eq!(
+        host_run(d.path(), &["--", plain.to_str().unwrap()])
+            .status
+            .code(),
+        Some(1)
+    );
+    let hangs = script(d.path(), "hangs", true, Some("4194304"), "sleep 30\n");
+    let o = host_run(
+        d.path(),
+        &["--deadline-secs", "1", "--", hangs.to_str().unwrap()],
+    );
+    assert_eq!(o.status.code(), Some(124), "{}", text(&o));
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the host runner is macOS only")]
 fn a_program_without_the_counted_heap_is_refused_by_name() {
     let d = tempfile::tempdir().unwrap();
     let exe = script(d.path(), "plain", false, Some("4194304"), "echo ran\n");

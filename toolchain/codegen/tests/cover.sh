@@ -8,19 +8,25 @@
 # with every form LIR admits (`nzcg --universe`). Prints the forms no input uses, then
 # `covered N of M forms`. A form is counted only from inputs that agreed with LLVM in that run.
 set -u
-NAZM=${NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
+# The generator is a program written in Nazm: built by the checkout's `nazm` with a heap limit of at
+# most 2 GiB and run through `cargo xtask host-run` on macOS (one at a time) or contained
+# (`toolchain/lib/stage.sh`; the runbook's R6 rule).
+stage_name=codegen-cover
+. "$(dirname "$0")/../../lib/stage.sh"
+stage_init "$(cd "$(dirname "$0")/../../.." && pwd)"
+NAZM=${NAZM:-$(stage_checkout_nazm "$stage_root")}
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${NZCG_OUT:-$HERE/out}
 WORK=$OUT/work-${NZCG_TARGET:-aarch64-apple-darwin}
 NZCG=$OUT/nzcg
 mkdir -p "$OUT"
-"$NAZM" build "$HERE/main.nz" -o "$NZCG" >"$OUT/build.log" 2>&1 || { cat "$OUT/build.log"; exit 2; }
-"$NZCG" --universe | sort -u >"$OUT/universe.txt"
+stage_build "$NAZM" "$HERE/main.nz" -o "$NZCG" >"$OUT/build.log" 2>&1 || { cat "$OUT/build.log"; exit 2; }
+"$STAGE_RUN" 300 "$NZCG" --universe | sort -u >"$OUT/universe.txt"
 : >"$OUT/seen.all"
 for d in "$WORK"/*/; do
   [ -f "$d/gen.status" ] && cmp -s "$d/ref.status" "$d/gen.status" &&
     cmp -s "$d/ref.stdout" "$d/gen.stdout" && cmp -s "$d/ref.stderr" "$d/gen.stderr" || continue
-  "$NZCG" --forms "$d/lir.txt" >>"$OUT/seen.all"
+  "$STAGE_RUN" 300 "$NZCG" --forms "$d/lir.txt" >>"$OUT/seen.all"
 done
 sort -u "$OUT/seen.all" >"$OUT/seen.txt"
 extra=$(comm -13 "$OUT/universe.txt" "$OUT/seen.txt")

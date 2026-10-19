@@ -4,8 +4,13 @@
 #
 #   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init, check, doc, fix, lsp, test, interface, docs, bindgen, reload, agent, mcp (all by default)
 #
-# The Nazm `nazm` (toolchain/commands/nazm.nz, which dispatches to CMD.nz) is built by the 0.10.0
-# release ($NAZM) and run as the reference is run, `nazm CMD ARGS`. The reference is
+# The Nazm `nazm` (toolchain/commands/nazm.nz, which dispatches to CMD.nz) is built by the checkout's
+# `nazm` ($NAZM, with a heap limit of at most 2 GiB) and run as the reference is run, `nazm CMD
+# ARGS`. It runs thousands of times, in parallel, so this is contained work (R6, `docs/runbook.md`):
+#
+#   cargo xtask contained run 'cargo build --locked -p nazm-cli && NAZM=target/debug/nazm sh toolchain/commands/tests/run.sh'
+#
+# and refuses to start anywhere else. The reference is
 # `nazm` built from this checkout into $CARGO_TARGET_DIR (default ~/.cache/nazm-target-track5), or
 # $NAZM_REF when set. Every comparison is of the whole observable behaviour — standard output,
 # standard error, the exit status and every file afterwards — byte for byte. A refusal (exit 6:
@@ -84,7 +89,10 @@ done
 [ -n "$parts" ] || parts="fmt args init check doc fix lsp test interface docs bindgen reload agent mcp"
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-nazm=${NAZM:-"$HOME/.local/nazm-0.10.0/bin/nazm"}
+. "$root/toolchain/lib/stage.sh"
+stage_name=commands
+stage_init "$root" contained
+nazm=${NAZM:-$(stage_checkout_nazm "$root")}
 [ -x "$nazm" ] || { echo "run.sh: no nazm at $nazm (set NAZM)" >&2; exit 2; }
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/r5-commands.XXXXXX")
@@ -108,9 +116,7 @@ if [ -n "${NAZM_PORT:-}" ]; then
   # A port already built from this checkout's toolchain/commands/nazm.nz.
   port=$NAZM_PORT
 else
-  # No `--heap-limit`: under one, 0.10.0's `os_realpath` traps (status 133), and `check` and `doc`
-  # canonicalise paths as the reference does (design D13).
-  "$nazm" build --stack-size 256M "$root/toolchain/commands/nazm.nz" -o "$work/bin/nazm" > "$work/build.log" 2>&1 \
+  stage_build "$nazm" --stack-size 256M "$root/toolchain/commands/nazm.nz" -o "$work/bin/nazm" > "$work/build.log" 2>&1 \
     || { cat "$work/build.log" >&2; echo "run.sh: toolchain/commands/nazm.nz did not build" >&2; exit 2; }
   port="$work/bin/nazm"
 fi
@@ -1381,7 +1387,7 @@ part_mcp() {
   if [ -n "${NAZM_MCP_PORT:-}" ]; then
     mport=$NAZM_MCP_PORT
   else
-    "$nazm" build --stack-size 256M "$root/toolchain/commands/mcp.nz" -o "$work/bin/nazm-mcp" > "$work/build-mcp.log" 2>&1 \
+    stage_build "$nazm" --stack-size 256M "$root/toolchain/commands/mcp.nz" -o "$work/bin/nazm-mcp" > "$work/build-mcp.log" 2>&1 \
       || { cat "$work/build-mcp.log" >&2; echo "run.sh: toolchain/commands/mcp.nz did not build" >&2; exit 2; }
     mport="$work/bin/nazm-mcp"
   fi
