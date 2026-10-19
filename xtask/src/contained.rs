@@ -514,7 +514,10 @@ fn image_present() -> bool {
 /// Drains a stream to exhaustion on its own thread, keeping at most `cap` bytes. Draining
 /// matters as much as capping: a child that fills a pipe nobody reads simply blocks, and
 /// the deadline then reports a hang that is really a full buffer.
-fn drain<R: Read + Send + 'static>(mut r: R, cap: usize) -> mpsc::Receiver<(Vec<u8>, u64)> {
+pub(crate) fn drain<R: Read + Send + 'static>(
+    mut r: R,
+    cap: usize,
+) -> mpsc::Receiver<(Vec<u8>, u64)> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut kept = Vec::new();
