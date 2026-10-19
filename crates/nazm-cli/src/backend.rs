@@ -418,8 +418,36 @@ fn link_args(opt_level: u8, cross: Option<&str>, whole: bool) -> Vec<String> {
     a.extend(target_args(cross));
     if whole {
         a.push("-flto=thin".to_owned());
+        // The code is generated at the link, by the linker's libLTO, which knows no CPU but its
+        // own default: for arm64 the first ARMv8.0, with no large-system extensions, so every
+        // atomic was a load-/store-exclusive loop (2026-10-19: four tasks +13%, the lock-free
+        // channels' compare-and-swap under contention). It gets the CPU a separately optimised
+        // object is compiled for, clang's own default for the triple — the target's baseline,
+        // never the host's (N66).
+        if let Some(cpu) = whole_program_cpu(cross) {
+            a.push(format!("-Wl,-mcpu,{cpu}"));
+        }
     }
     a
+}
+
+/// The CPU clang compiles an object for by default on a macOS target (`-target-cpu` in what
+/// `clang -###` resolves): what a whole-program link must name for its code generation to be a
+/// separately optimised build's (R1.5 3.4). `None` for a target with no whole-program link.
+fn whole_program_cpu(cross: Option<&str>) -> Option<&'static str> {
+    let arch = match cross {
+        None if std::env::consts::OS == "macos" => std::env::consts::ARCH,
+        None => return None,
+        Some(t) if t.contains("-apple-darwin") || t.contains("-apple-macos") => {
+            t.split('-').next().unwrap_or("")
+        }
+        Some(_) => return None,
+    };
+    match arch {
+        "aarch64" | "arm64" => Some("apple-m1"),
+        "x86_64" => Some("penryn"),
+        _ => None,
+    }
 }
 
 /// The system libraries a link needs beyond the C library, for the target being linked: on
@@ -982,6 +1010,57 @@ mod tests {
         assert!(link_args(2, None, true).contains(&flto));
         assert!(!compile_args(2, None, false).contains(&flto));
         assert!(!link_args(2, None, false).contains(&flto));
+    }
+
+    #[test]
+    fn a_whole_program_link_generates_for_the_cpu_a_separate_object_is_compiled_for() {
+        // 2026-10-19: without a CPU, libLTO generated ARMv8.0 code — every atomic a
+        // load-/store-exclusive loop — where a separately compiled object had the M1's.
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("cpu.ll");
+        std::fs::write(&input, b"").unwrap();
+        for cross in [
+            None,
+            Some("aarch64-apple-darwin"),
+            Some("x86_64-apple-darwin"),
+        ] {
+            let Some(cpu) = whole_program_cpu(cross) else {
+                assert!(!whole_program(2, cross), "{cross:?}");
+                continue;
+            };
+            let named = format!("-Wl,-mcpu,{cpu}");
+            assert!(link_args(2, cross, true).contains(&named), "{cross:?}");
+            assert!(!link_args(2, cross, false).contains(&named), "{cross:?}");
+            assert!(!compile_args(2, cross, true)
+                .iter()
+                .any(|a| a.contains("cpu")));
+            // The CPU is the one clang itself resolves for a separately optimised object.
+            let Ok(out) = Command::new(DRIVER)
+                .arg("-###")
+                .args(compile_args(2, cross, false))
+                .arg(&input)
+                .output()
+            else {
+                continue;
+            };
+            let report = String::from_utf8_lossy(&out.stderr);
+            let job = report
+                .lines()
+                .filter(|l| l.starts_with(' '))
+                .map(split)
+                .find(|j| j.iter().any(|a| a == "-target-cpu"));
+            if let Some(job) = job {
+                let at = job.iter().position(|a| a == "-target-cpu").unwrap();
+                assert_eq!(job.get(at + 1).map(String::as_str), Some(cpu), "{cross:?}");
+            }
+        }
+        for cross in [
+            "x86_64-pc-windows-gnu",
+            "aarch64-unknown-linux-gnu",
+            "wasm32-wasip1",
+        ] {
+            assert_eq!(whole_program_cpu(Some(cross)), None, "{cross}");
+        }
     }
 
     #[test]
