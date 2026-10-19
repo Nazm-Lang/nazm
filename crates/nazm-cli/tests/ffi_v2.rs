@@ -330,8 +330,11 @@ fn a_library_and_its_header_link_into_a_c_program_under_both_backends() {
             HEADER,
             "{backend}"
         );
-        d.clang(&["main.c", "libnz.a", "-o", "host"]);
-        let r = run(&d.path("host"), &[]);
+        let host = crate::common::exe_name("host");
+        let mut link = vec!["main.c", "libnz.a", "-o", host.as_str()];
+        link.extend_from_slice(common::c_host_libs());
+        d.clang(&link);
+        let r = run(&d.path(&host), &[]);
         assert_eq!(
             (r.code, r.stdout.replace("\r\n", "\n").as_str()),
             (Some(0), "25 1 0\n"),
@@ -339,9 +342,9 @@ fn a_library_and_its_header_link_into_a_c_program_under_both_backends() {
         );
         // A failure inside an export ends the process with Nazm's diagnostic and status 2,
         // and C never sees a value.
-        let r = run(&d.path("host"), &["wrap"]);
+        let r = run(&d.path(&host), &["wrap"]);
         assert_eq!(r.code, Some(2), "{backend}: {r:?}");
-        assert_eq!(r.stdout, "25 1 0\n", "{backend}");
+        assert_eq!(r.stdout.replace("\r\n", "\n"), "25 1 0\n", "{backend}");
         assert!(r.stderr.contains("N0400"), "{backend}: {r:?}");
     }
 }

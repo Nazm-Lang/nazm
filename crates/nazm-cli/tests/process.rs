@@ -108,6 +108,10 @@ fn main(p: ProcessCap, s: SpawnCap, out: OutCap) -> Int {\n\
     0\n\
 }\n";
 
+#[cfg_attr(
+    windows,
+    ignore = "the child is a POSIX shell script ending itself with `kill -9`: Windows has no signals, and no `sh` of its own, so the 256 + signal status cannot arise"
+)]
 #[test]
 fn a_program_runs_with_input_and_its_output_errors_and_status_come_back_everywhere() {
     // How a pipe splits 300 KB into reads is the system's timing, so the buffers a run allocates

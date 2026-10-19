@@ -235,7 +235,16 @@ pub(super) fn tcp_write(h: i64, s: &TcpStream, data: &BytesView) -> i64 {
 fn udp_recv(h: i64, u: &UdpSocket, buf: &BytesView, from: &BytesView) -> i64 {
     let deadline = timeout_of(h).map(|d| Instant::now() + d);
     let slice = Duration::from_millis(20);
-    let mut got = vec![0; buf.len];
+    // Winsock reports a datagram longer than the buffer as an error (`WSAEMSGSIZE`) where POSIX
+    // cuts it, so on Windows it is read whole and cut here, as the compiled runtime cuts it.
+    let mut got = vec![
+        0;
+        if cfg!(windows) {
+            buf.len.max(65_536)
+        } else {
+            buf.len
+        }
+    ];
     loop {
         let wait = deadline.map_or(slice, |d| {
             d.saturating_duration_since(Instant::now()).min(slice)
@@ -249,6 +258,7 @@ fn udp_recv(h: i64, u: &UdpSocket, buf: &BytesView, from: &BytesView) -> i64 {
                 if object(h).is_err() {
                     return CLOSED;
                 }
+                let n = n.min(buf.len);
                 buf.write(0, got.get(..n).unwrap_or_default());
                 let mut text = who.to_string().into_bytes();
                 text.resize(from.len, 0);

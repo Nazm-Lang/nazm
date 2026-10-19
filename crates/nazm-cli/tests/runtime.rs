@@ -370,8 +370,14 @@ fn build(dir: &Path) -> std::path::PathBuf {
     std::fs::write(dir.join("stack.ll"), emit_stack(host)).unwrap();
     std::fs::write(dir.join("harness.c"), HARNESS).unwrap();
     let exe = dir.join(crate::common::exe_name("harness"));
-    let o = Command::new("clang")
-        .args(["-O1", "-Wno-override-module", "-pthread"])
+    let mut clang = Command::new("clang");
+    clang.args(["-O1", "-Wno-override-module", "-pthread"]);
+    if cfg!(windows) {
+        // The `os` unit's sockets and random bytes are Winsock's and CNG's; `nazm build` links
+        // them the same way (`-lws2_32 -lbcrypt`).
+        clang.args(["-lws2_32", "-lbcrypt"]);
+    }
+    let o = clang
         .arg(dir.join("runtime.ll"))
         .arg(dir.join("switch.ll"))
         .arg(dir.join("errno.ll"))

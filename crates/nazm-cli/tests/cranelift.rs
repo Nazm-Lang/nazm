@@ -367,19 +367,20 @@ fn choosing_cranelift_writes_no_llvm_text_for_any_unit() {
     // Only the runtime, the platform entry, the task pool's switch (N83), the target's
     // `errno` (N85), its `os` unit (Gate 2), its `stack` unit (Gate 3) and the small-block heap's
     // (R1.5 3.1) are LLVM text; every unit is an object.
-    assert_eq!(
-        ll,
-        [
-            "prog.entry.ll",
-            "prog.errno.ll",
-            "prog.os.ll",
-            "prog.runtime.ll",
-            "prog.small.ll",
-            "prog.stack.ll",
-            "prog.switch.ll"
-        ],
-        "{ll:?}"
-    );
+    // Windows's `init` unit (binary standard streams) is LLVM text too.
+    let mut want = vec![
+        "prog.entry.ll",
+        "prog.errno.ll",
+        "prog.os.ll",
+        "prog.runtime.ll",
+        "prog.small.ll",
+        "prog.stack.ll",
+        "prog.switch.ll",
+    ];
+    if cfg!(windows) {
+        want.insert(2, "prog.init.ll");
+    }
+    assert_eq!(ll, want, "{ll:?}");
 }
 
 /// The native program for a source, as a backend sees it.

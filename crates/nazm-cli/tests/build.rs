@@ -969,6 +969,10 @@ fn a_statement_position_if_compiles_but_other_expression_statements_do_not() {
     expect_value("    { 1 }", "1");
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "Windows keeps the failure bit (Target::failures): `{T, i1}` returns and joins, no landing pads, until its unwinding is verified; this test reads the hosted unwinding IR"
+)]
 #[test]
 fn the_emitted_ir_for_a_conditional_is_well_formed() {
     // clang accepting the module is the real check — it verifies the IR, including that
@@ -2057,6 +2061,10 @@ fn a_working_loop_executable_survives_a_later_refused_build() {
     );
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "Windows keeps the failure bit (Target::failures): `{T, i1}` returns and joins, no landing pads, until its unwinding is verified; this test reads the hosted unwinding IR"
+)]
 #[test]
 fn many_iterations_with_body_locals_allocate_once_in_the_entry_block() {
     // Two claims, and they are separate.
@@ -2689,6 +2697,10 @@ fn assert_control_flow_is_well_formed(ir: &str) -> usize {
     blocks
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "Windows keeps the failure bit (Target::failures): `{T, i1}` returns and joins, no landing pads, until its unwinding is verified; this test reads the hosted unwinding IR"
+)]
 #[test]
 fn the_emitted_ir_for_nested_control_flow_is_well_formed() {
     // One program carrying every shape M1e adds at once: nested loops, `break` and
@@ -3447,8 +3459,11 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
             continue;
         }
         let stderr = String::from_utf8_lossy(&out.stderr);
+        // A TLS built-in on Windows is refused by the build for the target (N0830) until the
+        // SChannel binding has passed on a Windows host.
+        let refused_for_the_target = cfg!(windows) && stderr.contains("error[N0830]");
         assert!(
-            stderr.contains(&format!("the built-in `{}`", i.name())),
+            refused_for_the_target || stderr.contains(&format!("the built-in `{}`", i.name())),
             "`{}` neither compiles nor is refused by name: {stderr}",
             i.name()
         );
@@ -4452,7 +4467,13 @@ fn every_generated_function_asks_for_stack_probes() {
             for line in std::fs::read_to_string(&p).unwrap().lines() {
                 if line.starts_with("define ") {
                     defines += 1;
-                    assert!(line.contains("\"probe-stack\"=\"inline-asm\""), "{line}");
+                    // Inline everywhere but Windows, where LLVM calls the platform's `__chkstk`
+                    // unasked (`Target::probes`).
+                    assert_eq!(
+                        line.contains("\"probe-stack\"=\"inline-asm\""),
+                        !cfg!(windows),
+                        "{line}"
+                    );
                 }
             }
         }

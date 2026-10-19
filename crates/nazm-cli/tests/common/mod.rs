@@ -129,6 +129,11 @@ pub(crate) fn bounded_exe(exe: &std::path::Path) -> std::process::Command {
 
 /// [`bounded_exe`] under a ceiling of `kb` kilobytes rather than [`ADDRESS_SPACE_KB`].
 pub(crate) fn bounded_exe_within(exe: &std::path::Path, kb: u64) -> std::process::Command {
+    // Windows has no `RLIMIT_AS`, and no `sh` of its own: the program runs directly, under the
+    // run's deadline, which is the bound a test can still keep there.
+    if cfg!(windows) {
+        return std::process::Command::new(exe);
+    }
     let script = format!(
         r#"if [ "$(uname -s)" = Linux ]; then
     ulimit -v {kb} || {{ printf 'bounded_exe: cannot set RLIMIT_AS
@@ -183,6 +188,16 @@ pub(crate) fn run_within(
     cmd: &mut std::process::Command,
     limit: std::time::Duration,
 ) -> Option<Ran> {
+    run_within_stdin(cmd, limit, std::process::Stdio::null())
+}
+
+/// [`run_within`] with the child's standard input `stdin` (a file, where a test would have a shell
+/// redirect one: Windows has no `sh`).
+pub(crate) fn run_within_stdin(
+    cmd: &mut std::process::Command,
+    limit: std::time::Duration,
+    stdin: std::process::Stdio,
+) -> Option<Ran> {
     use std::io::Read;
     use std::process::Stdio;
 
@@ -202,7 +217,7 @@ pub(crate) fn run_within(
     }
 
     let mut child = cmd
-        .stdin(Stdio::null())
+        .stdin(stdin)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -249,6 +264,23 @@ pub(crate) fn skip_without(present: bool, what: &str) -> bool {
     );
     eprintln!("SKIP: {what}");
     true
+}
+
+/// The units a build has beyond the portable ones where the target does something before `main`:
+/// Windows's `init` unit (binary standard streams), which every Windows build carries; nothing
+/// elsewhere. A test that counts a build's units adds it.
+pub(crate) const PLATFORM_UNITS: u64 = if cfg!(windows) { 1 } else { 0 };
+/// [`PLATFORM_UNITS`] as a length.
+pub(crate) const PLATFORM_UNITS_LEN: usize = if cfg!(windows) { 1 } else { 0 };
+
+/// What a C program linking a Nazm static library needs beyond the library: on Windows the runtime's
+/// threads, sockets and random bytes (the libraries `nazm build` links itself); nothing elsewhere.
+pub(crate) fn c_host_libs() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["-pthread", "-lws2_32", "-lbcrypt"]
+    } else {
+        &[]
+    }
 }
 
 /// The name `nazm build -o NAME` publishes on this platform: `NAME` plus the platform's

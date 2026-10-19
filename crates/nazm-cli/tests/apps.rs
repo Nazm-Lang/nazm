@@ -40,6 +40,17 @@ fn staged(name: &str) -> tempfile::TempDir {
 
 /// `sh -c` running `program…` with standard input from `stdin`, when there is one.
 fn shell(dir: &Path, program: &[String], args: &[String], stdin: Option<&str>) -> Ran {
+    // Windows has no `sh` of its own: the program is started directly, its input the file.
+    if cfg!(windows) {
+        let mut c = Command::new(&program[0]);
+        c.current_dir(dir).args(&program[1..]).args(args);
+        let input = stdin.map_or_else(std::process::Stdio::null, |f| {
+            std::fs::File::open(dir.join(f)).unwrap().into()
+        });
+        let what = program.join(" ");
+        return common::run_within_stdin(&mut c, common::DEADLINE, input)
+            .unwrap_or_else(|| panic!("{what} did not terminate within {:?}", common::DEADLINE));
+    }
     let mut line = String::from("exec");
     for w in program.iter().chain(args) {
         line.push_str(" '");

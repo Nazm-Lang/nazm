@@ -134,6 +134,20 @@ pub(super) fn linked(
 /// `--emit-ir`: beside the output, one file per unit, named as the artefacts are — for a linked
 /// build and for one whose objects a target's own toolchain links (`--objects`).
 pub(super) fn write_ir(artefacts: &[Artefact], output: &Path) {
+    // On Windows the output is `prog.exe` and its units are `prog.m0.ll`: the `.exe` is the
+    // platform's suffix for an executable, not part of its name, as `prog` is on every other
+    // system.
+    let stripped;
+    let output = if cfg!(windows)
+        && output
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("exe"))
+    {
+        stripped = output.with_extension("");
+        stripped.as_path()
+    } else {
+        output
+    };
     for artefact in artefacts {
         let nazm_lir::backend::Code::Llvm(ir) = &artefact.code else {
             continue;

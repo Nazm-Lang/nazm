@@ -3633,13 +3633,18 @@ entry:
 /// `nz_os_preempt_stub`, which saves what a call may clobber, calls `nz.pool_preempt` and returns
 /// to where the thread was. Windows keeps nothing below a thread's stack pointer, so the pushed
 /// return lands on free stack.
+///
+/// The stub is **weak**: the `switch` unit that defines it is linked only where the program has
+/// tasks, and this unit wherever the stack is checked. A strong reference left a program without
+/// tasks unlinkable under GNU `ld`, which (unlike `lld`) keeps the reference of a function nothing
+/// calls; nothing calls `nz.os_preempt` without a pool, so the weak one is never taken.
 const WINDOWS_PREEMPT: &str = r#"
 declare ptr @pthread_gethandle(i64)
 declare i32 @SuspendThread(ptr)
 declare i32 @ResumeThread(ptr)
 declare i32 @GetThreadContext(ptr, ptr)
 declare i32 @SetThreadContext(ptr, ptr)
-declare void @nz_os_preempt_stub()
+declare extern_weak void @nz_os_preempt_stub()
 
 define hidden void @nz.text_lo() section ".text$nA" {
 entry:

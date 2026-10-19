@@ -64,7 +64,7 @@ fn an_unused_standard_function_is_left_out_and_the_program_still_runs() {
                     &exe,
                 ],
             );
-            let exe = dir.path().join(crate::common::exe_name(&exe));
+            let exe = dir.path().join(&exe);
             let out = Command::new(&exe).output().expect("run");
             assert!(out.status.success(), "{backend} -O{opt}");
             assert!(
@@ -112,7 +112,7 @@ fn a_dead_stripped_executable_is_smaller_than_the_same_objects_linked_whole() {
             .map(str::to_owned)
             .collect::<Vec<_>>()
     };
-    let whole = dir.path().join("whole");
+    let whole = dir.path().join(crate::common::exe_name("whole"));
     let out = Command::new("clang")
         .arg("-o")
         .arg(&whole)

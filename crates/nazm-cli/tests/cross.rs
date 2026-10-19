@@ -146,7 +146,7 @@ fn every_target_is_built_by_both_backends_in_its_own_format() {
             let libs = if triple.contains("linux") {
                 "-lpthread -lm"
             } else if windows {
-                "-static -pthread -lws2_32 -lbcrypt -Wl,--stack,8388608"
+                "-static -pthread -lws2_32 -lbcrypt -Wl,--stack,8388608 -Wl,--no-insert-timestamp"
             } else {
                 ""
             };
@@ -416,9 +416,12 @@ fn emit_ir_writes_each_unit_beside_the_output_when_the_objects_are_for_another_t
         ],
     );
     assert!(o.status.success(), "{}", err(&o));
+    // Beside `prog.exe` the units are `prog.exe.m0.ll` where the host's executables have no
+    // suffix, and `prog.m0.ll` where they have `.exe` (the build strips it from the output's name).
+    let stem = if cfg!(windows) { "prog" } else { "prog.exe" };
     for unit in ["m0", "runtime", "init", "entry"] {
-        let ir = std::fs::read_to_string(d.path().join(format!("prog.exe.{unit}.ll")))
-            .unwrap_or_else(|e| panic!("prog.exe.{unit}.ll: {e}"));
+        let ir = std::fs::read_to_string(d.path().join(format!("{stem}.{unit}.ll")))
+            .unwrap_or_else(|e| panic!("{stem}.{unit}.ll: {e}"));
         assert!(ir.contains("define"), "{unit}: {ir}");
     }
     assert!(d.path().join("objs/link.txt").exists());
