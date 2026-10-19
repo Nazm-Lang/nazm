@@ -10540,11 +10540,12 @@ Repointed by performance leadership 6.4's direct hand-off, which moved it to 45:
 Repointed by performance leadership 6.4's select over channels of different types, which moved it to 46: an object that calls `nz.sel_wait` must not be linked with a runtime that does not define it.
 Repointed by performance leadership 6.3's preemption on every backend, which moved it to 47: an object of generated code in `.text$nzM` must not be linked with a runtime whose markers are `.text$nA` and `.text$nZ`.
 Repointed by performance leadership 6.4's hand-off on the generic channel, which moved it to 48: an object built against a runtime whose `Chan[T]` header is 80 bytes must not be linked with one whose is 128.
-Repointed by performance leadership 6.4's lock-free channel, which moved it to 49: an object built against a runtime whose `Int` channel header is 112 bytes, its ring plain `i64`s, must not be linked with one whose ring is sequenced slots."""
+Repointed by performance leadership 6.4's lock-free channel, which moved it to 49: an object built against a runtime whose `Int` channel header is 112 bytes, its ring plain `i64`s, must not be linked with one whose ring is sequenced slots.
+Repointed by the fan-in fix, which moved it to 50: an object built against a runtime whose `nz.chq_take` takes two arguments, its parked waiter counting itself out, must not be linked with one whose takes the channel too and counts the waiter out itself."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 49;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 48;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_forty_nine_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 50;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 49;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_fifty_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -21018,6 +21019,30 @@ file = "crates/nazm-runtime/src/core.rs"
 find = '''  %rw0 = atomicrmw add ptr %nwp, i64 1 seq_cst'''
 replace = '''  %rw0 = atomicrmw add ptr %nwp, i64 0 seq_cst'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::parked_senders_and_receivers_are_served_first_come_first_served" }]
+
+# The fan-in fix (runtime ABI 50): a parked waiter is counted out by whoever takes its record off a
+# list, not when it runs again.
+
+[[mutation]]
+name = "fanin-a-taken-waiter-stays-counted"
+why = "a waiter taken off a list stays counted until it runs again, so while it waits for its worker every send and receive on the channel takes the mutex (the fan-in regression)"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %nw = atomicrmw sub ptr %nwp, i64 1 seq_cst
+  %rec = load ptr, ptr %qp'''
+replace = '''  %nw = atomicrmw sub ptr %nwp, i64 0 seq_cst
+  %rec = load ptr, ptr %qp'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::a_channel_waiter_is_counted_out_by_whoever_takes_it_off_a_list" }]
+
+[[mutation]]
+name = "fanin-a-woken-sender-counts-itself-out-again"
+why = "a sender back from parking counts itself out as well as its waker, so the count falls below the waiters and a later waiter is missed by an operation without the lock"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %st = call i64 @nz.chq_park(ptr %c, ptr %m, ptr %rec, ptr %sqp, ptr %sqtp)
+'''
+replace = '''  %st = call i64 @nz.chq_park(ptr %c, ptr %m, ptr %rec, ptr %sqp, ptr %sqtp)
+  %w3 = atomicrmw sub ptr %nwp, i64 1 seq_cst
+'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::a_channel_waiter_is_counted_out_by_whoever_takes_it_off_a_list" }]
 
 # The compiler-speed round: a check reads an entry without building its interface or unit, parses
 # each file once and without its lossless tree, and reads the prelude's names from a table.

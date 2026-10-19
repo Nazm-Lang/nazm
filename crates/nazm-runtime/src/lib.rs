@@ -389,7 +389,10 @@ pub fn escape(s: &str) -> String {
 /// ring of `{ i64 sequence, value }` slots taken by compare-and-swap while nobody waits, the close
 /// as bit 62 of the enqueue position, and the mutex and wait records only for parking; an `Int`
 /// channel's slots and records are a `Chan[T]`'s.
-pub const RUNTIME_ABI_REVISION: u32 = 49;
+/// 50 is the fan-in fix (2026-10-19): a channel's waiter is counted out of `waiting` by whoever
+/// takes its record off a list (`nz.chq_take` takes the channel), not when it runs again, so a woken
+/// task waiting for its worker no longer sends every operation on the channel through the mutex.
+pub const RUNTIME_ABI_REVISION: u32 = 50;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -868,7 +871,7 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.chq_record", "ptr" ("ptr") "noinline", false, Channels, "", Null, Locked, "a wait record, its value at 160: a spare, or a new one (6.4)", "the channel owns it; null when there is no memory"),
     rt!("nz.chq_spare", "void" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "a wait record back to the channel's spares (6.4)", "the channel owns it"),
     rt!("nz.chq_park", "i64" ("ptr", "ptr", "ptr", "ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "park on a wait record at the tail of a channel's list until a waker sets its state (6.4)", "the record goes back to the channel's spares; the mutex is held again on return"),
-    rt!("nz.chq_take", "ptr" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "the head of a channel's wait list, taken off it (6.4)", "the record stays the channel's"),
+    rt!("nz.chq_take", "ptr" ("ptr", "ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "the head of a channel's wait list, taken off it and counted out of its waiters (6.4)", "the record stays the channel's"),
     rt!("nz.chq_wake", "void" ("ptr", "i64") "noinline", false, Channels, "", Never, Locked, "give a wait record its state and wake its waiter alone (6.4)", "none"),
     rt!("nz.chq_tell_old", "void" ("ptr") "noinline", false, Channels, "", Never, Locked, "wake whoever waits on a channel's own condition variable, if anyone does (6.4)", "none"),
     rt!("nz.chq_rouse", "void" ("ptr") "noinline", false, Channels, "", Never, Locked, "after a value went in: the receiver parked longest looks again (6.4)", "none"),
@@ -1307,6 +1310,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_channel_waiter_is_counted_out_by_whoever_takes_it_off_a_list() {
+        // The fan-in fix (ABI 50): a parked task counted in `waiting` until it ran again sent
+        // every operation on its channel through the mutex while it waited for its worker
+        // (2026-10-19: 0.85-0.997 of a million operations a side under the lock, nearly all with
+        // nobody on either list).
+        let text = crate::emit_runtime(crate::EVERYTHING);
+        let body = |name: &str| {
+            let at = text
+                .find(&format!("@{name}("))
+                .and_then(|i| text[..i].rfind("define "))
+                .unwrap_or_else(|| panic!("{name} is not defined"));
+            let end = text[at..].find("\n}\n").map_or(text.len(), |e| at + e);
+            text[at..end].to_owned()
+        };
+        assert!(
+            body("nz.chq_take").contains("atomicrmw sub ptr %nwp, i64 1 seq_cst"),
+            "nz.chq_take counts the waiter out"
+        );
+        for name in ["nz.chq_send", "nz.chq_recv"] {
+            let b = body(name);
+            let lines: Vec<&str> = b.lines().collect();
+            let park = lines
+                .iter()
+                .position(|l| l.contains("call i64 @nz.chq_park("))
+                .unwrap_or_else(|| panic!("{name} parks"));
+            let back: Vec<&str> = lines[park + 1..]
+                .iter()
+                .take_while(|l| !l.ends_with(':'))
+                .copied()
+                .collect();
+            assert!(
+                !back.iter().any(|l| l.contains("atomicrmw sub ptr %nwp")),
+                "{name} counts itself out again after parking: {back:?}"
+            );
+        }
+    }
+
+    #[test]
     fn every_symbol_is_registered_once() {
         for (i, a) in IMPORTS.iter().enumerate() {
             for b in IMPORTS.iter().skip(i + 1) {
@@ -1570,9 +1611,9 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_forty_nine_and_reaches_the_system_only_through_its_platform_layer() {
-        // 6.4's lock-free channel: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 49);
+    fn the_runtime_is_revision_fifty_and_reaches_the_system_only_through_its_platform_layer() {
+        // The fan-in fix: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 50);
         // The session table is the runtime's; the engine is each target's own unit, and a target
         // without one has none.
         assert!(

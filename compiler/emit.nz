@@ -5935,7 +5935,9 @@ fn channel_runtime() -> Str {
     strs_push(r, "; the close, so a send and a close are ordered by one compare-and-swap. The mutex is for parking");
     strs_push(r, "; alone: `waiting` counts the tasks parked or about to park, and an operation goes without the lock");
     strs_push(r, "; only while it is zero; a waiter counts itself before it looks once more, and an operation that went");
-    strs_push(r, "; without the lock looks at the count after, so one of the two always sees the other.");
+    strs_push(r, "; without the lock looks at the count after, so one of the two always sees the other. A waiter is");
+    strs_push(r, "; counted out by whoever takes its record off a list, under the mutex, not when it runs again: a woken");
+    strs_push(r, "; task may wait long for its worker, and while it is counted every operation would take the lock.");
     strs_push(r, "define internal ptr @nz.chq_new(i64 %cap, i64 %stride, ptr %release) {");
     strs_push(r, "entry:");
     strs_push(r, "  %c = call ptr @malloc(i64 128)");
@@ -6246,9 +6248,12 @@ fn channel_runtime() -> Str {
     strs_push(r, "  ret i64 %st");
     strs_push(r, "}");
     strs_push(r, "");
-    strs_push(r, "; The head of the list at `%qp` (its tail at `%qtp`), taken off it; the list is not empty.");
-    strs_push(r, "define internal ptr @nz.chq_take(ptr %qp, ptr %qtp) noinline {");
+    strs_push(r, "; The head of the list at `%qp` (its tail at `%qtp`), taken off it and counted out of `waiting`;");
+    strs_push(r, "; the list is not empty.");
+    strs_push(r, "define internal ptr @nz.chq_take(ptr %c, ptr %qp, ptr %qtp) noinline {");
     strs_push(r, "entry:");
+    strs_push(r, "  %nwp = getelementptr i8, ptr %c, i64 24");
+    strs_push(r, "  %nw = atomicrmw sub ptr %nwp, i64 1 seq_cst");
     strs_push(r, "  %rec = load ptr, ptr %qp");
     strs_push(r, "  %next = load ptr, ptr %rec");
     strs_push(r, "  store ptr %next, ptr %qp");
@@ -6296,7 +6301,7 @@ fn channel_runtime() -> Str {
     strs_push(r, "  %parked = icmp ne ptr %rq, null");
     strs_push(r, "  br i1 %parked, label %wake, label %old");
     strs_push(r, "wake:");
-    strs_push(r, "  %rrec = call ptr @nz.chq_take(ptr %rqp, ptr %rqtp)");
+    strs_push(r, "  %rrec = call ptr @nz.chq_take(ptr %c, ptr %rqp, ptr %rqtp)");
     strs_push(r, "  call void @nz.chq_wake(ptr %rrec, i64 3)");
     strs_push(r, "  br label %old");
     strs_push(r, "old:");
@@ -6314,7 +6319,7 @@ fn channel_runtime() -> Str {
     strs_push(r, "  %parked = icmp ne ptr %sq, null");
     strs_push(r, "  br i1 %parked, label %move, label %old");
     strs_push(r, "move:");
-    strs_push(r, "  %srec = call ptr @nz.chq_take(ptr %sqp, ptr %sqtp)");
+    strs_push(r, "  %srec = call ptr @nz.chq_take(ptr %c, ptr %sqp, ptr %sqtp)");
     strs_push(r, "  %sv = getelementptr i8, ptr %srec, i64 160");
     strs_push(r, "  %put = call i64 @nz.chq_enq(ptr %c, ptr %sv)");
     strs_push(r, "  %queued = icmp eq i64 %put, 0");
@@ -6427,7 +6432,7 @@ fn channel_runtime() -> Str {
     strs_push(r, "  br i1 %empty, label %hand, label %put");
     strs_push(r, "hand:");
     strs_push(r, "  ; A receiver parked on an empty ring: the value goes straight to the one parked longest.");
-    strs_push(r, "  %hrec = call ptr @nz.chq_take(ptr %rqp, ptr %rqtp)");
+    strs_push(r, "  %hrec = call ptr @nz.chq_take(ptr %c, ptr %rqp, ptr %rqtp)");
     strs_push(r, "  %hv = getelementptr i8, ptr %hrec, i64 160");
     strs_push(r, "  call void @llvm.memcpy.p0.p0.i64(ptr %hv, ptr %src, i64 %stride, i1 false)");
     strs_push(r, "  call void @nz.chq_wake(ptr %hrec, i64 1)");
@@ -6465,8 +6470,8 @@ fn channel_runtime() -> Str {
     strs_push(r, "  call void @nz.chq_spare(ptr %c, ptr %rec)");
     strs_push(r, "  br label %refuse");
     strs_push(r, "sleep:");
+    strs_push(r, "  ; Back with its record off the list and counted out by whoever took it.");
     strs_push(r, "  %st = call i64 @nz.chq_park(ptr %c, ptr %m, ptr %rec, ptr %sqp, ptr %sqtp)");
-    strs_push(r, "  %w3 = atomicrmw sub ptr %nwp, i64 1 seq_cst");
     strs_push(r, "  %sent = icmp eq i64 %st, 1");
     strs_push(r, "  br i1 %sent, label %moved, label %check");
     strs_push(r, "moved:");
@@ -6547,7 +6552,7 @@ fn channel_runtime() -> Str {
     strs_push(r, "  %sparked = icmp ne ptr %sq, null");
     strs_push(r, "  br i1 %sparked, label %direct, label %wait");
     strs_push(r, "direct:");
-    strs_push(r, "  %drec = call ptr @nz.chq_take(ptr %sqp, ptr %sqtp)");
+    strs_push(r, "  %drec = call ptr @nz.chq_take(ptr %c, ptr %sqp, ptr %sqtp)");
     strs_push(r, "  %dv = getelementptr i8, ptr %drec, i64 160");
     strs_push(r, "  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %dv, i64 %stride, i1 false)");
     strs_push(r, "  call void @nz.chq_wake(ptr %drec, i64 1)");
@@ -6574,8 +6579,8 @@ fn channel_runtime() -> Str {
     strs_push(r, "  call void @nz.chq_spare(ptr %c, ptr %rec)");
     strs_push(r, "  br label %drained");
     strs_push(r, "sleep:");
+    strs_push(r, "  ; Back with its record off the list and counted out by whoever took it.");
     strs_push(r, "  %st = call i64 @nz.chq_park(ptr %c, ptr %m, ptr %rec, ptr %rqp, ptr %rqtp)");
-    strs_push(r, "  %w3 = atomicrmw sub ptr %nwp, i64 1 seq_cst");
     strs_push(r, "  %handed = icmp eq i64 %st, 1");
     strs_push(r, "  br i1 %handed, label %given, label %check");
     strs_push(r, "given:");
@@ -6646,7 +6651,7 @@ fn channel_runtime() -> Str {
     strs_push(r, "  %sparked = icmp ne ptr %sq, null");
     strs_push(r, "  br i1 %sparked, label %direct, label %none");
     strs_push(r, "direct:");
-    strs_push(r, "  %drec = call ptr @nz.chq_take(ptr %sqp, ptr %sqtp)");
+    strs_push(r, "  %drec = call ptr @nz.chq_take(ptr %c, ptr %sqp, ptr %sqtp)");
     strs_push(r, "  %dv = getelementptr i8, ptr %drec, i64 160");
     strs_push(r, "  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %dv, i64 %stride, i1 false)");
     strs_push(r, "  call void @nz.chq_wake(ptr %drec, i64 1)");
@@ -6701,7 +6706,7 @@ fn channel_runtime() -> Str {
     strs_push(r, "  %empty = call i1 @nz.chq_empty(ptr %c)");
     strs_push(r, "  br i1 %empty, label %hand, label %put");
     strs_push(r, "hand:");
-    strs_push(r, "  %hrec = call ptr @nz.chq_take(ptr %rqp, ptr %rqtp)");
+    strs_push(r, "  %hrec = call ptr @nz.chq_take(ptr %c, ptr %rqp, ptr %rqtp)");
     strs_push(r, "  %ohv = getelementptr i8, ptr %hrec, i64 160");
     strs_push(r, "  call void @llvm.memcpy.p0.p0.i64(ptr %ohv, ptr %src, i64 %stride, i1 false)");
     strs_push(r, "  call void @nz.chq_wake(ptr %hrec, i64 1)");
@@ -6742,7 +6747,7 @@ fn channel_runtime() -> Str {
     strs_push(r, "  %rnone = icmp eq ptr %rq, null");
     strs_push(r, "  br i1 %rnone, label %senders, label %rend");
     strs_push(r, "rend:");
-    strs_push(r, "  %rrec = call ptr @nz.chq_take(ptr %rqp, ptr %rqtp)");
+    strs_push(r, "  %rrec = call ptr @nz.chq_take(ptr %c, ptr %rqp, ptr %rqtp)");
     strs_push(r, "  call void @nz.chq_wake(ptr %rrec, i64 3)");
     strs_push(r, "  br label %receivers");
     strs_push(r, "senders:");
@@ -6750,7 +6755,7 @@ fn channel_runtime() -> Str {
     strs_push(r, "  %snone = icmp eq ptr %sq, null");
     strs_push(r, "  br i1 %snone, label %rest, label %send");
     strs_push(r, "send:");
-    strs_push(r, "  %srec = call ptr @nz.chq_take(ptr %sqp, ptr %sqtp)");
+    strs_push(r, "  %srec = call ptr @nz.chq_take(ptr %c, ptr %sqp, ptr %sqtp)");
     strs_push(r, "  call void @nz.chq_wake(ptr %srec, i64 3)");
     strs_push(r, "  br label %senders");
     strs_push(r, "rest:");
