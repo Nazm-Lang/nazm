@@ -4,34 +4,35 @@
 #     cargo xtask contained selfbuild            (the only way to run it)
 #     toolchain/selfbuild/selfbuild.sh [OUT]     (inside the contained runner)
 #
-# The builder is three programs written in Nazm: the front end (`compiler/diagnose.nz
-# --coredoc-sources`, R2), the pipeline (`toolchain/pipeline/main.nz`: MIR, LIR and the runtime
-# generator, R3) and the code generator (`toolchain/codegen/main.nz`, R9). A program is built by
-# them as
+# The builder is three programs written in Nazm: `nazm` (`toolchain/commands/nazm.nz`), whose
+# `build` is the driver with R2's front end in it (R8 slice 4, `openspec/changes/r8-cut-over/design.md`,
+# *Slice 4*), the pipeline (`toolchain/pipeline/main.nz`: MIR, LIR and the runtime generator, R3)
+# and the code generator (`toolchain/codegen/main.nz`, R9), the driver's two stages. A program is
+# built as
 #
-#     front end   FILE              -> Core IR (`nazm core-ir --with-sources`'s document)
-#     pipeline    ops CORE          -> LIR, every unit (`nazm lir --ops`)
-#     pipeline    runtime CORE      -> the runtime's units, LLVM IR text, for the target
-#     codegen     LIR               -> one object per unit
-#     clang -c    the runtime units (the platform's assembler of LLVM IR, as R3 leaves them)
-#     cc          every object      -> the executable
+#     NAZM_PIPELINE=pl NAZM_NZCG=cg nazm build --backend nazm --no-cache --target T --heap-limit H FILE -o NAME
 #
-# with no Rust between source and object. The chain (`rewrite-in-nazm` design, decision 7):
+# which runs the front end in process (Core IR, `nazm core-ir --with-sources`'s document), the
+# pipeline (LIR, every unit, and the runtime's units, LLVM IR text), the code generator (one
+# object per unit), the platform's `clang -c` for the runtime's units (as R3 leaves them) and its
+# link — with no Rust between source and object. The front end (`compiler/diagnose.nz`) is built
+# too, for the Core IR check below. The chain (`rewrite-in-nazm` design, decision 7):
 #
 #     stage 0   the Rust `nazm` (the seed) builds the builder
 #     stage 1   stage 0's builder builds the builder and every other toolchain program
 #     stage 2   stage 1's builder does the same
 #     stage 3   stage 2's builder does the same
 #
-# and stages 2 and 3 must be byte-identical at every step — Core IR, LIR, runtime text, every
-# object and every executable. Stage 1 is compared with stage 2 too: a builder built by Rust and
-# one built by Nazm from the same source must agree, or one of them is wrong.
+# and stages 2 and 3 must be byte-identical: every executable. Stage 1 is compared with stage 2
+# too: a builder built by Rust and one built by Nazm from the same source must agree, or one of
+# them is wrong.
 #
 # Every program the builder builds is given the bounded heap (`--heap-limit`, R1d) the seed gives
 # stage 0, so no stage of the chain allocates without a ceiling of its own. The container is the
 # other ceiling: this script refuses to start outside it, as `compiler/bootstrap.sh` does. Each
-# step's peak resident memory is read from the kernel (`getrusage` of the waited child) and
-# written to OUT/memory.txt; no time is taken.
+# build's peak resident memory — the largest of the driver and the stages it waited for — is read
+# from the kernel (`getrusage` of the waited child) and written to OUT/memory.txt; no time is
+# taken.
 #
 # The target is the container's own (aarch64-unknown-linux-gnu on an Apple-silicon host): the
 # containment rule needs a Linux kernel's cgroup, so the self-build is a Linux build of the
@@ -63,7 +64,7 @@ case $(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo none) in
     ''|*[!0-9]*|0) fail "NAZM_CONTAINED=1 is set, but no memory ceiling applies here. Run this through \`cargo xtask contained selfbuild\`; never set NAZM_CONTAINED on a host." ;;
 esac
 [ -x "$nazm" ] || fail "build the Rust implementation first: cargo build -p nazm-cli"
-command -v clang >/dev/null 2>&1 || fail "clang is required to assemble the runtime's units"
+command -v clang >/dev/null 2>&1 || fail "clang is required: \`nazm build\` assembles the runtime's units and links with it"
 
 case $(uname -m) in
     aarch64|arm64) arch=aarch64 ;;
@@ -71,7 +72,7 @@ case $(uname -m) in
     *) fail "no target for $(uname -m)" ;;
 esac
 case $(uname -s) in
-    Linux) os=linux; target="$arch-unknown-linux-gnu"; libs="-lpthread -lm" ;;
+    Linux) os=linux; target="$arch-unknown-linux-gnu" ;;
     *) fail "the self-build runs in the contained runner's Linux; $(uname -s) is not it" ;;
 esac
 
@@ -85,12 +86,13 @@ heap_bytes() {
 }
 heapb=$(heap_bytes "$heap")
 
-# The builder's programs, then every other program of the toolchain, as NAME SOURCE.
-builder="fe:compiler/diagnose.nz pl:toolchain/pipeline/main.nz cg:toolchain/codegen/main.nz"
+# The builder's programs, then every other program of the toolchain, as NAME SOURCE. Since R8 slice 4
+# the builder is `nazm build` (`nazm`) and its two stages; the front end (`fe`) is one of the others.
+builder="nazm:toolchain/commands/nazm.nz pl:toolchain/pipeline/main.nz cg:toolchain/codegen/main.nz"
 # The interpreter (`toolchain/interp/main.nz`) and `nazm-check` (`toolchain/harness/check/main.nz`)
 # joined at R8 slice 1, moved from 0.10.0's `List[T]` to the checkout's `Chain[T]` (R1.5 D7;
 # `openspec/changes/r6-host-qualification/design.md`, *Gaps*; `openspec/changes/r8-cut-over/`).
-others="nazm:toolchain/commands/nazm.nz mcp:toolchain/commands/mcp.nz mutate:toolchain/harness/mutate/main.nz jtool:toolchain/harness/tools/jtool.nz interp:toolchain/interp/main.nz check:toolchain/harness/check/main.nz"
+others="fe:compiler/diagnose.nz mcp:toolchain/commands/mcp.nz mutate:toolchain/harness/mutate/main.nz jtool:toolchain/harness/tools/jtool.nz interp:toolchain/interp/main.nz check:toolchain/harness/check/main.nz"
 
 rm -rf "$out"
 mkdir -p "$out"
@@ -131,44 +133,16 @@ peak() {
     "$out/peak" "$label" "$mem" "$deadline" "$@"
 }
 
-# `build_with BIN DEST NAME SOURCE`: the builder in BIN builds SOURCE into DEST/NAME, keeping
-# every intermediate under DEST/NAME.d.
+# `build_with BIN DEST NAME SOURCE`: the builder in BIN builds SOURCE into DEST/NAME — its `nazm
+# build`, with its pipeline and code generator as the stages (R8 slice 4) — under the heap limit
+# `$heapb`. What the build said is kept in DEST/NAME.build.out and .err.
 build_with() {
     B=$1; dest=$2; name=$3; src=$4
-    d="$dest/$name.d"
     st=$(basename "$dest")
-    mkdir -p "$d/obj" "$d/rt"
-    peak "$st $name front-end" "$B/fe" --coredoc-sources "$root/$src" "$root/library" "$os" "$arch" > "$d/core.json" 2> "$d/fe.err" \
-        || { say "  $name: the front end failed: $(head -3 "$d/fe.err")"; return 1; }
-    if [ ! -s "$d/core.json" ]; then
-        # Why: the front end's own diagnostics of the compilation, and what its checker stopped at.
-        "$out/peak" "$st $name front-end-diagnosis" "$mem" "$deadline" "$B/fe" --text "$root/$src" "$root/library" "$os" "$arch" > "$d/why.txt" 2>&1
-        say "  $name: the front end does not carry it: $(head -c 600 "$d/why.txt")"
-        return 1
-    fi
-    peak "$st $name pipeline-ops" "$B/pl" ops "$d/core.json" > "$d/lir.txt" 2> "$d/pl.err" \
-        || { say "  $name: the pipeline failed: $(head -3 "$d/pl.err")"; return 1; }
-    peak "$st $name pipeline-runtime" "$B/pl" --target "$target" runtime "$d/core.json" - "$heapb" > "$d/runtime.ll" 2> "$d/rt.err" \
-        || { say "  $name: the runtime generator failed: $(head -3 "$d/rt.err")"; return 1; }
-    # The program's units call the counted heap wherever they call C's allocator, as `nazm build
-    # --heap-limit` generates them (`nazm_lir::op::count_heap`): imports only.
-    sed -E -i 's/^(import func @|  (v[0-9]+ = )?call @)(malloc|realloc|free)\b/\1nz.heap_\3/' "$d/lir.txt"
-    # The runtime's units, one file each, assembled by clang.
-    awk -v dir="$d/rt" '/^;;; unit / { f = dir "/" $3 ".ll"; next } { print > f }' "$d/runtime.ll"
-    extra=""
-    for u in "$d"/rt/*.ll; do
-        clang -Wno-override-module -c "$u" -o "${u%.ll}.o" 2> "$d/clang.err" \
-            || { say "  $name: clang rejected the runtime unit $(basename "$u"): $(head -3 "$d/clang.err")"; return 1; }
-    done
-    [ -f "$d/rt/tls.ll" ] && extra="-lssl -lcrypto"
-    # One thread: the runtime's stack limit is a plain global, and the generator inlines the check.
-    one=""
-    if grep -qs '^@nz.stack_limit = ' "$d"/rt/*.ll && ! grep -qs '^@nz.stack_limit = .*thread_local' "$d"/rt/*.ll; then one="--one-thread"; fi
-    peak "$st $name codegen" "$B/cg" --target "$target" $one "$d/lir.txt" "$d/obj" > "$d/cg.out" 2> "$d/cg.err" \
-        || { say "  $name: the code generator failed: $(head -3 "$d/cg.err")"; return 1; }
-    objs=$(ls "$d/obj" | sed -n 's/^unit-\([0-9]*\)\.o$/\1/p' | sort -n | sed "s#.*#$d/obj/unit-&.o#")
-    cc -o "$dest/$name" $objs "$d"/rt/*.o $libs $extra 2> "$d/link.err" \
-        || { say "  $name: the link failed: $(head -5 "$d/link.err")"; return 1; }
+    NAZM_LIBRARY="$root/library" NAZM_PIPELINE="$B/pl" NAZM_NZCG="$B/cg" \
+        peak "$st $name build" "$B/nazm" build --backend nazm --no-cache --target "$target" --heap-limit "$heapb" \
+        "$root/$src" -o "$dest/$name" > "$dest/$name.build.out" 2> "$dest/$name.build.err" < /dev/null \
+        || { say "  $name: \`nazm build\` failed: $(head -c 600 "$dest/$name.build.err")"; return 1; }
     return 0
 }
 
@@ -196,7 +170,7 @@ for s in $(seq 1 "$stages"); do
         if build_with "$prev" "$dest" "$name" "$src"; then built=$((built + 1)); else bad=$((bad + 1)); fi
     done
     say "stage $s: stage $((s - 1))'s builder built $built programs"
-    for b in fe pl cg; do
+    for b in nazm pl cg; do
         [ -x "$dest/$b" ] || fail "stage $s has no $b: the chain stops here"
     done
     prev="$dest"
@@ -216,23 +190,28 @@ if [ "$stages" -ge 2 ]; then compare "$out/stage1" "$out/stage2" || fix=1; fi
 if [ "$stages" -ge 3 ]; then compare "$out/stage2" "$out/stage3" || fix=1; fi
 
 # --- the last builder's Core IR is the reference's ----------------------------------------------
-# For every toolchain program, the document the last stage's front end wrote must be the one the
-# seed's `nazm core-ir --with-sources` prints (the indented form), byte for byte.
+# For every toolchain program, the document the last stage's front end (`fe --coredoc-sources`)
+# writes must be the one the seed's `nazm core-ir --with-sources` prints (the indented form), byte
+# for byte. (`nazm build` writes the same document from the same front end, in process; its
+# objects agreeing with the Rust build's is `toolchain/commands/tests/build.sh`'s.)
 coreagree=0; corediffer=0
 last="$out/stage$stages"
+mkdir -p "$out/core"
 for p in $builder $others; do
     name=${p%%:*}; src=${p#*:}
-    [ -s "$last/$name.d/core.json" ] || continue
+    [ -x "$last/fe" ] || break
+    peak "core $name front-end" "$last/fe" --coredoc-sources "$root/$src" "$root/library" "$os" "$arch" > "$out/core/$name.json" 2> /dev/null
+    [ -s "$out/core/$name.json" ] || { corediffer=$((corediffer + 1)); say "  Core IR of $src: the front end wrote none"; continue; }
     # Whole: every member, a call's `callee_at` and a payload binding's `at` included (R6 gap 2).
-    "$nazm" core-ir --with-sources "$root/$src" 2> /dev/null > "$last/$name.d/core.ref.json"
-    if cmp -s "$last/$name.d/core.ref.json" "$last/$name.d/core.json"; then
+    "$nazm" core-ir --with-sources "$root/$src" 2> /dev/null > "$out/core/$name.ref.json"
+    if cmp -s "$out/core/$name.ref.json" "$out/core/$name.json"; then
         coreagree=$((coreagree + 1))
     else
         corediffer=$((corediffer + 1))
-        say "  Core IR of $src differs from the reference's: $(diff "$last/$name.d/core.ref.json" "$last/$name.d/core.json" | head -6 | cut -c1-160)"
+        say "  Core IR of $src differs from the reference's: $(diff "$out/core/$name.ref.json" "$out/core/$name.json" | head -6 | cut -c1-160)"
     fi
-    rm -f "$last/$name.d/core.ref.json"
 done
+rm -rf "$out/core"
 say "core-ir: $coreagree documents identical to the reference's, $corediffer differ"
 
 # --- what the last builder builds runs as the seed's build does ---------------------------------
@@ -356,4 +335,4 @@ awk '{ k = $NF; v = $(NF - 1); if (!($1 in m) || v > m[$1]) { m[$1] = v; w[$1] =
 [ "$disagree" -eq 0 ] && [ "$unbuilt" -eq 0 ] || fail "the last stage's builds do not all run as the seed's do"
 [ "$idisagree" -eq 0 ] || fail "the self-built interpreter does not run the corpus as the seed's does"
 [ "$cagree" -eq 1 ] || fail "the self-built nazm-check does not report the tree as the seed's build does"
-say "selfbuild complete: stages 1 to $stages byte-identical; $agree programs agree with the seed's builds; $iagree run by the self-built interpreter as by the seed's; nazm-check agrees; the bounded heap holds"
+say "selfbuild complete: stages 1 to $stages byte-identical, every program built by \`nazm build\`; $agree programs agree with the seed's builds; $iagree run by the self-built interpreter as by the seed's; nazm-check agrees; the bounded heap holds"
