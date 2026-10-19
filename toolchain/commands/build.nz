@@ -247,6 +247,19 @@ fn bd_admitted(image: Str) -> Str {
     if ut_find(image, "nz.heap_malloc", 0) < 0 {
         return "no-counted-heap: the executable does not link the counted heap (`nz.heap_malloc` is not in it): build it with `--heap-limit`"
     }
+    let found = bd_limits(image)
+    if strs_len(found) == 0 { return "no-heap-limit: the executable carries no heap limit (its `N0406` message is not in it)" }
+    if strs_len(found) > 1 { return "ambiguous-heap-limit: the executable names several heap limits" }
+    let limit = strs_get(found, 0)
+    if str_len(limit) > 10 || bd_size(limit) > 2147483648 {
+        return "heap-limit-too-large: its heap limit is " + limit + " bytes, over the 2 GiB (2147483648) a stage may have"
+    }
+    ""
+}
+
+// Every heap limit an image's `N0406` message names (`the heap limit of N bytes is reached`, N in
+// digits), each once.
+fn bd_limits(image: Str) -> Strs {
     let before = "the heap limit of "
     let after = " bytes is reached"
     let found = strs_new()
@@ -265,23 +278,11 @@ fn bd_admitted(image: Str) -> Str {
         from = start
         at = ut_find(image, before, from)
     }
-    if strs_len(found) == 0 { return "no-heap-limit: the executable carries no heap limit (its `N0406` message is not in it)" }
-    if strs_len(found) > 1 { return "ambiguous-heap-limit: the executable names several heap limits" }
-    let limit = strs_get(found, 0)
-    if str_len(limit) > 10 || bd_size(limit) > 2147483648 {
-        return "heap-limit-too-large: its heap limit is " + limit + " bytes, over the 2 GiB (2147483648) a stage may have"
-    }
-    ""
+    found
 }
 
-fn bd_limit_of(image: Str) -> Int {
-    let before = "the heap limit of "
-    let at = ut_find(image, before, 0)
-    let start = at + str_len(before)
-    let mut end = start
-    while end < str_len(image) && str_byte(image, end) >= 48 && str_byte(image, end) <= 57 { end += 1 }
-    bd_size(str_slice(image, start, end))
-}
+// The one heap limit an admitted image names.
+fn bd_limit_of(image: Str) -> Int { bd_size(strs_get(bd_limits(image), 0)) }
 
 // `host-run`'s state directory: where its withdrawal marker is.
 fn bd_state_dir(io: IoCap) -> Str {
@@ -291,9 +292,10 @@ fn bd_state_dir(io: IoCap) -> Str {
 }
 
 fn bd_check_stage(io: IoCap, path: Str, name: Str) -> Int {
-    let why = bd_admitted(read_file(path))
+    let image = read_file(path)
+    let why = bd_admitted(image)
     if why != "" { bd_fail(io, "nazm: " + name + " (`" + path + "`) is not admitted as a stage: " + why, 4) }
-    bd_limit_of(read_file(path))
+    bd_limit_of(image)
 }
 
 // A stage run to its end: whether it started, its status, its output and errors, and its peak.
