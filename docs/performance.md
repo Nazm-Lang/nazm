@@ -4560,3 +4560,25 @@ atomics are single LSE instructions on arm64 rather than exclusive-load retry lo
 
 Fan-in is still spread (σ about a third of the mean) and 5.4× Go's 67 ms: the remaining gap is the
 many-producer path of the channel itself, not the regression.
+
+## nbody and binary-trees in every language, measured (quiet window, 2026-10-19)
+
+`python3 bench/compare/compare.py NAZM OUT --runs 10 --only nbody,bintrees` at `7963c0c9`, the release `nazm`
+of `26e5e64a` (`--opt-level 2`), the toolchains of *Eighteen languages, re-run* above. nbody: the Benchmarks
+Game's five bodies, 5,000,000 steps; binary-trees: depth 18. Every row printed the expected output. Nazm's
+interpreter is not timed on these two (minutes a run, never ranked); COBOL and the hand-written assembly have
+no source. nbody began at load 1.91 and binary-trees at 2.33 (`compare.py` does not wait between programs; the
+1-minute average carried nbody's own runs), with no cargo, rustc or nextest running. Apple M1 Pro, macOS 27.2.
+
+**Nazm's rank** among the languages (each language's best row; lower is better):
+
+| program | run time | peak RSS | binary | build cold | build warm | lines | characters | among rows checking overflow and bounds |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| nbody | 228.5 ms, **#3** of 16 (Rust 154.1, Zig 160.3; C 287.6, Go 294.7, Fortran 305.2) | 1.70 MiB, **#1** of 16 | 50 KiB, #4 of 12 | 175 ms, **#3** of 12 (C 92, Pascal 165) | 172 ms, #5 of 12 (Go 61) | 79, #8 of 16 | 2,452, #4 of 16 | **#3** of 7 (Rust checked 154.1, Zig safe 160.6) |
+| binary-trees | 3,804 ms, **#14** of 16 (Java 350, Bun 557, Node 676, Go 866, C 1,154, Rust 1,314) | 163 MiB, #15 of 16 (C 17.8 MiB) | 67 KiB, #5 of 12 | 203 ms, #5 of 12 (C 76) | 205 ms, #5 of 12 (Go 60) | 37, #14 of 16 | 973, #12 of 16 | #3 of 7 (Fortran checked 1,175, Ada 1,209; Zig safe 3,695) |
+
+**What the numbers say.** nbody, floating point in a fixed array, is ahead of C, C++, Go and Fortran (1.26× C's
+speed) and behind only Rust and Zig, with the least memory of all. binary-trees is the largest gap measured so
+far: 3.3× C, 11× Java (a generational collector built for exactly this), and 9× C's memory — allocation and
+release of many small boxed nodes (`enum Tree` with `Box[Tree]`) is the path to work on, and the program is
+long beside the languages with classes. Not claimed: any lead on binary-trees.

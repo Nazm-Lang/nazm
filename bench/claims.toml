@@ -504,3 +504,8 @@ why = "one run of `bench/compare/compare.py --runs 10` on this Mac, begun at loa
 heading = "Fan-in and the four-task program after their fixes, measured (quiet window, 2026-10-19)"
 status = "dated"
 why = "hyperfine over release nazm builds of 0a52becf and 26e5e64a on bench/compare/nazm/fanin.nz and alloc4.nz, each invocation begun below load 2 with no cargo, rustc or nextest running; a record of that date and machine"
+
+[[claim]]
+heading = "nbody and binary-trees in every language, measured (quiet window, 2026-10-19)"
+status = "dated"
+why = "one run of `bench/compare/compare.py --runs 10 --only nbody,bintrees` on this Mac, nbody begun at load 1.91 and binary-trees at 2.33 (the benchmark's own runs), no cargo, rustc or nextest running; a record of that date and machine — the script reproduces the method, not these numbers"
