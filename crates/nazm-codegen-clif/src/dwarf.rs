@@ -263,6 +263,7 @@ fn place(
 ) -> Result<(), String> {
     let format = object.format();
     let macho = format == BinaryFormat::MachO;
+    let coff = format == BinaryFormat::Coff;
     let mut ids: BTreeMap<SectionId, ObjectSection> = BTreeMap::new();
     sections.for_each_mut(|id, s| -> Result<(), String> {
         if s.writer.len() == 0 {
@@ -290,7 +291,16 @@ fn place(
                     let Some(&t) = ids.get(&target) else {
                         return Err(format!("a relocation to an empty section {target:?}"));
                     };
-                    relocations.push((r.offset, object.section_symbol(t), r.addend, r.size));
+                    // An offset into another DWARF section: on COFF a section-relative one, since
+                    // the sections are placed past 4 GiB in a 64-bit image and an absolute
+                    // 32-bit address would not fit.
+                    relocations.push((
+                        r.offset,
+                        object.section_symbol(t),
+                        r.addend,
+                        r.size,
+                        coff && r.size == 4,
+                    ));
                 }
                 RelocationTarget::Symbol(k) => {
                     let Some(&f) = symbols.get(k) else {
@@ -311,15 +321,16 @@ fn place(
                             object.section_symbol(section),
                             addend,
                             r.size,
+                            false,
                         ));
                     } else {
-                        relocations.push((r.offset, f, r.addend, r.size));
+                        relocations.push((r.offset, f, r.addend, r.size, false));
                     }
                 }
             }
         }
         object.set_section_data(section, s.writer.take(), 1);
-        for (offset, symbol, addend, size) in relocations {
+        for (offset, symbol, addend, size, section_relative) in relocations {
             object
                 .add_relocation(
                     section,
@@ -328,7 +339,11 @@ fn place(
                         symbol,
                         addend,
                         flags: RelocationFlags::Generic {
-                            kind: RelocationKind::Absolute,
+                            kind: if section_relative {
+                                RelocationKind::SectionOffset
+                            } else {
+                                RelocationKind::Absolute
+                            },
                             encoding: RelocationEncoding::Generic,
                             size: size * 8,
                         },

@@ -63,7 +63,9 @@ impl Profile {
     /// (N86).
     fn text(self, target: &Target) -> String {
         match self {
-            Self::Hosted => nazm_lir::emit_runtime(hosted_services(target)),
+            Self::Hosted => {
+                crate::build::c_library_for(target, nazm_lir::emit_runtime(hosted_services(target)))
+            }
             Self::Board => {
                 nazm_lir::runtime::board::emit_runtime(crate::build::board_of(target), true)
             }

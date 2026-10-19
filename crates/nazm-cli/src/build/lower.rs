@@ -623,7 +623,10 @@ fn emit_artefacts(
     if !prebuilt {
         out.push(Artefact {
             name: "runtime".to_owned(),
-            code: nazm_lir::backend::Code::Llvm(nazm_lir::emit_runtime(needs)),
+            code: nazm_lir::backend::Code::Llvm(super::c_library_for(
+                backend.target(),
+                nazm_lir::emit_runtime(needs),
+            )),
             instance: false,
             key: None,
             reused: false,
