@@ -44,7 +44,8 @@
       the executables' behaviour (`toolchain/commands/build.nz`; `nazm-pipeline build`/`put` and
       the summation rewrite, `toolchain/pipeline/vectorize.nz`; `toolchain/commands/tests/build.sh`:
       see *Slice 4 — the evidence* in `design.md`)
-- [ ] 4.3 `selfbuild.sh` builds through the stage's `nazm build` instead of its glue
+- [x] 4.3 `selfbuild.sh` builds through the stage's `nazm build` instead of its glue —
+      `cargo xtask contained selfbuild` passed 2026-10-20 (`design.md`, *Slice 4 — the evidence*)
 - [ ] 4.4 Left by 4.2: the runtime's units through the object store (clang's `-###` probe, R3's
       keys) and the user cache for shared units; `build --help` and clap's usage errors; Rust's
       exact refusal texts for the targets it names
