@@ -28,6 +28,7 @@ use "bindgen.nz"
 use "reload.nz"
 use "doctor.nz"
 use "semantic.nz"
+use "build.nz"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -329,6 +330,7 @@ fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap) -> Int {
     if s == "help" { return help_command(io, 1) }
     if s == "patch" { return patch_command(io, patch_group()) }
     if s == "attest" { return attest_command(io, proc, sp, v, attest_group()) }
+    if s == "build" { return build_command(io, proc, sp) }
     let c = command_cli(s)
     if c.name == "" { not_carried(io, "nazm " + s) }
     cli_from(c, 1)
