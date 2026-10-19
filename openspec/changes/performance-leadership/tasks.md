@@ -131,3 +131,11 @@ in the Rust compiler only where users would meet the cost before then (the order
       instructions a Nazm-written phase retires at n and 8n (run by the pipeline's, `nzcg`'s and
       the front end's `run.sh`), and `mir::a_long_plus_chain_lowers_in_time_proportional_to_its_length`;
       the other phases still to guard
+
+## 8. Allocation-heavy programs (binary-trees, 2026-10-19)
+- [x] 8.1 A box's storage made with it at one element; a program of one thread keeps every small
+      block it frees; a release not the last inlined (`nz.vec_free` the rest); one-thread memory
+      report counts plain — runtime ABI 51, 163 -> 98 MiB at depth 18 (design.md). Speed to be
+      measured in a quiet window
+- [ ] 8.2 A box as one block `{count, value}` (a `Box` type below Core IR) and moves in MIR, so a
+      read does not retain and release what it only passes on (design.md, *What is left*)

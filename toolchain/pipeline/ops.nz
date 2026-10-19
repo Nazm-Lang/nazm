@@ -1088,11 +1088,41 @@ fn arg_value(fx: Fx, args: Vec[Operand], i: Int) -> Int {
     if i < vec_len(args) { opvalue(fx, vec_get(args, i)) } else { iconst(fx, 0) }
 }
 
+/// `box_fresh`: a sequence header with room for exactly one `t` (`prims::box_fresh`).
+fn box_fresh(fx: Fx, dst: Int, t: Str) {
+    let h = rt_v(fx, "nz.seq_new", ints_new(), "ptr")
+    let none = is_null(fx, h)
+    guard(fx, none, "N0406", "out of memory");
+    set(fx, dst, h);
+    let size = size_of(fx, t)
+    let bytes = iconst(fx, if size < 1 { 1 } else { size })
+    let data = rt_v(fx, "malloc", ints_of(bytes), "ptr")
+    let refused = is_null(fx, data)
+    guard(fx, refused, "N0406", "out of memory");
+    store(fx, h, 16, data);
+    let one = iconst(fx, 1)
+    store(fx, h, 8, one);
+}
+
+/// `box_fill`: the one element written into the room `box_fresh` made (`prims::box_fill`).
+fn box_fill(fx: Fx, dst: Int, args: Vec[Operand], t: Str) {
+    let h = arg_value(fx, args, 0)
+    let data = load(fx, "ptr", h, 16)
+    store_element(fx, data, args, 1, t, false);
+    let one = iconst(fx, 1)
+    store(fx, h, 0, one);
+    set(fx, dst, one);
+}
+
 fn primitive(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) {
     // Immutable indirection (R1a): a `Box[T]` and a `Chain[T]` are their `Vec[T]`, so each of
     // their operations is the `Vec` one it means.
-    if op == "box_fresh" || op == "chain_empty" { primitive(fx, dst, "vec_new", elem, args); return }
-    if op == "box_fill" || op == "chain_push" { primitive(fx, dst, "vec_push", elem, args); return }
+    // A box's storage is made with it, exactly one element (`prims::box_fresh`), and its one element
+    // written there (`prims::box_fill`).
+    if op == "box_fresh" { box_fresh(fx, dst, element(op, elem)); return }
+    if op == "box_fill" { box_fill(fx, dst, args, element(op, elem)); return }
+    if op == "chain_empty" { primitive(fx, dst, "vec_new", elem, args); return }
+    if op == "chain_push" { primitive(fx, dst, "vec_push", elem, args); return }
     if op == "chain_len" { primitive(fx, dst, "vec_len", elem, args); return }
     if op == "chain_get" { primitive(fx, dst, "vec_get", elem, args); return }
     if op == "box_get" {

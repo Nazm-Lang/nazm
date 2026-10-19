@@ -27,6 +27,7 @@ use crate::Needs;
 pub mod rt {
     /// A sequence header `{ len, cap, data }`.
     pub const SEQ_LEN: i32 = 0;
+    pub const SEQ_CAP: i32 = 8;
     pub const SEQ_DATA: i32 = 16;
     /// A string backing `{ rc, length, bytes… }`: the bytes after a 16-byte header.
     pub const STRING_HEADER: i64 = 16;

@@ -5063,7 +5063,10 @@ allocates and frees it on the last release. A string backing is a 16-byte header
 count at 0) and its bytes; a literal and `arg`'s strings are immortal (their owner is null, and
 retaining or releasing null is a no-op). A sequence is a 32-byte header and a data block that grows
 by `realloc`; `nz.vec_release` releases each element with the element type's release function at
-the element's stride, then the sequence. A channel is a 64-byte block (capacity, length, head,
+the element's stride, then the sequence — its decrement inlined into the unit, the rest
+(`nz.vec_free`) called only after the last reference (runtime ABI 51). A `Box` is such a sequence
+whose data block is made with it at exactly one element and written once, never grown (binary-trees,
+2026-10-19: a vector's first growth takes four). A channel is a 64-byte block (capacity, length, head,
 closed flag, ring, lock, condition, reference count) and three allocations beside it — the ring,
 the lock and the condition — taken in order and released together, with a failure part-way
 through freeing exactly what was taken. Allocation failure is never undefined behaviour: every allocating entry
@@ -9637,7 +9640,11 @@ loop that builds and drops a few small values spent almost all its time there (`
   large one, goes back to C, so a block one thread allocates and another frees — a producer and a
   consumer — costs at most the bound, never a list that grows with the program's lifetime. In a
   program of one thread (`Native::single_thread`) the lists are plain globals; elsewhere they are
-  `thread_local`, whose access on macOS is a call, so the gain there is smaller (measured).
+  `thread_local`, whose access on macOS is a call, so the gain there is smaller (measured). A
+  program of one thread has no other thread to free what it allocates, so its lists have no bound
+  (`SMALL_KEPT_ONE_THREAD`, binary-trees, 2026-10-19): every block it frees it will ask for again,
+  and at 64 a program that freed a tree of a million boxes and built another gave all but 64 back
+  to C and asked C for each again — 23.1 million calls of C's `malloc` at depth 16, 524,317 after.
 - **How a program reaches it.** As the counted heap (R1d, D5) is reached: by renaming. Every unit
   (`nazm_runtime::heap::small_heap` on LLVM text, `nazm_lir::op::small_heap` on Cranelift's and
   `nzcg`'s LIR, so their object keys change with it), the runtime, the entry and every runtime

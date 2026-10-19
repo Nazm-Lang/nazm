@@ -361,7 +361,6 @@ pub fn rt_core_SHIM_SEQUENCE_RUNTIME() -> Str ! {} {
     r#"
 define hidden void @nz.vec_release(ptr %h, ptr %f, i64 %stride, ptr %q) {
 entry:
-  %own = alloca [3 x i64]
   %none = icmp eq ptr %h, null
   br i1 %none, label %done, label %drop
 drop:
@@ -370,8 +369,17 @@ drop:
   %rc2 = sub i64 %rc, 1
   store i64 %rc2, ptr %rcp
   %last = icmp sle i64 %rc2, 0
-  br i1 %last, label %which, label %done
-which:
+  br i1 %last, label %free, label %done
+free:
+  call void @nz.vec_free(ptr %h, ptr %f, i64 %stride, ptr %q)
+  br label %done
+done:
+  ret void
+}
+
+define hidden void @nz.vec_free(ptr %h, ptr %f, i64 %stride, ptr %q) noinline nounwind {
+entry:
+  %own = alloca [3 x i64]
   %nested = icmp ne ptr %q, null
   br i1 %nested, label %enqueue, label %outer
 enqueue:
@@ -8929,6 +8937,7 @@ declare i32 @_commit(i32)
 declare i32 @_wunlink(ptr)
 declare i32 @_wrmdir(ptr)
 declare i32 @MoveFileExW(ptr, ptr, i32)
+declare i32 @GetFileAttributesW(ptr)
 declare i32 @BCryptGenRandom(ptr, ptr, i32, i32)
 declare ptr @strerror(i32)
 declare i64 @strlen(ptr)
@@ -9107,6 +9116,20 @@ w3:
 open:
   %flags = phi i32 [ 32896, %r ], [ 33665, %w0 ], [ 33161, %w1 ], [ 34177, %w2 ], [ 32898, %w3 ]
   %fd = call i32 (ptr, i32, ...) @_wopen(ptr %w, i32 %flags, i32 384)
+  %bad = icmp slt i32 %fd, 0
+  br i1 %bad, label %which, label %done
+which:
+  ; Windows refuses a directory with "access denied"; every other system says what it is.
+  %at = call i32 @GetFileAttributesW(ptr %w)
+  %valid = icmp ne i32 %at, -1
+  %dirbit = and i32 %at, 16
+  %hasdir = icmp ne i32 %dirbit, 0
+  %isdir = and i1 %valid, %hasdir
+  br i1 %isdir, label %dir, label %done
+dir:
+  call void @nz.win.set_errno(i32 21)
+  br label %done
+done:
   call void @free(ptr %w)
   ret i32 %fd
 }
@@ -15944,6 +15967,7 @@ RuntimeSymbol { symbol: "nz.pool_report", ret: "void", params: [], attrs: "noinl
 RuntimeSymbol { symbol: "nz.join_one", ret: "i32", params: ["ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "wait for one task to end, its thread joined or its record freed (N83)", ownership: "frees the pool task's record", effect: "", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.format_int", ret: "i64", params: ["ptr", "i64"], attrs: "", declared: false, part: Base, responsibility: "an Int's decimal digits into a 21-byte buffer", ownership: "writes into the caller's buffer", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.vec_release", ret: "void", params: ["ptr", "ptr", "i64", "ptr"], attrs: "", declared: false, part: Sequences, responsibility: "release a sequence, each element with its type's release at its stride, through a queue rather than recursion (R1a)", ownership: "takes a reference; null is a no-op; the queue is null outside a release", effect: "", failure: Never, safety: Owner }
+RuntimeSymbol { symbol: "nz.vec_free", ret: "void", params: ["ptr", "ptr", "i64", "ptr"], attrs: "noinline nounwind", declared: false, part: Sequences, responsibility: "what follows a sequence's last reference: queue it, or empty it and every sequence queued while it is emptied (binary-trees, 2026-10-19)", ownership: "takes the sequence, whose count `nz.vec_release` has taken to zero", effect: "", failure: Never, safety: Owner }
 RuntimeSymbol { symbol: "nz.vec_drain", ret: "void", params: ["ptr", "ptr", "i64", "ptr"], attrs: "", declared: false, part: Sequences, responsibility: "empty a dead sequence: each element's release, given the queue, then its storage (R1a)", ownership: "takes the sequence's last reference", effect: "", failure: Never, safety: Owner }
 RuntimeSymbol { symbol: "nz.vec_enqueue", ret: "i1", params: ["ptr", "ptr", "ptr", "i64"], attrs: "", declared: false, part: Sequences, responsibility: "queue a dead sequence on the release in progress; false when the queue cannot grow (R1a)", ownership: "takes the sequence's last reference when it answers true", effect: "", failure: Never, safety: Owner }
 RuntimeSymbol { symbol: "nz.read_file_to", ret: "void", params: ["ptr", "ptr", "i64"], attrs: "", declared: false, part: Io, responsibility: "`nz.read_file`, written through a pointer", ownership: "as `nz.read_file`", effect: "io", failure: Status, safety: Any }
@@ -16106,10 +16130,14 @@ nz.closure_release
 nz.chan_retain
 nz.chan_release
 nz.chanv_release
+nz.seq_new
+nz.seq_release
+nz.vec_drain
+nz.strs_release
 "#
 }
 
-pub fn rt_abi_revision() -> Int ! {} { 50 }
+pub fn rt_abi_revision() -> Int ! {} { 51 }
 
 pub fn rt_target_note() -> Str ! {} {
     r#"verified on aarch64-apple-darwin with Apple clang; other targets are unverified rather than unsupported"#

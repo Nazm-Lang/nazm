@@ -90,8 +90,16 @@ pub const SMALL: [(&str, &str); 3] = [
     ("@free(", "@nz.small_free("),
 ];
 
-/// Blocks of each size class a thread keeps for reuse; one freed past them goes back to C.
+/// Blocks of each size class a thread of a program of several keeps for reuse; one freed past
+/// them goes back to C.
 pub const SMALL_KEPT: u64 = 64;
+
+/// The bound in a program of one thread: none (`u64::MAX`, compared unsigned, is never reached).
+/// The bound exists for a block one thread allocates and another frees; with one thread every
+/// freed block is one this thread will ask for again, and a program that frees a tree of a
+/// million boxes and builds another (binary-trees) otherwise gave all but 64 of them back to C
+/// only to ask C for them again.
+pub const SMALL_KEPT_ONE_THREAD: u64 = u64::MAX;
 
 /// `text` with every call and declaration of C's `malloc`, `realloc` and `free` made the
 /// small-block heap's, as [`count_heap`] makes them the counted heap's.
@@ -107,7 +115,7 @@ pub fn small_heap(text: &str) -> String {
 /// again without calling C; a block freed past that, and every large one, goes back to C. A block
 /// freed on another thread than the one that allocated it joins the freeing thread's list, which
 /// the bound keeps from growing without limit. In a program of one thread (`single`) the lists
-/// are plain globals; elsewhere they are thread-local.
+/// are plain globals, unbounded ([`SMALL_KEPT_ONE_THREAD`]); elsewhere they are thread-local.
 #[must_use]
 pub fn emit_small(single: bool) -> String {
     // `noinline` keeps a list's update out of generated code, where a preempted task could be
@@ -117,7 +125,15 @@ pub fn emit_small(single: bool) -> String {
         SMALL_RUNTIME
             .replace("{TLS}", if single { "" } else { "thread_local " })
             .replace(" noinline {", if single { " {" } else { " noinline {" })
-            .replace("{KEPT}", &SMALL_KEPT.to_string())
+            .replace(
+                "{KEPT}",
+                &if single {
+                    // As LLVM spells the unsigned bound: the same 64 bits, signed.
+                    (SMALL_KEPT_ONE_THREAD as i64).to_string()
+                } else {
+                    SMALL_KEPT.to_string()
+                }
+            )
     )
 }
 

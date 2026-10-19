@@ -10,9 +10,6 @@ use super::ir::{BinOp, Class, Cmp, V};
 use super::lower::{class, rt};
 use crate::ir::{RecordTy, Ty};
 
-/// Where the sequence header keeps its capacity.
-const SEQ_CAP: i32 = 8;
-
 impl Fx<'_, '_> {
     /// The fields of a `Vec`'s element, if that `Vec` is laid out field by field.
     pub(crate) fn soa_fields(&self, vec: Ty) -> Option<Vec<Ty>> {
@@ -21,7 +18,7 @@ impl Fx<'_, '_> {
         self.soa_elem_fields(elem)
     }
 
-    fn soa_elem_fields(&self, elem: Ty) -> Option<Vec<Ty>> {
+    pub(crate) fn soa_elem_fields(&self, elem: Ty) -> Option<Vec<Ty>> {
         if !self.lw.soa {
             return None;
         }
@@ -121,7 +118,7 @@ impl Fx<'_, '_> {
 
     /// Where field `k` of element `i` lives.
     fn soa_slot(&mut self, h: V, k: usize, i: V) -> V {
-        let cap = self.load(Class::I64, h, SEQ_CAP);
+        let cap = self.load(Class::I64, h, rt::SEQ_CAP);
         let data = self.load(Class::Ptr, h, rt::SEQ_DATA);
         let kk = self.iconst(i64::try_from(k).unwrap_or(0));
         let base = self.bin(BinOp::Mul, cap, kk);

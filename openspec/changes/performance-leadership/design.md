@@ -545,3 +545,56 @@ a receive case's value is pushed onto its vector and a send case's moved out of 
 owns. A send case is spent once sent; `-1` is a select with no case left. `nz.sel_signal` now reads
 the selector count before it moves the event count, since a generic receive signals too (a send
 case waits for room). Architecture §7.84, amended twice.
+
+### Binary-trees: memory and the release path (2026-10-19)
+
+Binary-trees at depth 18 (`bench/compare/nazm/bintrees.nz`, `enum Tree` with `Box[Tree]`) peaked at
+163 MiB beside C's 17.8 (*nbody and binary-trees in every language*, `docs/performance.md`). Counted,
+not timed — a C `malloc`/`free` interposer and the memory report at depth 16, and the code `-O2`
+generates:
+
+- **Nothing leaked and nothing waited.** `sequences allocated=14,898,524 reclaimed=14,898,524`; the
+  live high-water was 524,299 blocks, two per box for the 262,144 boxes of the long-lived tree and
+  one tree being checked: each tree is freed as it goes out of scope.
+- **A box held four elements.** A `Box[T]` is a `Vec[T]` below Core IR, and `box_new` was a
+  `vec_new` and a `vec_push`, whose first growth takes four: a 32-byte header and a 96-byte data
+  block per box, each behind the small-block heap's 16-byte class header — 48 and 112 bytes from
+  C, 160 a box, 41.9 MB live at depth 16, 163 MiB at 18. C's node is 16 bytes.
+- **Freed blocks went back to C.** The small-block heap kept 64 of each class (`SMALL_KEPT`, the
+  bound against one thread allocating what another frees), so a tree freed gave all but 64 blocks
+  back to C, and the next tree asked C again: 23,069,400 calls of `malloc` and 23,069,256 of `free`.
+- **Six releases of eight were calls.** `nz.vec_release` — decrement, queue, walk, free — was too
+  large for the optimiser to inline, so every release that was not the last (six of the eight a node
+  takes as `check` reads it, three per child as `make` builds it) was a call, and a frame holding
+  the queue's room. Each box made and freed also took two atomic additions for the memory report.
+
+**Decided and built (runtime ABI 51).** `box_fresh` makes the header and storage for exactly one
+element together, and `box_fill` writes the element there without asking to grow
+(`nazm_lir::op::prims`, mirrored in `toolchain/pipeline/ops.nz`; a `--layout soa` record keeps the
+vector's path). A program of one thread keeps every small block it frees (`SMALL_KEPT_ONE_THREAD`):
+no other thread can free what it allocates, so the bound has nothing to bound there.
+`nz.vec_release` is the null test and the decrement alone, which a unit inlines (`INLINABLE`), and
+calls `nz.vec_free` — `noinline nounwind`, so a program of one thread does not inline it back —
+only after the last reference. In a program of one thread the sequence counts of the memory report
+are plain (`PLAIN_IN_ONE_THREAD`). A sequence's reference count was already plain everywhere (R3
+8.4 holds: a sequence never crosses a task, `N0321`).
+
+**After, the same counts.** At depth 16: C's `malloc` 524,317 calls (the high-water, each block
+from C once) and `free` 16; 25.2 MB live, 96 bytes a box (48 + 48); the same output and every
+sequence reclaimed. At depth 18 the peak resident set is 98 MiB (`/usr/bin/time -l`, not a
+timing). In `make` and `check` at `-O2` no call is left on the path that does not free: allocation
+is the free list's pop, inlined; a release not the last is a decrement and a compare; no atomic
+instruction. To measure in a quiet window: `python3 bench/compare/compare.py NAZM OUT --runs 10
+--only bintrees`.
+
+**What is left, and why it is not this change.** 96 bytes a box is still 5.5 times C's node: a
+24-byte `Tree` (tag and two pointers) in its own block, behind a 32-byte sequence header in
+another, each with a 16-byte class header. A box as one block `{count, value}` — 32 bytes, 48 with
+the class header — needs `Box` below Core IR as a type of its own, not a `Vec` (its release, get and
+layout in LIR, both code generators, the interpreter's LIR oracle and the R3 port); a block without
+a class header needs the class found from the address (aligned slabs or a reserved region), which
+the 16-byte header exists to avoid. And the time left is ownership: as `check` reads a node it
+retains and releases the same two boxes three times over (a match's copy of the node, the bound
+names, each child's copy as an argument), because MIR has no move — every operand is borrowed and
+every copy counted. Those pairs are now inline and cheap, not gone; removing them is a MIR change
+(moves out of a place that dies), the next lever for binary-trees' time.
