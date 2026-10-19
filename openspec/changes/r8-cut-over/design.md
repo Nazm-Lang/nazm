@@ -205,6 +205,155 @@ The questions as they were put:
 - **The suite against the Nazm `nazm` (slice 14) will find what the per-command comparisons did
   not** — that is its purpose; it is placed before the chain and the release path, not after.
 
+## Slice 4 — `nazm build` in Nazm: the driver (design, 2026-10-20)
+
+Group 1 of `build`'s flags (above), on Nazm's own code generator. The Rust `build --backend nazm`
+is the oracle: its objects, its executables, its words and its statuses (decision 2).
+
+### S4.1 Process structure: the front end in process, the pipeline and the generator as stages
+
+`nazm build` is a command of the Nazm `nazm` (`toolchain/commands/build.nz`). It runs:
+
+| step | where | what it holds |
+| --- | --- | --- |
+| the front end | **in process**: R2's `fx_check_in`, as `nazm check` runs it (`check.nz`, `front.nz`) | the whole compilation, then nothing: its diagnostics are written as the Rust build writes them and its Core IR document (`fx_core_document_with_sources`, what `compiler/diagnose.nz --coredoc-sources` prints) to the working directory, and the facts are let go before any stage starts |
+| the pipeline | **a stage**: `nazm-pipeline build` (`toolchain/pipeline/main.nz`) | MIR, LIR (every unit, the heap's renaming applied), the runtime's units and a plan, written as files |
+| the code generator | **a stage**: `nzcg` (`toolchain/codegen/main.nz`), once over every unit | one object per unit |
+| the runtime's units | the platform's `clang -c`, as the Rust build compiles LLVM units | one object per unit |
+| the link | the platform's `clang` (`cc` driver), MinGW-w64's for Windows | the executable, or `--objects DIR` |
+
+Why not one program: the `nazm` program would carry the pipeline (its runtime text alone is 16k
+lines) and the generator beside every command, and the front end building `nazm` itself — the
+self-build's largest step, 1.3 GB of 2 GiB — would grow toward the limit; and the three would hold
+one heap where now each is freed by its process ending. Why not the front end as a stage too: the
+diagnostics must name the files as the user named them, which is `check.nz`'s port (already compared
+byte for byte with the Rust `check`); a child would have to run the front end twice or `compiler/`
+would grow a third driver mode. The pipeline and the generator are already programs, compared with
+their Rust originals (R3, R9), and already in the self-build's fixpoint: the driver adds glue, not a
+new builder. `compiler/` does not change.
+
+The stages are found by `NAZM_PIPELINE` and `NAZM_NZCG` (the Rust build's variable), or in the
+directory `NAZM_LIBEXEC` names (`nazm-pipeline`, `nzcg`); the standard library by `NAZM_LIBRARY`,
+as every R5 command. A missing one is refused by name, status 4, before anything is compiled (the
+Rust build's `--backend nazm` with no generator). Where they are installed is slice 12's.
+
+### S4.2 The R6 rule when `nazm build` runs its stages on the macOS host
+
+The rule (`docs/internal/runbook.md`, *What may run on the host*): one Nazm-built program at a time,
+built with a counted heap of at most 2 GiB, admitted by `host-run`'s checks, under a deadline, its
+peak recorded, anything heavier contained. The driver keeps it as follows.
+
+1. **The driver is a host stage itself.** The Nazm `nazm` is built with `--heap-limit` of at most
+   2 GiB and started on the host only by `cargo xtask host-run` (`toolchain/lib/stage-run.sh`), which
+   admits it, holds the one-stage lock, and puts it and every child in one process group under one
+   deadline.
+2. **Each stage is admitted by host-run's checks before it starts.** The driver reads the stage's
+   image as `host-run` does (`xtask/src/host_run.rs`): the counted heap linked (`nz.heap_malloc` in
+   the file), one `N0406` limit in it, at most 2 GiB. Otherwise it refuses, status 4, with
+   `host-run`'s name for the refusal (`no-counted-heap`, `no-heap-limit`,
+   `ambiguous-heap-limit`, `heap-limit-too-large`), before anything is compiled. It does this
+   everywhere, not only on the host: an unbounded stage is never run.
+3. **One stage at a time.** The stages run strictly in sequence, the driver waiting on each. While
+   one runs, the driver holds no work of its own: the front end's facts were released before the
+   first stage started (its live counted heap is then the paths and the plan), and it starts no
+   thread but the one draining the stage's error stream. The generator is run once over every unit,
+   where the Rust build runs one `nzcg` per unit in parallel. The pipeline and the generator never
+   run beside each other, beside the front end, or beside another `host-run`.
+4. **The peak and the withdrawal conditions.** `host-run`'s `/usr/bin/time -l` reports the largest
+   resident set of the driver and the children it waited for, and holds it to the driver's limit
+   plus 256 MiB; so each stage is built with a limit no larger than the driver's (the self-build and
+   the scripts build all four with the same `--heap-limit`). The driver also reads each stage's own
+   peak (`process_peak_memory`) and applies the two conditions `host-run` applies, to the stage's own
+   limit: a peak more than 256 MiB past it, or an `N0406` that did not end the stage with status 2.
+   Either is reported as `WITHDRAWAL CONDITION`, `host-run`'s marker
+   (`~/.cache/nazm-host-run/withdrawn`, or under `NAZM_HOST_RUN_DIR`) is written, and the build
+   fails; a marker already there refuses the build (`withdrawn`), as it refuses `host-run`.
+5. **Heavier stays contained.** A build is one driver and at most one stage. The self-build (many
+   builds in a row), the suites and the comparison over many programs run contained, or on the host
+   as a script starting one `host-run` at a time (`toolchain/commands/tests/build.sh`).
+
+What this adds to the accepted rule, stated so the copyright holder can see it: while a stage runs,
+two Nazm-built processes exist — the waiting driver and the stage — where `host-run` alone admits
+one. The driver plays `host-run`'s part for its stage (the same image checks, one at a time, the
+same withdrawal conditions); the counted heaps are the driver's small residue and the stage's ≤ 2
+GiB, and the measured peaks (S4.6) are recorded with each run. If that reading is not accepted, the
+fallback costs nothing in the design: the macOS host builds with a Rust-built `nazm` driving the same
+stages, or contained only.
+
+### S4.3 What the stages are handed, and the counted heap in the LIR
+
+`nazm-pipeline [--target T] build CORE.json OUTDIR STACK HEAP` (new, `toolchain/pipeline/main.nz`)
+lowers once and writes `OUTDIR/lir.txt` (every unit as `nazm lir --ops` prints it), `OUTDIR/rt/NAME.ll`
+(the runtime's units) and `OUTDIR/plan.txt` (the units' artefact names in link order, whether the
+program has one thread, whether it calls C, whether it reaches TLS). The renaming `nazm build` does
+in Rust is the pipeline's, not a `sed` of the driver's: under a heap limit every unit's imports of and
+calls to C's `malloc`, `realloc` and `free` become the counted heap's (`nazm_lir::op::count_heap`),
+every runtime unit but the stack's likewise, and the `heap` unit holds the limit; with no limit, a
+hosted program that calls no C gets the small-block heap the same way (`small_heap`, `small`). The
+runtime is the Nazm backend's: every part (the Rust backend's `baseline`), TLS where a unit reaches
+it, `single` as the program decides it — not only the parts the units reach, which is the LLVM
+backend's runtime; on Windows the C library's `snprintf` and `strtod` are MinGW's
+(`c_library_for`).
+
+### S4.4 One thread, the target and the link
+
+- **One thread** is the pipeline's decision (`main` holds no `SpawnCap`, `NetCap` or `ForeignCap`):
+  it goes to the generator as `--one-thread` and to the runtime's `single`, from the plan — not read
+  back out of the runtime's text, as `selfbuild.sh` did.
+- **Targets:** `aarch64-apple-darwin` (the default on Apple silicon), `x86_64-apple-darwin`,
+  `x86_64-pc-windows-gnu` (objects with `--objects`, or linked where MinGW-w64 is the host's), and,
+  for the self-build only, the two Linux triples, which must be named (`docs/user/support.md`: Linux
+  is not a supported target). The Rust build refuses Linux for `--backend nazm`; the port's
+  acceptance of it is the one intended difference, and the comparison does not count it.
+- **Compiling the runtime's units and linking** are the Rust build's (`crates/nazm-cli/src/backend.rs`):
+  `clang` with an environment of nothing but `PASSED` and `ZERO_AR_DATE=1`; `-O0 -Wno-override-module
+  -c` and `-target` for a target not the host's, `-ffunction-sections -fdata-sections` on ELF; the
+  link in the working directory under the output's own name, the objects in link order, the system
+  libraries after them (none on macOS, `-lm` on Linux, MinGW-w64's on Windows), `-Wl,-dead_strip` or
+  `--gc-sections`; TLS's libraries only when the first link fails and the program reaches TLS; the
+  output published by rename. `--objects DIR` writes `NN-NAME.o` and `link.txt` as the Rust build
+  does.
+
+### S4.5 The object cache
+
+An object is a function of the unit's LIR text, the generator, the target, the runtime and whether the
+program has one thread; the key is the BLAKE3 digest of those (the generator's file digest, the
+target, the runtime's ABI revision and digest — `nazm-pipeline runtime-digest` — the one-thread bit
+and the LIR text), and the entry is R3's envelope (`toolchain/pipeline/objcache.nz`, `nazm.object/1`)
+in the project's store, as the Rust build files its Nazm-backend objects. A runtime unit is LLVM text
+and is keyed exactly as R3 defined it (`object_key` over the text, the backend identity and the
+configuration `clang -###` resolves). The Rust key digests its in-memory LIR module, the port's the
+module printed — one function of the other — so the two stores never confuse an entry; they do not
+share one either. `--no-cache` compiles everything and reads nothing. The first implementation
+neither reads nor writes the store (a cache is derived data: its absence changes no object), as
+`check.nz` did with the check cache; the keyed store follows in this slice or the next and is listed
+in `tasks.md` until then.
+
+### S4.6 What is carried, refused and compared
+
+Carried: FILE, `-o`, `--json`, `--target`, `--objects DIR`, `--link FILE`, `--no-cache`,
+`--heap-limit`, `--stack-size`, `--deny-warnings`, `--backend nazm`, TLS's libraries. Refused by name
+with status 6 (R5's convention): `--backend llvm` — the default, so `nazm build FILE` needs
+`--backend nazm` until slice 5 — and `cranelift`; every flag of groups 2–4; a package's build (its
+manifest's `heap-limit`, `--locked`, `--features`); `--help` and clap's usage errors (the help text is
+not ported in this slice); a construct the pipeline cannot lower (its own message, status 6).
+
+The comparison (`toolchain/commands/tests/build.sh`): over `tests/compat/v1/{run,trap,refuse,check}`,
+`compiler/conformance/` and `toolchain/codegen/tests/programs/`, the Rust `nazm build --backend nazm`
+(its `nzcg` run through a wrapper that takes `host-run` one at a time) against the Nazm-built one
+(through `stage-run.sh`): standard output, standard error and status, the executable byte for byte,
+and with `--objects` every object and `link.txt`. Agree, differ, refused (status 6, with its reason)
+and skipped (the reference cannot build it) are counted apart.
+
+### S4.7 The self-build through `nazm build`
+
+`selfbuild.sh`'s builder becomes `nazm` (the driver and the front end), `pl` and `cg`; `fe` is still
+built, for the Core IR reference check. Stage 0 is the seed's `nazm build --heap-limit`; stage *s*
+builds every program with stage *s−1*'s `nazm build --backend nazm --no-cache --heap-limit 2G
+--target T`, its `pl` and `cg` as the stages. The glue (`build_with`, the `sed`, the `awk` split, the
+`grep` for one thread, `clang -c`, `cc`) is gone. The fixpoint compares the executables; the Core IR
+check runs the last stage's `fe --coredoc-sources` beside the seed's `core-ir --with-sources`.
+
 ## Slice 1 — the evidence
 
 - The checkout's `nazm check` of `toolchain/interp/main.nz` and `toolchain/harness/check/main.nz`:

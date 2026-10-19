@@ -37,8 +37,8 @@
       `--coredoc-sources`; the self-build compares Core IR whole (`r6-host-qualification` 1.8)
 
 ## 4. Slice 4 — `nazm build` in Nazm: the driver
-- [ ] 4.1 Design (Opus): one program or `libexec/` children; the object cache; the counted heap in
-      the LIR; the one-thread decision; linking per target
+- [x] 4.1 Design (Opus): one program or `libexec/` children; the object cache; the counted heap in
+      the LIR; the one-thread decision; linking per target (`design.md`, *Slice 4*, S4.1–S4.7)
 - [ ] 4.2 `build` group 1 (`design.md`) for the macOS triples, Windows x86_64 and the internal Linux
       one; compared with the Rust `build --backend nazm` on the corpus: objects with `--objects`,
       the executables' behaviour
