@@ -280,6 +280,9 @@ GiB, and the measured peaks (S4.6) are recorded with each run. If that reading i
 fallback costs nothing in the design: the macOS host builds with a Rust-built `nazm` driving the same
 stages, or contained only.
 
+**Accepted by the copyright holder, 2026-10-20:** the waiting driver and one checked stage count as
+one stage at a time under the R6 rule (`docs/internal/runbook.md`, *What may run on the host*).
+
 ### S4.3 What the stages are handed, and the counted heap in the LIR
 
 `nazm-pipeline [--target T] build CORE.json OUTDIR STACK HEAP` (new, `toolchain/pipeline/main.nz`)
