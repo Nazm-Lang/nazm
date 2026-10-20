@@ -1,0 +1,20 @@
+# `nazm mir`'s command lines, run from the repository's root by `tests/inspect.sh args`.
+--help
+-h
+--bogus examples/max.nz
+--jsn examples/max.nz
+-x examples/max.nz
+examples/max.nz extra
+(none)
+absent.nz
+examples/bad/assign_to_immutable.nz
+examples/max.nz --source-root .
+examples/max.nz --source-root=nothere
+--source-root
+examples/max.nz --source-root examples
+examples/max.nz --source-root examples/max.nz
+--json examples/max.nz
+--spans examples/max.nz
+--json --spans examples/max.nz
+examples/pipeline.nz
+--json examples/pipeline.nz

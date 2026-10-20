@@ -1,0 +1,199 @@
+// `nazm inspect`, written in Nazm (R8 slice 8, `openspec/changes/r8-cut-over/design.md`, task 8.1).
+//
+// A port of `crates/nazm-cli/src/inspect.rs`: one program's facts as `nazm.inspect/2`, one line of JSON.
+//
+//   per definition   identity, signature, effects, capabilities and provenance from R2's facts
+//                    (`compiler/facts.nz`); the Core IR digests from the document the front end
+//                    publishes; and for each concrete function MIR has for it (every generic
+//                    instance) the executable digest, block, statement and local counts, read from
+//                    `nazm.mir/1` as the pipeline stage prints it (`coreir.nz`'s `ci_staged`);
+//   the toolchain    `capdata.nz`'s `cd_toolchain`, the Rust compiler's own tables, generated;
+//   authority        `main`'s signature, as `build` reads it.
+//
+// Not carried (status 6, by name): a package (its identity, its lock's verification), and a program
+// with a foreign function (what MIR holds for one).
+
+use "@std/json"
+use "@std/hashmap"
+use "../../compiler/syntax.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/package.nz"
+use "../../compiler/facts.nz"
+use "../../compiler/facts-core.nz"
+use "cli.nz"
+use "front.nz"
+use "util.nz"
+use "stagerun.nz"
+use "coreir.nz"
+use "obligations.nz"
+use "capdata.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+fn in_refuse(io: IoCap, why: Str) -> Int {
+    eprint("nazm: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+pub fn inspect_cli() -> Cli {
+    let c = cli_command("inspect", "Print one program's facts as `nazm.inspect/2` (N48; `/2` since N104): every definition's identity, signature, effects, "
+            + "capabilities, provenance, Core IR and MIR digests, and the toolchain, package and lock identities — one deterministic line of JSON", "")
+    cli_positional(c, "FILE", true, false, true, "", "")
+    cli_option(c, "", "def", "NAME", false, "", false, "Only the function of this name", "")
+    c
+}
+
+fn in_list(xs: Strs) -> Str {
+    let out = strs_new()
+    for i in 0..strs_len(xs) { strs_push(out, ob_quote(strs_get(xs, i))) }
+    "[" + str_join(out, ",") + "]"
+}
+
+fn in_ints(xs: Ints) -> Str {
+    let out = strs_new()
+    for i in 0..ints_len(xs) { strs_push(out, int_to_str(ints_get(xs, i))) }
+    "[" + str_join(out, ",") + "]"
+}
+
+fn in_effects(mask: Int) -> Str { if mask < 0 { "null" } else { in_list(ck_effect_names(mask)) } }
+
+fn in_reaches(c: Str) -> Str {
+    if c == "OutCap" { return "prints to standard output and error" }
+    if c == "IoCap" { return "files, arguments, the terminal and the process's exit" }
+    if c == "NetCap" { return "the network" }
+    if c == "ProcessCap" { return "other programs and the environment" }
+    if c == "SpawnCap" { return "threads" }
+    if c == "RandomCap" { return "the system's randomness" }
+    if c == "TimeCap" { return "the clocks" }
+    if c == "ForeignCap" { return "C functions" }
+    if c == "VouchCap" { return "vouching for values' provenance" }
+    if c == "MmioCap" { return "device memory" }
+    "an authority this build does not describe"
+}
+
+// `authority::json(of_main(text))`: what the root's `main` holds, or `null` for no `main`.
+fn in_authority(f: Facts) -> Str {
+    let t = fx_tree(f)
+    let program = fx_module_program(f, 0)
+    let fns = sx_items(t, sx_field(t, program, "functions"))
+    for i in 0..ints_len(fns) {
+        let fnode = ints_get(fns, i)
+        if sx_name(t, fnode, "name") == "main" && !sx_is_some(t, sx_field(t, fnode, "method_of")) {
+            let parts = strs_new()
+            let params = sx_items(t, sx_field(t, fnode, "params"))
+            for j in 0..ints_len(params) {
+                let p = ints_get(params, j)
+                let ty = sx_name(t, sx_field(t, p, "ty"), "name")
+                if ut_ends(ty, "Cap") {
+                    let span = sx_field(t, p, "span")
+                    strs_push(parts, "{\"capability\":" + ob_quote(ty) + ",\"implicit\":" + (if sx_s(t, span) == sx_e(t, span) { "true" } else { "false" })
+                            + ",\"reaches\":" + ob_quote(in_reaches(ty)) + "}")
+                }
+            }
+            return "[" + str_join(parts, ",") + "]"
+        }
+    }
+    "null"
+}
+
+// The MIR functions of `mir` (the stage's document) whose identity is `def`'s, its instance
+// `def[...]` or its function value's thunk `def#value@...`: the `native` rows, in the document's order.
+fn in_native(d: JsonDoc, def: Str, rows: Strs) -> Int {
+    let fns = ob_kid(d, json_root(d), "functions")
+    for i in 0..ob_len(d, fns) {
+        let m = ob_at(d, fns, i)
+        let id = ob_s(d, m, "identity")
+        if id == def || ut_starts(id, def + "[") || ut_starts(id, def + "#value@") {
+            let blocks = ob_kid(d, m, "blocks")
+            let mut statements = 0
+            for b in 0..ob_len(d, blocks) { statements += ob_len(d, ob_kid(d, ob_at(d, blocks, b), "stmts")) }
+            strs_push(rows, "{\"blocks\":" + int_to_str(ob_len(d, blocks)) + ",\"digest\":" + ob_quote(ob_s(d, m, "digest")) + ",\"foreign\":null,\"identity\":"
+                    + ob_quote(id) + ",\"locals\":" + int_to_str(ob_len(d, ob_kid(d, m, "locals"))) + ",\"statements\":" + int_to_str(statements) + "}")
+        }
+    }
+    0
+}
+
+pub fn inspect_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let file = cli_value(c, 0)
+    let only = cli_value(c, 1)
+    let has_def = cli_present(c, 1)
+    let root = pk_decide(fe_prefix(io, file) + file, io)
+    if pk_root_how(root) == 1 { in_refuse(io, "a package's inspect (its identity and its lock's verification: R8 slice 6)") }
+    let f = ci_checked(io, file, false, "")
+    let raw = fx_core_document_with_sources(f)
+    if raw == "" { in_refuse(io, "a program whose Core IR the front end does not carry") }
+    let text = ci_unprefix_paths(io, raw, file)
+    let d = match json_parse(text) {
+        Result.Ok(value: doc) => doc,
+        Result.Err(error: e) => { in_refuse(io, "Core IR's document does not parse: " + e); json_new() },
+    }
+    let fns = ob_kid(d, json_root(d), "functions")
+    for i in 0..ob_len(d, fns) {
+        if ob_kid(d, ob_at(d, fns, i), "foreign") >= 0 { in_refuse(io, "a program with a foreign function (what MIR holds for one)") }
+    }
+    // MIR, as a stage prints it.
+    let args = strs_new()
+    strs_push(args, "mir")
+    strs_push(args, "@CORE@")
+    let mirtext = ci_staged(io, proc, sp, "inspect", text, args)
+    let mir = match json_parse(mirtext) {
+        Result.Ok(value: doc) => doc,
+        Result.Err(error: e) => { in_refuse(io, "the pipeline's MIR does not parse: " + e); json_new() },
+    }
+    let ck = fx_checker(f)
+    // The checker's function table by durable identity (the first of a name).
+    let index: HashMap[Str, Int] = hashmap_new()
+    for k in 0..ck_fn_count(ck) {
+        let id = fx_fn_identity(f, k)
+        match hashmap_get(index, id) {
+            Some(v) => { },
+            None => { hashmap_set(index, id, k); },
+        }
+    }
+    let identities = strs_new()
+    let rows = strs_new()
+    for i in 0..ob_len(d, fns) {
+        let fnode = ob_at(d, fns, i)
+        let def = ob_s(d, fnode, "def")
+        if has_def && !ut_ends(def, "::fn " + only) { continue }
+        let at = match hashmap_get(index, def) { Some(v) => v, None => 0 - 1 }
+        // A definition the checker's table has no entry for is not the census's to name.
+        if at < 0 { continue }
+        let native = strs_new()
+        in_native(mir, def, native)
+        let digest = ob_kid(d, fnode, "digest")
+        let provenance = if fx_prov_has(f, at) {
+            "{\"passes_on\":" + in_ints(fx_prov_passes_on(f, at)) + ",\"reaches_sink\":" + in_ints(fx_prov_reaches(f, at)) + ",\"result\":" + in_list(fx_prov_origins(f, at)) + "}"
+        } else { "null" }
+        let foreign = ck_fn_foreign(ck, at)
+        strs_push(identities, def)
+        strs_push(rows, "{\"capabilities\":" + in_list(ck_fn_capabilities(ck, at)) + ",\"core_ir\":{\"body\":" + ob_quote(ob_s(d, digest, "body"))
+                + ",\"semantic\":" + ob_quote(ob_s(d, digest, "semantic")) + "},\"effects\":{\"declared\":" + in_effects(ck_fn_declared(ck, at))
+                + ",\"required\":" + in_effects(ck_fn_required(ck, at)) + "},\"foreign\":" + (if foreign == "" { "null" } else { ob_quote(foreign) })
+                + ",\"generic\":" + (if ck_fn_generic(ck, at) { "true" } else { "false" }) + ",\"identity\":" + ob_quote(def) + ",\"native\":[" + str_join(native, ",")
+                + "],\"params\":" + in_list(ck_fn_params(ck, at)) + ",\"provenance\":" + provenance + ",\"ret\":" + ob_quote(ck_fn_ret(ck, at)) + "}")
+    }
+    // In order of identity (`sort_by_key`: stable, by the string's bytes).
+    let n = strs_len(rows)
+    let mut i = 1
+    while i < n {
+        let mut j = i
+        while j > 0 && ut_less(strs_get(identities, j), strs_get(identities, j - 1)) {
+            let a = strs_get(identities, j)
+            strs_set(identities, j, strs_get(identities, j - 1))
+            strs_set(identities, j - 1, a)
+            let r = strs_get(rows, j)
+            strs_set(rows, j, strs_get(rows, j - 1))
+            strs_set(rows, j - 1, r)
+            j -= 1
+        }
+        i += 1
+    }
+    let key = fx_module_key(f, 0)
+    print("{\"authority\":" + in_authority(f) + ",\"definitions\":[" + str_join(rows, ",") + "],\"mir\":{\"functions\":" + int_to_str(ob_len(mir, ob_kid(mir, json_root(mir), "functions")))
+            + ",\"validated\":true},\"package\":null,\"root\":" + (if key == "" { "null" } else { ob_quote(key) }) + ",\"schema\":\"nazm.inspect/2\",\"toolchain\":" + cd_toolchain() + "}" + nl())
+    0
+}

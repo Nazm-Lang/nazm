@@ -1,0 +1,13 @@
+schema = "nazm.requirements/1"
+
+[[requirement]]
+id = "F-1"
+text = "double doubles."
+definitions = ["double"]
+tests = ["doubles"]
+
+[[requirement]]
+id = "F-2"
+text = "double miscounts."
+definitions = ["double", "main"]
+tests = ["miscounts"]

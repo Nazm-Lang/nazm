@@ -1,0 +1,4 @@
+schema = "nazm.requirements/1"
+
+[[requirement]]
+text = "no id"

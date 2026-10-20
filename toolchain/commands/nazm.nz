@@ -8,7 +8,9 @@
 // on standard error with status 5 when no command is named. Help and the version are standard output
 // and status 0; a usage error is standard error and status 5 (`main.rs`, `parse_cli`). Then the
 // command: `fmt`, `init`, `check`, `doc`, `fix`, `lsp`, `test`, `patch`, `interface`, `docs`, `attest`, `lock`, `update`, `publish`, `yank`, `bindgen`, `reload-check`, `doctor`, `snapshot`, `delta`, `diagnostics`, `resolve` and `references` are carried
-// (`fmt.nz`, `init.nz`, `check.nz`, `doc.nz`, `fix.nz`, `lsp.nz`, ..., `semantic.nz`), every other says it is not carried and exits 6.
+// (`fmt.nz`, `init.nz`, `check.nz`, `doc.nz`, `fix.nz`, `lsp.nz`, ..., `semantic.nz`), and so are `build` (`build.nz`) and the inspection commands
+// (R8 slice 8): `core-ir`, `mir`, `lir`, `capabilities` (`coreir.nz`), `obligations`, `trace`, `inspect`, and `explain-cost`, `explain-flow`
+// and `profile`, which parse their command line and refuse what R2 and R3 do not yet publish (`explain.nz`). Every other says it is not carried and exits 6.
 
 use "cli.nz"
 use "fmt.nz"
@@ -30,6 +32,11 @@ use "doctor.nz"
 use "semantic.nz"
 use "build.nz"
 use "buildcli.nz"
+use "coreir.nz"
+use "obligations.nz"
+use "trace.nz"
+use "inspect.nz"
+use "explain.nz"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -254,6 +261,16 @@ fn command_cli(name: Str) -> Cli {
     if name == "resolve" { return resolve_cli() }
     if name == "references" { return references_cli() }
     if name == "build" { return build_cli() }
+    if name == "core-ir" { return core_ir_cli() }
+    if name == "mir" { return mir_cli() }
+    if name == "lir" { return lir_cli() }
+    if name == "capabilities" { return capabilities_cli() }
+    if name == "obligations" { return obligations_cli() }
+    if name == "trace" { return trace_cli() }
+    if name == "inspect" { return inspect_cli() }
+    if name == "explain-cost" { return explain_cost_cli() }
+    if name == "explain-flow" { return explain_flow_cli() }
+    if name == "profile" { return profile_cli() }
     cli_command("", "", "")
 }
 
@@ -358,6 +375,16 @@ fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, tm: TimeCap) -> 
     if s == "resolve" { return resolve_command(io, c) }
     if s == "references" { return references_command(io, c) }
     if s == "build" { return build_command(io, proc, sp, tm, v, c) }
+    if s == "core-ir" { return core_ir_command(io, c) }
+    if s == "mir" { return mir_command(io, proc, sp, c) }
+    if s == "lir" { return lir_command(io, proc, sp, c) }
+    if s == "capabilities" { return capabilities_command(io, c) }
+    if s == "obligations" { return obligations_command(io, c) }
+    if s == "trace" { return trace_command(io, proc, sp, c) }
+    if s == "inspect" { return inspect_command(io, proc, sp, c) }
+    if s == "explain-cost" { return explain_cost_command(io, c) }
+    if s == "explain-flow" { return explain_flow_command(io, c) }
+    if s == "profile" { return profile_command(io, c) }
     check_command(io, c)
 }
 

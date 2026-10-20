@@ -1,0 +1,27 @@
+// A program with a test that passes and one that fails, for `nazm trace`'s comparison.
+
+use "@std/test";
+
+fn double(x: Int) -> Int
+    requires x >= 0
+    ensures result >= x
+{
+    x * 2
+}
+
+// No call here has only literals for arguments: the census would need the checker's witness of a proved one.
+fn main(out: OutCap) -> Int {
+    double(str_len("abc"))
+}
+
+@test
+fn doubles() -> Result[Int, Str] {
+    let four = str_len("abcd");
+    assert_eq_int("double(4)", double(four), 8)
+}
+
+@test
+fn miscounts() -> Result[Int, Str] {
+    let four = str_len("abcd");
+    assert_eq_int("double(4)", double(four), 9)
+}

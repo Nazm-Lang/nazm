@@ -1,0 +1,17 @@
+# `nazm inspect`'s command lines, run from the repository's root by `tests/inspect.sh args`.
+--help
+-h
+--bogus examples/max.nz
+-x examples/max.nz
+examples/max.nz extra
+(none)
+absent.nz
+examples/bad/assign_to_immutable.nz
+--def max examples/max.nz
+--def nothing examples/max.nz
+--def examples/max.nz
+--def
+examples/max.nz --def clamp
+--def=main examples/max.nz
+--def main --def max examples/max.nz
+--source-root . examples/max.nz
