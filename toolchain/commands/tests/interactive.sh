@@ -29,6 +29,7 @@
 #
 # The reference is $NAZM_REF (default $NAZM). The inputs are the tracked programs of the conformance, compatibility,
 # example and front-end corpora; BIG=1 adds the toolchain's own sources. KEEP=DIR keeps each difference's records.
+# INTERACTIVE_SLICE=K/N takes every Nth input from the Kth, for a contained run's hour.
 set -u
 stage_name=interactive-compare
 . "$(dirname "$0")/../../lib/stage.sh"
@@ -77,6 +78,17 @@ if [ ${#files[@]} -eq 0 ]; then
     )
 fi
 
+# INTERACTIVE_SLICE=K/N: every Nth input from the Kth (a contained run is held to an hour), so the corpus goes in several.
+if [ -n "${INTERACTIVE_SLICE:-}" ]; then
+    k=${INTERACTIVE_SLICE%/*}
+    n=${INTERACTIVE_SLICE#*/}
+    sel=()
+    for i in "${!files[@]}"; do
+        [ $((i % n)) -eq "$k" ] && sel+=("${files[$i]}")
+    done
+    files=("${sel[@]}")
+fi
+
 export NAZM_LIBRARY="$ROOT/library" NAZM_PIPELINE="$OUT/bin/nazm-pipeline" NAZM_NZCG="$OUT/bin/nzcg"
 cd "$ROOT" || exit 2
 
@@ -111,7 +123,8 @@ case_in() {
         break
     done
     echo $rc > "$W/got.status"
-    if [ "$rc" = 6 ]; then
+    # Status 6 is what the port does not carry (it says so: `nazm: not carried: ...`); a program may end 6 of itself.
+    if [ "$rc" = 6 ] && grep -q '^\(nazm\|check\|test\): not carried' "$W/got.err"; then
         refused=$((refused + 1))
         echo "refused  $label: $(head -c 200 "$W/got.err" | tr '\n' ' ')"
         return
@@ -166,6 +179,12 @@ part_args() {
     [ -f "$list" ] || { echo "$name args: no $list"; return; }
     while IFS= read -r line; do
         case $line in '' | '#'*) continue ;; esac
+        case $line in
+            '@contained '*)
+                line=${line#@contained }
+                # A compiled build runs without a heap limit: contained only.
+                [ "$STAGE_MODE" = contained ] || continue ;;
+        esac
         [ "$line" = '(none)' ] && line=
         # shellcheck disable=SC2086
         case_run "$name args: ${line:-(none)}" $name $line
@@ -179,6 +198,12 @@ part_interpret() {
         case_run "run --interpret $f" run --interpret "$f"
         case_run "run --interpret --json $f" run --interpret --json "$f"
         case_run "run --interpret $f -- a 'b c'" run --interpret "$f" -- a 'b c'
+    done
+    # The reports the runtime answers for the program, by environment variable: the interpreted program's, never `nazm`'s own.
+    for f in examples/max.nz examples/pipeline.nz tests/compat/v1/run/tasks.nz; do
+        NAZM_MEMORY_REPORT=1 NAZM_SCHED_REPORT=1 case_run "run --interpret $f with the memory and scheduler reports" run --interpret "$f"
+        NAZM_RESULT_REPORT=1 case_run "run --interpret $f with the result report" run --interpret "$f"
+        NAZM_MEMORY_REPORT=1 NAZM_SCHED_REPORT=1 NAZM_RESULT_REPORT=1 case_run "run --interpret $f with all three reports" run --interpret "$f"
     done
     report interpret
 }
@@ -272,7 +297,8 @@ fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Int ! { io, spawn } {
 EOF
     case_run "run killed by a signal" run "$OUT/work/signal.nz"
     for r in "run --interpret" run; do
-        NAZM_RESULT_REPORT=1 case_run "$r with NAZM_RESULT_REPORT" $r "$ROOT/examples/max.nz"
+        NAZM_RESULT_REPORT=1 case_run "$r with NAZM_RESULT_REPORT" $r examples/max.nz
+        NAZM_MEMORY_REPORT=1 NAZM_SCHED_REPORT=1 case_run "$r with the memory and scheduler reports" $r examples/pipeline.nz
     done
     report run
 }

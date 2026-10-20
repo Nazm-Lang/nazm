@@ -1068,6 +1068,15 @@ pub fn cli_parse(io: IoCap, c: Cli) -> Int {
         if !trailing {
             if s == "--" {
                 trailing = true
+                // What follows `--` goes to the positional that only follows it (`last(true)`), as clap's does.
+                if ints_len(c.lastp) > 0 {
+                    let at = ints_get(c.lastp, 0)
+                    let mut ordinal = 0
+                    for a in 0..at + 1 {
+                        if cli_is_pos(c, a) { ordinal += 1 }
+                    }
+                    if ordinal > pos_counter { pos_counter = ordinal }
+                }
                 continue
             }
             if n > 2 && cli_starts(s, "--") {
