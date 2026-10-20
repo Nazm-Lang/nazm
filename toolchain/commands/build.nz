@@ -21,7 +21,7 @@
 // before it starts (the counted heap linked, one heap limit of at most 2 GiB), the stages run one
 // at a time, and each one's peak is held to `host-run`'s withdrawal conditions (design S4.2).
 //
-// What this port does not carry — Cranelift, `--layout soa`, the flags of groups 3 and 4, a
+// What this port does not carry — Cranelift, the flags of groups 3 and 4, a
 // package's build, `--help` and the usage errors — it says so on standard error and exits 6 before
 // writing anything (R5's convention). With `--backend nazm` and without `--no-cache` each unit's
 // object is looked up in the project's object store by its key and only the misses are generated,
@@ -829,9 +829,8 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Int {
             bd_fail(io, "nazm: `--link " + strs_get(o.links, i) + "`: no such file; `--link` names an object or library that defines foreign functions", 3)
         }
     }
-    // The field-by-field layout (N68) is asked for by name; `soa` is not carried yet.
+    // The field-by-field layout (N68) is asked for by name.
     if o.layout != "aos" && o.layout != "soa" { bd_fail(io, "nazm: `--layout " + o.layout + "` is not a layout; the layouts are `aos` and `soa`", 5) }
-    if o.layout == "soa" { bd_refuse(io, "`nazm build --layout soa` (the field-by-field layout is not ported)") }
     let llvm = o.backend == "llvm"
     if !llvm && o.debug { bd_refuse(io, "`nazm build --debug` with `--backend nazm` (debug information is the LLVM backend's here)") }
     // A release build is a hardened macOS executable from the LLVM backend.
@@ -870,6 +869,7 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Int {
     strs_push(pargs, "--target")
     strs_push(pargs, target)
     if llvm { strs_push(pargs, "--llvm") }
+    if o.layout == "soa" { strs_push(pargs, "--soa") }
     if llvm && o.debug { strs_push(pargs, "--debug") }
     if llvm && o.release { strs_push(pargs, "--release") }
     // A foreign object may free what the program allocated: C's allocator stays.
