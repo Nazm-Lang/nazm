@@ -1,0 +1,415 @@
+// Debug information (N48) for the LLVM text, as DWARF metadata (R8 slice 5): a port of
+// `crates/nazm-lir/src/debug.rs` (`attach`). The emitter writes a marker comment before the
+// instructions of each statement — `; nz.loc FILE LINE COLUMN` — and a `; nz.fn FILE LINE` marker for
+// each function; this turns them into a compile unit, one subprogram per function and a location on
+// every instruction. Nothing else changes.
+
+use "@std/text"
+use "@std/hashmap"
+
+fn ld_nl() -> Str { str_from_byte(10) }
+
+fn ld_hex_digit(d: Int) -> Str {
+    str_slice("0123456789ABCDEF", d, d + 1)
+}
+
+fn ld_escape(s: Str) -> Str {
+    let out = strs_new()
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        if b == 34 || b == 92 || b < 32 || b > 126 {
+            strs_push(out, "\\" + ld_hex_digit(b / 16) + ld_hex_digit(b % 16))
+        } else {
+            strs_push(out, str_from_byte(b))
+        }
+    }
+    str_join(out, "")
+}
+
+// The metadata a unit accumulates: nodes after the fixed ones — !0 the compile unit, !1 and !2 the
+// module flags, !3 the subroutine type, !4 its empty type list.
+struct LdMeta {
+    nodes: Strs,
+    // 0: the next node's number, 1: whether a variable was declared, 2: the file with the least
+    // index (-1 for none) and 3: its node.
+    st: Ints,
+    types: HashMap[Str, Int],
+    files: HashMap[Int, Int],
+    locations: HashMap[Str, Int],
+    names: HashMap[Int, Str],
+}
+
+fn ld_node(m: LdMeta, body: Str) -> Int {
+    let id = ints_get(m.st, 0)
+    ints_set(m.st, 0, id + 1)
+    strs_push(m.nodes, "!" + int_to_str(id) + " = " + body)
+    id
+}
+
+fn ld_file(m: LdMeta, idx: Int) -> Int {
+    match hashmap_get(m.files, idx) {
+        Some(id) => { return id },
+        None => {},
+    }
+    let shown = ld_escape(match hashmap_get(m.names, idx) { Some(n) => n, None => "" })
+    let id = ld_node(m, "!DIFile(filename: \"" + shown + "\", directory: \".\")")
+    hashmap_set(m.files, idx, id)
+    if ints_get(m.st, 2) < 0 || idx < ints_get(m.st, 2) {
+        ints_set(m.st, 2, idx)
+        ints_set(m.st, 3, id)
+    }
+    id
+}
+
+// The DWARF type of a variable of `kind`: `int`, `bool` or `str`; -1 for any other.
+fn ld_ty(m: LdMeta, kind: Str) -> Int {
+    if kind != "int" && kind != "bool" && kind != "str" { return 0 - 1 }
+    match hashmap_get(m.types, kind) {
+        Some(id) => { return id },
+        None => {},
+    }
+    let mut id = 0
+    if kind == "int" {
+        id = ld_node(m, "!DIBasicType(name: \"Int\", size: 64, encoding: DW_ATE_signed)")
+    } else if kind == "bool" {
+        id = ld_node(m, "!DIBasicType(name: \"Bool\", size: 8, encoding: DW_ATE_boolean)")
+    } else {
+        let int = ld_ty(m, "int")
+        let byte = ld_node(m, "!DIBasicType(name: \"u8\", size: 8, encoding: DW_ATE_unsigned_char)")
+        let bytes = ld_node(m, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: !" + int_to_str(byte) + ", size: 64)")
+        let opaque = ld_node(m, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: null, size: 64)")
+        let data = ld_node(m, "!DIDerivedType(tag: DW_TAG_member, name: \"data\", baseType: !" + int_to_str(bytes) + ", size: 64, offset: 0)")
+        let len = ld_node(m, "!DIDerivedType(tag: DW_TAG_member, name: \"len\", baseType: !" + int_to_str(int) + ", size: 64, offset: 64)")
+        let owner = ld_node(m, "!DIDerivedType(tag: DW_TAG_member, name: \"owner\", baseType: !" + int_to_str(opaque) + ", size: 64, offset: 128)")
+        let members = ld_node(m, "!{!" + int_to_str(data) + ", !" + int_to_str(len) + ", !" + int_to_str(owner) + "}")
+        id = ld_node(m, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Str\", size: 192, elements: !" + int_to_str(members) + ")")
+    }
+    hashmap_set(m.types, kind, id)
+    id
+}
+
+fn ld_location(m: LdMeta, sp: Int, line: Int, column: Int) -> Int {
+    let key = int_to_str(sp) + "," + int_to_str(line) + "," + int_to_str(column)
+    match hashmap_get(m.locations, key) {
+        Some(id) => { return id },
+        None => {},
+    }
+    let id = ld_node(m, "!DILocation(line: " + int_to_str(line) + ", column: " + int_to_str(column) + ", scope: !" + int_to_str(sp) + ")")
+    hashmap_set(m.locations, key, id)
+    id
+}
+
+// Whether a line inside a function is one instruction a location may be attached to: not a label,
+// a comment, a blank, or a line of a multi-line `switch`.
+fn ld_instruction(line: Str) -> Bool {
+    text_starts_with(line, "  ") && !text_starts_with(line, "    ") && !text_starts_with(text_trim_start(line), ";")
+            && !text_ends_with(text_trim_end(line), "[") && str_len(text_trim(line)) > 0
+}
+
+// `, !dbg !N` inserted into `line` before its trailing comment, if it has one.
+fn ld_with_location(line: Str, node: Int) -> Str {
+    match text_find(line, " ;") {
+        Some(at) => text_trim_end(str_slice(line, 0, at)) + ", !dbg !" + int_to_str(node) + str_slice(line, at, str_len(line)),
+        None => line + ", !dbg !" + int_to_str(node),
+    }
+}
+
+// The numbers a marker's words hold (the words that are not numbers are left out).
+fn ld_numbers(rest: Str) -> Ints {
+    let out = ints_new()
+    for w in text_split(rest, " ") {
+        let ok = str_len(w) > 0 && str_len(w) < 10
+        let mut all = ok
+        if ok {
+            for k in 0..str_len(w) { if str_byte(w, k) < 48 || str_byte(w, k) > 57 { all = false } }
+        }
+        if all {
+            match text_parse_int(w) {
+                Ok(v) => { ints_push(out, v) },
+                Err(_) => {},
+            }
+        }
+    }
+    out
+}
+
+// A source block's lexical scope: its first and last positions and its node.
+struct LdLex {
+    from_line: Int,
+    from_col: Int,
+    to_line: Int,
+    to_col: Int,
+    node: Int,
+}
+
+fn ld_pos_le(a_line: Int, a_col: Int, b_line: Int, b_col: Int) -> Bool {
+    a_line < b_line || (a_line == b_line && a_col <= b_col)
+}
+
+// The innermost lexical block holding `at`, or the subprogram: the containing one that starts last.
+fn ld_scope_of(blocks: Vec[LdLex], sp: Int, line: Int, col: Int) -> Int {
+    let mut best = 0 - 1
+    for k in 0..vec_len(blocks) {
+        let b = vec_get(blocks, k)
+        if ld_pos_le(b.from_line, b.from_col, line, col) && ld_pos_le(line, col, b.to_line, b.to_col) {
+            if best < 0 {
+                best = k
+            } else {
+                let c = vec_get(blocks, best)
+                // `max_by_key`: the last of equal keys.
+                if ld_pos_le(c.from_line, c.from_col, b.from_line, b.from_col) { best = k }
+            }
+        }
+    }
+    if best < 0 { sp } else { vec_get(blocks, best).node }
+}
+
+fn ld_is_numeric(s: Str) -> Bool {
+    if str_len(s) == 0 { return false }
+    for k in 0..str_len(s) { if str_byte(s, k) < 48 || str_byte(s, k) > 57 { return false } }
+    true
+}
+
+// The words of `s` split at single spaces, as `str::split(' ')` does.
+fn ld_words(s: Str) -> Strs { text_split(s, " ") }
+
+// `; nz.var STORAGE ARG LINE KIND A B C D NAME`'s lexical range (a, b, c, d), as four numbers, or
+// none when it names no block or the name is not one word.
+fn ld_range_of(rest: Str) -> Ints {
+    let parts = ld_words(rest)
+    let out = ints_new()
+    if strs_len(parts) != 9 { return out }
+    for k in 4..8 {
+        if !ld_is_numeric(strs_get(parts, k)) { return ints_new() }
+        match text_parse_int(strs_get(parts, k)) {
+            Ok(v) => { ints_push(out, v) },
+            Err(_) => { return ints_new() },
+        }
+    }
+    if ints_get(out, 0) > 0 { out } else { ints_new() }
+}
+
+// Turn the markers in `text` into debug metadata. `names` names a file by its index.
+pub fn ld_attach(text: Str, names: HashMap[Int, Str]) -> Str ! {} {
+    let out = strs_new()
+    let st = ints_new()
+    ints_push(st, 5)
+    ints_push(st, 0)
+    ints_push(st, 0 - 1)
+    ints_push(st, 5)
+    let m = LdMeta(nodes: strs_new(), st: st, types: hashmap_new(), files: hashmap_new(), locations: hashmap_new(), names: names)
+    let mut lines = text_split(text, ld_nl())
+    if strs_len(lines) > 0 && str_len(strs_get(lines, strs_len(lines) - 1)) == 0 { strs_pop(lines) }
+    let mut i = 0
+    let mut any = false
+    while i < strs_len(lines) {
+        let line = strs_get(lines, i)
+        let is_def = text_starts_with(line, "define ") && !text_starts_with(line, "define linkonce_odr ")
+        let mut open = 0 - 1
+        if is_def {
+            // `rfind(" {")`
+            let mut k = str_len(line) - 2
+            while k >= 0 && open < 0 {
+                if str_byte(line, k) == 32 && str_byte(line, k + 1) == 123 { open = k }
+                k -= 1
+            }
+        }
+        if open < 0 {
+            strs_push(out, line + ld_nl())
+            i += 1
+            continue
+        }
+        // The function's own marker, if the emitter wrote one: the first `nz.fn` in its body.
+        let mut end = i + 1
+        let mut declared_file = 0 - 1
+        let mut declared_line = 0
+        while end < strs_len(lines) {
+            let l = strs_get(lines, end)
+            if l == "}" { break }
+            if declared_file < 0 {
+                let t = text_trim(l)
+                if text_starts_with(t, "; nz.fn ") {
+                    let nums = ld_numbers(str_slice(t, 8, str_len(t)))
+                    if ints_len(nums) >= 2 {
+                        declared_file = ints_get(nums, 0)
+                        declared_line = ints_get(nums, 1)
+                    }
+                }
+            }
+            end += 1
+        }
+        let at = match text_find(line, "@") { Some(p) => p, None => 0 - 1 }
+        let mut symbol = ""
+        if at >= 0 {
+            let mut j = at + 1
+            while j < str_len(line) && str_byte(line, j) != 40 { j += 1 }
+            symbol = str_slice(line, at + 1, j)
+        }
+        let mut name = symbol
+        let mut semi = 0 - 1
+        let mut k = str_len(line) - 2
+        while k >= 0 && semi < 0 {
+            if str_byte(line, k) == 59 && str_byte(line, k + 1) == 32 { semi = k }
+            k -= 1
+        }
+        if semi >= 0 { name = text_trim(str_slice(line, semi + 2, str_len(line))) }
+        let fidx = if declared_file < 0 { 0 } else { declared_file }
+        let fline = if declared_file < 0 { 0 } else { declared_line }
+        let fnode = ld_file(m, fidx)
+        let sp = ld_node(m, "distinct !DISubprogram(name: \"" + ld_escape(name) + "\", scope: !" + int_to_str(fnode) + ", file: !" + int_to_str(fnode) + ", line: " + int_to_str(fline) + ", type: !3, scopeLine: " + int_to_str(fline) + ", spFlags: DISPFlagDefinition, unit: !0)")
+        any = true
+        // The function's lexical blocks: one per distinct scope its variables name, outermost first
+        // so each finds its parent among those already made.
+        let ranges: Vec[Ints] = vec_new()
+        for b in i + 1..end {
+            let t = text_trim(strs_get(lines, b))
+            if text_starts_with(t, "; nz.var ") {
+                let r = ld_range_of(str_slice(t, 9, str_len(t)))
+                if ints_len(r) == 4 { vec_push(ranges, r) }
+            }
+        }
+        // Sorted by start, then the later end first (a stable insertion sort), and deduplicated.
+        let nr = vec_len(ranges)
+        for a in 1..nr {
+            let mut b = a
+            while b > 0 && ld_range_before(vec_get(ranges, b), vec_get(ranges, b - 1)) {
+                let x = vec_get(ranges, b)
+                vec_set(ranges, b, vec_get(ranges, b - 1))
+                vec_set(ranges, b - 1, x)
+                b -= 1
+            }
+        }
+        let blocks: Vec[LdLex] = vec_new()
+        for a in 0..nr {
+            let r = vec_get(ranges, a)
+            if a > 0 && ld_same_range(r, vec_get(ranges, a - 1)) { continue }
+            let parent = ld_scope_of(blocks, sp, ints_get(r, 0), ints_get(r, 1))
+            let node = ld_node(m, "distinct !DILexicalBlock(scope: !" + int_to_str(parent) + ", file: !" + int_to_str(fnode) + ", line: " + int_to_str(ints_get(r, 0)) + ", column: " + int_to_str(ints_get(r, 1)) + ")")
+            vec_push(blocks, LdLex(from_line: ints_get(r, 0), from_col: ints_get(r, 1), to_line: ints_get(r, 2), to_col: ints_get(r, 3), node: node))
+        }
+        strs_push(out, str_slice(line, 0, open) + " !dbg !" + int_to_str(sp) + str_slice(line, open, str_len(line)) + ld_nl())
+        let mut here_line = fline
+        let mut here_col = 0
+        let mut prologue = true
+        // The first statement's position, which the entry block's branch takes.
+        let mut first_line = fline
+        let mut first_col = 0
+        let mut statements = false
+        let mut found = false
+        for b in i + 1..end {
+            let t = text_trim(strs_get(lines, b))
+            if text_starts_with(t, "; nz.loc ") {
+                statements = true
+                if !found {
+                    let nums = ld_numbers(str_slice(t, 9, str_len(t)))
+                    if ints_len(nums) >= 3 {
+                        first_line = ints_get(nums, 1)
+                        first_col = ints_get(nums, 2)
+                    }
+                    found = true
+                }
+            }
+        }
+        for b in i + 1..end {
+            let l = strs_get(lines, b)
+            let t = text_trim(l)
+            if text_starts_with(t, "; nz.loc ") {
+                let nums = ld_numbers(str_slice(t, 9, str_len(t)))
+                if ints_len(nums) >= 3 {
+                    here_line = ints_get(nums, 1)
+                    here_col = ints_get(nums, 2)
+                }
+                prologue = false
+                continue
+            }
+            if prologue && text_starts_with(text_trim_start(l), "br ") {
+                let loc = ld_location(m, ld_scope_of(blocks, sp, first_line, first_col), first_line, first_col)
+                strs_push(out, ld_with_location(l, loc) + ld_nl())
+                prologue = statements
+                continue
+            }
+            // An intrinsic call carries no location either; an `invoke` is a call.
+            let intrinsic = text_contains(l, " @llvm.")
+            let trimmed = text_trim_start(l)
+            let call = text_contains(l, " call ") || text_contains(l, " invoke ") || text_starts_with(trimmed, "call ") || text_starts_with(trimmed, "invoke ")
+            if prologue && ld_instruction(l) && (intrinsic || !call) {
+                strs_push(out, l + ld_nl())
+                continue
+            }
+            if text_starts_with(t, "; nz.fn ") { continue }
+            // A variable: `; nz.var SLOT ARG LINE KIND A B C D NAME` becomes its declaration on the
+            // slot, positioned at the binding's line.
+            if text_starts_with(t, "; nz.var ") {
+                let parts = ld_words(str_slice(t, 9, str_len(t)))
+                if strs_len(parts) >= 7 {
+                    let slot = strs_get(parts, 0)
+                    let arg_s = strs_get(parts, 1)
+                    let line_s = strs_get(parts, 2)
+                    let kind = strs_get(parts, 3)
+                    let ty = ld_ty(m, kind)
+                    if ty >= 0 && ld_is_numeric(arg_s) && ld_is_numeric(line_s) {
+                        let arg = match text_parse_int(arg_s) { Ok(v) => v, Err(_) => 0 }
+                        let vline = match text_parse_int(line_s) { Ok(v) => v, Err(_) => 0 }
+                        let from_line = if ld_is_numeric(strs_get(parts, 4)) { match text_parse_int(strs_get(parts, 4)) { Ok(v) => v, Err(_) => 0 } } else { 0 }
+                        let from_col = if ld_is_numeric(strs_get(parts, 5)) { match text_parse_int(strs_get(parts, 5)) { Ok(v) => v, Err(_) => 0 } } else { 0 }
+                        let vname = strs_get(parts, strs_len(parts) - 1)
+                        // Its own block's node, found by where the block starts.
+                        let mut sco = sp
+                        let mut found_block = false
+                        for k2 in 0..vec_len(blocks) {
+                            let bk = vec_get(blocks, k2)
+                            if !found_block && from_line > 0 && bk.from_line == from_line && bk.from_col == from_col {
+                                sco = bk.node
+                                found_block = true
+                            }
+                        }
+                        let argument = if arg > 0 { "arg: " + int_to_str(arg) + ", " } else { "" }
+                        let var = ld_node(m, "!DILocalVariable(name: \"" + ld_escape(vname) + "\", " + argument + "scope: !" + int_to_str(sco) + ", file: !" + int_to_str(fnode) + ", line: " + int_to_str(vline) + ", type: !" + int_to_str(ty) + ")")
+                        let loc = ld_location(m, sco, vline, 0)
+                        ints_set(m.st, 1, 1)
+                        // `x3*`: the variable holds the value's address (a borrowed parameter).
+                        let deref = text_ends_with(slot, "*")
+                        let storage = if deref { str_slice(slot, 0, str_len(slot) - 1) } else { slot }
+                        let expr = if deref { "!DIExpression(DW_OP_deref)" } else { "!DIExpression()" }
+                        strs_push(out, "  call void @llvm.dbg.declare(metadata ptr %" + storage + ", metadata !" + int_to_str(var) + ", metadata " + expr + "), !dbg !" + int_to_str(loc) + ld_nl())
+                    }
+                }
+                continue
+            }
+            if ld_instruction(l) {
+                let loc = ld_location(m, ld_scope_of(blocks, sp, here_line, here_col), here_line, here_col)
+                strs_push(out, ld_with_location(l, loc) + ld_nl())
+            } else {
+                strs_push(out, l + ld_nl())
+            }
+        }
+        if end < strs_len(lines) { strs_push(out, strs_get(lines, end) + ld_nl()) }
+        i = end + 1
+    }
+    if !any { return text }
+    let unit_file = ints_get(m.st, 3)
+    strs_push(out, ld_nl())
+    if ints_get(m.st, 1) == 1 { strs_push(out, "declare void @llvm.dbg.declare(metadata, metadata, metadata)" + ld_nl()) }
+    strs_push(out, "!llvm.dbg.cu = !{!0}" + ld_nl())
+    strs_push(out, "!llvm.module.flags = !{!1, !2}" + ld_nl())
+    strs_push(out, "!0 = distinct !DICompileUnit(language: DW_LANG_C99, file: !" + int_to_str(unit_file) + ", producer: \"nazm\", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)" + ld_nl())
+    strs_push(out, "!1 = !{i32 7, !\"Dwarf Version\", i32 4}" + ld_nl())
+    strs_push(out, "!2 = !{i32 2, !\"Debug Info Version\", i32 3}" + ld_nl())
+    strs_push(out, "!3 = !DISubroutineType(types: !4)" + ld_nl())
+    strs_push(out, "!4 = !{}" + ld_nl())
+    for n in m.nodes { strs_push(out, n + ld_nl()) }
+    str_join(out, "")
+}
+
+// Whether range `a` sorts before `b`: by start, then the later end first.
+fn ld_range_before(a: Ints, b: Ints) -> Bool {
+    if ints_get(a, 0) != ints_get(b, 0) { return ints_get(a, 0) < ints_get(b, 0) }
+    if ints_get(a, 1) != ints_get(b, 1) { return ints_get(a, 1) < ints_get(b, 1) }
+    // `y.1.cmp(&x.1)`: the greater end is first.
+    if ints_get(a, 2) != ints_get(b, 2) { return ints_get(a, 2) > ints_get(b, 2) }
+    ints_get(a, 3) > ints_get(b, 3)
+}
+
+fn ld_same_range(a: Ints, b: Ints) -> Bool {
+    ints_get(a, 0) == ints_get(b, 0) && ints_get(a, 1) == ints_get(b, 1) && ints_get(a, 2) == ints_get(b, 2) && ints_get(a, 3) == ints_get(b, 3)
+}

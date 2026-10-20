@@ -1,27 +1,32 @@
-// `nazm build`, written in Nazm: the driver (R8 slice 4, `openspec/changes/r8-cut-over/design.md`,
-// *Slice 4*, S4.1–S4.7).
+// `nazm build`, written in Nazm: the driver (R8 slices 4 and 5, `openspec/changes/r8-cut-over/design.md`,
+// *Slice 4*, S4.1–S4.7, and *Slice 5*).
 //
-// `nazm build --backend nazm [OPTIONS] FILE`, run by the dispatcher (`nazm.nz`). A port of
-// `crates/nazm-cli/src/build/` for the flags of group 1 on Nazm's own code generator:
+// `nazm build [OPTIONS] FILE`, run by the dispatcher (`nazm.nz`). A port of
+// `crates/nazm-cli/src/build/` for the flags of groups 1 and 2, on the default LLVM backend and on
+// Nazm's own code generator (`--backend nazm`):
 //
 //   the front end   in process, as `nazm check` runs it (R2's facts, `front.nz`): the diagnostics
 //                   as the Rust build writes them, then the Core IR document to the working
 //                   directory, and the facts let go;
-//   the pipeline    a stage, `nazm-pipeline build` (R3): every unit's LIR with the heap's renaming,
-//                   the Nazm backend's runtime units and the plan;
-//   the generator   a stage, `nzcg` (R9), once over every unit;
-//   clang           the runtime's units, and the link — or `--objects DIR` and `link.txt`.
+//   the pipeline    a stage, `nazm-pipeline build` (R3): every unit's LIR; with `--llvm` (the
+//                   default backend) each unit as LLVM text (`llvm.nz`, `lldebug.nz`, `llpost.nz`)
+//                   and the runtime's units, else the units' LIR with the heap's renaming and the
+//                   Nazm backend's runtime units; and the plan;
+//   the generator   with `--backend nazm`, a stage, `nzcg` (R9), once over every unit;
+//   clang           the LLVM text of every unit, or the runtime's units alone, and the link — or
+//                   `--objects DIR` and `link.txt`.
 //
 // The stages are found by `NAZM_PIPELINE` and `NAZM_NZCG`, or in the directory `NAZM_LIBEXEC`
 // names; the standard library by `NAZM_LIBRARY`. Each stage is admitted by `host-run`'s checks
 // before it starts (the counted heap linked, one heap limit of at most 2 GiB), the stages run one
 // at a time, and each one's peak is held to `host-run`'s withdrawal conditions (design S4.2).
 //
-// What this port does not carry — the LLVM backend (the default), Cranelift, the flags of groups
-// 2–4, a package's build, `--help` and the usage errors — it says so on standard error and exits 6
-// before writing anything (R5's convention). Without `--no-cache` each unit's object is looked up in
-// the project's object store by its key and only the misses are generated, then filed (design
-// S4.5); the runtime's units are compiled by clang every time.
+// What this port does not carry — Cranelift, `--layout soa`, the flags of groups 3 and 4, a
+// package's build, `--help` and the usage errors — it says so on standard error and exits 6 before
+// writing anything (R5's convention). With `--backend nazm` and without `--no-cache` each unit's
+// object is looked up in the project's object store by its key and only the misses are generated,
+// then filed (design S4.5); the LLVM backend's objects are not filed (a cache is derived data), and
+// the runtime's units are compiled by clang every time.
 
 use "../../compiler/syntax.nz"
 use "../../compiler/diag.nz"
@@ -61,6 +66,11 @@ struct Opts {
     stack: Int,
     deny: Bool,
     backend: Str,
+    opt: Int,
+    emit_ir: Bool,
+    debug: Bool,
+    release: Bool,
+    layout: Str,
 }
 
 // `--stack-size` and `--heap-limit`'s sizes: bytes, or a number with `K`, `M` or `G`; -1 for one
@@ -87,8 +97,7 @@ fn bd_size(raw: Str) -> Int {
 
 // The flags of `nazm build` this port does not carry, by group (design, *`nazm build`'s flags*).
 fn bd_later(name: Str) -> Bool {
-    name == "emit-ir" || name == "opt-level" || name == "debug" || name == "layout" || name == "release"
-            || name == "build-report" || name == "summary-json" || name == "lib" || name == "shared"
+    name == "build-report" || name == "summary-json" || name == "lib" || name == "shared"
             || name == "runtime" || name == "locked" || name == "profile" || name == "provenance"
             || name == "attest-with" || name == "sbom" || name == "timings" || name == "features"
             || name == "function" || name == "harness" || name == "board" || name == "stack-watermark"
@@ -96,12 +105,12 @@ fn bd_later(name: Str) -> Bool {
 
 fn bd_takes_value(name: Str) -> Bool {
     name == "out" || name == "target" || name == "objects" || name == "link" || name == "heap-limit"
-            || name == "stack-size" || name == "backend"
+            || name == "stack-size" || name == "backend" || name == "opt-level" || name == "layout"
 }
 
 fn bd_parse(io: IoCap, from: Int) -> Opts {
     let mut o = Opts(file: "", out: "", json: false, target: "", objects: "", links: strs_new(), no_cache: false,
-            heap: 0 - 1, stack: 0 - 1, deny: false, backend: "llvm")
+            heap: 0 - 1, stack: 0 - 1, deny: false, backend: "llvm", opt: 0, emit_ir: false, debug: false, release: false, layout: "aos")
     let mut has_file = false
     let mut k = from
     let mut rest = false
@@ -159,6 +168,11 @@ fn bd_parse(io: IoCap, from: Int) -> Opts {
                     strs_push(o.links, value)
                 } else if name == "backend" {
                     o.backend = value
+                } else if name == "layout" {
+                    o.layout = value
+                } else if name == "opt-level" {
+                    if value != "0" && value != "1" && value != "2" && value != "3" { bd_refuse(io, "`--opt-level " + value + "` (the usage errors are not ported)") }
+                    o.opt = bd_size(value)
                 } else {
                     let n = bd_size(value)
                     if name == "heap-limit" {
@@ -177,15 +191,22 @@ fn bd_parse(io: IoCap, from: Int) -> Opts {
                 o.no_cache = true
             } else if name == "deny-warnings" {
                 o.deny = true
+            } else if name == "emit-ir" {
+                o.emit_ir = true
+            } else if name == "debug" {
+                o.debug = true
+            } else if name == "release" {
+                o.release = true
             } else {
                 bd_refuse(io, "`nazm build " + a + "` (the usage errors are not ported)")
             }
         }
     }
     if !has_file { bd_refuse(io, "`nazm build` without a file (the usage errors are not ported)") }
-    if o.backend == "llvm" { bd_refuse(io, "`nazm build --backend llvm`, the default (R8 slice 5): build with `--backend nazm`") }
     if o.backend == "cranelift" { bd_refuse(io, "`nazm build --backend cranelift` (Cranelift is not ported: `rewrite-in-nazm` decision 3)") }
-    if o.backend != "nazm" { bd_refuse(io, "`--backend " + o.backend + "` (the usage errors are not ported)") }
+    if o.backend != "nazm" && o.backend != "llvm" { bd_refuse(io, "`--backend " + o.backend + "` (the usage errors are not ported)") }
+    // `--release` conflicts with `--debug`, `--lib`, `--objects` and `--runtime` (clap's usage error).
+    if o.release && (o.debug || has_objects) { bd_refuse(io, "`nazm build --release` with `--debug` or `--objects` (the usage errors are not ported)") }
     if !has_out { o.out = "" }
     if !has_objects { o.objects = "" }
     o
@@ -228,16 +249,16 @@ fn bd_stage(io: IoCap, variable: Str, name: Str) -> Str {
     let named = os_env_get(variable)
     if named != "" {
         if ut_kind(io, named) != 0 {
-            bd_fail(io, "nazm: `--backend nazm` runs " + name + ": `" + variable + "` names `" + named + "`, which is not a file", 4)
+            bd_fail(io, "nazm: `nazm build` runs " + name + ": `" + variable + "` names `" + named + "`, which is not a file", 4)
         }
         return named
     }
     let dir = os_env_get("NAZM_LIBEXEC")
     if dir == "" {
-        bd_fail(io, "nazm: `--backend nazm` runs " + name + ": set `" + variable + "`, or `NAZM_LIBEXEC` to the directory holding it", 4)
+        bd_fail(io, "nazm: `nazm build` runs " + name + ": set `" + variable + "`, or `NAZM_LIBEXEC` to the directory holding it", 4)
     }
     let p = ut_join(dir, name)
-    if ut_kind(io, p) != 0 { bd_fail(io, "nazm: `--backend nazm` runs " + name + ": it is not installed at `" + p + "`", 4) }
+    if ut_kind(io, p) != 0 { bd_fail(io, "nazm: `nazm build` runs " + name + ": it is not installed at `" + p + "`", 4) }
     p
 }
 
@@ -808,10 +829,25 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Int {
             bd_fail(io, "nazm: `--link " + strs_get(o.links, i) + "`: no such file; `--link` names an object or library that defines foreign functions", 3)
         }
     }
+    // The field-by-field layout (N68) is asked for by name; `soa` is not carried yet.
+    if o.layout != "aos" && o.layout != "soa" { bd_fail(io, "nazm: `--layout " + o.layout + "` is not a layout; the layouts are `aos` and `soa`", 5) }
+    if o.layout == "soa" { bd_refuse(io, "`nazm build --layout soa` (the field-by-field layout is not ported)") }
+    let llvm = o.backend == "llvm"
+    if !llvm && o.debug { bd_refuse(io, "`nazm build --debug` with `--backend nazm` (debug information is the LLVM backend's here)") }
+    // A release build is a hardened macOS executable from the LLVM backend.
+    if o.release {
+        let mut why = ""
+        if !llvm {
+            why = "`--backend llvm`'s: Cranelift and Nazm's own code generator write no stack canary"
+        } else if bd_os(target) != "macos" || target != host {
+            why = "this host's macOS executable's: another target is not hardened yet"
+        }
+        if why != "" { bd_fail(io, "nazm: `--release` hardens " + why, 5) }
+    }
     let pipeline = bd_stage(io, "NAZM_PIPELINE", "nazm-pipeline")
-    let nzcg = bd_stage(io, "NAZM_NZCG", "nzcg")
+    let nzcg = if llvm { "" } else { bd_stage(io, "NAZM_NZCG", "nzcg") }
     let pipeline_limit = bd_check_stage(io, pipeline, "nazm-pipeline")
-    let nzcg_limit = bd_check_stage(io, nzcg, "nzcg")
+    let nzcg_limit = if llvm { 0 } else { bd_check_stage(io, nzcg, "nzcg") }
     // A target the host cannot link is built as objects, or refused before anything is compiled.
     let links_here = target == host || (bd_os(target) == "macos" && bd_os(host) == "macos")
     if !links_here && o.objects == "" {
@@ -833,6 +869,11 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Int {
     let pargs = strs_new()
     strs_push(pargs, "--target")
     strs_push(pargs, target)
+    if llvm { strs_push(pargs, "--llvm") }
+    if llvm && o.debug { strs_push(pargs, "--debug") }
+    if llvm && o.release { strs_push(pargs, "--release") }
+    // A foreign object may free what the program allocated: C's allocator stays.
+    if strs_len(o.links) > 0 { strs_push(pargs, "--no-small") }
     strs_push(pargs, "build")
     strs_push(pargs, work + "/core.json")
     strs_push(pargs, work)
@@ -840,7 +881,7 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Int {
     strs_push(pargs, if o.heap >= 0 { int_to_str(o.heap) } else { "-" })
     // The object store (design S4.5), unless `--no-cache`: each unit's object is looked up by its
     // key, and only the misses are generated.
-    if !o.no_cache {
+    if !o.no_cache && !llvm {
         strs_push(pargs, store)
         strs_push(pargs, nzcg)
     }
@@ -871,7 +912,7 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Int {
     if one_thread { strs_push(cargs, "--one-thread") }
     strs_push(cargs, work + "/lir.txt")
     strs_push(cargs, work + "/obj")
-    if strs_len(missed) > 0 {
+    if strs_len(missed) > 0 && !llvm {
         let cr = bd_stage_run(io, proc, sp, nzcg, nzcg_limit, cargs)
         if !cr.started {
             bd_remove(io, work)
@@ -879,7 +920,7 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Int {
         }
         if cr.status != 0 { bd_generator_failed(io, o, cr, work) }
     }
-    for k in 0..strs_len(missed) {
+    for k in 0..(if llvm { 0 } else { strs_len(missed) }) {
         let from = work + "/obj/unit-" + int_to_str(k) + ".o"
         if ut_kind(io, from) != 0 || os_rename(from, work + "/" + strs_get(missed, k) + ".o") != 0 {
             bd_remove(io, work)
@@ -887,7 +928,7 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Int {
         }
     }
     // What was generated is filed in the store; a store that will not take it fails nothing.
-    if !o.no_cache && strs_len(missed) > 0 {
+    if !o.no_cache && strs_len(missed) > 0 && !llvm {
         let put = strs_new()
         strs_push(put, "--target")
         strs_push(put, target)
@@ -900,32 +941,35 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Int {
     let objects = strs_new()
     for k in 0..strs_len(units) { strs_push(objects, work + "/" + strs_get(units, k) + ".o") }
 
-    // The runtime's units, by clang, in link order.
+    // The LLVM backend's executable at `-O2` and above on macOS is linked from bitcode and
+    // optimised as one program (R1.5 3.4): not objects for another linker, not a debug build.
+    let whole = llvm && o.objects == "" && !o.debug && bd_os(target) == "macos" && o.opt >= 2
     let env = bd_passed(io)
+    // The program's units, by clang, as the LLVM backend writes them.
+    if llvm {
+        for k in 0..strs_len(units) {
+            let name = strs_get(units, k)
+            let r = bd_compile(io, proc, sp, o.opt, target, cross, whole, work + "/" + name + ".ll", work + "/" + name + ".o", env)
+            if !r.started || r.status != 0 { bd_report_clang(io, r, work + "/" + name + ".ll", work, true) }
+        }
+    }
+    // The runtime's units, by clang, in link order.
     for i in 0..strs_len(runtime) {
         let name = strs_get(runtime, i)
         let ll = work + "/" + name + ".ll"
         let obj = work + "/" + name + ".o"
         os_rename(work + "/rt/" + name + ".ll", ll)
-        let a = strs_new()
-        strs_push(a, "-O0")
-        strs_push(a, "-Wno-override-module")
-        strs_push(a, "-c")
-        bd_target_args(cross, a)
-        if bd_family(target) == "elf" {
-            strs_push(a, "-ffunction-sections")
-            strs_push(a, "-fdata-sections")
-        }
-        strs_push(a, "-o")
-        strs_push(a, obj)
-        strs_push(a, ll)
-        let r = bd_run(io, proc, sp, "clang", a, false, env)
+        let r = bd_compile(io, proc, sp, o.opt, target, cross, whole, ll, obj, env)
         if !r.started || r.status != 0 { bd_report_clang(io, r, ll, work, true) }
         strs_push(objects, obj)
     }
+    let ir_names = strs_new()
+    for k in 0..strs_len(units) { strs_push(ir_names, strs_get(units, k)) }
+    for i in 0..strs_len(runtime) { strs_push(ir_names, strs_get(runtime, i)) }
 
     // `--objects DIR`: every object in link order and `link.txt`, for the target's own toolchain.
     if o.objects != "" {
+        if o.emit_ir { bd_write_ir(io, work, ir_names, output) }
         let why = strs_new()
         if !ut_make_dirs(io, o.objects, why) {
             bd_remove(io, work)
@@ -966,14 +1010,14 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Int {
 
     // The link, in the working directory under the output's own name.
     let exe = work + "/" + ut_file_name(output)
-    let linked = bd_link(io, proc, sp, target, cross, exe, objects, o.links, strs_new())
+    let linked = bd_link(io, proc, sp, target, cross, exe, objects, o.links, strs_new(), o.opt, whole, o.release)
     let mut result = linked
     if (!linked.started || linked.status != 0) && tls {
         let t = bd_tls_args(io, target)
         if strs_len(t) > 0 && ut_starts(strs_get(t, 0), "!") {
             eprint("nazm: " + str_slice(strs_get(t, 0), 1, str_len(strs_get(t, 0))) + nl())
         } else {
-            result = bd_link(io, proc, sp, target, cross, exe, objects, o.links, t)
+            result = bd_link(io, proc, sp, target, cross, exe, objects, o.links, t, o.opt, whole, o.release)
         }
     }
     if !result.started || result.status != 0 {
@@ -987,6 +1031,27 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Int {
         }
         bd_report_clang(io, result, work, work, true)
     }
+    // A release build is stripped and signed once it is linked.
+    if o.release {
+        let said = bd_finish_release(io, proc, sp, exe, env)
+        if said != "" {
+            bd_remove(io, work)
+            bd_fail(io, "nazm: the release build was not finished: " + said, 4)
+        }
+    }
+    if o.emit_ir { bd_write_ir(io, work, ir_names, output) }
+    // On macOS the linker leaves debug information in the objects it read, which are about to go, so
+    // a debug build gathers it into `OUTPUT.dSYM` first.
+    if o.debug && bd_os(host) == "macos" {
+        let a = strs_new()
+        strs_push(a, exe)
+        strs_push(a, "-o")
+        strs_push(a, output + ".dSYM")
+        let g = bd_run(io, proc, sp, "dsymutil", a, false, env)
+        if !g.started || g.status != 0 {
+            eprint("nazm: the debug information was not gathered: " + g.err + nl())
+        }
+    }
     // Published last, so an existing output survives every failure above.
     let moved = os_rename(exe, output)
     bd_remove(io, work)
@@ -999,11 +1064,17 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Int {
 // The link: `clang` with the build's arguments, the objects in order, the foreign inputs, the
 // system libraries, and the linker's dead-stripping (`Backend::link`); `extra` after the libraries
 // (TLS's, on the second attempt).
-fn bd_link(io: IoCap, proc: ProcessCap, sp: SpawnCap, target: Str, cross: Str, exe: Str, objects: Strs, links: Strs, extra: Strs) -> Ran ! { io, spawn } {
+fn bd_link(io: IoCap, proc: ProcessCap, sp: SpawnCap, target: Str, cross: Str, exe: Str, objects: Strs, links: Strs, extra: Strs, opt: Int, whole: Bool, release: Bool) -> Ran ! { io, spawn } {
     let a = strs_new()
-    strs_push(a, "-O0")
+    strs_push(a, "-O" + int_to_str(opt))
     strs_push(a, "-Wno-override-module")
     bd_target_args(cross, a)
+    if whole {
+        strs_push(a, "-flto=thin")
+        // The CPU a separately optimised object is compiled for, which the linker's code generation
+        // must name (`whole_program_cpu`).
+        strs_push(a, "-Wl,-mcpu," + (if bd_arch(target) == "x86_64" { "penryn" } else { "apple-m1" }))
+    }
     strs_push(a, "-o")
     strs_push(a, exe)
     for i in 0..strs_len(objects) { strs_push(a, strs_get(objects, i)) }
@@ -1013,7 +1084,60 @@ fn bd_link(io: IoCap, proc: ProcessCap, sp: SpawnCap, target: Str, cross: Str, e
     if bd_os(target) == "windows" { bd_windows_libraries(a) }
     if bd_family(target) == "macho" { strs_push(a, "-Wl,-dead_strip") }
     if bd_family(target) == "elf" { strs_push(a, "-Wl,--gc-sections") }
+    if release { strs_push(a, "-Wl,-pie") }
     let env = bd_passed(io)
     strs_push(env, "ZERO_AR_DATE=1")
     bd_run(io, proc, sp, "clang", a, false, env)
+}
+
+// One unit's LLVM text to its object, as `Backend::compile` does: the optimisation level, no target
+// triple in the unit, a section per function and datum on ELF, and bitcode for a whole-program link.
+fn bd_compile(io: IoCap, proc: ProcessCap, sp: SpawnCap, opt: Int, target: Str, cross: Str, whole: Bool, ll: Str, obj: Str, env: Strs) -> Ran ! { io, spawn } {
+    let a = strs_new()
+    strs_push(a, "-O" + int_to_str(opt))
+    strs_push(a, "-Wno-override-module")
+    strs_push(a, "-c")
+    bd_target_args(cross, a)
+    if bd_family(target) == "elf" {
+        strs_push(a, "-ffunction-sections")
+        strs_push(a, "-fdata-sections")
+    }
+    if whole { strs_push(a, "-flto=thin") }
+    strs_push(a, "-o")
+    strs_push(a, obj)
+    strs_push(a, ll)
+    bd_run(io, proc, sp, "clang", a, false, env)
+}
+
+// `--emit-ir`: beside the output, one file per unit that is LLVM text, named `OUTPUT.UNIT.ll`.
+fn bd_write_ir(io: IoCap, work: Str, names: Strs, output: Str) -> Int {
+    for i in 0..strs_len(names) {
+        let from = work + "/" + strs_get(names, i) + ".ll"
+        if ut_kind(io, from) == 0 {
+            let to = output + "." + strs_get(names, i) + ".ll"
+            if !bd_copy(io, from, to) { eprint("nazm: cannot write " + to + nl()) }
+        }
+    }
+    0
+}
+
+// A release build, finished (`release::finish`): the executable stripped, then signed ad hoc with
+// the hardened runtime. "" when it was, else what went wrong.
+fn bd_finish_release(io: IoCap, proc: ProcessCap, sp: SpawnCap, exe: Str, env: Strs) -> Str ! { io, spawn } {
+    let a = strs_new()
+    strs_push(a, exe)
+    let r = bd_run(io, proc, sp, "strip", a, false, env)
+    if !r.started { return "`strip` could not be run: " + r.err }
+    if r.status != 0 { return "`strip` failed: " + ut_trim(r.err) }
+    let b = strs_new()
+    strs_push(b, "--force")
+    strs_push(b, "--sign")
+    strs_push(b, "-")
+    strs_push(b, "--options")
+    strs_push(b, "runtime")
+    strs_push(b, exe)
+    let c = bd_run(io, proc, sp, "codesign", b, false, env)
+    if !c.started { return "`codesign` could not be run: " + c.err }
+    if c.status != 0 { return "`codesign` failed: " + ut_trim(c.err) }
+    ""
 }

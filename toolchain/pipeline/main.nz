@@ -56,6 +56,9 @@ use "rtgen.nz"
 use "objcache.nz"
 use "mir.nz"
 use "vectorize.nz"
+use "llvm.nz"
+use "llpost.nz"
+use "lldebug.nz"
 use "@std/hash"
 use "@std/blake3"
 use "@std/hashmap"
@@ -76,15 +79,35 @@ fn target_supported(t: Str) -> Bool {
 
 fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
     let given = process_args(io)
-    // `--target TRIPLE` first, as `nazm lir --target`; without it, Apple silicon's macOS.
+    // `--target TRIPLE` first, as `nazm lir --target`; without it, Apple silicon's macOS. Then the
+    // LLVM backend's flags (`--llvm`, `--debug`, `--release`, `--no-small`), which `build` reads.
     let mut target = "aarch64-apple-darwin"
     let mut from = 0
-    if strs_len(given) >= 2 && strs_get(given, 0) == "--target" {
-        target = strs_get(given, 1)
-        from = 2
-        if !target_supported(target) {
-            eprint("pipeline: target `" + target + "` is not ported: only aarch64-apple-darwin, x86_64-apple-darwin and x86_64-pc-windows-gnu are (and Linux, for the self-build), the others deferred until after 1.0\n")
-            return 2
+    let mut fl = Flags(llvm: false, debug: false, release: false, small_ok: true)
+    let mut more = true
+    while more && from < strs_len(given) {
+        let a = strs_get(given, from)
+        if a == "--target" && from + 1 < strs_len(given) {
+            target = strs_get(given, from + 1)
+            from += 2
+            if !target_supported(target) {
+                eprint("pipeline: target `" + target + "` is not ported: only aarch64-apple-darwin, x86_64-apple-darwin and x86_64-pc-windows-gnu are (and Linux, for the self-build), the others deferred until after 1.0\n")
+                return 2
+            }
+        } else if a == "--llvm" {
+            fl.llvm = true
+            from += 1
+        } else if a == "--debug" {
+            fl.debug = true
+            from += 1
+        } else if a == "--release" {
+            fl.release = true
+            from += 1
+        } else if a == "--no-small" {
+            fl.small_ok = false
+            from += 1
+        } else {
+            more = false
         }
     }
     let args = strs_new()
@@ -150,7 +173,7 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
     if mode == "build" {
         let store = if strs_len(args) == 7 { strs_get(args, 5) } else { "-" }
         let generator = if strs_len(args) == 7 { strs_get(args, 6) } else { "-" }
-        return build(io, v, c, tt, p, target, strs_get(args, 2), bytes_arg(strs_get(args, 3)), bytes_arg(strs_get(args, 4)), store, generator)
+        return build(io, v, c, tt, p, target, strs_get(args, 2), bytes_arg(strs_get(args, 3)), bytes_arg(strs_get(args, 4)), store, generator, fl)
     }
     if mode == "runtime" {
         let stack = if strs_len(args) == 4 { bytes_arg(strs_get(args, 2)) } else { -1 }
@@ -202,6 +225,15 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
     0
 }
 
+/// What the LLVM backend asks of `build`: its text rather than the code generator's, debug
+/// information, a stack canary in every function, and whether the small-block heap is allowed.
+struct Flags {
+    llvm: Bool,
+    debug: Bool,
+    release: Bool,
+    small_ok: Bool,
+}
+
 fn bytes_arg(a: Str) -> Int {
     if a == "-" { -1 } else { match text_parse_int(a) { Ok(n) => n, Err(_) => -1 } }
 }
@@ -234,10 +266,50 @@ fn runtime_of(c: Cir, tt: TypeTable, p: MirProgram, target: Str, stack: Int, hea
             }
         }
     }
-    Ok(runtime_units(needs_of(names), target, "@" + symbol_of(main), roots, calls_c, stack, heap))
+    Ok(runtime_units(needs_of(names), target, "@" + symbol_of(main), roots, calls_c, stack, heap, true))
 }
 
 fn nl() -> Str { str_from_byte(10) }
+
+/// The files a unit's debug text names: each `; file INDEX PATH` line.
+fn llvm_files(t: Str) -> HashMap[Int, Str] {
+    let out: HashMap[Int, Str] = hashmap_new()
+    for line in text_split(t, nl()) {
+        if text_starts_with(line, "; file ") {
+            let rest = str_slice(line, 7, str_len(line))
+            match text_find(rest, " ") {
+                Some(sp) => {
+                    match text_parse_int(str_slice(rest, 0, sp)) {
+                        Ok(n) => { hashmap_set(out, n, str_slice(rest, sp + 1, str_len(rest))); },
+                        Err(_) => {},
+                    }
+                },
+                None => {},
+            }
+        }
+    }
+    out
+}
+
+/// One unit's text for the LLVM backend (`LlvmText::generate`): its LIR as LLVM text, with debug
+/// information if asked, the one-thread state, the inlined reference counting, C's allocator made
+/// the heap's (`renaming`), and a release build's canaries.
+fn llvm_unit(t: Str, target: Str, single: Bool, renaming: Str, fl: Flags, defs: HashMap[Str, Str]) -> Result[Str, Str] {
+    let windows = text_contains(target, "-windows-")
+    let code = if text_contains(target, "-apple-") { "macho" } else if windows { "coff" } else { "plain" }
+    match ll_module(t, !windows, windows, code) {
+        Ok(ir) => {
+            let mut x = ir
+            if fl.debug { x = ld_attach(x, llvm_files(t)) }
+            if single { x = lp_single_state(x) }
+            x = lp_inline_counting(x, single, defs)
+            if renaming == "heap" { x = count_heap(x) } else if renaming == "small" { x = small_heap(x) }
+            if fl.release { x = lp_stack_protected(x) }
+            Ok(x)
+        },
+        Err(e) => Err(e),
+    }
+}
 
 fn yes(b: Bool) -> Str { if b { "yes" } else { "no" } }
 
@@ -283,9 +355,11 @@ fn heap_renamed(text: Str, heap: Str) -> Str {
 
 /// `pipeline build`: the program's units and the Nazm backend's runtime, written under `dir`, and
 /// the plan the driver links them by (R8 slice 4, `openspec/changes/r8-cut-over/design.md`, S4.3).
-fn build(io: IoCap, v: VouchCap, c: Cir, tt: TypeTable, p: MirProgram, target: Str, dir: Str, stack: Int, heap: Int, store: Str, generator: Str) -> Int ! { io } {
+fn build(io: IoCap, v: VouchCap, c: Cir, tt: TypeTable, p: MirProgram, target: Str, dir: Str, stack: Int, heap: Int, store: Str, generator: Str, fl: Flags) -> Int ! { io } {
     let names: HashMap[Str, Bool] = hashmap_new()
-    let texts = match lir_texts_needs(c, tt, p, names) {
+    // The LLVM text names the binding a variable holds beside it, which the LIR text carries then.
+    if fl.llvm { hashmap_set(names, "@names", true) }
+    let texts = match lir_texts_with(c, tt, p, names, fl.llvm && fl.debug) {
         Ok(ts) => ts,
         Err(e) => {
             eprint("pipeline: " + e + nl())
@@ -319,9 +393,11 @@ fn build(io: IoCap, v: VouchCap, c: Cir, tt: TypeTable, p: MirProgram, target: S
     let tls = hashmap_has(names, "tls")
     if tls { hashmap_set(all, "tls", true) }
     if single { hashmap_set(all, "single", true) }
-    let small = heap < 0 && switch_target(target) != "" && !calls_c
+    let small = fl.small_ok && heap < 0 && switch_target(target) != "" && !calls_c
     let renaming = if heap >= 0 { "heap" } else if small { "small" } else { "" }
-    let units = runtime_units(needs_of(all), target, "@" + symbol_of(main), roots, calls_c, stack, heap)
+    // The LLVM backend's runtime is what its units reach, and the program's own `single`.
+    if fl.llvm && single { hashmap_set(names, "single", true) }
+    let units = runtime_units(needs_of(if fl.llvm { names } else { all }), target, "@" + symbol_of(main), roots, calls_c, stack, heap, fl.small_ok)
     let rt_names = vec_get(units, 0)
     let rt_texts = vec_get(units, 1)
     // Each unit's object is looked up in the store by its key (design S4.5): a hit is written as
@@ -332,8 +408,27 @@ fn build(io: IoCap, v: VouchCap, c: Cir, tt: TypeTable, p: MirProgram, target: S
     let lir = strs_new()
     let plan = strs_new()
     let mut k = 0
+    let defs = lp_definitions()
     for t in texts {
         let name = vec_get(plans, k).artefact
+        if fl.llvm {
+            // The LLVM backend: each unit's text, as clang compiles it.
+            match llvm_unit(t, target, single, renaming, fl, defs) {
+                Ok(ir) => {
+                    if write_file(str_vouch(dir + "/" + name + ".ll"), ir) < 0 {
+                        eprint("pipeline: cannot write " + dir + "/" + name + ".ll" + nl())
+                        return 1
+                    }
+                },
+                Err(e) => {
+                    eprint("pipeline: " + e + nl())
+                    return 1
+                },
+            }
+            strs_push(plan, "unit " + name)
+            k += 1
+            continue
+        }
         let text = heap_renamed(t, renaming) + nl()
         strs_push(plan, "unit " + name)
         let mut hit = false
@@ -364,6 +459,8 @@ fn build(io: IoCap, v: VouchCap, c: Cir, tt: TypeTable, p: MirProgram, target: S
         if name == "runtime" && target == "x86_64-pc-windows-gnu" {
             text = text_replace(text_replace(text, "@snprintf(", "@__mingw_snprintf("), "@strtod(", "@__mingw_strtod(")
         }
+        // A release build: every function the runtime defines carries a stack canary too.
+        if fl.llvm && fl.release { text = lp_stack_protected(text) }
         if write_file(str_vouch(dir + "/rt/" + name + ".ll"), text) < 0 {
             eprint("pipeline: cannot write " + dir + "/rt/" + name + ".ll" + nl())
             return 1
