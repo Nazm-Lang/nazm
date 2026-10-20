@@ -16,6 +16,8 @@ use "../../compiler/facts-core.nz"
 use "front.nz"
 use "util.nz"
 use "harness.nz"
+use "build.nz"
+use "buildcli.nz"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -67,7 +69,8 @@ fn ip_emit(f: Facts, names: Strs, which: Ints, json: Bool) -> Int {
 // error ended as `run --interpret` ends it (status 3 for a root that cannot be read, else 1; `nazm: N error(s)`),
 // else the document. `spec` is `--harness`'s, `[]` for none; `over` the root's text when it is read through one.
 // The facts are this function's alone, and go when it returns.
-fn ip_document(io: IoCap, file: Str, json: Bool, harness: Strs, features: Bool, profile: Bool, root_over: Strs) -> Str {
+fn ip_document(io: IoCap, o: Opts, packages: Packages, json: Bool, harness: Strs, root_over: Strs) -> Str {
+    let file = o.file
     let library = ip_library(io)
     let prefix = fe_prefix(io, file)
     let abs = prefix + file
@@ -108,8 +111,18 @@ fn ip_document(io: IoCap, file: Str, json: Bool, harness: Strs, features: Bool, 
         ip_emit(f, names, all, json)
         exit_with(if missing { 3 } else { 1 })
     }
-    if features { ip_refuse(io, "`--features` (a package's features)") }
-    if profile { ip_refuse(io, "`--profile` (a restriction profile)") }
+    // `profile::configuration`: the features asked of the root package, which declares none.
+    if strs_len(o.features) > 0 {
+        if pk_packages_state(packages) == 1 { bd_undeclared_features(io, o, packages) }
+        eprint("nazm: `--features` enables a package's features, and this program is not in a package" + nl())
+        exit_with(5)
+    }
+    // `--profile general` holds no rule, but `@cfg(profile = …)` sees it: not carried there.
+    if o.has_profile {
+        for m in 0..fx_modules(f) {
+            if ut_contains(fx_module_text(f, m), "@cfg") { ip_refuse(io, "`--profile` where a module asks `@cfg`") }
+        }
+    }
     if !fx_carried(f) { ip_refuse(io, fx_why(f)) }
     let errors = ip_errors(f)
     let n = ints_len(errors)
@@ -124,11 +137,11 @@ fn ip_document(io: IoCap, file: Str, json: Bool, harness: Strs, features: Bool, 
 }
 
 // `nazm run --interpret FILE [-- ARGS]`: the status it ends with.
-pub fn ip_run(io: IoCap, out: OutCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap, file: Str, json: Bool,
-        program_args: Strs, max_iterations: Int, max_depth: Int, harness: Strs, features: Bool, profile: Bool) -> Int {
+pub fn ip_run(io: IoCap, out: OutCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap, o: Opts, packages: Packages, json: Bool,
+        program_args: Strs, max_iterations: Int, max_depth: Int, harness: Strs) -> Int {
     let over = strs_new()
-    let doc = ip_document(io, file, json, harness, features, profile, over)
-    ip_run_with(doc, file, over, max_iterations, max_depth, program_args, json, out, io, time, net, proc, rnd)
+    let doc = ip_document(io, o, packages, json, harness, over)
+    ip_run_with(doc, o.file, over, max_iterations, max_depth, program_args, json, out, io, time, net, proc, rnd)
 }
 
 fn ip_run_with(doc: Str, file: Str, over: Strs, max_iterations: Int, max_depth: Int, program_args: Strs, json: Bool,
@@ -224,4 +237,49 @@ pub fn ip_comptime(io: IoCap, out: OutCap, time: TimeCap, net: NetCap, proc: Pro
         },
     }
     0
+}
+
+// --- the session's checks and runs (`repl`) -----------------------------------------------------------------
+
+// What the front end said of a session's text: the errors rendered (as `Diagnostic::render` over one file named
+// `<input>` and the prelude), where each starts, and the Core IR document when there are none.
+pub struct Checked {
+    text: Str,
+    starts: Ints,
+    doc: Str,
+}
+
+// `nazm_core::check_source`: `source` as the one file of a compilation named `<input>`, with `doc` its Core IR.
+pub fn ip_check_source(io: IoCap, source: Str, want_doc: Bool) -> Checked {
+    let library = ip_library(io)
+    let abs = "/<input>"
+    let paths = strs_new()
+    let texts = strs_new()
+    strs_push(paths, abs)
+    strs_push(texts, source)
+    let f = fx_check_over(abs, "", paths, texts, library, fe_host_os(), fe_host_arch(), io)
+    if fx_refusal(f) != "" { ip_refuse(io, fx_refusal(f)) }
+    if !fx_carried(f) && !fe_load_failed(f) { ip_refuse(io, fx_why(f)) }
+    let d = fx_diags(f)
+    let names = fe_names(f, "")
+    strs_set(names, 0, "<input>")
+    let starts = ints_new()
+    let out = strs_new()
+    let tx = fe_texts(f)
+    let bs = fe_bases(f)
+    for i in 0..dg_len(d) {
+        if strs_get(d.severity, i) != "warning" {
+            ints_push(starts, dg_start(d, i))
+            strs_push(out, dg_render(d, i, names, tx, bs))
+        }
+    }
+    if ints_len(starts) > 0 { return Checked(text: str_join(out, ""), starts: starts, doc: "") }
+    let doc = if want_doc { fx_core_document(f) } else { "" }
+    if want_doc && doc == "" { ip_refuse(io, "a program whose Core IR the front end does not carry") }
+    Checked(text: "", starts: starts, doc: doc)
+}
+
+// A run of `doc` as the session runs one: the interpreter's default budgets, no arguments. `source` is the root's text.
+pub fn ip_session_run(io: IoCap, out: OutCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap, doc: Str, source: Str) -> IeRun {
+    interp_exec(doc, "<input>", ip_library(io), source, true, 10000000, 512, strs_new(), false, out, io, time, net, proc, rnd)
 }

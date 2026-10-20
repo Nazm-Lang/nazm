@@ -1,0 +1,12 @@
+
+   
+:defs
+fn a() -> Int { 1 }
+   fn b() -> Int { a() + 1 }   
+b()
+:defs
+:reset
+:defs
+b()
+  :q
+a()

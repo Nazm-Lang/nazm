@@ -1,0 +1,56 @@
+# `nazm run`'s command lines, run from the repository's root by `tests/interactive.sh args`.
+--help
+-h
+(none)
+--bogus examples/max.nz
+--interpret
+--interpret --json
+--interpret examples/max.nz
+--interpret --json examples/max.nz
+--interpret examples/max.nz -- a b
+--interpret examples/max.nz a
+--interpret absent.nz
+--interpret --json absent.nz
+--interpret --max-iterations 3 examples/max.nz
+--interpret --max-iterations x examples/max.nz
+--interpret --max-iterations -1 examples/max.nz
+--interpret --max-iterations 18446744073709551616 examples/max.nz
+--interpret --max-iterations +7 examples/max.nz
+--interpret --max-iterations= examples/max.nz
+--interpret --max-iterations
+--interpret --max-depth 0 examples/max.nz
+--interpret --max-depth x examples/max.nz
+--interpret --max-depth +5 examples/max.nz
+--interpret --max-depth 1000000 examples/max.nz
+--interpret --max-depth 1000001 examples/max.nz
+--interpret --max-depth 2000000 examples/max.nz
+--interpret --max-depth 99999999999999 examples/max.nz
+--interpret --max-depth 450359962737049 examples/max.nz
+--interpret --max-depth 450359962737050 examples/max.nz
+--interpret --max-depth 18446744073709551615 examples/max.nz
+--interpret --max-depth 18446744073709551616 examples/max.nz
+--max-iterations 3 examples/max.nz
+--max-depth 3 examples/max.nz
+--max-iterations 3 --max-depth 3 examples/max.nz
+--locked --interpret examples/max.nz
+--interpret --harness x examples/max.nz
+--interpret --harness test examples/max.nz
+--interpret --harness test: examples/max.nz
+--interpret --harness test:a-b examples/max.nz
+--interpret --harness fuzz:f examples/max.nz
+--interpret --harness fuzz:f:x examples/max.nz
+--interpret --harness fuzz:f:4294967296 examples/max.nz
+--interpret --harness bench:b:5:6 examples/max.nz
+--interpret --harness test:t:1 examples/max.nz
+--interpret --harness test:absent examples/max.nz
+--interpret --json --harness test:absent examples/max.nz
+--harness test:absent examples/max.nz
+--harness bogus examples/max.nz
+--profile general --interpret examples/max.nz
+--profile bogus --interpret examples/max.nz
+--features x --interpret examples/max.nz
+--features=a,b --interpret examples/max.nz
+-- examples/max.nz
+examples/max.nz --interpret -- --json
+examples/max.nz --json --interpret
+examples/max.nz extra --interpret

@@ -1,0 +1,15 @@
+9223372036854775807 + 1
+1 / 0
+fn f(n: Int) -> Int { f(n + 1) }
+f(0)
+fn spin() -> Int { let mut i = 0; while true { i += 1 }; i }
+spin()
+undefined_name
+1 +
+fn broken( {
+fn
+struct
+enum E { A, B
+fn g() -> Int { "no" }
+fn h() -> Int { 1 }
+h() + "x"

@@ -1,0 +1,8 @@
+# `nazm repl`'s command lines, run from the repository's root by `tests/interactive.sh args`.
+--help
+-h
+(none)
+--bogus
+x
+--json
+-- x

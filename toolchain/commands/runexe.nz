@@ -1,0 +1,110 @@
+// A built program run for `nazm run` (R8 slice 7, `openspec/changes/r8-cut-over/design.md`, S7.2 points 3 to 5): started with the
+// arguments given after `--` and this process's environment whole, its standard streams relayed — this process's input to the
+// child's, the child's output and errors to this process's — and `nazm` ended with its status as `compiled_run.rs` passes it
+// through: the child's code, `128 +` the signal that ended it, else 255.
+
+use "@std/file"
+
+fn rx_nl() -> Str { str_from_byte(10) }
+
+// What `from` yields, written to `to` as it comes, until its end; then a word on `done`.
+fn rx_pump(from: OsHandle, to: OsHandle, done: Chan[Int]) -> Int ! { io } {
+    let buf = bytes_new(65536)
+    let mut going = true
+    while going {
+        let n = os_read(from, buf)
+        if n <= 0 {
+            going = false
+        } else {
+            let mut at = 0
+            while at < n {
+                let w = os_write(to, bytes_slice(buf, at, n))
+                if w <= 0 { at = n } else { at += w }
+            }
+        }
+    }
+    chan_send_of(done, 1)
+    0
+}
+
+// This process's input to the child's, to its end, which closes the child's; a write the child refuses ends it quietly.
+fn rx_feed(from: OsHandle, to: OsHandle) -> Int ! { io } {
+    let buf = bytes_new(65536)
+    let mut going = true
+    while going {
+        let n = os_read(from, buf)
+        if n <= 0 {
+            going = false
+        } else {
+            let mut at = 0
+            while at < n {
+                let w = os_write(to, bytes_slice(buf, at, n))
+                if w <= 0 {
+                    at = n
+                    going = false
+                } else {
+                    at += w
+                }
+            }
+        }
+    }
+    os_close(to)
+    0
+}
+
+// The directory `dir` and everything under it, removed.
+fn rx_remove(io: IoCap, dir: Str) -> Int {
+    let d = os_dir_open(dir)
+    if os_status(d) < 0 { return 0 }
+    let names = strs_new()
+    let buf = bytes_new(1024)
+    let mut n = os_dir_next(d, buf)
+    while n > 0 {
+        strs_push(names, bytes_to_str(bytes_slice(buf, 0, n)))
+        n = os_dir_next(d, buf)
+    }
+    os_close(d)
+    for i in 0..strs_len(names) {
+        let p = dir + "/" + strs_get(names, i)
+        let kind = bytes_new(48)
+        if os_lstat(p, kind) == 0 && bytes_read_le[Int](kind, 8) == 1 { rx_remove(io, p) } else { os_unlink(p) }
+    }
+    os_rmdir(dir)
+    0
+}
+
+// Run `exe` with `args`, then remove `work` and end this process with the program's status.
+pub fn rx_run(io: IoCap, proc: ProcessCap, sp: SpawnCap, exe: Str, args: Strs, work: Str) -> Int ! { io, spawn } {
+    let env = strs_new()
+    for i in 0..os_env_count() { strs_push(env, os_env_at(i)) }
+    let h = os_spawn_with(exe, args, "", env, 0)
+    if os_status(h) < 0 {
+        rx_remove(io, work)
+        eprint("nazm: could not run the built program: " + os_error_text(os_status(h)) + rx_nl())
+        exit_with(4)
+        return 0
+    }
+    let inp = os_child_pipe(h, 0)
+    let out = os_child_pipe(h, 1)
+    let err = os_child_pipe(h, 2)
+    let done = chan_new_of[Int](2)
+    let got = vec_new[Int]()
+    let mut status = 255
+    scope {
+        spawn rx_pump(out, os_stdout(), done)
+        spawn rx_pump(err, os_stderr(), done)
+        spawn rx_feed(os_stdin(), inp)
+        let code = os_wait(h)
+        // Both output relays to their end (a grandchild holding the pipe open keeps `nazm run` waiting); the input relay is
+        // abandoned, for it may be blocked on a terminal: ending the process ends it.
+        chan_recv_of(done, got);
+        chan_recv_of(done, got);
+        os_close(out)
+        os_close(err)
+        os_close(h)
+        rx_remove(io, work)
+        status = if code >= 256 { 128 + (code - 256) } else if code >= 0 && code <= 255 { code } else { 255 }
+        exit_with(status);
+    }
+    status
+}

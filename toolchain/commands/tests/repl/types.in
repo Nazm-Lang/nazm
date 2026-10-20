@@ -1,0 +1,17 @@
+struct P { x: Int, y: Int }
+fn mk(a: Int) -> P { P(x: a, y: a + 1) }
+mk(3).y
+pub fn getx(p: P) -> Int { p.x }
+getx(mk(9))
+enum Shape { Dot, Line(len: Int) }
+fn size(s: Shape) -> Int { match s { Shape.Dot => 0, Shape.Line(len: n) => n } }
+size(Shape.Line(len: 7))
+size(Shape.Dot)
+struct P { x: Int }
+mk(1).y
+struct P { x: Int, y: Int }
+:defs
+fn main() -> Int { 0 }
+pub fn main() -> Int { 0 }
+fn mainly() -> Int { 3 }
+mainly()

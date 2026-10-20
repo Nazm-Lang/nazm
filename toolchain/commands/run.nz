@@ -5,7 +5,10 @@
 
 use "cli.nz"
 use "interpret.nz"
+use "build.nz"
+use "buildcli.nz"
 use "harness.nz"
+use "util.nz"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -63,21 +66,35 @@ fn ru_int(raw: Str) -> Int {
     v
 }
 
-pub fn run_command(io: IoCap, out: OutCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap, c: Cli) -> Int {
+pub fn run_command(io: IoCap, out: OutCap, time: TimeCap, net: NetCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, rnd: RandomCap, c: Cli) -> Int {
     cli_parse(io, c)
-    let file = cli_value(c, 0)
-    let json = cli_present(c, 2)
-    let interpret = cli_present(c, 3)
-    let harness = if cli_present(c, 9) { hs_require(io, cli_value(c, 9)) } else { strs_new() }
-    let features = cli_present(c, 10)
-    let profile = cli_present(c, 8)
-    if interpret {
+    let mut o = bo_default()
+    o.file = cli_value(c, 0)
+    o.json = cli_present(c, 2)
+    o.locked = cli_present(c, 6)
+    o.has_profile = cli_present(c, 7)
+    o.profile = cli_value(c, 7)
+    o.features = cli_values(c, 9)
+    // `prepare`: a package's directory stands for its `main`, `--locked` holds it to its lockfile, the profiles are held.
+    let entry = strs_new()
+    let packages = bd_prepare(io, o, entry)
+    if strs_len(entry) > 0 { o.file = strs_get(entry, 0) }
+    let harness = if cli_present(c, 8) { hs_require(io, cli_value(c, 8)) } else { strs_new() }
+    if cli_present(c, 3) {
         let max_iterations = ru_int(cli_value(c, 4))
         let max_depth = ru_int(cli_value(c, 5))
-        exit_with(ip_run(io, out, time, net, proc, rnd, file, json, cli_values(c, 1), max_iterations, max_depth, harness, features, profile))
+        exit_with(ip_run(io, out, time, net, proc, rnd, o, packages, o.json, cli_values(c, 1), max_iterations, max_depth, harness))
         return 0
     }
-    eprint("nazm: not carried: a compiled `nazm run` (slice 7, task 7.6)" + nl())
-    exit_with(6)
+    // The build: for the host, with Nazm's own code generator (the fast-to-compile backend; Cranelift is not carried), no heap limit,
+    // the object cache on, and `run` mode — nothing said of the build. The executable is run from the build's own work directory,
+    // in the temporary directory, which is removed on every path out.
+    o.run = true
+    o.backend = "nazm"
+    o.run_args = cli_values(c, 1)
+    let stem = ut_stem(o.file)
+    let tmp = os_env_get("TMPDIR")
+    o.out = (if tmp == "" { "/tmp" } else { tmp }) + "/" + (if stem == "" { "program" } else { stem })
+    exit_with(bd_build(io, proc, sp, time, v, o))
     0
 }

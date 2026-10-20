@@ -53,6 +53,9 @@ pub struct Opts {
     has_attest: Bool,
     sbom: Str,
     has_sbom: Bool,
+    // `nazm run`'s: the build is for running (`Choice.run`), and the program's arguments.
+    run: Bool,
+    run_args: Strs,
 }
 
 // The arguments' places, in the order `cli.rs` declares them.
@@ -209,7 +212,7 @@ pub fn bo_read(io: IoCap, c: Cli) -> Opts {
             locked: cli_present(c, bi_locked()), profile: cli_value(c, bi_profile()), has_profile: cli_present(c, bi_profile()),
             provenance: cli_value(c, bi_provenance()), has_provenance: cli_present(c, bi_provenance()),
             attest: cli_value(c, bi_attest_with()), has_attest: cli_present(c, bi_attest_with()),
-            sbom: cli_value(c, bi_sbom()), has_sbom: cli_present(c, bi_sbom()))
+            sbom: cli_value(c, bi_sbom()), has_sbom: cli_present(c, bi_sbom()), run: false, run_args: strs_new())
 }
 
 // A size the parser accepted (`--stack-size`, `--heap-limit`): bytes, or a number with `K`, `M` or `G`; the digits of
@@ -238,7 +241,7 @@ pub fn bo_default() -> Opts {
             heap: 0 - 1, stack: 0 - 1, deny: false, backend: "llvm", opt: 0, emit_ir: false, debug: false, release: false, layout: "aos",
             report: false, summary: false, timings: false, lib: false, shared: false, runtime: "", has_runtime: false, board: "", has_board: false,
             watermark: false, harness: "", has_harness: false, features: strs_new(), locked: false, profile: "", has_profile: false,
-            provenance: "", has_provenance: false, attest: "", has_attest: false, sbom: "", has_sbom: false)
+            provenance: "", has_provenance: false, attest: "", has_attest: false, sbom: "", has_sbom: false, run: false, run_args: strs_new())
 }
 
 // The group, as `crates/nazm-cli/src/cli.rs` declares `nazm runtime`.
