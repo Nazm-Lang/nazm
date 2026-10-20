@@ -1,0 +1,232 @@
+// `nazm build`'s command line (R8 slice 6, `openspec/changes/r8-cut-over/design.md`, *Slice 6*): the
+// arguments `crates/nazm-cli/src/cli.rs` declares, with the help text clap derives from their doc
+// comments, read through `cli.nz` (clap's parser, usage errors and help) into `Opts`.
+//
+// The help text is the Rust binary's, byte for byte, `--backend cranelift` included: Cranelift is not
+// ported (`rewrite-in-nazm` decision 3), so the value parses and the build refuses it by name; the
+// text drops it where the cut-over edits it (slice 18).
+
+use "cli.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+// What the command line asked for.
+pub struct Opts {
+    file: Str,
+    out: Str,
+    json: Bool,
+    target: Str,
+    has_target: Bool,
+    objects: Str,
+    has_objects: Bool,
+    links: Strs,
+    no_cache: Bool,
+    heap: Int,
+    stack: Int,
+    deny: Bool,
+    backend: Str,
+    opt: Int,
+    emit_ir: Bool,
+    debug: Bool,
+    release: Bool,
+    layout: Str,
+    report: Bool,
+    summary: Bool,
+    timings: Bool,
+    lib: Bool,
+    shared: Bool,
+    runtime: Str,
+    has_runtime: Bool,
+    board: Str,
+    has_board: Bool,
+    watermark: Bool,
+    harness: Str,
+    has_harness: Bool,
+    features: Strs,
+    locked: Bool,
+    profile: Str,
+    has_profile: Bool,
+    provenance: Str,
+    has_provenance: Bool,
+    attest: Str,
+    has_attest: Bool,
+    sbom: Str,
+    has_sbom: Bool,
+}
+
+// The arguments' places, in the order `cli.rs` declares them.
+fn bi_file() -> Int { 0 }
+fn bi_out() -> Int { 1 }
+fn bi_json() -> Int { 2 }
+fn bi_emit_ir() -> Int { 3 }
+fn bi_opt_level() -> Int { 4 }
+fn bi_no_cache() -> Int { 5 }
+fn bi_build_report() -> Int { 6 }
+fn bi_summary_json() -> Int { 7 }
+fn bi_backend() -> Int { 8 }
+fn bi_target() -> Int { 9 }
+fn bi_link() -> Int { 10 }
+fn bi_lib() -> Int { 11 }
+fn bi_shared() -> Int { 12 }
+fn bi_objects() -> Int { 13 }
+fn bi_stack_watermark() -> Int { 14 }
+fn bi_stack_size() -> Int { 15 }
+fn bi_heap_limit() -> Int { 16 }
+fn bi_deny_warnings() -> Int { 17 }
+fn bi_board() -> Int { 18 }
+fn bi_layout() -> Int { 19 }
+fn bi_timings() -> Int { 20 }
+fn bi_debug() -> Int { 21 }
+fn bi_release() -> Int { 22 }
+fn bi_runtime() -> Int { 23 }
+fn bi_harness() -> Int { 24 }
+fn bi_features() -> Int { 25 }
+fn bi_locked() -> Int { 26 }
+fn bi_profile() -> Int { 27 }
+fn bi_provenance() -> Int { 28 }
+fn bi_attest_with() -> Int { 29 }
+fn bi_sbom() -> Int { 30 }
+
+pub fn build_cli() -> Cli {
+    let c = cli_command("build", "Compile to a native executable", "Compile to a native executable." + nl() + nl()
+            + "A narrower subset than `nazm run` — ask `nazm capabilities` for this build's own answer rather than a document. "
+            + "Anything outside it is refused by name after ordinary checking; nothing is partially compiled.")
+    cli_positional(c, "FILE", true, false, true, "", "")
+    let out = cli_option(c, "o", "out", "OUT", true, "", false, "Where to write the executable. Defaults to the source's stem", "")
+    let json = cli_flag(c, "", "json", "Emit diagnostics as one JSON object per line. Build-time only: see the module documentation for why "
+            + "a generated executable does not do this", "")
+    let emit_ir = cli_flag(c, "", "emit-ir", "Also write the generated LLVM IR next to the executable, as `<out>.<unit>.ll` (with `--objects` too, "
+            + "beside the `-o` path)", "")
+    let opt_level = cli_option(c, "", "opt-level", "OPT_LEVEL", false, "0", true, "Optimisation level handed to `clang`", "Optimisation level handed to `clang`." + nl() + "" + nl() + "Defaults to 0. The specified arithmetic semantics hold at every level by construction — overflow is "
+            + "an intrinsic and a branch, never `nsw` — and the test suite compiles the same programs at 0 and 2 to "
+            + "keep that true.")
+    let no_cache = cli_flag(c, "", "no-cache", "Compile every unit, reusing nothing", "Compile every unit, reusing nothing." + nl() + "" + nl() + "As `nazm check --no-cache`, and for the same reason: the equivalence tests compare a build with this "
+            + "flag against one without and require the same program. It disables the native object store; nothing "
+            + "in `nazm build` reads the semantic one.")
+    let build_report = cli_flag(c, "", "build-report", "One `nazm.build-report/1` object on stdout: what was compiled, and what was reused", "")
+    let summary_json = cli_flag(c, "", "summary-json", "One `nazm.command-summary/1` object on stdout, and nothing else on either stream: the outcome, and a "
+            + "reference to each diagnostic — no prose. The exit status is unchanged. `--json` still gives every "
+            + "diagnostic in full", "")
+    let backend = cli_option(c, "", "backend", "BACKEND", false, "llvm", true, "The code generator: `llvm` (the default: LLVM IR text compiled by clang), `cranelift` (in process), "
+            + "or `nazm` (Nazm's own, `nzcg`, run per unit: installed as `libexec/nazm/nzcg` beside `nazm`, or "
+            + "named by `NAZM_NZCG`; macOS only before 1.0). None falls back to another; a program one cannot "
+            + "compile is refused by name", "")
+    let target = cli_option(c, "", "target", "TRIPLE", false, "", false, "The target triple: one of the nine `nazm capabilities` lists (N57). A target this host links is "
+            + "built to an executable; any other needs `--objects`. An unknown triple is refused rather than "
+            + "silently built for this machine", "")
+    let link = cli_list(c, "", "link", "FILE", "", "An object file or static library that defines foreign (`extern \"C\"`) functions the program calls, "
+            + "handed to the linker after the program's own objects. It may be given more than once; it must exist. "
+            + "Nazm does not compile C", "")
+    let lib = cli_flag(c, "", "lib", "Build a static library instead of an executable (N55): no `main` is needed, `-o` names the archive, "
+            + "and a C header declaring every `extern \"C\"` export is written beside it with the extension `.h`", "")
+    let shared = cli_flag(c, "", "shared", "With `--lib`, a shared library (`.dylib`, `.so`) instead of a static archive (N85): its only visible "
+            + "symbols are the exports, and the header is the same", "")
+    let objects = cli_option(c, "", "objects", "DIR", true, "", false, "Write every object and `DIR/link.txt` instead of linking (N57): for a `--target` this host has no "
+            + "linker for, linked by that target's own toolchain", "")
+    let stack_watermark = cli_flag(c, "", "stack-watermark", "Paint the board's stack in `_start` and write `nazm-stack: used=N` to its UART after `main` (N63): "
+            + "the deepest byte the run touched, beside `bounds.json`'s static bound. A board's target only: "
+            + "`aarch64-unknown-none`, `riscv64gc-unknown-none-elf` or `thumbv7m-none-eabi`", "")
+    let stack_size = cli_option(c, "", "stack-size", "BYTES", false, "", false, "The stack `main` and every task run on (R1b, L14), in bytes or with a `K`, `M` or `G` suffix (KiB, "
+            + "MiB, GiB): `--stack-size 64M` for a program that recurses deeply. Hosted targets only. Without it, "
+            + "`main` has the process's stack, a task 8 MiB on its own thread or 256 KiB in the pool, and "
+            + "`NAZM_TASK_STACK` still overrides the pool's", "")
+    let heap_limit = cli_option(c, "", "heap-limit", "BYTES", false, "", false, "The most heap the program may hold live (R1d, D5), in bytes or with a `K`, `M` or `G` suffix, from "
+            + "64K to 1024G: an allocation that would pass it ends the program with `N0406` and status 2. A hosted "
+            + "program's only; a package's manifest may give it as `heap-limit`, and this overrides that. Without "
+            + "either, the heap is the host's", "")
+    let deny_warnings = cli_flag(c, "", "deny-warnings", "Refuse a program the checker warns of (R1b, L15), as `nazm check --deny-warnings`", "")
+    let board = cli_option(c, "", "board", "FILE", true, "", false, "A board's manifest (Gate 3, `docs/user/spec.md`, *Boards*): load address, stack, UART, how the "
+            + "machine stops, a heap. A board's target only; without it, the target's built-in board, which `nazm "
+            + "inspect` prints as a manifest", "")
+    let layout = cli_option(c, "", "layout", "LAYOUT", false, "aos", true, "How a `Vec` of records is laid out (N68): `aos`, each element whole, or `soa`, one array per field "
+            + "for every record of `Int`s and `Bool`s. Unobservable to the program; part of every object's "
+            + "identity. LLVM backend only", "")
+    let timings = cli_flag(c, "", "timings", "One `nazm.timings/1` line on stderr: each phase's wall time — load, front end, MIR, LIR, code "
+            + "generation, native compilation, link — and the total (N48)", "")
+    let debug = cli_flag(c, "", "debug", "Carry DWARF debug information (N48): a subprogram for each function and a source position on each "
+            + "instruction, so a debugger stops in Nazm functions and shows their lines. LLVM backend only; the "
+            + "same program, with more metadata", "")
+    let release = cli_flag(c, "", "release", "Harden the executable (R1.5, D15): every function guarded by a stack canary where it holds a local "
+            + "array or a local whose address is taken, linked position-independent, stripped of its symbols and "
+            + "debug information, and signed ad hoc with the hardened runtime. A macOS executable built by the LLVM "
+            + "backend; refused with `--debug`, `--lib`, `--objects` and `--runtime`. The default build is "
+            + "unchanged", "")
+    let runtime = cli_option(c, "", "runtime", "DIR", true, "", false, "Link the runtime artifact in DIR, built by `nazm runtime build`, instead of generating the runtime "
+            + "(N82): refused, by name and before linking, when it does not fit this compiler, the target or what "
+            + "the program reaches", "")
+    let harness = cli_option(c, "", "harness", "SPEC", false, "", false, "", "")
+    let features = cli_list(c, "", "features", "NAMES", ",", "Features of the root package to enable beyond its `default`, comma-separated (Gate 2, §22); each "
+            + "package's `@cfg(feature = …)` sees its own", "")
+    let locked = cli_flag(c, "", "locked", "Refuse to build unless the package's `nazm.lock` records exactly the packages this resolves to, with "
+            + "their bytes unchanged (N46)", "")
+    let profile = cli_option(c, "", "profile", "NAME", false, "", false, "A restriction profile to hold the program to (N47): `general`, `embedded`, `critical`, `cyber`, "
+            + "`realtime`, `web3`, `accounts`, `authority`, `kernel`, `robotics`, `automotive`, `aerospace`, "
+            + "`assurance`, `industrial` or `medical`. Added to any the packages' manifests require; a profile only "
+            + "refuses, and never changes what an accepted program does", "")
+    let provenance = cli_option(c, "", "provenance", "FILE", true, "", false, "After a successful build, write `nazm.provenance/1` to FILE (N73): every source module and package "
+            + "with its BLAKE3 digest, the target, the compiler and C compiler, the runtime's ABI revision and "
+            + "digest, the backend and its options, the profiles and the output's digest. Deterministic: no path, "
+            + "time or host name", "")
+    let attest_with = cli_option(c, "", "attest-with", "CMD", false, "", false, "Run CMD (its words, no shell) with the provenance file's path appended, and keep its standard output "
+            + "as `FILE.sig` — a hook for any local signer. Needs `--provenance`", "")
+    let sbom = cli_option(c, "", "sbom", "FILE", true, "", false, "After a successful build, write a CycloneDX 1.5 SBOM to FILE (N94): the output, every package, "
+            + "source module and the runtime with their BLAKE3 hashes, and the tools", "")
+    cli_vkind(c, opt_level, 3)
+    cli_possible(c, backend, "llvm,cranelift,nazm")
+    cli_vkind(c, stack_size, 4)
+    cli_vkind(c, heap_limit, 5)
+    cli_hidden(c, harness)
+    ints_set(c.path, link, 1)
+    cli_conflicts(c, summary_json, json)
+    cli_conflicts(c, summary_json, build_report)
+    cli_requires(c, shared, lib)
+    cli_requires(c, attest_with, provenance)
+    cli_conflicts(c, release, debug)
+    cli_conflicts(c, release, lib)
+    cli_conflicts(c, release, objects)
+    cli_conflicts(c, release, runtime)
+    c
+}
+
+// `nazm build`'s arguments, read into `c` (`build_cli`) from where `cli_from` says; help or a usage error
+// and the exit that goes with it otherwise.
+pub fn bo_read(io: IoCap, c: Cli) -> Opts {
+    cli_parse(io, c)
+    Opts(file: cli_value(c, bi_file()), out: cli_value(c, bi_out()), json: cli_present(c, bi_json()),
+            target: cli_value(c, bi_target()), has_target: cli_present(c, bi_target()),
+            objects: cli_value(c, bi_objects()), has_objects: cli_present(c, bi_objects()), links: cli_values(c, bi_link()),
+            no_cache: cli_present(c, bi_no_cache()),
+            heap: if cli_present(c, bi_heap_limit()) { bo_size(cli_value(c, bi_heap_limit())) } else { 0 - 1 },
+            stack: if cli_present(c, bi_stack_size()) { bo_size(cli_value(c, bi_stack_size())) } else { 0 - 1 },
+            deny: cli_present(c, bi_deny_warnings()), backend: cli_value(c, bi_backend()), opt: bo_size(cli_value(c, bi_opt_level())),
+            emit_ir: cli_present(c, bi_emit_ir()), debug: cli_present(c, bi_debug()), release: cli_present(c, bi_release()),
+            layout: cli_value(c, bi_layout()), report: cli_present(c, bi_build_report()), summary: cli_present(c, bi_summary_json()),
+            timings: cli_present(c, bi_timings()), lib: cli_present(c, bi_lib()), shared: cli_present(c, bi_shared()),
+            runtime: cli_value(c, bi_runtime()), has_runtime: cli_present(c, bi_runtime()),
+            board: cli_value(c, bi_board()), has_board: cli_present(c, bi_board()), watermark: cli_present(c, bi_stack_watermark()),
+            harness: cli_value(c, bi_harness()), has_harness: cli_present(c, bi_harness()), features: cli_values(c, bi_features()),
+            locked: cli_present(c, bi_locked()), profile: cli_value(c, bi_profile()), has_profile: cli_present(c, bi_profile()),
+            provenance: cli_value(c, bi_provenance()), has_provenance: cli_present(c, bi_provenance()),
+            attest: cli_value(c, bi_attest_with()), has_attest: cli_present(c, bi_attest_with()),
+            sbom: cli_value(c, bi_sbom()), has_sbom: cli_present(c, bi_sbom()))
+}
+
+// A size the parser accepted (`--stack-size`, `--heap-limit`): bytes, or a number with `K`, `M` or `G`; the digits of
+// `--opt-level` too.
+pub fn bo_size(raw: Str) -> Int {
+    let n = str_len(raw)
+    if n == 0 { return 0 }
+    let last = str_byte(raw, n - 1)
+    let mut unit = 1
+    let mut digits = raw
+    if last == 75 || last == 107 { unit = 1024 }
+    if last == 77 || last == 109 { unit = 1048576 }
+    if last == 71 || last == 103 { unit = 1073741824 }
+    if unit > 1 { digits = str_slice(raw, 0, n - 1) }
+    let mut v = 0
+    for i in 0..str_len(digits) {
+        let b = str_byte(digits, i)
+        if b >= 48 && b <= 57 { v = v * 10 + (b - 48) }
+    }
+    v * unit
+}

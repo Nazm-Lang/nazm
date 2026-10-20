@@ -1,0 +1,177 @@
+# `nazm build` and `nazm runtime` command lines (R8 slice 6), run by `toolchain/commands/tests/build.sh` as `nazm LINE` in a fixture
+# both sides share: a.nz builds, b.nz does not, w.nz is warned of, m.nz imports a file that is not there, lib.nz is a library, sub/ is
+# a directory with no manifest, pkg/app and pkg/geometry are packages, and rt/ is a runtime artifact for the host.
+build --help
+build -h
+help build
+build
+build a.nz b.nz
+build a.nz --bogus
+build --opt-levl 2 a.nz
+build -x a.nz
+build -o
+build a.nz --target
+build a.nz --opt-level
+build --backend foo a.nz
+build --backend nazx a.nz
+build --backend llvm,nazm a.nz
+build --opt-level 7 a.nz
+build --opt-level abc a.nz
+build --opt-level 300 a.nz
+build --opt-level 99999999999999999999 a.nz
+build --heap-limit 1 a.nz
+build --heap-limit 2000G a.nz
+build --heap-limit 1x a.nz
+build --heap-limit G a.nz
+build --heap-limit 99999999999999999999G a.nz
+build --stack-size abc a.nz
+build --stack-size 8G a.nz
+build --stack-size 63K a.nz
+build --shared a.nz
+build --release --debug a.nz
+build --release --lib a.nz
+build --release --objects o a.nz
+build --release --runtime rt a.nz
+build --summary-json --json a.nz
+build --summary-json --build-report a.nz
+build --attest-with foo a.nz
+build --layout xyz a.nz
+build --layout soa a.nz -o x
+build --link nothere.o a.nz
+build --summary-json --link nothere.o a.nz
+build --target foo a.nz
+build --summary-json --target foo a.nz
+build --target aarch64-unknown-linux-gnu a.nz
+build --target aarch64-unknown-linux-gnu --objects o a.nz
+build --target x86_64-unknown-linux-gnu --objects o a.nz
+build --summary-json --target aarch64-unknown-linux-gnu a.nz
+build --target wasm32-wasip1 a.nz
+build --target wasm32-wasip1 --objects o a.nz
+build --target wasm32-unknown-unknown --objects o a.nz
+build --target aarch64-linux-android a.nz
+build --target aarch64-apple-ios --objects o a.nz
+build --target aarch64-unknown-none a.nz
+build --target aarch64-unknown-none --objects o a.nz
+build --target thumbv7m-none-eabi --objects o a.nz
+build --target riscv64gc-unknown-none-elf --objects o a.nz
+build --target riscv32imc-unknown-none-elf --objects o a.nz
+build --backend cranelift a.nz
+build --backend cranelift --target wasm32-wasip1 a.nz
+build --backend cranelift --target aarch64-unknown-none --objects o a.nz
+build --backend cranelift --target aarch64-linux-android a.nz
+build --backend cranelift --target aarch64-apple-ios --objects o a.nz
+build --backend nazm --target aarch64-unknown-linux-gnu a.nz
+build --backend nazm --target wasm32-wasip1 a.nz
+build --backend nazm --target aarch64-unknown-none --objects o a.nz
+build --release --backend nazm a.nz
+build --release --target x86_64-apple-darwin a.nz
+build --lib --shared --target x86_64-pc-windows-gnu --objects o a.nz
+build --board x.toml a.nz
+build --board x.toml --target aarch64-unknown-none a.nz
+build --board x.toml --runtime rt --target aarch64-unknown-none a.nz
+build --stack-watermark a.nz
+build --stack-watermark --target thumbv7m-none-eabi --objects o a.nz
+build --stack-size 1M --target thumbv7m-none-eabi --objects o a.nz
+build --stack-size 1M --target wasm32-wasip1 --objects o a.nz
+build --heap-limit 1M --target thumbv7m-none-eabi --objects o a.nz
+build --heap-limit 1M --target wasm32-wasip1 --objects o a.nz
+build --heap-limit 1M --lib a.nz
+build --heap-limit 1M --runtime rt a.nz
+build --harness bad a.nz
+build --harness test: a.nz
+build --harness fuzz:f a.nz
+build --harness fuzz:f:x a.nz
+build --harness test:foo a.nz
+build --locked a.nz
+build --locked pkg/app
+build --locked pkg/geometry
+build --features a a.nz
+build --features a pkg/app
+build --features ,x pkg/app
+build --profile nope a.nz
+build --profile general a.nz -o x
+build --profile critical a.nz
+build --profile embedded pkg/app
+build a.nz -o x
+build a.nz -o a.nz
+build --summary-json a.nz -o a.nz
+build --summary-json a.nz -o x
+build --summary-json b.nz
+build --summary-json w.nz -o x
+build --summary-json --deny-warnings w.nz
+build --summary-json m.nz
+build --summary-json nothere.nz
+build --summary-json sub
+build --json b.nz
+build b.nz
+build w.nz -o x
+build --json w.nz -o x
+build --deny-warnings w.nz
+build m.nz
+build nothere.nz
+build sub
+build a.nz -o sub
+build --build-report a.nz -o x
+build --build-report b.nz
+build --build-report a.nz --objects o
+build --build-report --no-cache a.nz --target x86_64-pc-windows-gnu --objects o
+build --build-report --no-cache --backend nazm a.nz -o x
+build --timings a.nz -o x
+build pkg/app
+build pkg/app -o appx
+build --no-cache --build-report pkg/app -o appx
+build --summary-json pkg/app
+build pkg/geometry
+build pkg/nothere
+build --lib pkg/geometry
+build --lib lib.nz -o libx.a
+build --lib --no-cache --build-report lib.nz -o libx.a
+build --lib --shared lib.nz -o libx.dylib
+build --lib --shared --target x86_64-pc-windows-gnu lib.nz
+build --lib --objects o lib.nz
+build --lib a.nz -o libx.a
+build lib.nz
+build lib.nz -o x
+build --runtime rt a.nz -o x
+build --runtime rtx a.nz -o x
+build --runtime rt --target x86_64-apple-darwin --objects o a.nz
+build --summary-json --runtime rtx a.nz -o x
+build --provenance p.json a.nz -o x
+build --provenance p.json --sbom s.json a.nz -o x
+build --sbom s.json a.nz -o x
+build --provenance p.json --attest-with true a.nz -o x
+build --provenance p.json --attest-with false a.nz -o x
+build --provenance p.json --attest-with nothere-signer a.nz -o x
+runtime
+runtime --help
+runtime -h
+runtime help
+runtime help build
+runtime help verify
+runtime build
+runtime build --help
+runtime build -h
+runtime build --out
+runtime build --out r1
+runtime build --out r1 --target x86_64-apple-darwin
+runtime build --out r1 -O 0
+runtime build --out r1 --opt-level 300
+runtime build --out r1 --profile board
+runtime build --out r1 --profile foo
+runtime build --out r1 --target foo
+runtime build --out r1 --target aarch64-unknown-linux-gnu
+runtime build --out r1 --target x86_64-pc-windows-gnu
+runtime build --out r1 --target wasm32-wasip1
+runtime build --out r1 --target aarch64-unknown-none
+runtime verify
+runtime verify --help
+runtime verify rt
+runtime verify rt --target x86_64-apple-darwin
+runtime verify rt --target foo
+runtime verify rtx
+runtime verify sub
+runtime verify rt-bad
+runtime verify rt-abi
+runtime verify rt-archive
+runtime bogus
+runtime verify rt extra

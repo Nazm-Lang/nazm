@@ -35,6 +35,13 @@
 //     pipeline backend REPORT PROBE.ll PROBE.o
 //                                  the backend identity and configuration a `clang -###` report
 //                                  of compiling PROBE.ll describes, as the build keys objects
+//     pipeline llvm-get TOOL CONFIG DIR ROOT NAME [ROOT NAME]...
+//                                  each LLVM unit DIR/NAME.ll looked up under ROOT by its key (R8
+//                                  slice 6): `hit NAME` (its object published as DIR/NAME.o), `miss
+//                                  NAME` or `rejected NAME`, one line each
+//     pipeline llvm-put TOOL CONFIG DIR ROOT NAME [ROOT NAME]...
+//                                  each unit's object DIR/NAME.o filed under ROOT by its unit's key:
+//                                  `stored NAME`, or `failed NAME`
 //     pipeline entry-check ROOT KEY
 //                                  the entry filed under KEY, broken one way at a time: what the
 //                                  store's reader says of each
@@ -83,7 +90,7 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
     // LLVM backend's flags (`--llvm`, `--debug`, `--release`, `--no-small`), which `build` reads.
     let mut target = "aarch64-apple-darwin"
     let mut from = 0
-    let mut fl = Flags(llvm: false, debug: false, release: false, small_ok: true, soa: false)
+    let mut fl = Flags(llvm: false, debug: false, release: false, small_ok: true, soa: false, prebuilt: false)
     let mut more = true
     while more && from < strs_len(given) {
         let a = strs_get(given, from)
@@ -109,6 +116,9 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
         } else if a == "--soa" {
             fl.soa = true
             from += 1
+        } else if a == "--prebuilt" {
+            fl.prebuilt = true
+            from += 1
         } else {
             more = false
         }
@@ -129,6 +139,9 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
     }
     if strs_len(args) == 4 && strs_get(args, 0) == "put" {
         return put(io, v, target, strs_get(args, 1), strs_get(args, 2), strs_get(args, 3))
+    }
+    if strs_len(args) >= 7 && (strs_get(args, 0) == "llvm-get" || strs_get(args, 0) == "llvm-put") {
+        return llvm_store(io, v, args)
     }
     if strs_len(args) == 3 && strs_get(args, 0) == "entry-check" {
         return entry_check(io, v, strs_get(args, 1), strs_get(args, 2))
@@ -236,6 +249,7 @@ struct Flags {
     release: Bool,
     small_ok: Bool,
     soa: Bool,
+    prebuilt: Bool,
 }
 
 fn bytes_arg(a: Str) -> Int {
@@ -317,6 +331,27 @@ fn llvm_unit(t: Str, target: Str, single: Bool, renaming: Str, fl: Flags, defs: 
 
 fn yes(b: Bool) -> Str { if b { "yes" } else { "no" } }
 
+/// Each service reached, by its stable name, in a fixed order (`Needs::names`).
+fn needs_names(n: Needs) -> Strs {
+    let out = strs_new()
+    if n.tasks { strs_push(out, "tasks") }
+    if n.channels { strs_push(out, "channels") }
+    if n.sequences { strs_push(out, "sequences") }
+    if n.io { strs_push(out, "io") }
+    if n.join { strs_push(out, "join") }
+    if n.strings { strs_push(out, "strings") }
+    if n.shims { strs_push(out, "shims") }
+    if n.stack { strs_push(out, "stack") }
+    if n.closures { strs_push(out, "closures") }
+    if n.foreign { strs_push(out, "foreign") }
+    if n.numbers { strs_push(out, "numbers") }
+    if n.files { strs_push(out, "files") }
+    if n.net { strs_push(out, "net") }
+    if n.wide { strs_push(out, "wide") }
+    if n.tls { strs_push(out, "tls") }
+    out
+}
+
 /// `line` with every whole symbol `@NAME` of C's allocator made `@nz.<heap>_NAME`: what
 /// `nazm_lir::op::count_heap` and `small_heap` do to a module's imports, as the module prints.
 fn renamed_line(line: Str, heap: Str) -> Str {
@@ -394,6 +429,9 @@ fn build(io: IoCap, v: VouchCap, c: Cir, tt: TypeTable, p: MirProgram, target: S
     }
     // The Nazm backend's runtime is every part (`NazmCodegen::baseline`), TLS where a unit reaches
     // it, and the program's own `single`.
+    // A runtime artifact's program may have more threads than its own `main` shows: the artifact keeps the failure
+    // state per thread (`single_thread &= runtime.is_none()`).
+    if fl.prebuilt { single = false }
     let all: HashMap[Str, Bool] = hashmap_new()
     for n in text_split("tasks channels sequences io join strings shims stack closures foreign numbers files net wide", " ") {
         hashmap_set(all, n, true)
@@ -405,9 +443,24 @@ fn build(io: IoCap, v: VouchCap, c: Cir, tt: TypeTable, p: MirProgram, target: S
     let renaming = if heap >= 0 { "heap" } else if small { "small" } else { "" }
     // The LLVM backend's runtime is what its units reach, and the program's own `single`.
     if fl.llvm && single { hashmap_set(names, "single", true) }
-    let units = runtime_units(needs_of(if fl.llvm { names } else { all }), target, "@" + symbol_of(main), roots, calls_c, stack, heap, fl.small_ok)
-    let rt_names = vec_get(units, 0)
-    let rt_texts = vec_get(units, 1)
+    // What the program reaches of the runtime, by name, as a runtime artifact's manifest lists them.
+    let reached = settled(needs_of(if fl.llvm { names } else { all }))
+    let units = runtime_units(needs_of(if fl.llvm { names } else { all }), target, "@" + symbol_of(main), roots, calls_c, stack, heap, fl.small_ok && !fl.prebuilt)
+    let mut rt_names = vec_get(units, 0)
+    let mut rt_texts = vec_get(units, 1)
+    // A runtime artifact (`--runtime`) is linked instead of a generated runtime: the entry alone is the program's.
+    if fl.prebuilt {
+        let only_names = strs_new()
+        let only_texts = strs_new()
+        for i in 0..strs_len(rt_names) {
+            if strs_get(rt_names, i) == "entry" {
+                strs_push(only_names, strs_get(rt_names, i))
+                strs_push(only_texts, strs_get(rt_texts, i))
+            }
+        }
+        rt_names = only_names
+        rt_texts = only_texts
+    }
     // Each unit's object is looked up in the store by its key (design S4.5): a hit is written as
     // DIR/NAME.o and left out of lir.txt; a miss's text is kept as DIR/units/NAME.lir for `put`.
     let plans = unit_plans(c, p)
@@ -478,6 +531,12 @@ fn build(io: IoCap, v: VouchCap, c: Cir, tt: TypeTable, p: MirProgram, target: S
     strs_push(plan, "one-thread " + yes(single))
     strs_push(plan, "calls-c " + yes(calls_c))
     strs_push(plan, "tls " + yes(tls))
+    strs_push(plan, "needs " + str_join(needs_names(reached), " "))
+    for k in 0..vec_len(plans) {
+        let u = vec_get(plans, k)
+        // A standard or prelude module's own unit is every project's: it is filed in the user cache.
+        if u.owns && (u.module == "@core/prelude" || text_starts_with(u.module, "@std/")) { strs_push(plan, "shared " + u.artefact) }
+    }
     for f in p.fns {
         if f.foreign != "" { strs_push(plan, "foreign " + f.foreign) }
     }
@@ -522,6 +581,43 @@ fn put(io: IoCap, v: VouchCap, target: Str, store: Str, generator: Str, dir: Str
                     Ok(_) => {},
                     Err(e) => { bad += 1 },
                 }
+            }
+        }
+    }
+    if bad == 0 { 0 } else { 1 }
+}
+
+/// `pipeline llvm-get` and `llvm-put` (R8 slice 6): the LLVM units' objects, looked up in the object stores
+/// and filed there. `args` are the command, the backend identity and configuration a `clang -###` probe
+/// described (`backend`), the directory the units are in, and then each unit's store root and name.
+fn llvm_store(io: IoCap, v: VouchCap, args: Strs) -> Int ! { io } {
+    let putting = strs_get(args, 0) == "llvm-put"
+    let tool = strs_get(args, 1)
+    let config = strs_get(args, 2)
+    let dir = strs_get(args, 3)
+    let mut bad = 0
+    let mut i = 4
+    while i + 1 < strs_len(args) {
+        let root = strs_get(args, i)
+        let name = strs_get(args, i + 1)
+        i += 2
+        let text = read_file(str_vouch(dir + "/" + name + ".ll"))
+        if putting {
+            let object = read_file(str_vouch(dir + "/" + name + ".o"))
+            match store_put(io, v, root, llvm_input(text), tool, config, object, "nazm-build-" + int_to_str(os_pid())) {
+                Ok(_) => { print("stored " + name + nl()) },
+                Err(e) => { print("failed " + name + nl()) },
+            }
+        } else {
+            match store_get(io, v, root, object_key(llvm_input(text), tool, config)) {
+                Ok(object) => {
+                    if write_file(str_vouch(dir + "/" + name + ".o"), object) == str_len(object) {
+                        print("hit " + name + nl())
+                    } else {
+                        print("miss " + name + nl())
+                    }
+                },
+                Err(e) => { print((if e == "miss" { "miss " } else { "rejected " }) + name + nl()) },
             }
         }
     }
