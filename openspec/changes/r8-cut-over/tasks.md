@@ -71,7 +71,14 @@
       `--build-report`, `--summary-json`, `--timings`, `--lib`; the released set's backend is slice 15's
 
 ## 6. Slice 6 — the rest of `build`
-- [ ] 6.1 `build` group 3; `nazm runtime build` and `verify`
+- [x] 6.1 `build` group 3; `nazm runtime build` and `verify`
+      Evidence (17f9105c): `toolchain/commands/tests/build.sh` over the whole corpus, every mode (nazm
+      backend, LLVM, report, summary, timings, lib, lib-shared, lib-objects, rtlink, prov, prov-sign, link)
+      and the command lines (`BUILD_ARGS=1`): 4585 agree, 0 differ, 16 refused (the Linux/WASM/iOS/board
+      targets the cut-over removes), after one fix (a runtime artifact that does not fit is silent on
+      standard error under `--summary-json`; the args part rerun: 158 agree, 0 differ, 16 refused).
+      Contained self-builds from a checkout under $HOME: `backend=nazm` passed in 591.3 s, `backend=llvm`
+      passed in 709.9 s (stages 1 to 3 byte-identical; 66 programs agree with the seed's builds).
 
 ## 7. Slice 7 — the interactive tier
 - [x] 7.1 Design (Opus): `design.md`, *Slice 7*, S7.1–S7.8
