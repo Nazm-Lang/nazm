@@ -156,7 +156,7 @@ pub fn cli_hidden(c: Cli, a: Int) -> Int {
     0
 }
 
-// Argument `a`'s value parser: 3 a `u8` in 0..=3, 4 a stack size, 5 a heap size.
+// Argument `a`'s value parser: 3 a `u8` in 0..=3, 4 a stack size, 5 a heap size, 6 a `u8`.
 pub fn cli_vkind(c: Cli, a: Int, kind: Int) -> Int {
     ints_set(c.vkind, a, kind)
     0
@@ -575,8 +575,8 @@ fn cli_size_error(raw: Str, kind: Int) -> Str {
     ""
 }
 
-// Why `v` is not a `u8` in 0..=3 (a `RangedI64ValueParser`), or "".
-fn cli_range_error(v: Str) -> Str {
+// Why `v` is not a `u8` in 0..=`top` (a `RangedI64ValueParser`: 3 for `--opt-level`, 255 for a plain `u8`), or "".
+fn cli_range_error(v: Str, top: Str) -> Str {
     if str_len(v) == 0 { return "cannot parse integer from empty string" }
     let mut i = if str_byte(v, 0) == 43 { 1 } else { 0 }
     if i == 1 && str_len(v) == 1 { return "invalid digit found in string" }
@@ -585,7 +585,7 @@ fn cli_range_error(v: Str) -> Str {
     }
     let d = cli_digits(v)
     if cli_more(d, "9223372036854775807") { return "number too large to fit in target type" }
-    if cli_more(d, "3") { return d + " is not in 0..=3" }
+    if cli_more(d, top) { return d + " is not in 0..=" + top }
     ""
 }
 
@@ -958,7 +958,7 @@ fn cli_react(io: IoCap, c: Cli, a: Int, by: Int, vals: Strs, quiet: Bool) -> Int
         }
         let vk = ints_get(c.vkind, a)
         if vk > 0 {
-            let why = if vk == 3 { cli_range_error(v) } else { cli_size_error(v, vk) }
+            let why = if vk == 3 { cli_range_error(v, "3") } else if vk == 6 { cli_range_error(v, "255") } else { cli_size_error(v, vk) }
             if why != "" {
                 if quiet { return 1 }
                 cli_fail(io, "invalid value '" + v + "' for '" + cli_display(c, a) + "': " + why)

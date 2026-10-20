@@ -1,0 +1,166 @@
+// What `nazm build --runtime` and `nazm runtime verify` check of a runtime artifact (R8 slice 6: a port of
+// `crates/nazm-cli/src/runtime_artifact.rs`'s `fits`, N82).
+//
+// A runtime artifact is the whole runtime for one target and profile compiled once into `libnazmrt.a`, beside
+// `nazm-runtime.json`, a `nazm.runtime/1` manifest saying what it is: the runtime ABI revision and digest it was built
+// from, the target, the profile, the services, the optimisation level, the toolchain, and BLAKE3 digests of the text and
+// the archive. A build given one links it instead of generating a runtime, and refuses, by name and before linking,
+// every artifact that does not fit: there is no fallback.
+
+use "util.nz"
+use "@std/json"
+use "@std/blake3"
+
+fn rt_nl() -> Str { str_from_byte(10) }
+
+pub fn rt_schema() -> Str { "nazm.runtime/1" }
+pub fn rt_archive_name() -> Str { "libnazmrt.a" }
+pub fn rt_manifest_name() -> Str { "nazm-runtime.json" }
+
+// Every service a runtime has, in the fixed order `Needs::names` lists them.
+pub fn rt_services() -> Strs {
+    text_split("tasks channels sequences io join strings shims stack closures foreign numbers files net wide tls", " ")
+}
+
+// The runtime profile of a target: the operating system's, a board's, or WebAssembly's.
+pub fn rt_profile_of(target: Str) -> Str {
+    if ut_starts(target, "wasm32") { return "wasm" }
+    if ut_ends(target, "-none") || ut_ends(target, "-none-elf") || ut_ends(target, "-none-eabi") || ut_ends(target, "-none-eabihf") { return "board" }
+    "hosted"
+}
+
+fn rt_field(doc: JsonDoc, name: Str) -> Str {
+    if json_kind(doc, json_root(doc)) != "object" { return "" }
+    match json_get(doc, json_root(doc), name) {
+        Some(n) => match json_str(doc, n) { Some(s) => s, None => "" },
+        None => "",
+    }
+}
+
+fn rt_has(xs: Strs, s: Str) -> Bool {
+    for i in 0..strs_len(xs) {
+        if strs_get(xs, i) == s { return true }
+    }
+    false
+}
+
+// What the program needs once the parts' implications are settled (`Needs::settled`), by name in the fixed order:
+// `needs` names the services reached.
+pub fn rt_settle(needs: Strs) -> Strs {
+    let io = rt_has(needs, "io") || rt_has(needs, "files") || rt_has(needs, "net")
+    let files = rt_has(needs, "files") || rt_has(needs, "net")
+    let tasks = rt_has(needs, "tasks") || rt_has(needs, "net")
+    let sequences = rt_has(needs, "sequences") || tasks || rt_has(needs, "channels") || rt_has(needs, "net")
+    let strings = rt_has(needs, "strings") || rt_has(needs, "join") || io || files
+    let out = strs_new()
+    for n in rt_services() {
+        let on = if n == "tasks" { tasks } else if n == "sequences" { sequences } else if n == "io" { io } else if n == "strings" { strings }
+                else if n == "files" { files } else { rt_has(needs, n) }
+        if on { strs_push(out, n) }
+    }
+    out
+}
+
+// Whether the artifact in `dir` fits this compiler (`abi`, `ours`: its ABI revision and the runtime's digest),
+// `target`, and a program needing `needs` when `has_needs` — every check `nazm build --runtime` makes before linking.
+// `["ok", ARCHIVE, DIGEST]`, or `["err", CODE, MESSAGE]` naming the first that fails; `["refused", WHY]` where this port does not
+// read what the reference does (a manifest that is not JSON, whose error text is the reference's own).
+pub fn rt_fits(io: IoCap, dir: Str, target: Str, abi: Int, ours: Str, needs: Strs, has_needs: Bool) -> Strs {
+    let out = strs_new()
+    let path = ut_join(dir, rt_manifest_name())
+    let why = ut_read_error(io, path, true)
+    if why != "" {
+        strs_push(out, "err")
+        strs_push(out, "3")
+        strs_push(out, "the runtime at " + dir + " has no readable manifest: " + why)
+        return out
+    }
+    let text = read_file(path)
+    let doc = match json_parse(text) {
+        Ok(d) => d,
+        Err(e) => {
+            strs_push(out, "refused")
+            strs_push(out, "a runtime manifest that is not JSON (the reference words its parse error)")
+            return out
+        },
+    }
+    if rt_field(doc, "schema") != rt_schema() {
+        return rt_unfit("the runtime manifest is `" + rt_field(doc, "schema") + "`, and this compiler reads `" + rt_schema() + "`")
+    }
+    let mut found = 0 - 1
+    if json_kind(doc, json_root(doc)) == "object" {
+        match json_get(doc, json_root(doc), "abi") {
+            Some(n) => match json_int(doc, n) { Some(v) => { if v >= 0 { found = v } }, None => {} },
+            None => {},
+        }
+    }
+    if found != abi {
+        return rt_unfit("the runtime is ABI revision " + (if found < 0 { "?" } else { int_to_str(found) }) + ", and this compiler's is " + int_to_str(abi))
+    }
+    if rt_field(doc, "runtime") != ours {
+        return rt_unfit("the runtime was built from runtime " + rt_field(doc, "runtime") + ", and this compiler's is " + ours)
+    }
+    if rt_field(doc, "target") != target {
+        return rt_unfit("the runtime is for " + rt_field(doc, "target") + ", and this build is for " + target)
+    }
+    let profile = rt_profile_of(target)
+    if rt_field(doc, "profile") != profile {
+        return rt_unfit("the runtime is the `" + rt_field(doc, "profile") + "` profile, and " + target + " links `" + profile + "`")
+    }
+    let have = strs_new()
+    if json_kind(doc, json_root(doc)) == "object" {
+        match json_get(doc, json_root(doc), "services") {
+            Some(a) => {
+                if json_kind(doc, a) == "array" {
+                    for i in 0..json_len(doc, a) {
+                        match json_at(doc, a, i) {
+                            Some(e) => { match json_str(doc, e) { Some(s) => { strs_push(have, s) }, None => {} } },
+                            None => {},
+                        }
+                    }
+                }
+            },
+            None => {},
+        }
+    }
+    for i in 0..strs_len(have) {
+        if !rt_has(rt_services(), strs_get(have, i)) {
+            return rt_unfit("the runtime manifest names a service this compiler does not know")
+        }
+    }
+    if has_needs && profile == "hosted" {
+        let missing = strs_new()
+        for n in rt_settle(needs) {
+            if !rt_has(have, n) { strs_push(missing, n) }
+        }
+        if strs_len(missing) > 0 {
+            return rt_unfit("the program reaches " + str_join(missing, ", ") + " of the runtime, which this artifact does not provide")
+        }
+    }
+    let archive = ut_join(dir, rt_archive_name())
+    let read_why = ut_read_error(io, archive, false)
+    if read_why != "" {
+        strs_push(out, "err")
+        strs_push(out, "3")
+        strs_push(out, "cannot read the runtime archive " + archive + ": " + read_why)
+        return out
+    }
+    let actual = blake3_hex(bytes_from_str(read_file(archive)))
+    if rt_field(doc, "archive") != actual {
+        return rt_unfit("the runtime archive's bytes are " + actual + ", and its manifest says " + rt_field(doc, "archive")
+                + ": it is not the archive that was built")
+    }
+    strs_push(out, "ok")
+    strs_push(out, archive)
+    strs_push(out, actual)
+    out
+}
+
+// An artifact that does not fit the request: status 1.
+fn rt_unfit(why: Str) -> Strs {
+    let out = strs_new()
+    strs_push(out, "err")
+    strs_push(out, "1")
+    strs_push(out, why)
+    out
+}

@@ -1,0 +1,354 @@
+// Static archives, written by Nazm itself (R8 slice 6: a port of `crates/nazm-cli/src/archive.rs` for the
+// objects of the targets that are kept: Mach-O, and COFF for Windows x86_64).
+//
+// The system's `ar` wrote them once. Apple's tools write the symbol index in a varying order, so the same objects
+// archived twice gave different bytes; so the archive is written here, from the objects' own symbol tables, and is a
+// function of the objects' bytes and names alone: no date, owner or mode of the machine, no tool's version.
+//
+// Two formats, chosen by the members:
+//
+// - Mach-O members: the BSD format Apple's `ld64` reads — every name `#1/N` with the name after the header, padded so
+//   each member's bytes start 8-byte aligned, and a first member `__.SYMDEF SORTED` whose index is sorted by symbol
+//   name, ties by member offset.
+// - COFF members: the GNU/System V format GNU `ld`, MinGW's `ld` and LLVM's linkers read — a first member `/`
+//   indexing the symbols in member order, a `//` table of the names longer than 15 bytes.
+//
+// An index holds each member's defined global symbols, read from its object's symbol table (Mach-O `nlist`, COFF's
+// symbol table). An ELF or WebAssembly member belongs to a target that is not built after the cut-over: refused.
+
+use "util.nz"
+
+fn ar_nl() -> Str { str_from_byte(10) }
+
+fn ar_zeros(n: Int) -> Str {
+    let parts = strs_new()
+    for _ in 0..n { strs_push(parts, str_from_byte(0)) }
+    str_join(parts, "")
+}
+
+fn ar_spaces(n: Int) -> Str {
+    let parts = strs_new()
+    for _ in 0..n { strs_push(parts, " ") }
+    str_join(parts, "")
+}
+
+fn ar_round_up(n: Int, to: Int) -> Int { ((n + to - 1) / to) * to }
+
+// The bytes of `n` as four, little endian or big endian.
+fn ar_le32(n: Int) -> Str {
+    str_from_byte(n % 256) + str_from_byte((n / 256) % 256) + str_from_byte((n / 65536) % 256) + str_from_byte((n / 16777216) % 256)
+}
+
+fn ar_be32(n: Int) -> Str {
+    str_from_byte((n / 16777216) % 256) + str_from_byte((n / 65536) % 256) + str_from_byte((n / 256) % 256) + str_from_byte(n % 256)
+}
+
+// What an object holds at `at`, little endian; -1 where it is cut short.
+fn ar_u8(d: Str, at: Int) -> Int { if at < 0 || at >= str_len(d) { 0 - 1 } else { str_byte(d, at) } }
+
+fn ar_u16(d: Str, at: Int) -> Int {
+    if at < 0 || at + 2 > str_len(d) { return 0 - 1 }
+    str_byte(d, at) + str_byte(d, at + 1) * 256
+}
+
+fn ar_u32(d: Str, at: Int) -> Int {
+    if at < 0 || at + 4 > str_len(d) { return 0 - 1 }
+    str_byte(d, at) + str_byte(d, at + 1) * 256 + str_byte(d, at + 2) * 65536 + str_byte(d, at + 3) * 16777216
+}
+
+// The NUL-terminated string at `at`; "" when there is none there.
+fn ar_cstring(d: Str, at: Int) -> Str {
+    if at < 0 || at >= str_len(d) { return "" }
+    let mut end = at
+    while end < str_len(d) && str_byte(d, end) != 0 { end += 1 }
+    str_slice(d, at, end)
+}
+
+// An object's format by its magic: "macho", "coff", "bigobj", or "".
+fn ar_format(d: Str) -> Str {
+    if str_len(d) < 4 { return "" }
+    let a = str_byte(d, 0)
+    let b = str_byte(d, 1)
+    let c = str_byte(d, 2)
+    let e = str_byte(d, 3)
+    if (a == 207 || a == 206) && b == 250 && c == 237 && e == 254 { return "macho" }
+    if a == 0 && b == 0 && c == 255 && e == 255 { return "bigobj" }
+    if (a == 100 && b == 134) || (a == 100 && b == 170) || (a == 65 && b == 166) || (a == 76 && b == 1) || (a == 196 && b == 1) { return "coff" }
+    ""
+}
+
+// A COFF object's `TimeDateStamp` zeroed (byte 4 of a header, byte 8 of a big-object's): LLVM writes the build's time there.
+fn ar_zero_coff_time(d: Str) -> Str {
+    let f = ar_format(d)
+    let at = if f == "coff" { 4 } else if f == "bigobj" { 8 } else { return d }
+    if at + 4 > str_len(d) { return d }
+    str_slice(d, 0, at) + ar_zeros(4) + str_slice(d, at + 4, str_len(d))
+}
+
+// Mach-O: each `nlist` that is external, not a debugging entry, and not undefined.
+fn ar_macho(d: Str) -> Result[Strs, Str] {
+    let out = strs_new()
+    let wide = ar_u32(d, 0) == 4277009103
+    let header = if wide { 32 } else { 28 }
+    let entry = if wide { 16 } else { 12 }
+    let commands = ar_u32(d, 16)
+    if commands < 0 { return Err("truncated at byte 16") }
+    let mut at = header
+    for _ in 0..commands {
+        let size = ar_u32(d, at + 4)
+        let cmd = ar_u32(d, at)
+        if size < 0 || cmd < 0 { return Err("truncated at byte " + int_to_str(at)) }
+        if cmd == 2 {
+            let symoff = ar_u32(d, at + 8)
+            let nsyms = ar_u32(d, at + 12)
+            let stroff = ar_u32(d, at + 16)
+            if symoff < 0 || nsyms < 0 || stroff < 0 { return Err("truncated at byte " + int_to_str(at + 8)) }
+            for i in 0..nsyms {
+                let e = symoff + i * entry
+                let kind = ar_u8(d, e + 4)
+                let name = ar_u32(d, e)
+                if kind < 0 || name < 0 { return Err("truncated at byte " + int_to_str(e)) }
+                if kind < 32 && kind % 2 == 1 && (kind / 2) % 8 != 0 {
+                    strs_push(out, ar_cstring(d, stroff + name))
+                }
+            }
+        }
+        if size == 0 { return Err("a load command of no size") }
+        at += size
+    }
+    Ok(out)
+}
+
+// COFF (and its big-object form): each external symbol that is defined or common, and each weak external.
+fn ar_coff(d: Str, big: Bool) -> Result[Strs, Str] {
+    let ptr = if big { ar_u32(d, 48) } else { ar_u32(d, 8) }
+    let count = if big { ar_u32(d, 52) } else { ar_u32(d, 12) }
+    let entry = if big { 20 } else { 18 }
+    if ptr < 0 || count < 0 { return Err("truncated at byte 8") }
+    let strings = ptr + count * entry
+    let out = strs_new()
+    let mut i = 0
+    while i < count {
+        let e = ptr + i * entry
+        let value = ar_u32(d, e + 8)
+        let section = if big { ar_u32(d, e + 12) } else { ar_u16(d, e + 12) }
+        let class = if big { ar_u8(d, e + 18) } else { ar_u8(d, e + 16) }
+        let aux = if big { ar_u8(d, e + 19) } else { ar_u8(d, e + 17) }
+        if value < 0 || section < 0 || class < 0 || aux < 0 { return Err("truncated at byte " + int_to_str(e)) }
+        if (class == 2 && (section != 0 || value != 0)) || class == 105 {
+            let short = str_slice(d, e, e + 8)
+            let name = if ar_u32(d, e) == 0 {
+                ar_cstring(d, strings + ar_u32(d, e + 4))
+            } else {
+                ar_cstring(short, 0)
+            }
+            strs_push(out, name)
+        }
+        i += 1 + aux
+    }
+    Ok(out)
+}
+
+fn ar_globals(d: Str) -> Result[Strs, Str] {
+    let f = ar_format(d)
+    if f == "macho" { return ar_macho(d) }
+    if f == "coff" { return ar_coff(d, false) }
+    if f == "bigobj" { return ar_coff(d, true) }
+    Err("not an object file nazm can index here (Mach-O or COFF)")
+}
+
+// `value` padded with spaces to `width`.
+fn ar_field(value: Str, width: Int) -> Str { value + ar_spaces(width - str_len(value)) }
+
+// A member's 60-byte header.
+fn ar_header(name: Str, mode: Str, size: Int) -> Str {
+    let date = if mode == "" { "" } else { "0" }
+    ar_field(name, 16) + ar_field(date, 12) + ar_field(date, 6) + ar_field(date, 6) + ar_field(mode, 8) + ar_field(int_to_str(size), 10) + "`" + ar_nl()
+}
+
+// Whether the name `a` is before `b` byte by byte (the order of Rust's `[u8]`).
+fn ar_less(a: Str, b: Str) -> Bool {
+    let n = if str_len(a) < str_len(b) { str_len(a) } else { str_len(b) }
+    for i in 0..n {
+        if str_byte(a, i) != str_byte(b, i) { return str_byte(a, i) < str_byte(b, i) }
+    }
+    str_len(a) < str_len(b)
+}
+
+// One member: its name in the archive, its bytes and its defined global symbols.
+struct Member {
+    name: Str,
+    data: Str,
+    symbols: Strs,
+}
+
+fn ar_symbol_total(ms: Vec[Member]) -> Int {
+    let mut n = 0
+    for i in 0..vec_len(ms) { n += strs_len(vec_get(ms, i).symbols) }
+    n
+}
+
+fn ar_strings_total(ms: Vec[Member]) -> Int {
+    let mut n = 0
+    for i in 0..vec_len(ms) {
+        let m = vec_get(ms, i)
+        for k in 0..strs_len(m.symbols) { n += str_len(strs_get(m.symbols, k)) + 1 }
+    }
+    n
+}
+
+// The BSD format, as Apple's `ld64` reads it.
+fn ar_bsd(ms: Vec[Member]) -> Str {
+    let symdef = "__.SYMDEF SORTED"
+    let count = ar_symbol_total(ms)
+    let strtab = ar_round_up(ar_strings_total(ms), 8)
+    let index = 4 + 8 * count + 4 + strtab
+    let offsets = ints_new()
+    let mut at = 8 + 60 + ar_round_up(str_len(symdef), 8) + 4 + index
+    for i in 0..vec_len(ms) {
+        let m = vec_get(ms, i)
+        ints_push(offsets, at)
+        at += 60 + ar_round_up(str_len(m.name), 8) + 4 + ar_round_up(str_len(m.data), 8)
+    }
+    // Sorted by name, ties by member offset: a total order of the archive's own contents.
+    let names = strs_new()
+    let offs = ints_new()
+    for i in 0..vec_len(ms) {
+        let m = vec_get(ms, i)
+        for k in 0..strs_len(m.symbols) {
+            let name = strs_get(m.symbols, k)
+            let off = ints_get(offsets, i)
+            let mut p = strs_len(names)
+            while p > 0 && (ar_less(name, strs_get(names, p - 1)) || (name == strs_get(names, p - 1) && off < ints_get(offs, p - 1))) { p -= 1 }
+            strs_push(names, "")
+            ints_push(offs, 0)
+            let mut j = strs_len(names) - 1
+            while j > p {
+                strs_set(names, j, strs_get(names, j - 1))
+                ints_set(offs, j, ints_get(offs, j - 1))
+                j -= 1
+            }
+            strs_set(names, p, name)
+            ints_set(offs, p, off)
+        }
+    }
+    let out = strs_new()
+    strs_push(out, "!<arch>" + ar_nl())
+    let symdef_long = ar_round_up(str_len(symdef), 8) + 4
+    strs_push(out, ar_header("#1/20", "100644", symdef_long + index))
+    strs_push(out, symdef + ar_zeros(symdef_long - str_len(symdef)))
+    strs_push(out, ar_le32(8 * count))
+    let mut strx = 0
+    for i in 0..strs_len(names) {
+        strs_push(out, ar_le32(strx))
+        strs_push(out, ar_le32(ints_get(offs, i)))
+        strx += str_len(strs_get(names, i)) + 1
+    }
+    strs_push(out, ar_le32(strtab))
+    let table = strs_new()
+    for i in 0..strs_len(names) {
+        strs_push(table, strs_get(names, i))
+        strs_push(table, str_from_byte(0))
+    }
+    let tabled = str_join(table, "")
+    strs_push(out, tabled + ar_zeros(strtab - str_len(tabled)))
+    for i in 0..vec_len(ms) {
+        let m = vec_get(ms, i)
+        let n = ar_round_up(str_len(m.name), 8) + 4
+        let padded = ar_round_up(str_len(m.data), 8)
+        strs_push(out, ar_header("#1/" + int_to_str(n), "644", n + padded))
+        strs_push(out, m.name + ar_zeros(n - str_len(m.name)))
+        strs_push(out, m.data + ar_zeros(padded - str_len(m.data)))
+    }
+    str_join(out, "")
+}
+
+fn ar_even(n: Int) -> Int { ar_round_up(n, 2) }
+
+// The GNU/System V format, as GNU `ld`, MinGW's `ld` and LLVM's linkers read it.
+fn ar_gnu(ms: Vec[Member]) -> Str {
+    let table = strs_new()
+    let mut table_len = 0
+    let names = strs_new()
+    for i in 0..vec_len(ms) {
+        let m = vec_get(ms, i)
+        if str_len(m.name) <= 15 && !ut_contains(m.name, "/") {
+            strs_push(names, m.name + "/")
+        } else {
+            strs_push(names, "/" + int_to_str(table_len))
+            strs_push(table, m.name + "/" + ar_nl())
+            table_len += str_len(m.name) + 2
+        }
+    }
+    let count = ar_symbol_total(ms)
+    let index = 4 + 4 * count + ar_strings_total(ms)
+    let mut at = 8 + 60 + ar_even(index)
+    if table_len > 0 { at += 60 + ar_even(table_len) }
+    let offsets = ints_new()
+    for i in 0..vec_len(ms) {
+        ints_push(offsets, at)
+        at += 60 + ar_even(str_len(vec_get(ms, i).data))
+    }
+    let out = strs_new()
+    strs_push(out, "!<arch>" + ar_nl())
+    strs_push(out, ar_header("/", "0", index))
+    strs_push(out, ar_be32(count))
+    for i in 0..vec_len(ms) {
+        for _ in 0..strs_len(vec_get(ms, i).symbols) { strs_push(out, ar_be32(ints_get(offsets, i))) }
+    }
+    for i in 0..vec_len(ms) {
+        let m = vec_get(ms, i)
+        for k in 0..strs_len(m.symbols) {
+            strs_push(out, strs_get(m.symbols, k))
+            strs_push(out, str_from_byte(0))
+        }
+    }
+    if index % 2 == 1 { strs_push(out, ar_nl()) }
+    if table_len > 0 {
+        strs_push(out, ar_header("//", "", table_len))
+        strs_push(out, str_join(table, ""))
+        if table_len % 2 == 1 { strs_push(out, ar_nl()) }
+    }
+    for i in 0..vec_len(ms) {
+        let m = vec_get(ms, i)
+        strs_push(out, ar_header(strs_get(names, i), "644", str_len(m.data)))
+        strs_push(out, m.data)
+        if str_len(m.data) % 2 == 1 { strs_push(out, ar_nl()) }
+    }
+    str_join(out, "")
+}
+
+// The archive of the objects `datas` named `names`, in order.
+pub fn ar_archive(names: Strs, datas: Strs) -> Result[Str, Str] {
+    let ms: Vec[Member] = vec_new()
+    let mut macho = false
+    for i in 0..strs_len(names) {
+        let name = strs_get(names, i)
+        let data = ar_zero_coff_time(strs_get(datas, i))
+        if ar_format(data) == "macho" { macho = true }
+        match ar_globals(data) {
+            Ok(symbols) => { vec_push(ms, Member(name: name, data: data, symbols: symbols)) },
+            Err(e) => { return Err("cannot read the symbols of `" + name + "`: " + e) },
+        }
+    }
+    Ok(if macho { ar_bsd(ms) } else { ar_gnu(ms) })
+}
+
+// `crate::archive::write`: the objects at `paths`, in order, as the archive at `output`; "" or why not.
+pub fn ar_write(io: IoCap, output: Str, paths: Strs) -> Str {
+    let names = strs_new()
+    let datas = strs_new()
+    for i in 0..strs_len(paths) {
+        let p = strs_get(paths, i)
+        if ut_kind(io, p) != 0 { return "cannot read " + p + ": No such file or directory (os error 2)" }
+        strs_push(names, ut_file_name(p))
+        strs_push(datas, read_file(p))
+    }
+    match ar_archive(names, datas) {
+        Ok(bytes) => {
+            if write_file(output, bytes) < 0 { return "cannot write " + output + ": could not write" }
+            ""
+        },
+        Err(e) => e,
+    }
+}

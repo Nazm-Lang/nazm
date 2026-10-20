@@ -42,6 +42,12 @@
 //     pipeline llvm-put TOOL CONFIG DIR ROOT NAME [ROOT NAME]...
 //                                  each unit's object DIR/NAME.o filed under ROOT by its unit's key:
 //                                  `stored NAME`, or `failed NAME`
+//     pipeline runtime-abi         print the runtime's ABI revision and digest
+//     pipeline runtime-artifact DIR
+//                                  for `nazm runtime build` (R8 slice 6): the hosted runtime's text for the
+//                                  target, `DIR/runtime.ll`, and its per-target units (`switch`, `errno`, `os`,
+//                                  `stack`, `tls`, `init`) as `DIR/NAME.ll`; `text DIGEST` (the manifest's), then
+//                                  `unit NAME` for each unit but the runtime's and `services` and its names
 //     pipeline entry-check ROOT KEY
 //                                  the entry filed under KEY, broken one way at a time: what the
 //                                  store's reader says of each
@@ -61,6 +67,7 @@ use "lir.nz"
 use "ops.nz"
 use "rtgen.nz"
 use "objcache.nz"
+use "rtext.nz"
 use "mir.nz"
 use "vectorize.nz"
 use "llvm.nz"
@@ -125,6 +132,13 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
     }
     let args = strs_new()
     for i in from..strs_len(given) { strs_push(args, strs_get(given, i)) }
+    if strs_len(args) == 1 && strs_get(args, 0) == "runtime-abi" {
+        print(int_to_str(rt_abi_revision()) + " " + runtime_digest() + nl())
+        return 0
+    }
+    if strs_len(args) == 2 && strs_get(args, 0) == "runtime-artifact" {
+        return runtime_artifact(io, v, target, strs_get(args, 1))
+    }
     if strs_len(args) == 1 && strs_get(args, 0) == "runtime-digest" {
         print(runtime_digest() + "\n")
         return 0
@@ -585,6 +599,62 @@ fn put(io: IoCap, v: VouchCap, target: Str, store: Str, generator: Str, dir: Str
         }
     }
     if bad == 0 { 0 } else { 1 }
+}
+
+/// `pipeline runtime-artifact` (R8 slice 6): the texts `nazm runtime build` compiles for a hosted target
+/// (`Profile::text`, and the units the archive carries beside it).
+fn runtime_artifact(io: IoCap, v: VouchCap, target: Str, dir: Str) -> Int ! { io } {
+    let t = switch_target(target)
+    if t == "" {
+        eprint("pipeline: no hosted runtime for " + target + nl())
+        return 1
+    }
+    let engine = emit_tls(t)
+    let all = Needs(
+        tasks: true, channels: true, sequences: true, io: true, join: true, strings: true,
+        shims: true, stack: true, closures: true, foreign: true, numbers: true, files: true,
+        net: true, wide: true, tls: engine != "", single: false,
+    )
+    let mut text = emit_runtime(all)
+    // Windows' C library: MinGW's own `snprintf` and `strtod` (`c_library_for`).
+    if target == "x86_64-pc-windows-gnu" { text = text_replace(text_replace(text, "@snprintf(", "@__mingw_snprintf("), "@strtod(", "@__mingw_strtod(") }
+    let switch = emit_switch(t)
+    let errno = emit_errno(t)
+    let units = strs_new()
+    let names = strs_new()
+    strs_push(names, "switch")
+    strs_push(units, switch)
+    strs_push(names, "errno")
+    strs_push(units, errno)
+    strs_push(names, "os")
+    strs_push(units, emit_os(t))
+    strs_push(names, "stack")
+    strs_push(units, emit_stack(t))
+    if engine != "" {
+        strs_push(names, "tls")
+        strs_push(units, engine)
+    }
+    let init = emit_init(t)
+    if init != "" {
+        strs_push(names, "init")
+        strs_push(units, init)
+    }
+    if write_file(str_vouch(dir + "/runtime.ll"), text) < 0 {
+        eprint("pipeline: cannot write " + dir + "/runtime.ll" + nl())
+        return 1
+    }
+    let out = strs_new()
+    strs_push(out, "text " + blake3_hex(bytes_from_str(text + switch + errno)))
+    for i in 0..strs_len(names) {
+        if write_file(str_vouch(dir + "/" + strs_get(names, i) + ".ll"), strs_get(units, i)) < 0 {
+            eprint("pipeline: cannot write " + dir + "/" + strs_get(names, i) + ".ll" + nl())
+            return 1
+        }
+        strs_push(out, "unit " + strs_get(names, i))
+    }
+    strs_push(out, "services " + str_join(needs_names(all), " "))
+    print(str_join(out, nl()) + nl())
+    0
 }
 
 /// `pipeline llvm-get` and `llvm-put` (R8 slice 6): the LLVM units' objects, looked up in the object stores

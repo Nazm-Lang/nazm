@@ -387,6 +387,8 @@ if [ "$PART" = all ] || [ "$PART" = args ]; then
         k=0
         while IFS= read -r line; do
             case $line in '#'* | '') continue ;; esac
+            # BUILD_FILTER=REGEX runs only the lines it matches.
+            if [ -n "${BUILD_FILTER:-}" ] && ! echo "$line" | grep -Eq "$BUILD_FILTER"; then continue; fi
             k=$((k + 1))
             W=$OUT/work/args.$k
             rm -rf "$W"
