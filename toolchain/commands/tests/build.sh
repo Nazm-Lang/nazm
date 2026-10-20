@@ -287,6 +287,10 @@ for src in "${inputs[@]}"; do
             lib) args=(--lib -o libx.a); backend=() ;;
             lib-shared) args=(--lib --shared -o libx.dylib); backend=() ;;
             lib-objects) args=(--lib --objects objs); backend=() ;;
+            lib-ir) args=(--lib --emit-ir -o libx.a); backend=() ;;
+            lib-windows) args=(--lib --target x86_64-pc-windows-gnu -o libx.a); backend=() ;;
+            lib-x86) args=(--lib --target x86_64-apple-darwin -o libx.a); backend=() ;;
+            lib-nazm) args=(--lib -o libx.a) ;;
             rtlink) args=(--runtime "$OUT/rt" -o prog); backend=() ;;
             prov) args=(--provenance p.json --sbom s.json -o prog); backend=() ;;
             prov-sign) args=(--provenance p.json --attest-with cat -o prog); backend=() ;;

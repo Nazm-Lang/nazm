@@ -429,6 +429,29 @@ Group 2 of `build`'s flags on the default backend: `--backend llvm` (now the def
   slice 4's six modes again: see `tasks.md` 5.1.
 - **The self-build on the LLVM backend**: see `tasks.md` 5.3.
 
+## Slice 6 — the rest of `build` (2026-10-20)
+
+Group 3 of `build`'s flags, the forms of the command line, and `nazm runtime build` and `verify`, for the kept
+targets. The Rust `build` is the oracle, as in slices 4 and 5; `toolchain/commands/tests/build.sh` compares
+every mode below, and its `args` part (`tests/args/build.txt`) every command line.
+
+- **Where it lives.** `buildcli.nz` declares the arguments as `cli.rs` does, with clap's help text, and reads them
+  through `cli.nz` (extended with possible values, hidden arguments, the `u8` and size value parsers and clap's
+  required-set ordering of a usage line). `build.nz` is the driver: `bd_prepare` (a package's directory is its
+  `main`, `--locked`, the profiles), `bd_preflight` (`preflight`'s checks in the Rust build's order and words),
+  the front end, the stages, `--build-report`, `--summary-json`, `--timings`, `--lib`, `--runtime`, and
+  `runtime build|verify`. `archive.nz` is `archive.rs` for Mach-O and COFF members, `buildrt.nz` the runtime
+  artifact's `fits`, `buildprov.nz` `provenance.rs` and the SBOM. The pipeline gained `--lib`, `--prebuilt`,
+  `llvm-get`, `llvm-put`, `runtime-abi`, `runtime-artifact`, and the plan's `needs`, `shared` and `export` lines.
+- **The object stores.** Every LLVM unit is looked up and filed under R3's keys through the `clang -###` probe,
+  the runtime's and the standard modules' units in the user cache, the rest in the project's store; a
+  whole-program link names the linker's cache `STORE/lto`. The report's `reused` and `stored` agree with the Rust
+  build's (`report-cached`). Not carried: the relink cache (`link/`).
+- **Not carried, by name (status 6):** the targets the cut-over removes where the Rust build would go on to build
+  them, `--backend cranelift`, `--harness` (slice 7), a restriction profile other than `general`, a manifest's
+  `heap-limit`, `[features]` and registry dependencies (the front end reads none), a runtime manifest that is not
+  JSON. Where the Rust build refuses, so does this one, in its words (`decisions-log.md`).
+
 ## Slice 1 — the evidence
 
 - The checkout's `nazm check` of `toolchain/interp/main.nz` and `toolchain/harness/check/main.nz`:
