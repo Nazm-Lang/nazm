@@ -42,7 +42,11 @@ use "buildcli.nz"
 use "cli.nz"
 use "summary.nz"
 use "lockcheck.nz"
+use "group.nz"
+use "archive.nz"
+use "buildrt.nz"
 use "@std/file"
+use "@std/blake3"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -1203,6 +1207,155 @@ fn bd_llvm_objects(io: IoCap, o: Opts, proc: ProcessCap, sp: SpawnCap, pipeline:
     0
 }
 
+// --- `nazm runtime build` and `nazm runtime verify` ------------------------------------------------------------------
+
+// The runtime's ABI revision and digest, asked of the pipeline: `[REVISION, DIGEST]`.
+fn bd_runtime_abi(io: IoCap, o: Opts, proc: ProcessCap, sp: SpawnCap) -> Strs {
+    let pipeline = bd_stage(io, o, "NAZM_PIPELINE", "nazm-pipeline")
+    let limit = bd_check_stage(io, o, pipeline, "nazm-pipeline")
+    let r = bd_stage_run(io, o, proc, sp, pipeline, limit, text_split_spaces("runtime-abi"))
+    let words = text_split_spaces(ut_trim(r.out))
+    if !r.started || r.status != 0 || strs_len(words) != 2 {
+        bd_fail(io, o, "nazm: the runtime's identity could not be read from `" + pipeline + "`", 4)
+    }
+    words
+}
+
+// The target `target_of` reads: the host's, or the triple given; the refusal, in the Rust build's words.
+fn rt_target(io: IoCap, c: Cli, at: Int) -> Str {
+    let given = cli_present(c, at)
+    let t = if given { cli_value(c, at) } else { bd_host() }
+    if !bd_known(t) {
+        eprint("nazm: " + bd_unknown_target(t) + nl())
+        exit_with(if given { 5 } else { 4 })
+    }
+    t
+}
+
+fn rt_refuse(io: IoCap, why: Str, code: Int) -> Int {
+    eprint("nazm: " + why + nl())
+    exit_with(code)
+    0
+}
+
+// `nazm runtime build`: the whole runtime for one target and profile compiled into `OUT/libnazmrt.a` with its manifest.
+fn runtime_build(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let o = bo_default()
+    let target = rt_target(io, c, 0)
+    let opt = bo_size(cli_value(c, 2))
+    let out = cli_value(c, 3)
+    // A `--profile` that is not this target's, or not a profile: the command line's.
+    let own = rt_profile_of(target)
+    let mut profile = own
+    if cli_present(c, 1) {
+        let p = cli_value(c, 1)
+        if p != "hosted" && p != "board" && p != "wasm" {
+            rt_refuse(io, "`" + p + "` is not a runtime profile; the profiles are hosted, board and wasm", 5)
+        }
+        if p != own { rt_refuse(io, "`" + target + "` links the `" + own + "` runtime, not `" + p + "`", 5) }
+        profile = p
+    }
+    if profile != "hosted" || !bd_carried(io, target) {
+        bd_refuse(io, o, "`nazm runtime build` for `" + target + "` (Nazm builds the runtime for aarch64-apple-darwin, x86_64-apple-darwin and x86_64-pc-windows-gnu; Linux, WebAssembly, WASI, Android, iOS and the boards are not built after the cut-over)")
+    }
+    let why = strs_new()
+    if !ut_make_dirs(io, out, why) { rt_refuse(io, "cannot create " + out + ": " + str_join(why, ""), 4) }
+    // The working files live beside the artifact, and go when it is written.
+    let work = ut_join(out, ".nazm-runtime-work")
+    if !ut_make_dirs(io, work, why) { rt_refuse(io, "cannot create " + work + ": " + str_join(why, ""), 4) }
+    let pipeline = bd_stage(io, o, "NAZM_PIPELINE", "nazm-pipeline")
+    let limit = bd_check_stage(io, o, pipeline, "nazm-pipeline")
+    let pargs = strs_new()
+    strs_push(pargs, "--target")
+    strs_push(pargs, target)
+    strs_push(pargs, "runtime-artifact")
+    strs_push(pargs, work)
+    let pr = bd_stage_run(io, o, proc, sp, pipeline, limit, pargs)
+    if !pr.started || pr.status != 0 {
+        bd_remove(io, work)
+        rt_refuse(io, "the runtime's text could not be made: " + ut_trim_end(pr.err), 4)
+    }
+    let mut text_digest = ""
+    let mut services = strs_new()
+    let units = strs_new()
+    for line in text_split(pr.out, nl()) {
+        if ut_starts(line, "text ") { text_digest = str_slice(line, 5, str_len(line)) }
+        if ut_starts(line, "unit ") { strs_push(units, str_slice(line, 5, str_len(line))) }
+        if ut_starts(line, "services ") { services = text_split_spaces(str_slice(line, 9, str_len(line))) }
+    }
+    let host = bd_host()
+    let cross = if target == host { "" } else { target }
+    let env = bd_passed(io)
+    // Every unit by clang, as `Backend::compile` does: the per-target ones first, then the runtime.
+    let members = strs_new()
+    strs_push(members, work + "/runtime.o")
+    for i in 0..strs_len(units) {
+        let name = strs_get(units, i)
+        let r = bd_compile(io, proc, sp, opt, target, cross, false, work + "/" + name + ".ll", work + "/" + name + ".o", env)
+        if !r.started || r.status != 0 {
+            bd_remove(io, work)
+            rt_refuse(io, "the toolchain refused the runtime's `" + name + "` unit", 4)
+        }
+        strs_push(members, work + "/" + name + ".o")
+    }
+    let r = bd_compile(io, proc, sp, opt, target, cross, false, work + "/runtime.ll", work + "/runtime.o", env)
+    if !r.started {
+        bd_remove(io, work)
+        rt_refuse(io, "`clang` was not found", 4)
+    }
+    if r.status != 0 {
+        bd_remove(io, work)
+        rt_refuse(io, "the toolchain refused the runtime: " + ut_trim(r.err), 4)
+    }
+    let archive = ut_join(out, rt_archive_name())
+    os_unlink(archive)
+    // Written by nazm itself, not the system's `ar`: the same objects archive to the same bytes.
+    let said = ar_write(io, archive, members)
+    if said != "" {
+        bd_remove(io, work)
+        rt_refuse(io, "the runtime was not archived: " + said, 4)
+    }
+    let digest = blake3_hex(bytes_from_str(read_file(archive)))
+    let abi = bd_runtime_abi(io, o, proc, sp)
+    let version = bd_run(io, proc, sp, "clang", text_split_spaces("--version"), true, strs_new())
+    let toolchain = if version.started && str_len(version.out) > 0 { strs_get(text_split(version.out, nl()), 0) } else { "unknown" }
+    let names = strs_new()
+    for i in 0..strs_len(services) { strs_push(names, "\"" + strs_get(services, i) + "\"") }
+    let manifest = "{\"abi\":" + strs_get(abi, 0) + ",\"archive\":\"" + digest + "\",\"opt_level\":" + int_to_str(opt) + ",\"profile\":\"" + profile
+            + "\",\"runtime\":\"" + strs_get(abi, 1) + "\",\"schema\":\"" + rt_schema() + "\",\"services\":[" + str_join(names, ",") + "],\"target\":\"" + target
+            + "\",\"text\":\"" + text_digest + "\",\"toolchain\":" + bd_json_str(toolchain) + "}" + nl()
+    if write_file(ut_join(out, rt_manifest_name()), manifest) < 0 {
+        bd_remove(io, work)
+        rt_refuse(io, "cannot write the manifest: could not write", 4)
+    }
+    print("nazm: built the " + profile + " runtime for " + target + " into " + archive + nl())
+    bd_remove(io, work)
+    0
+}
+
+// `nazm runtime verify`: the artifact in DIR is whole and fits this compiler and the target.
+fn runtime_verify(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let o = bo_default()
+    let dir = cli_value(c, 0)
+    let target = rt_target(io, c, 1)
+    let abi = bd_runtime_abi(io, o, proc, sp)
+    let fit = rt_fits(io, dir, target, bo_size(strs_get(abi, 0)), strs_get(abi, 1), strs_new(), false)
+    if strs_get(fit, 0) == "refused" { bd_refuse(io, o, strs_get(fit, 1)) }
+    if strs_get(fit, 0) == "err" { rt_refuse(io, strs_get(fit, 2), bo_size(strs_get(fit, 1))) }
+    print("nazm: the runtime at " + dir + " fits this compiler for " + target + " (archive " + strs_get(fit, 2) + ")" + nl())
+    0
+}
+
+// `nazm runtime`, the group's own commands read from the argument after its name.
+pub fn runtime_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, g: Group) -> Int {
+    let i = grp_route(io, g, 1)
+    let c = grp_kid(g, i)
+    cli_from(c, 2)
+    if i == 0 { runtime_build(io, proc, sp, c) } else { runtime_verify(io, proc, sp, c) }
+}
+
 // `nazm.build-report/1` (`timing::report`), one object: what was compiled, and what was reused.
 fn bd_report(how: Str, modules: Int, units: Int, compiled: Int, reused: Int, rejected: Int, stored: Int, instances: Int,
         instances_compiled: Int, instances_reused: Int, linked: Bool) -> Str {
@@ -1243,7 +1396,6 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, c: 
     let llvm = o.backend == "llvm"
     if !llvm && o.debug { bd_refuse(io, o, "`nazm build --debug` with `--backend nazm` (debug information is the LLVM backend's here)") }
     if o.lib { bd_refuse(io, o, "`nazm build --lib`") }
-    if o.has_runtime { bd_refuse(io, o, "`nazm build --runtime`") }
     if o.has_provenance || o.has_sbom { bd_refuse(io, o, "`nazm build --provenance` and `--sbom`") }
     let pipeline = bd_stage(io, o, "NAZM_PIPELINE", "nazm-pipeline")
     let nzcg = if llvm { "" } else { bd_stage(io, o, "NAZM_NZCG", "nzcg") }
@@ -1275,6 +1427,8 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, c: 
     if llvm && o.release { strs_push(pargs, "--release") }
     // A foreign object may free what the program allocated: C's allocator stays.
     if strs_len(o.links) > 0 { strs_push(pargs, "--no-small") }
+    // A runtime artifact is linked instead of a generated runtime: the program's units keep the failure state per thread.
+    if o.has_runtime { strs_push(pargs, "--prebuilt") }
     strs_push(pargs, "build")
     strs_push(pargs, work + "/core.json")
     strs_push(pargs, work)
@@ -1300,6 +1454,22 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, c: 
     let tls = strs_get(bd_plan(plan, "tls"), 0) == "yes"
     let foreign = bd_plan(plan, "foreign")
     let cached = bd_plan(plan, "cached")
+    // A runtime artifact (N82) is checked against this compiler, the target and everything the program reached before any
+    // file is written: refused by name, never replaced by a generated runtime.
+    let mut prebuilt = ""
+    if o.has_runtime {
+        let abi = bd_runtime_abi(io, o, proc, sp)
+        let fit = rt_fits(io, o.runtime, target, bo_size(strs_get(abi, 0)), strs_get(abi, 1), text_split_spaces(strs_get(bd_plan(plan, "needs"), 0)), true)
+        if strs_get(fit, 0) == "refused" {
+            bd_remove(io, work)
+            bd_refuse(io, o, strs_get(fit, 1))
+        }
+        if strs_get(fit, 0) == "err" {
+            bd_remove(io, work)
+            bd_fail(io, o, "nazm: " + strs_get(fit, 2), bo_size(strs_get(fit, 1)))
+        }
+        prebuilt = strs_get(fit, 1)
+    }
     let missed = strs_new()
     for k in 0..strs_len(units) {
         let mut hit = false
@@ -1363,6 +1533,8 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, c: 
         strs_push(llvm_names, name)
         strs_push(objects, work + "/" + name + ".o")
     }
+    // The runtime artifact after every object that calls it, and before the foreign inputs.
+    if prebuilt != "" { strs_push(objects, prebuilt) }
     // Every unit of the runtime but the entry is every project's.
     let shared = bd_plan(plan, "shared")
     for i in 0..strs_len(runtime) {

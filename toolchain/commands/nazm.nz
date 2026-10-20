@@ -272,6 +272,7 @@ fn help_command(io: IoCap, k: Int) -> Int {
                 + nl() + nl() + "Arguments:" + nl() + "  [COMMAND]...  Print help for the subcommand(s)" + nl())
     }
     if name == "patch" { return grp_help_command(io, patch_group(), k + 1) }
+    if name == "runtime" { return grp_help_command(io, runtime_group(), k + 1) }
     if name == "attest" { return grp_help_command(io, attest_group(), k + 1) }
     let c = command_cli(name)
     if c.name == "" { not_carried(io, "nazm help " + name) }
@@ -331,6 +332,7 @@ fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, tm: TimeCap) -> 
     if !is_command(s) { unrecognized(io, s, true) }
     if s == "help" { return help_command(io, 1) }
     if s == "patch" { return patch_command(io, patch_group()) }
+    if s == "runtime" { return runtime_command(io, proc, sp, runtime_group()) }
     if s == "attest" { return attest_command(io, proc, sp, v, attest_group()) }
     let c = command_cli(s)
     if c.name == "" { not_carried(io, "nazm " + s) }
