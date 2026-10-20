@@ -1,4 +1,5 @@
-# `nazm run`'s command lines, run from the repository's root by `tests/interactive.sh args`.
+# `nazm run`'s command lines, run from the repository's root by `tests/interactive.sh args`. A line marked `@contained` may
+# reach a compiled build, which runs without a heap limit: it runs contained only.
 --help
 -h
 (none)
@@ -44,13 +45,15 @@
 --interpret --harness test:t:1 examples/max.nz
 --interpret --harness test:absent examples/max.nz
 --interpret --json --harness test:absent examples/max.nz
---harness test:absent examples/max.nz
---harness bogus examples/max.nz
+@contained --harness test:absent examples/max.nz
+@contained --harness bogus examples/max.nz
 --profile general --interpret examples/max.nz
 --profile bogus --interpret examples/max.nz
 --features x --interpret examples/max.nz
 --features=a,b --interpret examples/max.nz
--- examples/max.nz
+@contained -- examples/max.nz
+@contained --harness test:t examples/max.nz
+@contained --json --harness test:absent examples/max.nz
 examples/max.nz --interpret -- --json
 examples/max.nz --json --interpret
 examples/max.nz extra --interpret

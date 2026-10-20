@@ -11,6 +11,7 @@ use "vm.nz"
 use "heap.nz"
 use "diag.nz"
 use "sched.nz"
+use "num.nz"
 use "@std/hash"
 use "@std/hashmap"
 
@@ -154,13 +155,52 @@ fn sched_line(h: Heap) -> Str {
     f"nazm-sched: spawned={spawned} joined={joined} selects={selects} timeouts={timeouts}" + nl()
 }
 
-/// `main`'s value, as `nazm run` ends with it (`interpret.rs`, `end_with_result`).
-pub fn ie_show(v: V) -> Str {
+/// A value as the reference's `Display` writes it (`eval/value.rs`): a number, a `Bool` and a `Str` in full; anything else says what
+/// it is — `record(2 fields)`, `variant 1(1 fields)`, `array(3 elements)`, `Vec(4 items)`, `Bytes(8 bytes)` — and does not dump it.
+pub fn ie_show(h: Heap, v: V) -> Str {
     match v {
         V.Int(v: x) => int_to_str(x),
         V.Bool(v: b) => if b { "true" } else { "false" },
         V.Str(s: s, obj: o, start: st) => s,
-        _ => "value",
+        V.Num(kind: k, v: x) => text(v),
+        V.Flt(kind: k, v: x) => text(v),
+        V.Arr(items: xs) => f"array({chain_len(xs)} elements)",
+        V.Rec(def: d, obj: o) => {
+            let n = if o > 0 { vec_len(fields_of(h, o)) } else { 0 }
+            f"record({n} fields)"
+        },
+        V.Enm(def: d, variant: k, obj: o) => {
+            let n = if o > 0 { vec_len(fields_of(h, o)) } else { 0 }
+            f"variant {k}({n} fields)"
+        },
+        V.Ref(obj: o) => {
+            let kind = ints_get(h.kind, o)
+            if kind == K_SEQ {
+                let n = vec_len(items(h, o))
+                f"Vec({n} items)"
+            } else if kind == K_CHAN {
+                "Chan"
+            } else if kind == K_FUNC {
+                let n = vec_len(items(h, o))
+                f"function value({n} carried)"
+            } else if kind == K_SEL {
+                "Select"
+            } else if kind == K_ATOMIC {
+                "Atomic"
+            } else if kind == K_HANDLE {
+                "OsHandle"
+            } else {
+                "value"
+            }
+        },
+        V.Byt(b: b, obj: o) => {
+            let n = bytes_len(b)
+            f"Bytes({n} bytes)"
+        },
+        V.Osh(h: x, sock: k) => "OsHandle",
+        V.Atm(a: a) => "Atomic",
+        V.Cap(kind: k) => "Cap",
+        V.Unset => "value",
     }
 }
 
@@ -202,7 +242,7 @@ pub fn interp_exec(doc: Str, root: Str, std: Str, over: Str, has_over: Bool, max
         V.Int(v: x) => true,
         _ => false,
     }
-    IeRun(kind: 0, is_int: is_int, code: code, value: ie_show(result), diag: "", memory: memory, sched: sched)
+    IeRun(kind: 0, is_int: is_int, code: code, value: ie_show(vm.heap, result), diag: "", memory: memory, sched: sched)
 }
 
 /// `nazm run --interpret` after the front end: the run and what it writes, as `interp/main.nz` always
@@ -269,5 +309,5 @@ pub fn interp_constant(doc: Str, root: Str, std: Str, max_iterations: Int, max_d
     if ran == 2 { return Err("interp: every task is waiting and none can proceed" + nl()) }
     if failed(vm) { return Err(report(io, p, vm, root, std, "", false, false)) }
     let result = if vec_len(vm.res) > 0 { vec_get(vm.res, 0) } else { V.Unset }
-    Ok(ie_show(result))
+    Ok(ie_show(vm.heap, result))
 }

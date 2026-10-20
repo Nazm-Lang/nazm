@@ -92,6 +92,8 @@ pub fn run_command(io: IoCap, out: OutCap, time: TimeCap, net: NetCap, proc: Pro
     o.run = true
     o.backend = "nazm"
     o.run_args = cli_values(c, 1)
+    o.has_harness = cli_present(c, 8)
+    o.harness = cli_value(c, 8)
     let stem = ut_stem(o.file)
     let tmp = os_env_get("TMPDIR")
     o.out = (if tmp == "" { "/tmp" } else { tmp }) + "/" + (if stem == "" { "program" } else { stem })

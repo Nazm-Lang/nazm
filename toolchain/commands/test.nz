@@ -9,9 +9,10 @@
 // --interpret` and as a `nazm build` executable, and the report, the `--json` objects and the
 // `nazm.test-summary/1` line are the reference's, byte for byte.
 //
-// The two legs are another `nazm`'s to run — the port carries neither `run` nor `build` — so the
-// command starts the one `NAZM_TEST_DRIVER` names (the reference's own seam, `test.rs`, `DRIVER`);
-// without it the command says so and exits 6 (design D5).
+// The two legs are another `nazm`'s to run: `nazm run --interpret` and `nazm build` (the reference's own seam is
+// `NAZM_TEST_DRIVER`, `test.rs`, `DRIVER`). Without it the driver is this executable (`own_path`: `arg(0)` is the first argument,
+// never the program's name, so `/proc/self/exe` or the path `ps` reports for this process is read), as the reference's is
+// `current_exe()`.
 
 use "@std/file"
 use "../../compiler/syntax.nz"
