@@ -1,0 +1,1421 @@
+// LIR as LLVM IR text (R8 slice 5): the LLVM backend's whole job, in Nazm — a port of
+// `crates/nazm-lir/src/op/llvm.rs` over a unit's instruction text (`ops.nz`'s, what `nazm lir
+// --ops` prints, with the names of the variables and slots beside their declarations as
+// `lir_texts_with` writes them for this).
+//
+// Each LIR instruction is the LLVM instruction it names; each variable and each slot an `alloca`
+// in the entry block, which LLVM's own promotion turns into registers. Nothing here decides
+// anything a program can observe. How a failure crosses a call is the target's: the failure bit
+// returned beside the result, or a forced unwind (`unwind`).
+//
+// The names are `ll_` throughout: every file of the pipeline shares one namespace.
+
+use "rtext.nz"
+use "@std/text"
+use "@std/hashmap"
+
+fn ll_nl() -> Str { str_from_byte(10) }
+
+fn ll_w(out: Strs, line: Str) { strs_push(out, line + ll_nl()) }
+
+// --- classes --------------------------------------------------------------------------------------
+
+fn ll_ty(c: Str) -> Str {
+    if c == "bit" { return "i1" }
+    if c == "f32" { return "float" }
+    if c == "f64" { return "double" }
+    c
+}
+
+// An `I128`'s explicit alignment: the layout gives it 8, less than LLVM's own.
+fn ll_align(c: Str) -> Str {
+    if c == "i128" { ", align 8" } else { "" }
+}
+
+// A parameter's or result's type in a signature: C's `bool` is zero-extended.
+fn ll_sig_ty(c: Str, conv: Str, result: Bool) -> Str {
+    if c == "bit" && conv == "c" {
+        if result { return "zeroext i1" }
+        return "i1 zeroext"
+    }
+    ll_ty(c)
+}
+
+// A function's LLVM result: a Nazm function's failure bit beside its result, as a first-class pair,
+// or alone where there is no result. Where failures unwind, the result alone.
+fn ll_ret_ty(ret: Str, conv: Str, unwind: Bool) -> Str {
+    let bit = conv == "nazm" && !unwind
+    if ret != "" {
+        if bit { return "{" + ll_ty(ret) + ", i1}" }
+        return ll_sig_ty(ret, conv, true)
+    }
+    if bit { "i1" } else { "void" }
+}
+
+// --- numbers ---------------------------------------------------------------------------------------
+
+fn ll_hex_digit(d: Int) -> Str {
+    str_slice("0123456789ABCDEF", d, d + 1)
+}
+
+// 64 bits as sixteen uppercase hexadecimal digits.
+fn ll_hex16(x: Int) -> Str {
+    let out = strs_new()
+    let mut k = 15
+    while k >= 0 {
+        strs_push(out, ll_hex_digit((x >> (4 * k)) & 15))
+        k -= 1
+    }
+    str_join(out, "")
+}
+
+// The low 64 bits of a decimal integer of up to 128 bits, as its two's complement.
+fn ll_low64(s: Str) -> Int {
+    let n = str_len(s)
+    if n == 0 { return 0 }
+    let neg = str_byte(s, 0) == 45
+    let mut i = if neg { 1 } else { 0 }
+    let limbs = ints_new()
+    ints_push(limbs, 0)
+    ints_push(limbs, 0)
+    while i < n {
+        let d = str_byte(s, i) - 48
+        if d < 0 || d > 9 { return 0 }
+        let mut carry = d
+        let mut k = 0
+        while k < 2 {
+            let t = limbs[k] * 10 + carry
+            limbs[k] = t & 0xFFFFFFFF
+            carry = t >> 32
+            k += 1
+        }
+        i += 1
+    }
+    let lo = limbs[0] | (limbs[1] << 32)
+    if neg { wrapping_add(~lo, 1) } else { lo }
+}
+
+fn ll_is_zero(s: Str) -> Bool {
+    let n = str_len(s)
+    let mut i = if n > 0 && str_byte(s, 0) == 45 { 1 } else { 0 }
+    if i >= n { return true }
+    while i < n {
+        if str_byte(s, i) != 48 { return false }
+        i += 1
+    }
+    true
+}
+
+// The bits of the `double` an `f32` with bits `b` is exactly.
+fn ll_f32_as_f64(b: Int) -> Int {
+    let sign = (b >> 31) & 1
+    let exp = (b >> 23) & 255
+    let frac = b & 8388607
+    let s = sign << 63
+    if exp == 255 {
+        if frac == 0 { return s | (2047 << 52) }
+        return s | (2047 << 52) | (1 << 51) | (frac << 29)
+    }
+    if exp == 0 {
+        if frac == 0 { return s }
+        let mut e = 0 - 126
+        let mut f = frac
+        while (f & 8388608) == 0 {
+            f = f << 1
+            e -= 1
+        }
+        f = f & 8388607
+        return s | ((e + 1023) << 52) | (f << 29)
+    }
+    s | ((exp - 127 + 1023) << 52) | (frac << 29)
+}
+
+// A float constant as LLVM writes one exactly: the hexadecimal of its value as a `double`.
+fn ll_float_text(c: Str, value: Str) -> Str {
+    let bits = ll_low64(value)
+    let as_double = if c == "f32" { ll_f32_as_f64(bits & 0xFFFFFFFF) } else { bits }
+    "0x" + ll_hex16(as_double)
+}
+
+// LLVM's constant-string escaping of the bytes the hex text `hex` holds from byte `from` up to `to`.
+fn ll_escape_hex(hex: Str, from: Int, to: Int) -> Str {
+    let out = strs_new()
+    let mut k = from
+    while k < to {
+        let hi = ll_hex_val(str_byte(hex, 2 * k))
+        let lo = ll_hex_val(str_byte(hex, 2 * k + 1))
+        let b = hi * 16 + lo
+        if b == 34 || b == 92 || b < 32 || b >= 127 {
+            strs_push(out, "\\" + ll_hex_digit(hi) + ll_hex_digit(lo))
+        } else {
+            strs_push(out, str_from_byte(b))
+        }
+        k += 1
+    }
+    str_join(out, "")
+}
+
+fn ll_hex_val(b: Int) -> Int {
+    if b >= 97 { return b - 87 }
+    if b >= 65 { return b - 55 }
+    b - 48
+}
+
+// --- the module ----------------------------------------------------------------------------------------
+
+struct LlMod {
+    unwind: Bool,
+    platform: Bool,
+    code: Str,
+    s_name: Strs,
+    s_link: Strs,
+    s_kind: Strs,
+    s_ret: Strs,
+    s_conv: Strs,
+    s_params: Vec[Strs],
+    by_name: HashMap[Str, Int],
+}
+
+// A symbol's name as LLVM spells it: bare where every byte is one LLVM accepts bare, quoted otherwise.
+fn ll_sname(n: Str) -> Str {
+    let mut bare = true
+    for i in 0..str_len(n) {
+        let b = str_byte(n, i)
+        if !((b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 46 || b == 95 || b == 36 || b == 45) { bare = false }
+    }
+    if bare { "@" + n } else { "@\"" + n + "\"" }
+}
+
+fn ll_sym(m: LlMod, name: Str) -> Int {
+    match hashmap_get(m.by_name, name) {
+        Some(i) => i,
+        None => 0 - 1,
+    }
+}
+
+// The tokens of a line: split at spaces, the commas after operands dropped.
+fn ll_tok(line: Str) -> Strs {
+    let out = strs_new()
+    let n = str_len(line)
+    let mut i = 0
+    let mut start = 0 - 1
+    while i <= n {
+        let c = if i < n { str_byte(line, i) } else { 32 }
+        if c == 32 || c == 44 {
+            if start >= 0 {
+                strs_push(out, str_slice(line, start, i))
+                start = 0 - 1
+            }
+        } else if start < 0 {
+            start = i
+        }
+        i += 1
+    }
+    out
+}
+
+// `vN`, `xN`, `sN` or `bN`: N; -1 when it is not one.
+fn ll_num_after(tok: Str, prefix: Int) -> Int {
+    let n = str_len(tok)
+    if n < 2 || str_byte(tok, 0) != prefix { return 0 - 1 }
+    match text_parse_int(str_slice(tok, 1, n)) {
+        Ok(v) => v,
+        Err(_) => 0 - 1,
+    }
+}
+
+fn ll_val(tok: Str) -> Int { ll_num_after(tok, 118) }
+fn ll_blk(tok: Str) -> Int { ll_num_after(tok, 98) }
+
+fn ll_int(tok: Str) -> Int {
+    match text_parse_int(tok) {
+        Ok(v) => v,
+        Err(_) => 0 - 9999999,
+    }
+}
+
+// A signature `[plain |c ](c1, c2) [-> c]` as its parts: [conv, ret, params...].
+fn ll_parse_sig(text: Str) -> Strs {
+    let mut s = text_trim(text)
+    let mut conv = "nazm"
+    if text_starts_with(s, "plain ") {
+        conv = "plain"
+        s = str_slice(s, 6, str_len(s))
+    } else if text_starts_with(s, "c ") {
+        conv = "c"
+        s = str_slice(s, 2, str_len(s))
+    }
+    let out = strs_new()
+    strs_push(out, conv)
+    let close = match text_find(s, ")") { Some(i) => i, None => str_len(s) }
+    let inner = str_slice(s, 1, close)
+    let rest = text_trim(str_slice(s, close + 1, str_len(s)))
+    strs_push(out, if text_starts_with(rest, "-> ") { text_trim(str_slice(rest, 3, str_len(rest))) } else { "" })
+    if str_len(text_trim(inner)) > 0 {
+        for p in text_split(inner, ",") { strs_push(out, text_trim(p)) }
+    }
+    out
+}
+
+fn ll_sym_fails(m: LlMod, i: Int) -> Bool {
+    i >= 0 && strs_get(m.s_kind, i) == "func" && strs_get(m.s_conv, i) == "nazm"
+}
+
+// --- one function ----------------------------------------------------------------------------------------
+
+struct LlFn {
+    m: LlMod,
+    out: Strs,
+    vals: Strs,
+    cls: Strs,
+    // 0: the temporaries made, 1: the call being printed fails to a bare failure exit, 2: the
+    // function checks its stack, so each call it makes to a Nazm function is `notail`.
+    st: Ints,
+    var_cls: Strs,
+    own: Strs,
+}
+
+fn ll_v(f: LlFn, v: Int) -> Str {
+    if v >= 0 && v < strs_len(f.vals) && strs_get(f.vals, v) != "" { strs_get(f.vals, v) } else { "undef" }
+}
+
+fn ll_c(f: LlFn, v: Int) -> Str {
+    if v >= 0 && v < strs_len(f.cls) && strs_get(f.cls, v) != "" { strs_get(f.cls, v) } else { "i64" }
+}
+
+fn ll_tv(f: LlFn, v: Int) -> Str { ll_ty(ll_c(f, v)) + " " + ll_v(f, v) }
+
+fn ll_set(f: LlFn, v: Int, text: Str, c: Str) {
+    if v < 0 { return }
+    while strs_len(f.vals) <= v {
+        strs_push(f.vals, "")
+        strs_push(f.cls, "")
+    }
+    strs_set(f.vals, v, text)
+    strs_set(f.cls, v, c)
+}
+
+fn ll_named(f: LlFn, v: Int, c: Str) -> Str {
+    let n = "%v" + int_to_str(v)
+    ll_set(f, v, n, c)
+    n
+}
+
+fn ll_temp(f: LlFn) -> Str {
+    ints_set(f.st, 0, ints_get(f.st, 0) + 1)
+    "%t" + int_to_str(ints_get(f.st, 0))
+}
+
+fn ll_flag(f: LlFn, i: Int) -> Bool { ints_get(f.st, i) == 1 }
+
+// An address `offset` bytes past `addr`.
+fn ll_at(f: LlFn, addr: Int, offset: Int) -> Str {
+    if offset == 0 { return ll_v(f, addr) }
+    let t = ll_temp(f)
+    ll_w(f.out, "  " + t + " = getelementptr i8, ptr " + ll_v(f, addr) + ", i64 " + int_to_str(offset))
+    t
+}
+
+fn ll_label(b: Int) -> Str {
+    if b == 0 { "entry" } else { "b" + int_to_str(b) }
+}
+
+fn ll_linkage(l: Str) -> Str {
+    if l == "local" { return "internal " }
+    if l == "hidden" { return "hidden " }
+    ""
+}
+
+// A call, parsed: `[vD, ][failed vF = ]call @NAME(args)` or `call_indirect SIG vA(args)`.
+struct LlCall {
+    ok: Bool,
+    dst: Int,
+    failed: Int,
+    indirect: Bool,
+    callee: Str,
+    addr: Int,
+    // [conv, ret, params...]
+    sig: Strs,
+    args: Ints,
+}
+
+fn ll_no_call() -> LlCall {
+    LlCall(ok: false, dst: 0 - 1, failed: 0 - 1, indirect: false, callee: "", addr: 0 - 1, sig: strs_new(), args: ints_new())
+}
+
+// Whether `line` is a call, and its parts.
+fn ll_call_of(m: LlMod, line: Str) -> LlCall {
+    let call_at = match text_find(line, "call") { Some(p) => p, None => 0 - 1 }
+    if call_at < 0 { return ll_no_call() }
+    let eq_at = match text_find(line, "= ") { Some(p) => p, None => 0 - 1 }
+    let head_end = if eq_at >= 0 { eq_at + 2 } else { 0 }
+    if call_at != head_end { return ll_no_call() }
+    let mut c = ll_no_call()
+    let rest = str_slice(line, call_at, str_len(line))
+    c.indirect = text_starts_with(rest, "call_indirect ")
+    if eq_at >= 0 {
+        for d in text_split(str_slice(line, 0, eq_at), ",") {
+            let dt = text_trim(d)
+            if text_starts_with(dt, "failed ") {
+                c.failed = ll_val(str_slice(dt, 7, str_len(dt)))
+            } else {
+                c.dst = ll_val(dt)
+            }
+        }
+    }
+    let n = str_len(rest)
+    let mut open = n - 1
+    while open >= 0 && str_byte(rest, open) != 40 { open -= 1 }
+    if open < 0 { return c }
+    let inner = str_slice(rest, open + 1, n - 1)
+    if str_len(text_trim(inner)) > 0 {
+        for a in text_split(inner, ",") { ints_push(c.args, ll_val(text_trim(a))) }
+    }
+    if c.indirect {
+        let head = str_slice(rest, 14, open)
+        let mut sp = str_len(head) - 1
+        while sp >= 0 && str_byte(head, sp) != 32 { sp -= 1 }
+        if sp < 0 { return c }
+        c.addr = ll_val(str_slice(head, sp + 1, str_len(head)))
+        c.sig = ll_parse_sig(str_slice(head, 0, sp))
+    } else {
+        c.callee = str_slice(rest, 6, open)
+        let s = ll_sym(m, c.callee)
+        let sig = strs_new()
+        if s >= 0 && strs_get(m.s_kind, s) == "func" {
+            strs_push(sig, strs_get(m.s_conv, s))
+            strs_push(sig, strs_get(m.s_ret, s))
+            for p in vec_get(m.s_params, s) { strs_push(sig, p) }
+        } else {
+            strs_push(sig, "plain")
+            strs_push(sig, "")
+        }
+        c.sig = sig
+    }
+    c.ok = true
+    c
+}
+
+fn ll_call_fails(c: LlCall) -> Bool {
+    c.ok && strs_get(c.sig, 0) == "nazm"
+}
+
+// Whether block `b`, given by its instructions `ins[first..end]` and terminator `term`, ends in a
+// Nazm call whose failure edge is a bare failure exit: a block that only fails, releasing nothing.
+fn ll_bare_edge(m: LlMod, ins: Strs, first: Ints, bend: Ints, terms: Strs, b: Int) -> Bool {
+    let n = ints_get(bend, b) - ints_get(first, b)
+    if n <= 0 { return false }
+    let last = strs_get(ins, ints_get(bend, b) - 1)
+    let c = ll_call_of(m, last)
+    if !c.ok || c.failed < 0 { return false }
+    let t = ll_tok(strs_get(terms, b))
+    if strs_len(t) != 4 || t[0] != "branch" || ll_val(t[1]) != c.failed { return false }
+    let then = ll_blk(t[2])
+    if then < 0 || then >= strs_len(terms) { return false }
+    if strs_get(terms, then) != "fail" { return false }
+    for k in ints_get(first, then)..ints_get(bend, then) {
+        if !text_starts_with(strs_get(ins, k), "loc ") { return false }
+    }
+    true
+}
+
+// --- instructions -------------------------------------------------------------------------------------------
+
+fn ll_cmp_op(o: Str) -> Str {
+    if o == "eq" { return "icmp eq" }
+    if o == "ne" { return "icmp ne" }
+    if o == "lt" { return "icmp slt" }
+    if o == "le" { return "icmp sle" }
+    if o == "gt" { return "icmp sgt" }
+    if o == "ge" { return "icmp sge" }
+    if o == "ult" { return "icmp ult" }
+    if o == "ule" { return "icmp ule" }
+    if o == "ugt" { return "icmp ugt" }
+    if o == "uge" { return "icmp uge" }
+    if o == "feq" { return "fcmp oeq" }
+    if o == "fne" { return "fcmp une" }
+    if o == "flt" { return "fcmp olt" }
+    if o == "fle" { return "fcmp ole" }
+    if o == "fgt" { return "fcmp ogt" }
+    if o == "fge" { return "fcmp oge" }
+    ""
+}
+
+fn ll_is_bin(o: Str) -> Bool {
+    o == "add" || o == "sub" || o == "mul" || o == "sdiv" || o == "srem" || o == "and" || o == "or" || o == "xor"
+            || o == "udiv" || o == "urem" || o == "shl" || o == "lshr" || o == "ashr" || o == "rotl" || o == "rotr"
+            || o == "fadd" || o == "fsub" || o == "fmul" || o == "fdiv"
+}
+
+fn ll_is_un(o: Str) -> Bool {
+    o == "fneg" || o == "fsqrt" || o == "fabs" || o == "ffloor" || o == "fceil" || o == "ftrunc" || o == "popcnt"
+            || o == "clz" || o == "ctz" || o == "bswap"
+}
+
+fn ll_is_conv(o: Str) -> Bool {
+    o == "stof" || o == "utof" || o == "ftos" || o == "ftou" || o == "fext" || o == "ftrunc" || o == "bits"
+}
+
+fn ll_ovf_op(o: Str) -> Str {
+    if o == "add.ovf" { return "sadd" }
+    if o == "sub.ovf" { return "ssub" }
+    if o == "mul.ovf" { return "smul" }
+    if o == "uadd.ovf" { return "uadd" }
+    if o == "usub.ovf" { return "usub" }
+    if o == "umul.ovf" { return "umul" }
+    ""
+}
+
+// `vA+OFF`: the value and the offset.
+fn ll_addr_off(tok: Str) -> Ints {
+    let out = ints_new()
+    match text_find(tok, "+") {
+        Some(p) => {
+            ints_push(out, ll_val(str_slice(tok, 0, p)))
+            ints_push(out, ll_int(str_slice(tok, p + 1, str_len(tok))))
+        },
+        None => {
+            ints_push(out, 0 - 1)
+            ints_push(out, 0)
+        },
+    }
+    out
+}
+
+fn ll_inst(f: LlFn, line: Str) {
+    let m = f.m
+    let out = f.out
+    let call = ll_call_of(m, line)
+    if call.ok {
+        ll_call_inst(f, call)
+        return
+    }
+    let t = ll_tok(line)
+    let n = strs_len(t)
+    if n == 0 { return }
+    let first = t[0]
+    if first == "store" && n == 3 {
+        let ao = ll_addr_off(t[1])
+        let a = ll_at(f, ao[0], ao[1])
+        let v = ll_val(t[2])
+        ll_w(out, "  store " + ll_tv(f, v) + ", ptr " + a + ll_align(ll_c(f, v)))
+        return
+    }
+    if first == "set" && n == 3 {
+        ll_w(out, "  store " + ll_tv(f, ll_val(t[2])) + ", ptr %x" + int_to_str(ll_num_after(t[1], 120)))
+        return
+    }
+    if first == "copy" && n == 4 {
+        ll_w(out, "  call void @llvm.memcpy.p0.p0.i64(ptr " + ll_v(f, ll_val(t[1])) + ", ptr " + ll_v(f, ll_val(t[2])) + ", i64 " + t[3] + ", i1 false)")
+        return
+    }
+    if first == "zero" && n == 3 {
+        ll_w(out, "  call void @llvm.memset.p0.i64(ptr " + ll_v(f, ll_val(t[1])) + ", i8 0, i64 " + t[2] + ", i1 false)")
+        return
+    }
+    if first == "loc" && n == 4 {
+        ll_w(out, "  ; nz.loc " + t[1] + " " + t[2] + " " + t[3])
+        return
+    }
+    // `vD, vO = OVF vA, vB`
+    if n == 6 && t[2] == "=" {
+        let o = ll_ovf_op(t[3])
+        let a = ll_val(t[4])
+        let b = ll_val(t[5])
+        let c = ll_c(f, a)
+        let w = ll_ty(c)
+        let tmp = ll_temp(f)
+        ll_w(out, "  " + tmp + " = call {" + w + ", i1} @llvm." + o + ".with.overflow." + w + "(" + w + " " + ll_v(f, a) + ", " + w + " " + ll_v(f, b) + ")")
+        let d = ll_named(f, ll_val(t[0]), c)
+        ll_w(out, "  " + d + " = extractvalue {" + w + ", i1} " + tmp + ", 0")
+        let ov = ll_named(f, ll_val(t[1]), "bit")
+        ll_w(out, "  " + ov + " = extractvalue {" + w + ", i1} " + tmp + ", 1")
+        return
+    }
+    if n < 4 || t[1] != "=" { return }
+    let dst = ll_val(t[0])
+    let w = t[2]
+    if w == "param" && n == 4 {
+        let idx = ll_int(t[3])
+        let c = if idx >= 0 && idx + 2 < strs_len(f.own) { strs_get(f.own, idx + 2) } else { "i64" }
+        ll_set(f, dst, "%p" + t[3], c)
+        return
+    }
+    if w == "const" && n == 5 {
+        let c = t[3]
+        let value = t[4]
+        let text = if c == "bit" { if ll_is_zero(value) { "false" } else { "true" } } else if c == "ptr" {
+            if ll_is_zero(value) { "null" } else { "inttoptr (i64 " + value + " to ptr)" }
+        } else if c == "f32" || c == "f64" { ll_float_text(c, value) } else { value }
+        ll_set(f, dst, text, c)
+        return
+    }
+    if w == "addr" {
+        let at = match text_find(line, "@") { Some(p) => p, None => 0 }
+        ll_set(f, dst, ll_sname(str_slice(line, at + 1, str_len(line))), "ptr")
+        return
+    }
+    if w == "slot" && n == 4 {
+        ll_set(f, dst, "%s" + int_to_str(ll_num_after(t[3], 115)), "ptr")
+        return
+    }
+    if w == "load" && n == 5 {
+        let c = t[3]
+        let ao = ll_addr_off(t[4])
+        let a = ll_at(f, ao[0], ao[1])
+        let d = ll_named(f, dst, c)
+        ll_w(out, "  " + d + " = load " + ll_ty(c) + ", ptr " + a + ll_align(c))
+        return
+    }
+    if w == "cmp" && n == 6 {
+        let a = ll_val(t[4])
+        let b = ll_val(t[5])
+        let c = ll_c(f, a)
+        let x = ll_v(f, a)
+        let y = ll_v(f, b)
+        let d = ll_named(f, dst, "bit")
+        ll_w(out, "  " + d + " = " + ll_cmp_op(t[3]) + " " + ll_ty(c) + " " + x + ", " + y)
+        return
+    }
+    if w == "select" && n == 6 {
+        let cond = ll_val(t[3])
+        let a = ll_val(t[4])
+        let b = ll_val(t[5])
+        let c = ll_c(f, a)
+        let k = ll_v(f, cond)
+        let x = ll_tv(f, a)
+        let y = ll_tv(f, b)
+        let d = ll_named(f, dst, c)
+        ll_w(out, "  " + d + " = select i1 " + k + ", " + x + ", " + y)
+        return
+    }
+    if (w == "sext" || w == "zext") && n == 5 {
+        let to = t[3]
+        let src = ll_val(t[4])
+        let from = ll_c(f, src)
+        if from == to {
+            ll_set(f, dst, ll_v(f, src), to)
+        } else {
+            let s = ll_tv(f, src)
+            let d = ll_named(f, dst, to)
+            ll_w(out, "  " + d + " = " + w + " " + s + " to " + ll_ty(to))
+        }
+        return
+    }
+    if w == "trunc" && n == 5 {
+        let to = t[3]
+        let src = ll_val(t[4])
+        let from = ll_c(f, src)
+        if from == to {
+            ll_set(f, dst, ll_v(f, src), to)
+        } else {
+            let s = ll_tv(f, src)
+            let d = ll_named(f, dst, to)
+            ll_w(out, "  " + d + " = trunc " + s + " to " + ll_ty(to))
+        }
+        return
+    }
+    if w == "ptradd" && n == 5 {
+        let b = ll_v(f, ll_val(t[3]))
+        let o = ll_v(f, ll_val(t[4]))
+        let d = ll_named(f, dst, "ptr")
+        ll_w(out, "  " + d + " = getelementptr i8, ptr " + b + ", i64 " + o)
+        return
+    }
+    if w == "ptrtoint" && n == 4 {
+        let s = ll_v(f, ll_val(t[3]))
+        let d = ll_named(f, dst, "i64")
+        ll_w(out, "  " + d + " = ptrtoint ptr " + s + " to i64")
+        return
+    }
+    if w == "inttoptr" && n == 4 {
+        let s = ll_v(f, ll_val(t[3]))
+        let d = ll_named(f, dst, "ptr")
+        ll_w(out, "  " + d + " = inttoptr i64 " + s + " to ptr")
+        return
+    }
+    if w == "get" && n == 4 {
+        let x = ll_num_after(t[3], 120)
+        let c = if x >= 0 && x < strs_len(f.var_cls) { strs_get(f.var_cls, x) } else { "i64" }
+        let d = ll_named(f, dst, c)
+        ll_w(out, "  " + d + " = load " + ll_ty(c) + ", ptr %x" + int_to_str(x))
+        return
+    }
+    if ll_is_bin(w) && n == 5 {
+        let a = ll_val(t[3])
+        let b = ll_val(t[4])
+        let c = ll_c(f, a)
+        let x = ll_v(f, a)
+        let y = ll_v(f, b)
+        let d = ll_named(f, dst, c)
+        let ty = ll_ty(c)
+        if w == "rotl" || w == "rotr" {
+            let g = if w == "rotl" { "fshl" } else { "fshr" }
+            ll_w(out, "  " + d + " = call " + ty + " @llvm." + g + "." + ty + "(" + ty + " " + x + ", " + ty + " " + x + ", " + ty + " " + y + ")")
+        } else {
+            ll_w(out, "  " + d + " = " + w + " " + ty + " " + x + ", " + y)
+        }
+        return
+    }
+    if ll_is_conv(w) && n == 5 {
+        let to = t[3]
+        let src = ll_val(t[4])
+        if w == "ftos" || w == "ftou" {
+            let from = ll_c(f, src)
+            let g = if from == "f32" { "f32" } else { "f64" }
+            let ft = if from == "f32" { "float" } else { "double" }
+            let s = ll_v(f, src)
+            let ty = ll_ty(to)
+            let o = if w == "ftos" { "fptosi" } else { "fptoui" }
+            let d = ll_named(f, dst, to)
+            ll_w(out, "  " + d + " = call " + ty + " @llvm." + o + ".sat." + ty + "." + g + "(" + ft + " " + s + ")")
+            return
+        }
+        let s = ll_tv(f, src)
+        let d = ll_named(f, dst, to)
+        let o = if w == "stof" { "sitofp" } else if w == "utof" { "uitofp" } else if w == "fext" { "fpext" } else if w == "ftrunc" { "fptrunc" } else { "bitcast" }
+        ll_w(out, "  " + d + " = " + o + " " + s + " to " + ll_ty(to))
+        return
+    }
+    if ll_is_un(w) && n == 4 {
+        let a = ll_val(t[3])
+        let c = ll_c(f, a)
+        let ty = ll_ty(c)
+        let x = ll_v(f, a)
+        let g = if c == "f32" { "f32" } else { "f64" }
+        let d = ll_named(f, dst, c)
+        if w == "fneg" {
+            ll_w(out, "  " + d + " = fneg " + ty + " " + x)
+        } else if w == "fsqrt" {
+            ll_w(out, "  " + d + " = call " + ty + " @llvm.sqrt." + g + "(" + ty + " " + x + ")")
+        } else if w == "fabs" {
+            ll_w(out, "  " + d + " = call " + ty + " @llvm.fabs." + g + "(" + ty + " " + x + ")")
+        } else if w == "ffloor" {
+            ll_w(out, "  " + d + " = call " + ty + " @llvm.floor." + g + "(" + ty + " " + x + ")")
+        } else if w == "fceil" {
+            ll_w(out, "  " + d + " = call " + ty + " @llvm.ceil." + g + "(" + ty + " " + x + ")")
+        } else if w == "ftrunc" {
+            ll_w(out, "  " + d + " = call " + ty + " @llvm.trunc." + g + "(" + ty + " " + x + ")")
+        } else if w == "popcnt" {
+            ll_w(out, "  " + d + " = call " + ty + " @llvm.ctpop." + ty + "(" + ty + " " + x + ")")
+        } else if w == "clz" {
+            ll_w(out, "  " + d + " = call " + ty + " @llvm.ctlz." + ty + "(" + ty + " " + x + ", i1 false)")
+        } else if w == "ctz" {
+            ll_w(out, "  " + d + " = call " + ty + " @llvm.cttz." + ty + "(" + ty + " " + x + ", i1 false)")
+        } else if c == "i8" {
+            ll_w(out, "  " + d + " = or i8 " + x + ", 0")
+        } else {
+            ll_w(out, "  " + d + " = call " + ty + " @llvm.bswap." + ty + "(" + ty + " " + x + ")")
+        }
+        return
+    }
+}
+
+// A call. The runtime's "has this thread failed?" is read in place, and the stack check is inlined;
+// every other call is `call` below.
+fn ll_call_inst(f: LlFn, c: LlCall) {
+    let out = f.out
+    if !c.indirect && c.dst >= 0 && c.callee == "nz.failed_now" {
+        let t = ll_temp(f)
+        ll_w(out, "  " + t + " = load i1, ptr @nz.failed")
+        let d = ll_named(f, c.dst, "i32")
+        ll_w(out, "  " + d + " = zext i1 " + t + " to i32")
+        return
+    }
+    if !c.indirect && c.dst >= 0 && ints_len(c.args) == 0 && c.callee == "nz.stack_check" {
+        let fp = ll_temp(f)
+        let sp = ll_temp(f)
+        let lim = ll_temp(f)
+        let past = ll_temp(f)
+        let unset = ll_temp(f)
+        let slow = ll_temp(f)
+        let nt = ll_temp(f)
+        let n = str_slice(nt, 1, str_len(nt))
+        let r = ll_temp(f)
+        ll_w(out, "  " + fp + " = call ptr @llvm.frameaddress.p0(i32 0)")
+        ll_w(out, "  " + sp + " = ptrtoint ptr " + fp + " to i64")
+        ll_w(out, "  " + lim + " = load i64, ptr @nz.stack_limit")
+        ll_w(out, "  " + past + " = icmp ult i64 " + sp + ", " + lim)
+        ll_w(out, "  " + unset + " = icmp eq i64 " + lim + ", 0")
+        ll_w(out, "  " + slow + " = or i1 " + past + ", " + unset)
+        ll_w(out, "  br i1 " + slow + ", label %sc.slow." + n + ", label %sc.fast." + n + ", !prof !{!\"branch_weights\", i32 1, i32 2000}")
+        ll_w(out, "sc.slow." + n + ":")
+        ll_w(out, "  " + r + " = call i32 @nz.stack_check()")
+        ll_w(out, "  br label %sc.join." + n)
+        ll_w(out, "sc.fast." + n + ":")
+        ll_w(out, "  br label %sc.join." + n)
+        ll_w(out, "sc.join." + n + ":")
+        let d = ll_named(f, c.dst, "i32")
+        ll_w(out, "  " + d + " = phi i32 [ " + r + ", %sc.slow." + n + " ], [ 0, %sc.fast." + n + " ]")
+        return
+    }
+    let callee = if c.indirect { ll_v(f, c.addr) } else { ll_sname(c.callee) }
+    ll_call(f, c, callee)
+}
+
+fn ll_call(f: LlFn, c: LlCall, callee: Str) {
+    let out = f.out
+    let conv = strs_get(c.sig, 0)
+    let ret = strs_get(c.sig, 1)
+    let fails = conv == "nazm"
+    let unwind = f.m.unwind
+    let parts = strs_new()
+    for k in 0..ints_len(c.args) {
+        let pc = if k + 2 < strs_len(c.sig) { strs_get(c.sig, k + 2) } else { "i64" }
+        strs_push(parts, ll_sig_ty(pc, conv, false) + " " + ll_v(f, ints_get(c.args, k)))
+    }
+    let a = str_join(parts, ", ")
+    let r = ll_ret_ty(ret, conv, unwind)
+    if fails && unwind {
+        ll_unwinding_call(f, c, ret, r + " " + callee + "(" + a + ")")
+        return
+    }
+    let kw = if ll_flag(f, 2) && fails { "notail call" } else { "call" }
+    if ret != "" && fails {
+        let t = ll_temp(f)
+        ll_w(out, "  " + t + " = " + kw + " " + r + " " + callee + "(" + a + ")")
+        if c.dst >= 0 {
+            let d = ll_named(f, c.dst, ret)
+            ll_w(out, "  " + d + " = extractvalue " + r + " " + t + ", 0")
+        }
+        if c.failed >= 0 {
+            let fv = ll_named(f, c.failed, "bit")
+            ll_w(out, "  " + fv + " = extractvalue " + r + " " + t + ", 1")
+        }
+        return
+    }
+    if ret == "" && fails {
+        if c.failed >= 0 {
+            let fv = ll_named(f, c.failed, "bit")
+            ll_w(out, "  " + fv + " = " + kw + " " + r + " " + callee + "(" + a + ")")
+        } else {
+            ll_w(out, "  " + kw + " " + r + " " + callee + "(" + a + ")")
+        }
+        return
+    }
+    if ret != "" && c.dst >= 0 {
+        let d = ll_named(f, c.dst, ret)
+        ll_w(out, "  " + d + " = " + kw + " " + r + " " + callee + "(" + a + ")")
+        return
+    }
+    ll_w(out, "  " + kw + " " + r + " " + callee + "(" + a + ")")
+}
+
+// A Nazm call where failures unwind. Straight into a bare failure exit it is a plain call, which an
+// unwind passes through, and its failure edge is never taken here. Otherwise an `invoke` whose
+// cleanup landing pad joins the normal path with the edge taken — the LIR's own branch then goes
+// where the failure goes — or, from a call with no failure edge, as if the call had returned.
+fn ll_unwinding_call(f: LlFn, c: LlCall, ret: Str, call: Str) {
+    let out = f.out
+    let mut named = ""
+    if ret != "" && c.dst >= 0 { named = ll_named(f, c.dst, ret) }
+    let plain = ll_flag(f, 1) && c.failed >= 0
+    if plain {
+        ll_set(f, c.failed, "false", "bit")
+        let kw = if ll_flag(f, 2) { "notail call" } else { "call" }
+        if named != "" {
+            ll_w(out, "  " + named + " = " + kw + " " + call)
+        } else {
+            ll_w(out, "  " + kw + " " + call)
+        }
+        return
+    }
+    ints_set(f.st, 0, ints_get(f.st, 0) + 1)
+    let n = int_to_str(ints_get(f.st, 0))
+    ll_w(out, "  br label %iv." + n)
+    ll_w(out, "iv." + n + ":")
+    let t = "%iv." + n + ".r"
+    if named != "" {
+        ll_w(out, "  " + t + " = invoke " + call + " to label %ok." + n + " unwind label %lp." + n)
+    } else {
+        ll_w(out, "  invoke " + call + " to label %ok." + n + " unwind label %lp." + n)
+    }
+    ll_w(out, "lp." + n + ":")
+    ll_w(out, "  %lp." + n + ".x = landingpad { ptr, i32 } cleanup")
+    ll_w(out, "  br label %ok." + n)
+    ll_w(out, "ok." + n + ":")
+    if named != "" {
+        let stand_in = if c.failed >= 0 { "poison" } else { "zeroinitializer" }
+        ll_w(out, "  " + named + " = phi " + ll_ty(ret) + " [ " + t + ", %iv." + n + " ], [ " + stand_in + ", %lp." + n + " ]")
+    }
+    if c.failed >= 0 {
+        let fv = ll_named(f, c.failed, "bit")
+        ll_w(out, "  " + fv + " = phi i1 [ false, %iv." + n + " ], [ true, %lp." + n + " ]")
+    }
+}
+
+// --- cold blocks ------------------------------------------------------------------------------------------
+
+fn ll_succ(term: Str) -> Ints {
+    let out = ints_new()
+    let t = ll_tok(term)
+    if t[0] == "jump" {
+        ints_push(out, ll_blk(t[1]))
+    } else if t[0] == "branch" {
+        ints_push(out, ll_blk(t[2]))
+        ints_push(out, ll_blk(t[3]))
+    } else if t[0] == "switch" {
+        // `switch vV [k: bK, ...] else bD`
+        let open = match text_find(term, "[") { Some(p) => p, None => 0 - 1 }
+        let close = match text_find(term, "]") { Some(p) => p, None => 0 - 1 }
+        if open >= 0 && close > open {
+            let inner = str_slice(term, open + 1, close)
+            if str_len(text_trim(inner)) > 0 {
+                for cs in text_split(inner, ",") {
+                    let kv = text_split(text_trim(cs), ":")
+                    ints_push(out, ll_blk(text_trim(kv[1])))
+                }
+            }
+        }
+        ints_push(out, ll_blk(t[strs_len(t) - 1]))
+    }
+    out
+}
+
+// Which blocks only a failure reaches the end of: one that records a failure or ends in `fail`,
+// and every block all the successors of which are such blocks.
+fn ll_cold(ins: Strs, first: Ints, bend: Ints, terms: Strs) -> Ints {
+    let n = strs_len(terms)
+    let cold = ints_new()
+    let preds: Vec[Ints] = vec_new()
+    for b in 0..n {
+        vec_push(preds, ints_new())
+        let mut is = strs_get(terms, b) == "fail"
+        if !is {
+            for k in ints_get(first, b)..ints_get(bend, b) {
+                let line = strs_get(ins, k)
+                if text_contains(line, "call @nz.fail(") || text_contains(line, "call @nz.report(") { is = true }
+            }
+        }
+        ints_push(cold, if is { 1 } else { 0 })
+    }
+    for b in 0..n {
+        for s in ll_succ(strs_get(terms, b)) {
+            if s >= 0 && s < n { ints_push(vec_get(preds, s), b) }
+        }
+    }
+    let work = ints_new()
+    for b in 0..n { if ints_get(cold, b) == 1 { ints_push(work, b) } }
+    while ints_len(work) > 0 {
+        let c = ints_pop(work)
+        for p in vec_get(preds, c) {
+            if ints_get(cold, p) == 1 { continue }
+            let s = ll_succ(strs_get(terms, p))
+            let mut all = ints_len(s) > 0
+            for x in s { if x < 0 || x >= n || ints_get(cold, x) != 1 { all = false } }
+            if all {
+                ints_set(cold, p, 1)
+                ints_push(work, p)
+            }
+        }
+    }
+    cold
+}
+
+// --- a function ----------------------------------------------------------------------------------------------
+
+// The function whose lines are `lines[from..to]` (its `function` line first).
+fn ll_function(m: LlMod, out: Strs, lines: Strs, from: Int, to: Int) {
+    let head = strs_get(lines, from)
+    let semi = match text_find(head, " ; ") { Some(p) => p, None => str_len(head) }
+    let hd = str_slice(head, 9, semi)
+    let sec_at = match text_find(hd, " section ") { Some(p) => p, None => 0 - 1 }
+    let fname = if sec_at >= 0 { str_slice(hd, 1, sec_at) } else { str_slice(hd, 1, str_len(hd)) }
+    let fsection = if sec_at >= 0 { str_slice(hd, sec_at + 9, str_len(hd)) } else { "" }
+    let display = if semi < str_len(head) { str_slice(head, semi + 3, str_len(head)) } else { "" }
+    let sym = ll_sym(m, fname)
+    if sym < 0 || strs_get(m.s_kind, sym) != "func" { return }
+    let conv = strs_get(m.s_conv, sym)
+    let ret = strs_get(m.s_ret, sym)
+    let params = vec_get(m.s_params, sym)
+    let own = strs_new()
+    strs_push(own, conv)
+    strs_push(own, ret)
+    for p in params { strs_push(own, p) }
+    // The declarations before the first block, then the blocks.
+    let var_cls = strs_new()
+    let var_names = strs_new()
+    let slot_text = strs_new()
+    let slot_names = strs_new()
+    let at_line = strs_new()
+    let debug_lines = strs_new()
+    let ins = strs_new()
+    let first = ints_new()
+    let bend = ints_new()
+    let terms = strs_new()
+    let mut inblocks = false
+    let mut i = from + 1
+    while i < to {
+        let line = strs_get(lines, i)
+        i += 1
+        if str_len(line) == 0 || text_starts_with(line, "; file ") { continue }
+        if str_byte(line, 0) == 98 && text_ends_with(line, ":") {
+            inblocks = true
+            ints_push(first, strs_len(ins))
+            ints_push(bend, 0 - 1)
+            continue
+        }
+        let body = text_trim(line)
+        if !inblocks {
+            let t = ll_tok(body)
+            if t[0] == "var" {
+                strs_push(var_cls, t[2])
+                strs_push(var_names, "")
+            } else if t[0] == "slot" {
+                // `slot sN SIZE align A`
+                strs_push(slot_text, t[2] + " " + t[4])
+                strs_push(slot_names, "")
+            } else if t[0] == "at" {
+                strs_push(at_line, t[1] + " " + t[2])
+            } else if t[0] == "vname" {
+                let k = ll_int(t[1])
+                strs_set(var_names, k, str_slice(body, 6 + str_len(t[1]) + 1, str_len(body)))
+            } else if t[0] == "sname" {
+                let k = ll_int(t[1])
+                strs_set(slot_names, k, str_slice(body, 6 + str_len(t[1]) + 1, str_len(body)))
+            } else if t[0] == "debug" {
+                strs_push(debug_lines, body)
+            }
+            continue
+        }
+        let word = if str_len(body) > 0 { body } else { "" }
+        let is_term = text_starts_with(word, "jump ") || text_starts_with(word, "branch ") || text_starts_with(word, "switch ")
+                || word == "return" || text_starts_with(word, "return ") || word == "fail" || word == "unreachable"
+        if is_term {
+            ints_set(bend, ints_len(first) - 1, strs_len(ins))
+            strs_push(terms, word)
+        } else {
+            strs_push(ins, word)
+        }
+    }
+    let nb = strs_len(terms)
+    let unwind = m.unwind
+    // Where failures unwind, a function with a landing pad names the C personality: one that calls
+    // a Nazm function other than straight into a bare failure exit.
+    let bare = ints_new()
+    for b in 0..nb { ints_push(bare, if unwind && ll_bare_edge(m, ins, first, bend, terms, b) { 1 } else { 0 }) }
+    let mut pads = false
+    if unwind {
+        for b in 0..nb {
+            let from_k = ints_get(first, b)
+            let to_k = ints_get(bend, b)
+            for k in from_k..to_k {
+                let c = ll_call_of(m, strs_get(ins, k))
+                if ll_call_fails(c) && !(k + 1 == to_k && ints_get(bare, b) == 1) { pads = true }
+            }
+        }
+    }
+    let personality = if pads { " personality ptr @__gcc_personality_v0" } else { "" }
+    let probe = if m.platform { "" } else { " \"probe-stack\"=\"inline-asm\"" }
+    let code_section = if m.code == "macho" { " section \"__TEXT,__nz_text,regular,pure_instructions\"" } else if m.code == "coff" { " section \".text$nM\"" } else { "" }
+    let section = if fsection != "" { " section \"" + fsection + "\"" } else { code_section }
+    let pl = strs_new()
+    for k in 0..strs_len(params) { strs_push(pl, ll_sig_ty(strs_get(params, k), conv, false) + " %p" + int_to_str(k)) }
+    ll_w(out, "define " + ll_linkage(strs_get(m.s_link, sym)) + ll_ret_ty(ret, conv, unwind) + " " + ll_sname(fname) + "(" + str_join(pl, ", ") + ")" + probe + section + personality + " {   ; " + display)
+    // The function checks its stack when it calls the runtime's check.
+    let mut checks = false
+    for k in 0..strs_len(ins) {
+        if text_contains(strs_get(ins, k), "call @nz.stack_check()") {
+            let c = ll_call_of(m, strs_get(ins, k))
+            if c.ok && !c.indirect && ints_len(c.args) == 0 && c.callee == "nz.stack_check" { checks = true }
+        }
+    }
+    let st = ints_new()
+    ints_push(st, 0)
+    ints_push(st, 0)
+    ints_push(st, if checks { 1 } else { 0 })
+    let f = LlFn(m: m, out: out, vals: strs_new(), cls: strs_new(), st: st, var_cls: var_cls, own: own)
+    let cold = ll_cold(ins, first, bend, terms)
+    for bi in 0..nb {
+        ll_w(out, ll_label(bi) + ":")
+        if bi == 0 {
+            if strs_len(at_line) > 0 { ll_w(out, "  ; nz.fn " + strs_get(at_line, 0)) }
+            for k in 0..strs_len(var_cls) {
+                let ty = ll_ty(strs_get(var_cls, k))
+                if strs_get(var_names, k) != "" {
+                    ll_w(out, "  %x" + int_to_str(k) + " = alloca " + ty + "            ; " + strs_get(var_names, k))
+                } else {
+                    ll_w(out, "  %x" + int_to_str(k) + " = alloca " + ty)
+                }
+            }
+            for k in 0..strs_len(slot_text) {
+                let sp = text_split(strs_get(slot_text, k), " ")
+                let size = sp[0]
+                let al = match text_parse_int(sp[1]) { Ok(v) => v, Err(_) => 1 }
+                let a = int_to_str(if al < 1 { 1 } else { al })
+                if strs_get(slot_names, k) != "" {
+                    ll_w(out, "  %s" + int_to_str(k) + " = alloca [" + size + " x i8], align " + a + "            ; " + strs_get(slot_names, k))
+                } else {
+                    ll_w(out, "  %s" + int_to_str(k) + " = alloca [" + size + " x i8], align " + a)
+                }
+            }
+            for d in debug_lines { ll_debug_var(out, d) }
+        }
+        let b0 = ints_get(first, bi)
+        let b1 = ints_get(bend, bi)
+        for k in b0..b1 {
+            ints_set(st, 1, if k + 1 == b1 && ints_get(bare, bi) == 1 { 1 } else { 0 })
+            ll_inst(f, strs_get(ins, k))
+        }
+        ints_set(st, 1, 0)
+        ll_term(f, strs_get(terms, bi), cold, ret, conv, unwind)
+    }
+    ll_w(out, "}")
+    ll_w(out, "")
+}
+
+// `debug STORAGE ARG LINE KIND (a, b, c, d) NAME` as its comment: `; nz.var STORAGE ARG LINE KIND a b c d NAME`.
+fn ll_debug_var(out: Strs, body: Str) {
+    let t = ll_tok(body)
+    // debug, storage, arg, line, kind, "(a", b, c, "d)", name...
+    let mut name_at = 0
+    let mut seen = 0
+    for k in 0..str_len(body) {
+        if k > 0 && str_byte(body, k) == 32 && str_byte(body, k - 1) != 32 {
+            seen += 1
+            if seen == 9 && name_at == 0 { name_at = k + 1 }
+        }
+    }
+    let dscope = strs_new()
+    for k in 5..9 {
+        let mut x = t[k]
+        if str_byte(x, 0) == 40 { x = str_slice(x, 1, str_len(x)) }
+        if str_byte(x, str_len(x) - 1) == 41 { x = str_slice(x, 0, str_len(x) - 1) }
+        strs_push(dscope, x)
+    }
+    ll_w(out, "  ; nz.var " + t[1] + " " + t[2] + " " + t[3] + " " + t[4] + " " + str_join(dscope, " ") + " " + str_slice(body, name_at, str_len(body)))
+}
+
+fn ll_term(f: LlFn, term: Str, cold: Ints, ret: Str, conv: Str, unwind: Bool) {
+    let out = f.out
+    let t = ll_tok(term)
+    let w = t[0]
+    let fails = conv == "nazm"
+    if w == "jump" {
+        ll_w(out, "  br label %" + ll_label(ll_blk(t[1])))
+        return
+    }
+    if w == "branch" {
+        let then = ll_blk(t[2])
+        let other = ll_blk(t[3])
+        let is_then = then >= 0 && then < ints_len(cold) && ints_get(cold, then) == 1
+        let is_other = other >= 0 && other < ints_len(cold) && ints_get(cold, other) == 1
+        let weights = if is_then && !is_other { ", !prof !{!\"branch_weights\", i32 1, i32 2000}" } else if !is_then && is_other { ", !prof !{!\"branch_weights\", i32 2000, i32 1}" } else { "" }
+        ll_w(out, "  br i1 " + ll_v(f, ll_val(t[1])) + ", label %" + ll_label(then) + ", label %" + ll_label(other) + weights)
+        return
+    }
+    if w == "switch" {
+        let v = ll_val(t[1])
+        let default = ll_blk(t[strs_len(t) - 1])
+        ll_w(out, "  switch " + ll_tv(f, v) + ", label %" + ll_label(default) + " [")
+        let vt = ll_ty(ll_c(f, v))
+        let open = match text_find(term, "[") { Some(p) => p, None => 0 - 1 }
+        let close = match text_find(term, "]") { Some(p) => p, None => 0 - 1 }
+        if open >= 0 && close > open {
+            let inner = str_slice(term, open + 1, close)
+            if str_len(text_trim(inner)) > 0 {
+                for cs in text_split(inner, ",") {
+                    let kv = text_split(text_trim(cs), ":")
+                    ll_w(out, "    " + vt + " " + text_trim(kv[0]) + ", label %" + ll_label(ll_blk(text_trim(kv[1]))))
+                }
+            }
+        }
+        ll_w(out, "  ]")
+        return
+    }
+    if w == "return" {
+        if strs_len(t) == 2 {
+            let v = ll_val(t[1])
+            if fails && !unwind {
+                let r = ll_ret_ty(ret, conv, unwind)
+                let a = ll_temp(f)
+                let b = ll_temp(f)
+                ll_w(out, "  " + a + " = insertvalue " + r + " undef, " + ll_tv(f, v) + ", 0")
+                ll_w(out, "  " + b + " = insertvalue " + r + " " + a + ", i1 false, 1")
+                ll_w(out, "  ret " + r + " " + b)
+            } else {
+                ll_w(out, "  ret " + ll_tv(f, v))
+            }
+        } else if fails && !unwind {
+            ll_w(out, "  ret i1 false")
+        } else {
+            ll_w(out, "  ret void")
+        }
+        return
+    }
+    if w == "fail" {
+        if unwind {
+            ll_w(out, "  call void @nz.raise()")
+            ll_w(out, "  unreachable")
+        } else if ret != "" {
+            ll_w(out, "  ret " + ll_ret_ty(ret, conv, unwind) + " { " + ll_ty(ret) + " zeroinitializer, i1 true }")
+        } else {
+            ll_w(out, "  ret i1 true")
+        }
+        return
+    }
+    ll_w(out, "  unreachable")
+}
+
+// --- the module's text ------------------------------------------------------------------------------------------
+
+// Where failures unwind: the exception object, one per thread; the stop function, which lets every
+// frame's cleanup run and aborts only at the end of the stack; and `nz.raise`, which a failure exit
+// calls. Defined once per image whichever units define them.
+fn ll_raise(out: Strs) {
+    ll_w(out, "declare i32 @_Unwind_ForcedUnwind(ptr, ptr, ptr)")
+    ll_w(out, "declare void @abort() noreturn")
+    ll_w(out, "@nz.exc = linkonce_odr hidden thread_local global [4 x i64] zeroinitializer, align 16")
+    ll_w(out, "define linkonce_odr hidden i32 @nz.unwind_stop(i32 %v, i32 %a, i64 %c, ptr %e, ptr %x, ptr %p) \"probe-stack\"=\"inline-asm\" {")
+    ll_w(out, "  %end = and i32 %a, 16")
+    ll_w(out, "  %at = icmp ne i32 %end, 0")
+    ll_w(out, "  br i1 %at, label %over, label %on")
+    ll_w(out, "over:")
+    ll_w(out, "  call void @abort()")
+    ll_w(out, "  unreachable")
+    ll_w(out, "on:")
+    ll_w(out, "  ret i32 0")
+    ll_w(out, "}")
+    ll_w(out, "define linkonce_odr hidden void @nz.raise() noinline cold \"probe-stack\"=\"inline-asm\" {")
+    ll_w(out, "  store i64 5638864641536806221, ptr @nz.exc")
+    ll_w(out, "  %r = call i32 @_Unwind_ForcedUnwind(ptr @nz.exc, ptr @nz.unwind_stop, ptr null)")
+    ll_w(out, "  call void @abort()")
+    ll_w(out, "  unreachable")
+    ll_w(out, "}")
+}
+
+// The declarations every unit makes: every width's overflow-checked operations, bit counts and
+// rotations, and the float operations LLVM has exactly. An unused declaration costs nothing.
+fn ll_declares(out: Strs) {
+    for w in text_split("i8 i16 i32 i64", " ") {
+        for o in text_split("sadd ssub smul uadd usub umul", " ") {
+            ll_w(out, "declare {" + w + ", i1} @llvm." + o + ".with.overflow." + w + "(" + w + ", " + w + ")")
+        }
+        ll_w(out, "declare " + w + " @llvm.ctpop." + w + "(" + w + ")")
+        for p in 0..2 {
+            let fl = if p == 0 { "f32" } else { "f64" }
+            let t = if p == 0 { "float" } else { "double" }
+            ll_w(out, "declare " + w + " @llvm.fptosi.sat." + w + "." + fl + "(" + t + ")")
+            ll_w(out, "declare " + w + " @llvm.fptoui.sat." + w + "." + fl + "(" + t + ")")
+        }
+        ll_w(out, "declare " + w + " @llvm.ctlz." + w + "(" + w + ", i1)")
+        ll_w(out, "declare " + w + " @llvm.cttz." + w + "(" + w + ", i1)")
+        ll_w(out, "declare " + w + " @llvm.fshl." + w + "(" + w + ", " + w + ", " + w + ")")
+        ll_w(out, "declare " + w + " @llvm.fshr." + w + "(" + w + ", " + w + ", " + w + ")")
+        if w != "i8" { ll_w(out, "declare " + w + " @llvm.bswap." + w + "(" + w + ")") }
+    }
+    for p in 0..2 {
+        let fl = if p == 0 { "f32" } else { "f64" }
+        let t = if p == 0 { "float" } else { "double" }
+        for o in text_split("sqrt fabs floor ceil trunc", " ") {
+            ll_w(out, "declare " + t + " @llvm." + o + "." + fl + "(" + t + ")")
+        }
+    }
+    ll_w(out, "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)")
+    ll_w(out, "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)")
+}
+
+// The data this unit defines.
+fn ll_data(m: LlMod, out: Strs, line: Str) {
+    // `data @NAME align A[ writable][ section S] [HEX][ OFF:@SYM…]`; a name may hold spaces, so a
+    // relocation's symbol runs to the next ` OFF:@`.
+    let align_at = match text_find(line, " align ") { Some(p) => p, None => 0 - 1 }
+    if align_at < 0 { return }
+    let name = str_slice(line, 6, align_at)
+    let sym = ll_sym(m, name)
+    let toks = ll_tok(str_slice(line, align_at + 1, str_len(line)))
+    let merged = strs_new()
+    for x in toks {
+        let colon = match text_find(x, ":@") { Some(p) => p, None => 0 - 1 }
+        let starts = colon > 0 && str_byte(x, 0) >= 48 && str_byte(x, 0) <= 57
+        let nt = strs_len(merged)
+        if !starts && nt > 0 && text_contains(strs_get(merged, nt - 1), ":@") {
+            strs_set(merged, nt - 1, strs_get(merged, nt - 1) + " " + x)
+        } else {
+            strs_push(merged, x)
+        }
+    }
+    let align = ll_int(strs_get(merged, 1))
+    let mut writable = false
+    let mut section = ""
+    let mut hex = ""
+    let r_off = ints_new()
+    let r_sym = strs_new()
+    let mut k = 2
+    while k < strs_len(merged) {
+        let x = strs_get(merged, k)
+        if x == "writable" {
+            writable = true
+        } else if x == "section" && k + 1 < strs_len(merged) {
+            section = strs_get(merged, k + 1)
+            k += 1
+        } else if str_byte(x, 0) == 91 && str_byte(x, str_len(x) - 1) == 93 {
+            hex = str_slice(x, 1, str_len(x) - 1)
+        } else {
+            let colon = match text_find(x, ":@") { Some(p) => p, None => 0 - 1 }
+            if colon > 0 {
+                ints_push(r_off, ll_int(str_slice(x, 0, colon)))
+                strs_push(r_sym, str_slice(x, colon + 2, str_len(x)))
+            }
+        }
+        k += 1
+    }
+    // The relocations in offset order (a stable insertion sort).
+    let nr = ints_len(r_off)
+    for a in 1..nr {
+        let mut b = a
+        while b > 0 && ints_get(r_off, b - 1) > ints_get(r_off, b) {
+            let o = ints_get(r_off, b)
+            ints_set(r_off, b, ints_get(r_off, b - 1))
+            ints_set(r_off, b - 1, o)
+            let s = strs_get(r_sym, b)
+            strs_set(r_sym, b, strs_get(r_sym, b - 1))
+            strs_set(r_sym, b - 1, s)
+            b -= 1
+        }
+    }
+    let total = str_len(hex) / 2
+    let parts = strs_new()
+    let types = strs_new()
+    let mut at = 0
+    for r in 0..nr {
+        let off = ints_get(r_off, r)
+        if off > at {
+            let c = off - at
+            strs_push(parts, "[" + int_to_str(c) + " x i8] c\"" + ll_escape_hex(hex, at, off) + "\"")
+            strs_push(types, "[" + int_to_str(c) + " x i8]")
+        }
+        strs_push(parts, "ptr " + ll_sname(strs_get(r_sym, r)))
+        strs_push(types, "ptr")
+        at = off + 8
+    }
+    if at < total {
+        let c = total - at
+        strs_push(parts, "[" + int_to_str(c) + " x i8] c\"" + ll_escape_hex(hex, at, total) + "\"")
+        strs_push(types, "[" + int_to_str(c) + " x i8]")
+    }
+    let body = if nr == 0 { str_join(parts, "") } else { "<{ " + str_join(types, ", ") + " }> <{ " + str_join(parts, ", ") + " }>" }
+    let local = sym < 0 || strs_get(m.s_link, sym) == "local"
+    let place = if local { "private unnamed_addr " } else { "hidden " }
+    let kind = if writable { "global" } else { "constant" }
+    let placed = if section != "" { ", section \"" + section + "\"" } else { "" }
+    ll_w(out, ll_sname(name) + " = " + place + kind + " " + body + placed + ", align " + int_to_str(if align < 1 { 1 } else { align }))
+}
+
+// One unit's LIR text as LLVM IR text. `unwind`: failures unwind (the hosted targets) rather than
+// return a bit; `platform`: the platform's stack probe; `code`: where generated functions go
+// (`plain`, `macho` or `coff`). Err when the text is not LIR.
+pub fn ll_module(text: Str, unwind: Bool, platform: Bool, code: Str) -> Result[Str, Str] ! {} {
+    let lines = text_split(text, ll_nl())
+    let m = LlMod(unwind: unwind, platform: platform, code: code, s_name: strs_new(), s_link: strs_new(), s_kind: strs_new(),
+            s_ret: strs_new(), s_conv: strs_new(), s_params: vec_new(), by_name: hashmap_new())
+    let mut source = ""
+    let datas = strs_new()
+    let mut fn_at = strs_len(lines)
+    let mut failing = false
+    let mut failed_now = false
+    let mut stack_check = false
+    for i in 0..strs_len(lines) {
+        let line = strs_get(lines, i)
+        if str_len(line) == 0 { continue }
+        if text_starts_with(line, "function ") {
+            if fn_at == strs_len(lines) { fn_at = i }
+            continue
+        }
+        if i >= fn_at {
+            if line == "  fail" { failing = true }
+            continue
+        }
+        if text_starts_with(line, "; unit ") {
+            source = str_slice(line, 7, str_len(line))
+            continue
+        }
+        if text_starts_with(line, "; file ") { continue }
+        if text_starts_with(line, "data @") {
+            strs_push(datas, line)
+            continue
+        }
+        // `LINK func @NAME SIG` or `LINK data @NAME CLASS`.
+        let t = ll_tok(line)
+        if strs_len(t) < 3 || (t[1] != "func" && t[1] != "data") {
+            return Err("LIR text not understood: " + line)
+        }
+        let at_name = match text_find(line, "@") { Some(p) => p + 1, None => 0 }
+        let mut name_end = str_len(line)
+        if t[1] == "func" {
+            let mut k = str_len(line) - 1
+            while k > at_name && !(str_byte(line, k) == 40 && str_byte(line, k - 1) == 32) { k -= 1 }
+            name_end = k - 1
+            if text_ends_with(str_slice(line, 0, name_end), " plain") {
+                name_end -= 6
+            } else if text_ends_with(str_slice(line, 0, name_end), " c") {
+                name_end -= 2
+            }
+        } else {
+            let mut k = str_len(line) - 1
+            while k > at_name && str_byte(line, k) != 32 { k -= 1 }
+            name_end = k
+        }
+        let name = str_slice(line, at_name, name_end)
+        hashmap_set(m.by_name, name, strs_len(m.s_name))
+        strs_push(m.s_name, name)
+        strs_push(m.s_link, t[0])
+        strs_push(m.s_kind, t[1])
+        if name == "nz.failed_now" { failed_now = true }
+        if name == "nz.stack_check" { stack_check = true }
+        if t[1] == "func" {
+            let sg = ll_parse_sig(str_slice(line, name_end, str_len(line)))
+            strs_push(m.s_conv, sg[0])
+            strs_push(m.s_ret, sg[1])
+            let ps = strs_new()
+            for k in 2..strs_len(sg) { strs_push(ps, sg[k]) }
+            vec_push(m.s_params, ps)
+        } else {
+            strs_push(m.s_conv, "")
+            strs_push(m.s_ret, str_slice(line, name_end + 1, str_len(line)))
+            vec_push(m.s_params, strs_new())
+        }
+    }
+    let out = strs_new()
+    strs_push(out, "; Generated by nazm build. Do not edit." + ll_nl() + "; " + rt_target_note() + ll_nl() + "source_filename = \"" + source + "\"" + ll_nl() + ll_nl())
+    ll_declares(out)
+    if unwind {
+        ll_w(out, "declare i32 @__gcc_personality_v0(...)")
+        if failing { ll_raise(out) }
+    }
+    if failed_now { ll_w(out, "@nz.failed = external hidden thread_local global i1") }
+    // The stack check, inlined: the limit is read here and the runtime called only when it is unset
+    // or crossed.
+    if stack_check {
+        ll_w(out, "@nz.stack_limit = external hidden thread_local global i64")
+        ll_w(out, "declare ptr @llvm.frameaddress.p0(i32)")
+    }
+    for i in 0..strs_len(m.s_name) {
+        if strs_get(m.s_link, i) != "import" { continue }
+        let name = strs_get(m.s_name, i)
+        if strs_get(m.s_kind, i) == "func" {
+            let conv = strs_get(m.s_conv, i)
+            let ps = strs_new()
+            for p in vec_get(m.s_params, i) { strs_push(ps, ll_sig_ty(p, conv, false)) }
+            ll_w(out, "declare " + ll_ret_ty(strs_get(m.s_ret, i), conv, unwind) + " " + ll_sname(name) + "(" + str_join(ps, ", ") + ")")
+        } else {
+            // The runtime's state is `hidden` in the image this unit is linked into, so it is
+            // addressed directly rather than through the global offset table; a C library's data
+            // keeps default visibility.
+            let vis = if text_starts_with(name, "nz.") { "hidden " } else { "" }
+            let c = strs_get(m.s_ret, i)
+            ll_w(out, ll_sname(name) + " = external " + vis + "global " + (if c == "bytes" || c == "" { "i8" } else { ll_ty(c) }))
+        }
+    }
+    strs_push(out, ll_nl())
+    for d in datas { ll_data(m, out, d) }
+    strs_push(out, ll_nl())
+    let mut i = fn_at
+    while i < strs_len(lines) {
+        let mut j = i + 1
+        while j < strs_len(lines) && !text_starts_with(strs_get(lines, j), "function ") { j += 1 }
+        ll_function(m, out, lines, i, j)
+        i = j
+    }
+    Ok(str_join(out, ""))
+}

@@ -1,8 +1,8 @@
 #!/bin/bash
 # R6 — the Nazm toolchain builds itself (`openspec/changes/rewrite-in-nazm/`, task 7.1).
 #
-#     cargo xtask contained selfbuild            (the only way to run it)
-#     toolchain/selfbuild/selfbuild.sh [OUT]     (inside the contained runner)
+#     cargo xtask contained selfbuild [stages=N] [backend=llvm]   (the only way to run it)
+#     toolchain/selfbuild/selfbuild.sh [OUT] [stages=N] [backend=llvm]   (inside the contained runner)
 #
 # The builder is three programs written in Nazm: `nazm` (`toolchain/commands/nazm.nz`), whose
 # `build` is the driver with R2's front end in it (R8 slice 4, `openspec/changes/r8-cut-over/design.md`,
@@ -16,7 +16,16 @@
 # pipeline (LIR, every unit, and the runtime's units, LLVM IR text), the code generator (one
 # object per unit), the platform's `clang -c` for the runtime's units (as R3 leaves them) and its
 # link — with no Rust between source and object. The front end (`compiler/diagnose.nz`) is built
-# too, for the Core IR check below. The chain (`rewrite-in-nazm` design, decision 7):
+# too, for the Core IR check below.
+#
+# `backend=llvm` (R8 slice 5) builds every stage's programs on the default LLVM backend instead:
+#
+#     NAZM_PIPELINE=pl nazm build --backend llvm --no-cache --target T --heap-limit H FILE -o NAME
+#
+# the pipeline writing each unit as LLVM text (`toolchain/pipeline/llvm.nz`), as the Rust build does,
+# and `clang -c` making every object. The seed's own builds of the builder are the LLVM backend's
+# (its default), so stage 1 must also equal stage 0: the same sources, the same text, the same objects.
+# The chain (`rewrite-in-nazm` design, decision 7):
 #
 #     stage 0   the Rust `nazm` (the seed) builds the builder
 #     stage 1   stage 0's builder builds the builder and every other toolchain program
@@ -44,8 +53,13 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 out=${1:-/work/selfbuild}
 # `stages=N` after OUT (what `cargo xtask contained selfbuild stages=N` passes) runs fewer stages.
 for a in "${@:2}"; do
-    case $a in stages=*) SELFBUILD_STAGES=${a#stages=} ;; *) printf 'selfbuild: unknown setting %s\n' "$a" >&2; exit 2 ;; esac
+    case $a in
+        stages=*) SELFBUILD_STAGES=${a#stages=} ;;
+        backend=nazm | backend=llvm) SELFBUILD_BACKEND=${a#backend=} ;;
+        *) printf 'selfbuild: unknown setting %s\n' "$a" >&2; exit 2 ;;
+    esac
 done
+backend=${SELFBUILD_BACKEND:-nazm}
 nazm=${NAZM:-"${CARGO_TARGET_DIR:-$root/target}/debug/nazm"}
 # The heap each built program may hold: 2 GiB, the limit the R6 proposal would let a stage run
 # under on a host (`openspec/changes/r6-host-qualification/design.md`), so the self-build is the
@@ -140,13 +154,13 @@ build_with() {
     B=$1; dest=$2; name=$3; src=$4
     st=$(basename "$dest")
     NAZM_LIBRARY="$root/library" NAZM_PIPELINE="$B/pl" NAZM_NZCG="$B/cg" \
-        peak "$st $name build" "$B/nazm" build --backend nazm --no-cache --target "$target" --heap-limit "$heapb" \
+        peak "$st $name build" "$B/nazm" build --backend "$backend" --no-cache --target "$target" --heap-limit "$heapb" \
         "$root/$src" -o "$dest/$name" > "$dest/$name.build.out" 2> "$dest/$name.build.err" < /dev/null \
         || { say "  $name: \`nazm build\` failed: $(head -c 600 "$dest/$name.build.err")"; return 1; }
     return 0
 }
 
-say "selfbuild: target $target, heap limit $heap ($heapb bytes) per built program, $stages stages"
+say "selfbuild: target $target, backend $backend, heap limit $heap ($heapb bytes) per built program, $stages stages"
 say "selfbuild: seed $("$nazm" --version 2>/dev/null)"
 
 # --- stage 0: the seed builds the builder -------------------------------------------------------
@@ -186,6 +200,15 @@ compare() {
     [ "$differ" -eq 0 ]
 }
 fix=0
+# On the LLVM backend the seed's builds of the builder are the same backend's: Nazm's emitter and the
+# Rust one must write the same text, so stage 1's builder is the seed's, byte for byte.
+if [ "$backend" = llvm ] && [ "$stages" -ge 1 ]; then
+    seeddiff=0
+    for b in $(echo "$builder" | tr ' ' '\n' | cut -d: -f1); do
+        if cmp -s "$out/stage0/$b" "$out/stage1/$b"; then say "stage 0 vs stage 1: $b identical"; else seeddiff=$((seeddiff + 1)); say "  differs: $b (the seed's LLVM build and Nazm's)"; fi
+    done
+    [ "$seeddiff" -eq 0 ] || fix=1
+fi
 if [ "$stages" -ge 2 ]; then compare "$out/stage1" "$out/stage2" || fix=1; fi
 if [ "$stages" -ge 3 ]; then compare "$out/stage2" "$out/stage3" || fix=1; fi
 
@@ -335,4 +358,4 @@ awk '{ k = $NF; v = $(NF - 1); if (!($1 in m) || v > m[$1]) { m[$1] = v; w[$1] =
 [ "$disagree" -eq 0 ] && [ "$unbuilt" -eq 0 ] || fail "the last stage's builds do not all run as the seed's do"
 [ "$idisagree" -eq 0 ] || fail "the self-built interpreter does not run the corpus as the seed's does"
 [ "$cagree" -eq 1 ] || fail "the self-built nazm-check does not report the tree as the seed's build does"
-say "selfbuild complete: stages 1 to $stages byte-identical, every program built by \`nazm build\`; $agree programs agree with the seed's builds; $iagree run by the self-built interpreter as by the seed's; nazm-check agrees; the bounded heap holds"
+say "selfbuild complete ($backend backend): stages 1 to $stages byte-identical, every program built by \`nazm build\`; $agree programs agree with the seed's builds; $iagree run by the self-built interpreter as by the seed's; nazm-check agrees; the bounded heap holds"

@@ -461,6 +461,10 @@ struct Fb {
     reg: Ints,
     vars: Strs,
     slots: Strs,
+    /// The source binding each variable and slot holds (`name : Type`, or `""`), which only the
+    /// LLVM text shows as a comment.
+    var_names: Strs,
+    slot_names: Strs,
     slot_sizes: Ints,
     slot_aligns: Ints,
     /// The last position emitted (`Fb::here`, a `loc` line, `""` for none), the function's own
@@ -476,7 +480,7 @@ fn fb_new() -> Fb {
     ints_push(reg, 0)
     let here = strs_new()
     strs_push(here, "")
-    let fb = Fb(insts: vec_new(), terms: strs_new(), reg: reg, vars: strs_new(), slots: strs_new(), slot_sizes: ints_new(), slot_aligns: ints_new(),
+    let fb = Fb(insts: vec_new(), terms: strs_new(), reg: reg, vars: strs_new(), slots: strs_new(), var_names: strs_new(), slot_names: strs_new(), slot_sizes: ints_new(), slot_aligns: ints_new(),
         here: here, at_line: strs_new(), debug_lines: strs_new())
     let entry = new_lblock(fb)
     ints_set(fb.reg, 0, entry)
@@ -520,6 +524,7 @@ fn term(fb: Fb, t: Str) {
 
 fn new_var(fb: Fb, c: Str) -> Int {
     strs_push(fb.vars, c)
+    strs_push(fb.var_names, "")
     strs_len(fb.vars) - 1
 }
 
@@ -527,6 +532,7 @@ fn new_slot(fb: Fb, size: Int, align: Int) -> Int {
     let s = if size < 1 { 1 } else { size }
     let a = if align < 1 { 1 } else { align }
     strs_push(fb.slots, int_to_str(s) + " align " + int_to_str(a))
+    strs_push(fb.slot_names, "")
     ints_push(fb.slot_sizes, s)
     ints_push(fb.slot_aligns, a)
     strs_len(fb.slots) - 1
@@ -542,6 +548,15 @@ fn finish_in(lo: Lo, fb: Fb, sym: Int, name: Str, section: Str) -> Str {
     for a in fb.at_line { strs_push(lines, a) }
     for i in 0..strs_len(fb.vars) { strs_push(lines, "  var x" + int_to_str(i) + " " + strs_get(fb.vars, i)) }
     for i in 0..strs_len(fb.slots) { strs_push(lines, "  slot s" + int_to_str(i) + " " + strs_get(fb.slots, i)) }
+    // For the LLVM text, which names the binding a variable or slot holds beside it.
+    if hashmap_has(lo.needs, "@names") {
+        for i in 0..strs_len(fb.var_names) {
+            if strs_get(fb.var_names, i) != "" { strs_push(lines, "  vname " + int_to_str(i) + " " + strs_get(fb.var_names, i)) }
+        }
+        for i in 0..strs_len(fb.slot_names) {
+            if strs_get(fb.slot_names, i) != "" { strs_push(lines, "  sname " + int_to_str(i) + " " + strs_get(fb.slot_names, i)) }
+        }
+    }
     for d in fb.debug_lines { strs_push(lines, d) }
     for b in 0..vec_len(fb.insts) {
         strs_push(lines, "b" + int_to_str(b) + ":")
@@ -1984,6 +1999,27 @@ fn num_primitive(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) -> Bo
         return true
     }
     false
+}
+
+/// A type as the LIR's own `Ty::name` says it, for the comment beside a variable in the LLVM text.
+fn lir_ty_name(t: Str) -> Str {
+    let k = class(t)
+    if k == "int" { return "Int" }
+    if k == "str" { return "Str" }
+    if k == "bool" { return "Bool" }
+    if k == "num" { return t }
+    if k == "record" { return "a record" }
+    if k == "enum" { return "an enum" }
+    if k == "array" { return "an array" }
+    if t == "Ints" { return "Ints" }
+    if t == "Strs" { return "Strs" }
+    if t == "Chan" { return "Chan" }
+    if t == "Select" { return "Select" }
+    let s = spell(t)
+    if s.head == "Chan" && strs_len(s.args) > 0 { return "a `Chan[T]`" }
+    if s.kind == "vec" { return "a `Vec`" }
+    if s.kind == "unknown" { return "a function value" }
+    t
 }
 
 // --- numeric kinds ------------------------------------------------------------------------------
@@ -4842,6 +4878,7 @@ fn lower_fn(lo: Lo, fi: Int, sym: Int) -> Str {
             } else {
                 let ly = lay(lo.lx, l.ty)
                 let s = new_slot(fx.fb, ly.size, if ly.align < 8 { 8 } else { ly.align })
+                strs_set(fx.fb.slot_names, s, l.name + " : " + lir_ty_name(l.ty))
                 if owns_ty(fx, l.ty) {
                     let a = slot_addr(fx, s)
                     zero(fx, a, ly.size);
@@ -4854,6 +4891,7 @@ fn lower_fn(lo: Lo, fi: Int, sym: Int) -> Str {
             ints_push(fx.idx, 0 - 1)
         } else {
             let v = new_var(fx.fb, mclass(l.ty))
+            strs_set(fx.fb.var_names, v, l.name + " : " + lir_ty_name(l.ty))
             let init = if is_param {
                 let p = param(fx, next_param)
                 next_param += 1
@@ -5102,7 +5140,7 @@ pub fn lir_texts_with(c: Cir, tt: TypeTable, p: MirProgram, needs: HashMap[Str, 
     let out = strs_new()
     for u in unit_plans(c, p) {
         match lower_unit(c, lx, p, u, runtime, parts, needs, sources, starts, debug, files, paths) {
-            Ok(t) => { strs_push(out, if debug { t + file_names(t, paths) } else { t }); },
+            Ok(t) => { strs_push(out, if debug { t + file_names(t, paths, hashmap_has(needs, "@names")) } else { t }); },
             Err(e) => { return Err(e) },
         }
     }
@@ -5110,9 +5148,14 @@ pub fn lir_texts_with(c: Cir, tt: TypeTable, p: MirProgram, needs: HashMap[Str, 
 }
 
 /// The files a unit's positions name, by index, as the backends' debug information names them.
-fn file_names(t: Str, paths: HashMap[Int, Str]) -> Str {
+fn file_names(t: Str, paths: HashMap[Int, Str], with_root: Bool) -> Str {
     let seen: HashMap[Int, Bool] = hashmap_new()
     let ids = ints_new()
+    // The LLVM text's debug information names the root file for a function with no position.
+    if with_root {
+        hashmap_set(seen, 0, true)
+        ints_push(ids, 0)
+    }
     for line in text_lines(t) {
         let at = text_starts_with(line, "  at ")
         if at || text_starts_with(line, "  loc ") {
