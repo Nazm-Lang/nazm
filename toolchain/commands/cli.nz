@@ -12,8 +12,7 @@
 // then answers the arguments, or prints help (standard output, status 0) or the usage error
 // (standard error, status 5, the contract's `USAGE`) and exits.
 //
-// Not carried, because no command ported so far has them: subcommands, aliases, possible values,
-// groups, `requires`, environment variables, `num_args` other than a flag's none, an option's one
+// Not carried, because no command ported so far has them: subcommands, aliases, groups, environment variables, `num_args` other than a flag's none, an option's one
 // and a positional's one-or-more, hyphen values, and terminal-width wrapping (the reference is built
 // without `wrap_help`).
 
@@ -61,6 +60,8 @@ pub struct Cli {
     delim: Strs,
     // Per argument, whether its value is a `u32` (clap's `value_parser` of the type).
     numeric: Ints,
+    // The positional that only follows `--` (clap's `last(true)`), or -1: shown `[-- <ARGS>...]` in a usage.
+    lastp: Ints,
     // The arguments of the one required group (`ArgGroup::new(..).required(true)`: exactly one of them).
     grp: Ints,
     conf_a: Ints,
@@ -82,7 +83,7 @@ pub fn cli_command(name: Str, about: Str, long_about: Str) -> Cli {
     Cli(name: name, about: about, long_about: long_about, kind: ints_new(), short: strs_new(), long: strs_new(),
             value: strs_new(), required: ints_new(), multiple: ints_new(), path: ints_new(), default: strs_new(),
             has_default: ints_new(), help: strs_new(), long_help: strs_new(), order: ints_new(), explicit: ints_new(),
-            val_arg: ints_new(), val_text: strs_new(), pend: ints_new(), pend_vals: strs_new(), delim: strs_new(), numeric: ints_new(), grp: ints_new(),
+            val_arg: ints_new(), val_text: strs_new(), pend: ints_new(), pend_vals: strs_new(), delim: strs_new(), numeric: ints_new(), lastp: ints_new(), grp: ints_new(),
             conf_a: ints_new(), conf_b: ints_new(), req_a: ints_new(), req_b: ints_new(), first: ints_new(),
             possible: strs_new(), hidden: ints_new(), vkind: ints_new())
 }
@@ -136,6 +137,17 @@ pub fn cli_list(c: Cli, short: Str, long: Str, value: Str, delim: Str, help: Str
     let a = cli_add(c, cli_k_opt(), short, long, value, false, true, false, "", false, help, long_help)
     strs_set(c.delim, a, delim)
     a
+}
+
+// Positional `a` takes values only after `--` (`last = true`).
+pub fn cli_last(c: Cli, a: Int) -> Int {
+    ints_push(c.lastp, a)
+    0
+}
+
+fn cli_is_last(c: Cli, a: Int) -> Bool {
+    for i in 0..ints_len(c.lastp) { if ints_get(c.lastp, i) == a { return true } }
+    false
 }
 
 // Argument `a`'s values are `u32`s: another is refused as `invalid value`.
@@ -454,7 +466,14 @@ fn cli_write_args(c: Cli, used: Ints) -> Str {
     let parts = strs_new()
     for i in 0..strs_len(opts) { strs_push(parts, strs_get(opts, i) + " ") }
     for a in 0..ints_len(c.kind) {
-        if cli_is_pos(c, a) { strs_push(parts, cli_stylized(c, a, ints_get(pos_set, a) == 1) + " ") }
+        if cli_is_pos(c, a) {
+            if cli_is_last(c, a) {
+                let shown = "-- <" + strs_get(c.value, a) + ">..."
+                strs_push(parts, (if ints_get(pos_set, a) == 1 { shown } else { "[" + shown + "]" }) + " ")
+            } else {
+                strs_push(parts, cli_stylized(c, a, ints_get(pos_set, a) == 1) + " ")
+            }
+        }
     }
     if ints_len(c.grp) > 0 { strs_push(parts, cli_group_text(c) + " ") }
     str_join(parts, "")
@@ -1099,7 +1118,8 @@ pub fn cli_parse(io: IoCap, c: Cli) -> Int {
                 continue
             }
         }
-        let a = cli_positional_at(c, pos_counter)
+        let mut a = cli_positional_at(c, pos_counter)
+        if a >= 0 && cli_is_last(c, a) && !trailing { a = 0 - 1 }
         if a < 0 {
             cli_resolve(io, c, true)
             let looks = (n > 2 && cli_starts(s, "--")) || (n > 1 && str_byte(s, 0) == 45 && str_byte(s, 1) != 45)
@@ -1186,6 +1206,20 @@ pub fn cli_parse(io: IoCap, c: Cli) -> Int {
         if group_missing { strs_push(lines, cli_group_text(c)) }
         let used = cli_used(c, false)
         for i in 0..ints_len(missing) { ints_push(used, ints_get(missing, i)) }
+        // An argument another asks for is written where it is declared (clap's usage of `requires`).
+        if ints_len(c.req_a) > 0 {
+            let mut x = 1
+            while x < ints_len(used) {
+                let mut y = x
+                while y > 0 && ints_get(used, y) < ints_get(used, y - 1) {
+                    let t = ints_get(used, y)
+                    ints_set(used, y, ints_get(used, y - 1))
+                    ints_set(used, y - 1, t)
+                    y -= 1
+                }
+                x += 1
+            }
+        }
         let mut text = "the following required arguments were not provided:"
         for i in 0..strs_len(lines) { text = text + cli_nl() + "  " + strs_get(lines, i) }
         cli_fail_usage(io, c, text, used)

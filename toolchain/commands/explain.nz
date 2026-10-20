@@ -1,0 +1,77 @@
+// `nazm explain-cost`, `nazm explain-flow` and `nazm profile`, in Nazm (R8 slice 8,
+// `openspec/changes/r8-cut-over/design.md`, task 8.1): the command lines, the front end, and then what R2
+// and R3 do not yet publish, refused by name (status 6, counted by the comparison, never an agreement).
+//
+//   explain-cost   `nazm_mir::cost` over MIR (every allocation, retain, block, channel, C call and task
+//                  of each function, its count per call), `vectorize::explain`, `--layout soa`'s
+//                  eligibility and the scheduler's policy: the R3 pipeline has no mode that prints them
+//                  (a hand-back to R3: `pipeline cost`).
+//   explain-flow   every sink of the compilation with the origins that reach it and how each got there
+//                  (`Resolution::sinks`): R2's provenance facts summarise a function's, not the sinks
+//                  nor their traces (a hand-back to R2: `fx_sink_*`).
+//   profile        builds the program with the chosen backend and runs it once with its counters on,
+//                  printing the wall time: `build`'s LLVM and Cranelift backends are not carried, and a
+//                  run's counters and clock are not a thing two builds can print alike (hand-back to
+//                  slice 5/6: `profile --backend nazm`, its counters compared by structure).
+
+use "../../compiler/facts.nz"
+use "cli.nz"
+use "front.nz"
+use "util.nz"
+use "coreir.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+fn ex_refuse(io: IoCap, why: Str) -> Int {
+    eprint("nazm: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+pub fn explain_cost_cli() -> Cli {
+    let c = cli_command("explain-cost", "Print where each function allocates, retains, blocks, talks to a channel, calls C or starts a task (N52), read off MIR, each with its "
+            + "count per call — `at-most-once` or `unknown`, never a guess. `--json` prints `nazm.cost/2`, which since N106 also says which scheduler a native "
+            + "build runs the program's tasks on, and why", "")
+    cli_positional(c, "FILE", true, false, true, "", "")
+    cli_flag(c, "", "json", "", "")
+    c
+}
+
+pub fn explain_flow_cli() -> Cli {
+    let c = cli_command("explain-flow", "Print every sink — a path written to, standard output, a file's data — and every declassification, with the origins that reach it "
+            + "(N52). `--json` prints `nazm.flow/2`", "")
+    cli_positional(c, "FILE", true, false, true, "", "")
+    cli_flag(c, "", "json", "", "")
+    c
+}
+
+pub fn profile_cli() -> Cli {
+    let c = cli_command("profile", "Build the program and run it once with its memory and scheduler counters on (N58), and print `nazm.profile/2`: its exit status, wall "
+            + "time and the counts; with `--sample`, also where its samples fell (N91)", "")
+    cli_positional(c, "FILE", true, false, true, "", "")
+    let backend = cli_option(c, "", "backend", "BACKEND", false, "llvm", true, "The code generator, as `nazm build --backend`: `llvm`, `cranelift` or `nazm`", "")
+    cli_possible(c, backend, "llvm,cranelift,nazm")
+    cli_flag(c, "", "sample", "Sample the run with the host's sampler, attributing each sample to a Nazm function and line, the runtime, foreign code or the system (N91)", "")
+    let interval = cli_option(c, "", "interval-ms", "MS", false, "1", true, "With `--sample`, the time between samples", "")
+    cli_requires(c, interval, 2)
+    cli_numeric_size(c, interval)
+    c
+}
+
+pub fn explain_cost_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    ci_checked(io, cli_value(c, 0), false, "")
+    ex_refuse(io, "`explain-cost` (MIR's cost sites, the vectorizer's reasons, the layouts and the scheduler's policy: the pipeline prints none of them, an R3 hand-back)")
+}
+
+pub fn explain_flow_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    // `on_checked_map` checks the root as a program: a module with no `main` is `N0204`.
+    ci_checked_as(io, cli_value(c, 0), false, "", true)
+    ex_refuse(io, "`explain-flow` (the checker's sinks and the traces of the origins that reach them: R2 publishes a function's provenance, not these, an R2 hand-back)")
+}
+
+pub fn profile_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    ex_refuse(io, "`profile` (it builds with `--backend " + cli_value(c, 1) + "` and runs the program with its counters on: not carried by `build`, and its wall time is no byte to compare)")
+}

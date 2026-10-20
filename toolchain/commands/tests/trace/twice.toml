@@ -1,0 +1,9 @@
+schema = "nazm.requirements/1"
+
+[[requirement]]
+id = "R"
+definitions = ["power"]
+tests = ["power_is_bounded"]
+
+[[requirement]]
+id = "R"

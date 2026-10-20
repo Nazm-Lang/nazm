@@ -1,0 +1,14 @@
+# `nazm trace`'s command lines, run from the repository's root by `tests/inspect.sh args`.
+--help
+-h
+(none)
+examples/max.nz
+--requirements
+--requirements x.toml
+examples/max.nz --requirements absent.toml
+--requirements absent.toml examples/max.nz
+--requirements=absent.toml examples/max.nz
+examples/max.nz --requirements examples/max.nz
+examples/max.nz --requirements examples/max.nz --source-root .
+--bogus
+examples/max.nz --requirements absent.toml extra

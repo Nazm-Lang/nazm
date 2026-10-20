@@ -1,0 +1,13 @@
+schema = "nazm.requirements/1"
+
+[[requirement]]
+id = "HTR-1"
+text = "The heater's power is never outside 0 to 100."
+definitions = ["power"]
+tests = ["power_is_bounded"]
+
+[[requirement]]
+id = "HTR-2"
+text = "The heater trips above 80.0 degrees."
+definitions = ["over"]
+tests = ["trips_above_eighty"]

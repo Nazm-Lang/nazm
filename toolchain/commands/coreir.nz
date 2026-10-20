@@ -1,0 +1,446 @@
+// `nazm core-ir`, `nazm mir`, `nazm lir` and `nazm capabilities`, written in Nazm (R8 slice 8,
+// `openspec/changes/r8-cut-over/design.md`, task 8.1).
+//
+// Ports of `crates/nazm-cli/src/{core_ir,mir,lir,capabilities}.rs`, run by the dispatcher (`nazm.nz`).
+//
+//   the front end   in process, as `nazm interface` runs it (R2's facts over the root as a module,
+//                   `Entry::Absent`): every diagnostic of the compilation (a warning stops these
+//                   commands too, as `on_lowered` does) written as the Rust commands write them;
+//                   then Core IR's document (`fx_core_document`, with the sources for `mir` and
+//                   `lir`, which a stage reads);
+//   core-ir         that document, indented unless `--json`; `--no-spans` leaves out every `at`;
+//   mir, lir        a stage, `nazm-pipeline` (R3): `mir`, `lir`, `ops` and `ops-debug`, found as
+//                   `build` finds it (`NAZM_PIPELINE`, or `NAZM_LIBEXEC`);
+//   capabilities    the Rust compiler's inventory, `capdata.nz`, generated from the reference.
+//
+// What is not carried is said on standard error and exits 6 (R5's convention): `mir --spans`, `lir
+// --soa` and `lir --run` (the pipeline prints no statement positions, no field-by-field layout and
+// has no LIR interpreter), and a package's directory.
+
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/package.nz"
+use "../../compiler/facts.nz"
+use "../../compiler/facts-core.nz"
+use "cli.nz"
+use "front.nz"
+use "util.nz"
+use "stagerun.nz"
+use "capdata.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+fn ci_refuse(io: IoCap, why: Str) -> Int {
+    eprint("nazm: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+// --- the command lines, as `cli.rs` declares them ---------------------------------------------------
+
+pub fn core_ir_cli() -> Cli {
+    let c = cli_command("core-ir", "Print a checked program's Core IR, `nazm.core-ir/3`: what each function became, typed, with every name resolved and every transfer explicit",
+            "Print a checked program's Core IR, `nazm.core-ir/3`: what each function became, typed, with every name resolved and every transfer explicit."
+            + nl() + nl() + "A debugging view of the one representation `nazm run` and `nazm build` both start from, built only for a program that checks. "
+            + "Deterministic, and naming every definition and type by its durable key. Not user-facing syntax, and its version promises nothing to a "
+            + "reader outside this build; `docs/internal/architecture.md` §7.41.")
+    cli_positional(c, "FILE", true, false, true, "", "")
+    cli_flag(c, "", "json", "The one canonical compact serialisation. Without it, the same object indented", "")
+    cli_flag(c, "", "no-spans", "Leave out every node's source span, so two programs that differ only in where their text sits print the same", "")
+    cli_flag(c, "", "with-sources", "Give each module its source text, as `source`: what turns a span into a line and a column. Read-only; without it the document names no file's contents", "")
+    cli_option(c, "", "source-root", "DIR", true, "", false, "Where this project begins. As `nazm check --source-root`", "")
+    c
+}
+
+pub fn mir_cli() -> Cli {
+    let c = cli_command("mir", "Print each concrete function of the native program as MIR, `nazm.mir/1` (N40): basic blocks with every copy, move, drop, scope join and failure edge written out, after the validator accepted it. Debug output, internal and unstable; `docs/internal/architecture.md` §7.42", "")
+    cli_positional(c, "FILE", true, false, true, "", "")
+    cli_flag(c, "", "json", "One line rather than indented", "")
+    cli_flag(c, "", "spans", "Name each statement's source position", "")
+    cli_option(c, "", "source-root", "DIR", true, "", false, "Where this project begins. As `nazm check --source-root`", "")
+    c
+}
+
+pub fn lir_cli() -> Cli {
+    let c = cli_command("lir", "Print what LIR decided for a checked program, `nazm.lir/2` (N81, N105): the target's data layout, every unit's symbols and linkage, "
+            + "every record's and enum's byte layout on that target, which types own anything, and every unit's instructions — what both backends read, "
+            + "validated. `docs/internal/architecture.md` §7.82 and §7.106", "")
+    cli_positional(c, "FILE", true, false, true, "", "")
+    cli_option(c, "", "target", "TRIPLE", false, "", false, "The target whose layout to print; the host's when absent", "")
+    cli_flag(c, "", "ops", "Print each unit's instructions as text (N105), validated, instead of the tables", "")
+    cli_flag(c, "", "soa", "With `--ops`: lay out every eligible `Vec[R]` field by field (N68)", "")
+    cli_flag(c, "", "debug", "With `--ops`: lower as `nazm build --debug` does, so each function's `at` line and every `loc` position (N48, N91) are printed — "
+            + "what a code generator makes line tables from (R9) — and after each unit a `; file INDEX NAME` line for every file they name", "")
+    cli_flag(c, "", "run", "Run the program on LIR's interpreter, the oracle the native backends are held to (N105): its output, and the status a native build would end with", "")
+    cli_last(c, cli_positional(c, "ARGS", false, true, false, "With `--run`: the program's arguments", ""))
+    cli_option(c, "", "source-root", "DIR", true, "", false, "Where this project begins. As `nazm check --source-root`", "")
+    c
+}
+
+pub fn capabilities_cli() -> Cli {
+    let c = cli_command("capabilities", "Report what this build of the compiler actually supports",
+            "Report what this build of the compiler actually supports." + nl() + nl()
+            + "Read from the compiler's own tables rather than from a written list, so it cannot describe a version of itself that does not exist.")
+    cli_flag(c, "", "json", "One JSON object, on stdout. See `docs/user/diagnostics.md`", "")
+    c
+}
+
+// --- the front end ----------------------------------------------------------------------------------
+
+// The root checked as a module and its diagnostics, as `crate::opened::opened` and `on_lowered` give
+// them: a root that cannot be decided or loaded ends the process with the loader's own words; any
+// diagnostic of the check ends it as `nazm: N error(s)`; what the front end does not carry is
+// refused. `rooted` and `given` are `--source-root`.
+pub fn ci_checked(io: IoCap, file: Str, rooted: Bool, given: Str) -> Facts { ci_checked_as(io, file, rooted, given, false) }
+
+// `program`: the root checked as a program (one with a `main`), as `nazm check` checks it.
+pub fn ci_checked_as(io: IoCap, file: Str, rooted: Bool, given: Str, program: Bool) -> Facts {
+    let library = os_env_get("NAZM_LIBRARY")
+    if library == "" { ci_refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
+    let given_prefix = if rooted { fe_prefix(io, given) } else { "" }
+    let prefix = fe_prefix(io, file)
+    let at = if rooted { given_prefix + given } else { "" }
+    let f = if program { fx_check_in(prefix + file, at, library, fe_host_os(), fe_host_arch(), io) } else { fx_check_module_in(prefix + file, at, library, fe_host_os(), fe_host_arch(), io) }
+    if fx_refusal(f) != "" {
+        let why = fe_unprefix(fx_refusal(f), given_prefix)
+        eprint("nazm: " + why + nl())
+        let unreadable = fe_starts(why, "could not read") || ut_ends(why, "is not a directory")
+        exit_with(if unreadable { 3 } else { 1 })
+    }
+    if !fx_carried(f) { ci_refuse(io, fx_why(f)) }
+    let d = fx_diags(f)
+    fe_unprefix_diags(io, d, prefix, prefix + file)
+    let names = fe_names(f, prefix)
+    let texts = fe_texts(f)
+    let bases = fe_bases(f)
+    let out = strs_new()
+    if fe_load_failed(f) {
+        let mut missing = true
+        for i in 0..dg_len(d) {
+            if strs_get(d.code, i) != "N0205" { missing = false }
+            strs_push(out, dg_render(d, i, names, texts, bases))
+        }
+        eprint(str_join(out, ""))
+        exit_with(if missing { 3 } else { 1 })
+    }
+    let n = dg_len(d)
+    if n > 0 {
+        for i in 0..n { strs_push(out, dg_render(d, i, names, texts, bases)) }
+        eprint(str_join(out, "") + "nazm: " + int_to_str(n) + " error" + ut_plural(n) + nl())
+        exit_with(1)
+    }
+    f
+}
+
+// --- JSON, as the Core IR printer writes it -----------------------------------------------------------
+
+fn ci_spaces(out: Strs, n: Int) -> Int {
+    for _ in 0..n { strs_push(out, "  ") }
+    0
+}
+
+// `indented` written on one line, the canonical compact form: every line break and every space outside
+// a string goes (a document's only spaces there are its indentation and the one after each colon).
+fn ci_compact(indented: Str) -> Str {
+    let out = strs_new()
+    let n = str_len(indented)
+    let mut i = 0
+    let mut from = 0
+    while i < n {
+        let b = str_byte(indented, i)
+        if b == 34 {
+            i = ci_string_end(indented, i)
+        } else if b == 10 || b == 32 {
+            strs_push(out, str_slice(indented, from, i))
+            i += 1
+            from = i
+        } else {
+            i += 1
+        }
+    }
+    strs_push(out, str_slice(indented, from, n))
+    str_join(out, "")
+}
+
+// `compact` (one value on one line, no space after a colon or a comma) written indented, as
+// `J::write` does: two spaces a level, `[]` and `{}` for an empty one, a space after a colon.
+fn ci_indent(compact: Str) -> Str {
+    let out = strs_new()
+    let n = str_len(compact)
+    let mut level = 0
+    let mut i = 0
+    let mut from = 0
+    while i < n {
+        let b = str_byte(compact, i)
+        if b == 34 {
+            // A string, to its closing quote.
+            i += 1
+            while i < n && str_byte(compact, i) != 34 {
+                if str_byte(compact, i) == 92 { i += 1 }
+                i += 1
+            }
+            i += 1
+        } else if b == 123 || b == 91 {
+            let close = if b == 123 { 125 } else { 93 }
+            if i + 1 < n && str_byte(compact, i + 1) == close {
+                i += 2
+            } else {
+                strs_push(out, str_slice(compact, from, i + 1))
+                level += 1
+                strs_push(out, nl())
+                ci_spaces(out, level)
+                i += 1
+                from = i
+            }
+        } else if b == 125 || b == 93 {
+            strs_push(out, str_slice(compact, from, i))
+            level -= 1
+            strs_push(out, nl())
+            ci_spaces(out, level)
+            from = i
+            i += 1
+        } else if b == 44 {
+            strs_push(out, str_slice(compact, from, i + 1))
+            strs_push(out, nl())
+            ci_spaces(out, level)
+            i += 1
+            from = i
+        } else if b == 58 {
+            strs_push(out, str_slice(compact, from, i + 1))
+            strs_push(out, " ")
+            i += 1
+            from = i
+        } else {
+            i += 1
+        }
+    }
+    strs_push(out, str_slice(compact, from, n))
+    str_join(out, "")
+}
+
+// The end of the string that begins at the quote at `i`: the index after its closing quote.
+fn ci_string_end(s: Str, i: Int) -> Int {
+    let n = str_len(s)
+    let mut k = i + 1
+    while k < n && str_byte(s, k) != 34 {
+        if str_byte(s, k) == 92 { k += 1 }
+        k += 1
+    }
+    k + 1
+}
+
+// `compact` without every member `"at": "…"` (`--no-spans`: `Printer::at` leaves them out), and the
+// comma that joined it to its neighbour.
+fn ci_without_at(compact: Str) -> Str {
+    let out = strs_new()
+    let n = str_len(compact)
+    let key = "\"at\":\""
+    let key2 = "\"callee_at\":\""
+    let mut i = 0
+    let mut from = 0
+    while i < n {
+        let b = str_byte(compact, i)
+        if b == 34 {
+            // A key or a value. A key `"at":` (or `"callee_at":`, which `source_at` writes only with spans) with a
+            // string value, after `{` or `,`, is dropped.
+            let after_open = i > 0 && (str_byte(compact, i - 1) == 123 || str_byte(compact, i - 1) == 44)
+            let kl = if i + str_len(key2) <= n && str_slice(compact, i, i + str_len(key2)) == key2 { str_len(key2) } else { str_len(key) }
+            let hit = i + kl <= n && (str_slice(compact, i, i + kl) == key || str_slice(compact, i, i + kl) == key2)
+            if after_open && hit {
+                let e = ci_string_end(compact, i + kl - 1)
+                let prev = str_byte(compact, i - 1)
+                if prev == 44 {
+                    // `…,"at":"x"`: the comma before goes.
+                    strs_push(out, str_slice(compact, from, i - 1))
+                    from = e
+                } else if e < n && str_byte(compact, e) == 44 {
+                    // `{"at":"x",…`: the comma after goes.
+                    strs_push(out, str_slice(compact, from, i))
+                    from = e + 1
+                } else {
+                    strs_push(out, str_slice(compact, from, i))
+                    from = e
+                }
+                i = from
+            } else {
+                i = ci_string_end(compact, i)
+            }
+        } else {
+            i += 1
+        }
+    }
+    strs_push(out, str_slice(compact, from, n))
+    str_join(out, "")
+}
+
+// `doc` with the working directory's prefix taken off every module's `path` (`--with-sources`): the front
+// end was given an absolute path, the Rust command names the path it was given — but a dependency
+// package's module is named under that package's source root, canonically, and keeps it.
+pub fn ci_unprefix_paths(io: IoCap, doc: Str, file: Str) -> Str {
+    let prefix = fe_prefix(io, file)
+    if prefix == "" { return doc }
+    let kept = fe_dependency_roots(io, prefix + file)
+    let key = "\"path\": \"" + prefix
+    let out = strs_new()
+    let mut from = 0
+    let mut at = ut_find(doc, key, 0)
+    while at >= 0 {
+        let mut end = at + str_len(key)
+        while end < str_len(doc) && str_byte(doc, end) != 34 { end += 1 }
+        let mut under = false
+        let path = str_slice(doc, at + 9, end)
+        for k in 0..strs_len(kept) {
+            if pk_under(pk_normalise(path), strs_get(kept, k)) { under = true }
+        }
+        if under {
+            strs_push(out, str_slice(doc, from, end))
+            from = end
+        } else {
+            strs_push(out, str_slice(doc, from, at + 9))
+            from = at + str_len(key)
+        }
+        at = ut_find(doc, key, end)
+    }
+    strs_push(out, str_slice(doc, from, str_len(doc)))
+    str_join(out, "")
+}
+
+// --- core-ir ----------------------------------------------------------------------------------------
+
+pub fn core_ir_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let file = cli_value(c, 0)
+    let json = cli_present(c, 1)
+    let spans = !cli_present(c, 2)
+    // The modules' `source`, `file` and `path` follow `--with-sources` whether or not spans are printed.
+    let sources = cli_present(c, 3)
+    let f = ci_checked(io, file, cli_present(c, 4), cli_value(c, 4))
+    let raw = if sources { fx_core_document_with_sources(f) } else { fx_core_document(f) }
+    if raw == "" { ci_refuse(io, "a program whose Core IR the front end does not carry") }
+    let doc = if sources { ci_unprefix_paths(io, raw, file) } else { raw }
+    // `fx_core_document` is the indented document; the others are made from its compact form.
+    if spans && !json { print(doc); return 0 }
+    let compact = if spans { ci_compact(doc) } else { ci_without_at(ci_compact(doc)) }
+    if json { print(compact + nl()) } else { print(ci_indent(compact) + nl()) }
+    0
+}
+
+// --- the pipeline, as a stage ---------------------------------------------------------------------------
+
+// The pipeline's stage, found as `build` finds it, naming this command's own words.
+fn ci_stage(io: IoCap, command: Str) -> Str {
+    let named = os_env_get("NAZM_PIPELINE")
+    if named != "" {
+        if ut_kind(io, named) != 0 { sr_fail(io, "nazm: `" + command + "` runs nazm-pipeline: `NAZM_PIPELINE` names `" + named + "`, which is not a file", 4) }
+        return named
+    }
+    let dir = os_env_get("NAZM_LIBEXEC")
+    if dir == "" { sr_fail(io, "nazm: `" + command + "` runs nazm-pipeline: set `NAZM_PIPELINE`, or `NAZM_LIBEXEC` to the directory holding it", 4) }
+    let p = ut_join(dir, "nazm-pipeline")
+    if ut_kind(io, p) != 0 { sr_fail(io, "nazm: `" + command + "` runs nazm-pipeline: it is not installed at `" + p + "`", 4) }
+    p
+}
+
+// Core IR's document written to a new working directory and the pipeline run over it with `args`
+// (its `CORE.json` named `@CORE@`): what it printed. A stage that fails is reported as the Rust
+// command reports a lowering the validator rejects: the program was checked, so this is the
+// compiler's.
+pub fn ci_staged(io: IoCap, proc: ProcessCap, sp: SpawnCap, command: Str, doc: Str, args: Strs) -> Str {
+    let pipeline = ci_stage(io, command)
+    let limit = sr_check_stage(io, pipeline, "nazm-pipeline")
+    let tmp = os_env_get("TMPDIR")
+    let work = sr_workdir(io, (if tmp == "" { "/tmp" } else { tmp }) + "/nazm-" + command)
+    if write_file(work + "/core.json", doc) < 0 {
+        sr_remove(io, work)
+        sr_fail(io, "nazm: cannot write " + work + "/core.json", 4)
+    }
+    let full = strs_new()
+    for i in 0..strs_len(args) {
+        strs_push(full, if strs_get(args, i) == "@CORE@" { work + "/core.json" } else { strs_get(args, i) })
+    }
+    let r = sr_stage_run(io, proc, sp, pipeline, limit, full)
+    sr_remove(io, work)
+    if !r.started { sr_fail(io, "nazm: nazm-pipeline did not start: " + r.err, 4) }
+    if r.status != 0 {
+        // What the Rust command words as a diagnostic of its own (`N0357` and the like) is the
+        // pipeline's refusal here, by name: not carried.
+        ci_refuse(io, "a program the pipeline does not lower (status " + int_to_str(r.status) + "): " + ut_trim_end(r.err))
+    }
+    r.out
+}
+
+// `mir`'s compact form from its indented one: `nazm_mir::print` writes the same text with no line
+// break and no indent at its structural places, so every line break and the spaces after it go,
+// but the last.
+fn ci_mir_compact(text: Str) -> Str {
+    let out = strs_new()
+    let n = str_len(text)
+    let mut from = 0
+    let mut i = 0
+    while i < n {
+        if str_byte(text, i) == 10 && i + 1 < n {
+            strs_push(out, str_slice(text, from, i))
+            let mut j = i + 1
+            while j < n && str_byte(text, j) == 32 { j += 1 }
+            from = j
+            i = j
+        } else {
+            i += 1
+        }
+    }
+    strs_push(out, str_slice(text, from, n))
+    str_join(out, "")
+}
+
+pub fn mir_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let file = cli_value(c, 0)
+    let json = cli_present(c, 1)
+    let f = ci_checked(io, file, cli_present(c, 3), cli_value(c, 3))
+    if cli_present(c, 2) { ci_refuse(io, "`mir --spans` (the pipeline's MIR printer names no statement's position: R3, a hand-back)") }
+    let raw = fx_core_document_with_sources(f)
+    if raw == "" { ci_refuse(io, "a program whose Core IR the front end does not carry") }
+    let doc = ci_unprefix_paths(io, raw, file)
+    let args = strs_new()
+    strs_push(args, "mir")
+    strs_push(args, "@CORE@")
+    let text = ci_staged(io, proc, sp, "mir", doc, args)
+    if json { print(ci_mir_compact(text)) } else { print(text) }
+    0
+}
+
+pub fn lir_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let file = cli_value(c, 0)
+    let target = if cli_present(c, 1) { cli_value(c, 1) } else { "" }
+    let ops = cli_present(c, 2)
+    // `lir` lowers natively, so the root is checked as a program: a module with no `main` is `N0204`.
+    let f = ci_checked_as(io, file, cli_present(c, 7), cli_value(c, 7), true)
+    if cli_present(c, 5) { ci_refuse(io, "`lir --run` (LIR's interpreter has no Nazm counterpart: R8 design, S13.5)") }
+    if cli_present(c, 3) { ci_refuse(io, "`lir --soa` (the pipeline lays out no `Vec[R]` field by field: R3, a hand-back)") }
+    if cli_present(c, 1) && target != "aarch64-apple-darwin" && target != "x86_64-apple-darwin" && target != "x86_64-pc-windows-gnu" {
+        ci_refuse(io, "`lir --target " + target + "` (the pipeline lowers for aarch64-apple-darwin, x86_64-apple-darwin and x86_64-pc-windows-gnu)")
+    }
+    let raw = fx_core_document_with_sources(f)
+    if raw == "" { ci_refuse(io, "a program whose Core IR the front end does not carry") }
+    let doc = ci_unprefix_paths(io, raw, file)
+    let args = strs_new()
+    if cli_present(c, 1) {
+        strs_push(args, "--target")
+        strs_push(args, target)
+    }
+    // `--debug` without `--ops` is a flag with no effect in the Rust command.
+    strs_push(args, if ops && cli_present(c, 4) { "ops-debug" } else if ops { "ops" } else { "lir" })
+    strs_push(args, "@CORE@")
+    print(ci_staged(io, proc, sp, "lir", doc, args))
+    0
+}
+
+// --- capabilities -----------------------------------------------------------------------------------
+
+pub fn capabilities_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    if cli_present(c, 0) { print(cd_json() + nl()) } else { print(cd_text()) }
+    0
+}

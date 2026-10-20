@@ -1,0 +1,18 @@
+schema = "nazm.requirements/1"
+
+[[requirement]]
+id = "A-1"
+text = "A renamed definition and a missing test."
+definitions = ["gone", "power"]
+tests = ["power_is_bounded", "no_such_test"]
+
+[[requirement]]
+id = "A-2"
+definitions = []
+tests = []
+
+[[requirement]]
+id = "A-3"
+text = "Quotes \" and a tab\t and unicode é."
+definitions = ["over", "over"]
+tests = ["trips_above_eighty"]

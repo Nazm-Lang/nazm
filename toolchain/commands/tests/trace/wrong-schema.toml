@@ -1,0 +1,4 @@
+schema = "nazm.requirements/2"
+
+[[requirement]]
+id = "R"

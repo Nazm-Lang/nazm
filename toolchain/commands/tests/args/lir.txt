@@ -1,0 +1,28 @@
+# `nazm lir`'s command lines, run from the repository's root by `tests/inspect.sh args`.
+--help
+-h
+--bogus examples/max.nz
+--jsn examples/max.nz
+-x examples/max.nz
+examples/max.nz extra
+(none)
+absent.nz
+examples/bad/assign_to_immutable.nz
+examples/max.nz --source-root .
+examples/max.nz --source-root=nothere
+--source-root
+examples/max.nz --source-root examples
+examples/max.nz --source-root examples/max.nz
+--ops examples/max.nz
+--ops --debug examples/max.nz
+--debug examples/max.nz
+--target x86_64-apple-darwin examples/max.nz
+--target x86_64-pc-windows-gnu --ops examples/max.nz
+--target aarch64-unknown-none examples/max.nz
+--target examples/max.nz
+--soa --ops examples/max.nz
+--run examples/max.nz
+--run examples/max.nz -- a b
+examples/max.nz -- a
+examples/max.nz --ops -- a b
+examples/max.nz --target

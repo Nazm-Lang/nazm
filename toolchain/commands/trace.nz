@@ -1,0 +1,302 @@
+// `nazm trace`, written in Nazm (R8 slice 8, `openspec/changes/r8-cut-over/design.md`, task 8.1).
+//
+// A port of `crates/nazm-cli/src/trace.rs`: `nazm trace FILE --requirements FILE`, each requirement of a
+// `requirements.toml` traced to the definitions it constrains (by durable identity, Core IR semantic
+// digest and obligations: `obligations.nz`'s census, keyed by definition) and to the `@test` functions
+// it names, run. The requirements are read with `toml.nz`; the compilation is the front end's
+// (`coreir.nz`, `ci_checked`), its facts read off the Core IR document with sources; the tests are
+// run as the Rust command runs them, by `nazm test --json --interpret-only FILE` of the `nazm` that
+// runs the command — here the one `NAZM_TEST_DRIVER` names, as `test.nz`'s legs are (a `nazm` that
+// knows its own executable is slice 7's: until then it is refused when the variable is not set).
+//
+// What the `toml` crate says of a file that is not TOML is its error with the line and column, which
+// `toml.nz` does not carry: such a file, and TOML the reader does not read, are refused by name.
+
+use "@std/json"
+use "../../compiler/facts.nz"
+use "../../compiler/facts-core.nz"
+use "cli.nz"
+use "front.nz"
+use "util.nz"
+use "toml.nz"
+use "coreir.nz"
+use "obligations.nz"
+use "stagerun.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+pub fn trace_cli() -> Cli {
+    let c = cli_command("trace", "Trace requirements to what verifies them, `nazm.trace/1` (Gate 3): each requirement of a `requirements.toml` to the definitions "
+            + "it constrains — by durable identity and digest, with their obligations — and to the `@test` functions it names, run. A definition renamed "
+            + "away, a test missing or failing is reported by name and fails the command. Not certification", "")
+    cli_positional(c, "FILE", true, false, true, "", "")
+    cli_required_option(c, "requirements", "FILE", true, "The requirements: `schema = \"nazm.requirements/1\"`, and each `[[requirement]]` with its `id`, `text`, `definitions` and `tests`")
+    cli_option(c, "", "source-root", "DIR", true, "", false, "Where this project begins. As `nazm check --source-root`", "")
+    c
+}
+
+// One requirement as the file writes it: the columns of `Reqs`.
+struct Reqs {
+    id: Strs,
+    text: Strs,
+    // Each requirement's definitions and tests, joined by a line break (a name has none).
+    definitions: Strs,
+    tests: Strs,
+}
+
+fn tr_fail(io: IoCap, file: Str, why: Str) -> Int {
+    eprint("nazm: " + file + ": " + why + nl())
+    exit_with(1)
+    0
+}
+
+fn tr_refuse(io: IoCap, why: Str) -> Int {
+    eprint("nazm: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+// `strings(t, key)`: the list a requirement's `key` holds, its names joined by line breaks ("" where
+// there is none); the error's words are pushed to `err` for one that is not a list of strings.
+fn tr_list(t: Toml, r: Int, key: Str, id: Str, err: Strs) -> Str {
+    let k = tm_get(t, r, key)
+    if k < 0 { return "" }
+    if tm_kind(t, k) != tm_array() {
+        strs_push(err, "`" + id + "`: `" + key + "` is not a list of strings")
+        return ""
+    }
+    let names = strs_new()
+    let mut e = tm_first(t, k)
+    while e >= 0 {
+        if tm_kind(t, e) != tm_string() {
+            strs_push(err, "`" + id + "`: `" + key + "` holds something that is not a string")
+            return ""
+        }
+        strs_push(names, tm_text(t, e))
+        e = tm_next(t, e)
+    }
+    str_join(names, nl())
+}
+
+// `read_requirements`: the file's requirements, or (ending the process) the Rust command's words.
+fn tr_read(io: IoCap, file: Str) -> Reqs {
+    let why = ut_read_error(io, file, true)
+    if why != "" { tr_fail(io, file, "cannot read `" + file + "`: " + why) }
+    let t = tm_parse(read_file(file))
+    if !tm_ok(t) {
+        // The `toml` crate's own error prints the line, the column and the line's text: `toml.nz` carries its
+        // message only, so a file that is not TOML is refused by name, never worded.
+        tr_refuse(io, "a requirements file that is not TOML this port reads (" + tm_why(t) + ")")
+    }
+    let schema = tm_get(t, 0, "schema")
+    if schema < 0 || tm_kind(t, schema) != tm_string() || tm_text(t, schema) != "nazm.requirements/1" {
+        tr_fail(io, file, "`schema` must be \"nazm.requirements/1\"")
+    }
+    let list = tm_get(t, 0, "requirement")
+    if list < 0 || tm_kind(t, list) != tm_array() { tr_fail(io, file, "no `[[requirement]]`") }
+    let out = Reqs(id: strs_new(), text: strs_new(), definitions: strs_new(), tests: strs_new())
+    let mut r = tm_first(t, list)
+    while r >= 0 {
+        if tm_kind(t, r) != tm_table() { tr_fail(io, file, "a `[[requirement]]` that is not a table") }
+        let idn = tm_get(t, r, "id")
+        if idn < 0 || tm_kind(t, idn) != tm_string() { tr_fail(io, file, "a requirement without an `id`") }
+        let id = tm_text(t, idn)
+        for i in 0..strs_len(out.id) {
+            if strs_get(out.id, i) == id { tr_fail(io, file, "the requirement `" + id + "` is written twice") }
+        }
+        let tn = tm_get(t, r, "text")
+        let err = strs_new()
+        let definitions = tr_list(t, r, "definitions", id, err)
+        if strs_len(err) > 0 { tr_fail(io, file, strs_get(err, 0)) }
+        let tests = tr_list(t, r, "tests", id, err)
+        if strs_len(err) > 0 { tr_fail(io, file, strs_get(err, 0)) }
+        strs_push(out.id, id)
+        strs_push(out.text, if tn >= 0 && tm_kind(t, tn) == tm_string() { tm_text(t, tn) } else { "" })
+        strs_push(out.definitions, definitions)
+        strs_push(out.tests, tests)
+        r = tm_next(t, r)
+    }
+    out
+}
+
+// A name list as it was joined; empty for none.
+fn tr_names(joined: Str) -> Strs {
+    let out = strs_new()
+    if joined == "" { return out }
+    let mut from = 0
+    for i in 0..str_len(joined) {
+        if str_byte(joined, i) == 10 {
+            strs_push(out, str_slice(joined, from, i))
+            from = i + 1
+        }
+    }
+    strs_push(out, str_slice(joined, from, str_len(joined)))
+    out
+}
+
+// The tests of `file`, run by the driver as `test --json --interpret-only` runs them: each function's
+// name and whether it passed, the last of a name winning (a map's insertion).
+fn tr_outcomes(io: IoCap, proc: ProcessCap, sp: SpawnCap, file: Str, names: Strs, passed: Ints) -> Int {
+    let driver = os_env_get("NAZM_TEST_DRIVER")
+    if driver == "" { tr_refuse(io, "the tests run by this `nazm`'s own `test` (set NAZM_TEST_DRIVER: slice 7 gives the executable's path)") }
+    let args = strs_new()
+    strs_push(args, "test")
+    strs_push(args, "--json")
+    strs_push(args, "--interpret-only")
+    strs_push(args, file)
+    let r = sr_run(io, proc, sp, driver, args, true, strs_new())
+    if !r.started {
+        eprint("nazm: cannot run `nazm test`: " + r.err + nl())
+        exit_with(4)
+    }
+    let mut from = 0
+    for i in 0..str_len(r.out) {
+        if str_byte(r.out, i) == 10 {
+            tr_outcome(str_slice(r.out, from, i), names, passed)
+            from = i + 1
+        }
+    }
+    if from < str_len(r.out) { tr_outcome(str_slice(r.out, from, str_len(r.out)), names, passed) }
+    0
+}
+
+fn tr_outcome(line: Str, names: Strs, passed: Ints) -> Int {
+    let d = match json_parse(line) {
+        Result.Ok(value: doc) => doc,
+        Result.Err(error: e) => { return 0 },
+    }
+    let root = json_root(d)
+    if json_kind(d, root) != "object" || ob_s(d, root, "kind") != "test" { return 0 }
+    let name = ob_s(d, root, "name")
+    let mut cut = 0 - 1
+    for i in 0..str_len(name) {
+        if i + 1 < str_len(name) && str_byte(name, i) == 58 && str_byte(name, i + 1) == 58 { cut = i + 2 }
+    }
+    let function = if cut >= 0 { str_slice(name, cut, str_len(name)) } else { name }
+    let k = ob_kid(d, root, "passed")
+    let ok = if k >= 0 { match json_bool(d, k) { Some(b) => b, None => false } } else { false }
+    for i in 0..strs_len(names) {
+        if strs_get(names, i) == function {
+            ints_set(passed, i, if ok { 1 } else { 0 })
+            return 0
+        }
+    }
+    strs_push(names, function)
+    ints_push(passed, if ok { 1 } else { 0 })
+    0
+}
+
+fn tr_q(s: Str) -> Str { ob_quote(s) }
+
+pub fn trace_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let file = cli_value(c, 0)
+    let reqfile = cli_value(c, 1)
+    let reqs = tr_read(io, reqfile)
+    let f = ci_checked(io, file, cli_present(c, 2), cli_value(c, 2))
+    let raw = fx_core_document_with_sources(f)
+    if raw == "" { tr_refuse(io, "a program whose Core IR the front end does not carry") }
+    let d = match json_parse(ci_unprefix_paths(io, raw, file)) {
+        Result.Ok(value: doc) => doc,
+        Result.Err(error: e) => { tr_refuse(io, "Core IR's document does not parse: " + e); json_new() },
+    }
+    let census = ob_census(io, d)
+    // The program's own module's functions: name to a row, the last of a name winning.
+    let root = json_root(d)
+    let mods = ob_kid(d, root, "modules")
+    let mut root_name = ""
+    for i in 0..ob_len(d, mods) {
+        let m = ob_at(d, mods, i)
+        let k = ob_kid(d, m, "root")
+        let is_root = if k >= 0 { match json_bool(d, k) { Some(b) => b, None => false } } else { false }
+        if is_root { root_name = ob_s(d, m, "name") }
+    }
+    let fns = ob_kid(d, root, "functions")
+    let dnames = strs_new()
+    let dkeys = strs_new()
+    let ddigests = strs_new()
+    for i in 0..ob_len(d, fns) {
+        let fn_node = ob_at(d, fns, i)
+        if ob_s(d, fn_node, "module") != root_name || ob_kid(d, fn_node, "foreign") >= 0 { continue }
+        let name = ob_s(d, fn_node, "name")
+        let key = ob_s(d, fn_node, "def")
+        let digest = ob_s(d, ob_kid(d, fn_node, "digest"), "semantic")
+        let mut at = 0 - 1
+        for k in 0..strs_len(dnames) { if strs_get(dnames, k) == name { at = k } }
+        if at >= 0 {
+            strs_set(dkeys, at, key)
+            strs_set(ddigests, at, digest)
+        } else {
+            strs_push(dnames, name)
+            strs_push(dkeys, key)
+            strs_push(ddigests, digest)
+        }
+    }
+    let tnames = strs_new()
+    let tpassed = ints_new()
+    tr_outcomes(io, proc, sp, file, tnames, tpassed)
+    let broken = strs_new()
+    let rows = strs_new()
+    for q in 0..strs_len(reqs.id) {
+        let id = strs_get(reqs.id, q)
+        let defs = tr_names(strs_get(reqs.definitions, q))
+        let tests = tr_names(strs_get(reqs.tests, q))
+        let defrows = strs_new()
+        for k in 0..strs_len(defs) {
+            let name = strs_get(defs, k)
+            let mut at = 0 - 1
+            for j in 0..strs_len(dnames) { if strs_get(dnames, j) == name { at = j } }
+            if at < 0 {
+                strs_push(broken, id + ": the definition `" + name + "` is not in " + file)
+                strs_push(defrows, "{\"broken\":\"no such definition\",\"key\":null,\"name\":" + tr_q(name) + "}")
+            } else {
+                let key = strs_get(dkeys, at)
+                let mut proved = 0
+                let mut checked = 0
+                let mut unknown = 0
+                let each = strs_new()
+                for o in 0..ints_len(census.kind) {
+                    if strs_get(census.def, o) != key { continue }
+                    let st = ints_get(census.status, o)
+                    if st == 0 { proved += 1 } else if st == 1 { checked += 1 } else { unknown += 1 }
+                    let m = ob_module(d, strs_get(census.span, o))
+                    let source = ob_s(d, m, "source")
+                    strs_push(each, "{\"column\":" + int_to_str(ob_column(source, ints_get(census.start, o))) + ",\"kind\":\"" + ob_kind_name(ints_get(census.kind, o))
+                            + "\",\"line\":" + int_to_str(ob_line(source, ints_get(census.start, o))) + ",\"status\":\"" + ob_status_name(st) + "\"}")
+                }
+                strs_push(defrows, "{\"digest\":" + tr_q(strs_get(ddigests, at)) + ",\"key\":" + tr_q(key) + ",\"name\":" + tr_q(name)
+                        + ",\"obligations\":{\"checked\":" + int_to_str(checked) + ",\"each\":[" + str_join(each, ",") + "],\"proved\":" + int_to_str(proved)
+                        + ",\"unknown\":" + int_to_str(unknown) + "}}")
+            }
+        }
+        let testrows = strs_new()
+        for k in 0..strs_len(tests) {
+            let name = strs_get(tests, k)
+            let mut at = 0 - 1
+            for j in 0..strs_len(tnames) { if strs_get(tnames, j) == name { at = j } }
+            if at >= 0 && ints_get(tpassed, at) == 1 {
+                strs_push(testrows, "{\"name\":" + tr_q(name) + ",\"outcome\":\"passed\"}")
+            } else if at >= 0 {
+                strs_push(broken, id + ": the test `" + name + "` fails")
+                strs_push(testrows, "{\"name\":" + tr_q(name) + ",\"outcome\":\"failed\"}")
+            } else {
+                strs_push(broken, id + ": the test `" + name + "` is not a `@test` of " + file)
+                strs_push(testrows, "{\"name\":" + tr_q(name) + ",\"outcome\":\"missing\"}")
+            }
+        }
+        if strs_len(defs) == 0 || strs_len(tests) == 0 {
+            strs_push(broken, id + ": a requirement needs a definition it constrains and a test that verifies it")
+        }
+        strs_push(rows, "{\"definitions\":[" + str_join(defrows, ",") + "],\"id\":" + tr_q(id) + ",\"tests\":[" + str_join(testrows, ",") + "],\"text\":"
+                + tr_q(strs_get(reqs.text, q)) + "}")
+    }
+    let quoted = strs_new()
+    for i in 0..strs_len(broken) { strs_push(quoted, tr_q(strs_get(broken, i))) }
+    print("{\"broken\":[" + str_join(quoted, ",") + "],\"evidence\":\"compiler evidence: each definition's durable identity, digest and obligations, and each test's outcome; not certification\","
+            + "\"file\":" + tr_q(file) + ",\"requirements\":[" + str_join(rows, ",") + "],\"schema\":\"nazm.trace/1\",\"status\":\""
+            + (if strs_len(broken) == 0 { "traced" } else { "broken" }) + "\"}" + nl())
+    if strs_len(broken) == 0 { return 0 }
+    for i in 0..strs_len(broken) { eprint("nazm: " + strs_get(broken, i) + nl()) }
+    exit_with(1)
+    1
+}

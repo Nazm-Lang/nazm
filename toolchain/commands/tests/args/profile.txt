@@ -1,0 +1,19 @@
+# `nazm profile`'s command lines, run from the repository's root by `tests/inspect.sh args`.
+--help
+-h
+(none)
+examples/max.nz
+--backend x examples/max.nz
+--backend ll examples/max.nz
+--backend llvm examples/max.nz
+--backend cranelift examples/max.nz
+--backend=nazm examples/max.nz
+--interval-ms 3 examples/max.nz
+--sample examples/max.nz
+--sample --interval-ms x examples/max.nz
+--sample --interval-ms 5 examples/max.nz
+--sample --interval-ms -1 examples/max.nz
+--sample --interval-ms 99999999999999999999999 examples/max.nz
+--bogus examples/max.nz
+examples/max.nz extra
+absent.nz

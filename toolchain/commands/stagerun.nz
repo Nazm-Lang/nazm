@@ -1,0 +1,212 @@
+// A stage run as `host-run` admits a program, for the inspection commands (R8 slice 8): a copy of what
+// `build.nz` holds privately (`bd_size`, `bd_admitted`, `bd_limits`, `bd_check_stage`, `bd_run`,
+// `bd_stage_run`, `bd_remove`, `bd_workdir`), made `pub` under `sr_` so this slice leaves `build.nz`
+// to its own slice. Hand-back to slice 4/5: make `build.nz`'s own `pub` and drop this copy.
+
+use "util.nz"
+use "@std/file"
+
+fn nl() -> Str { str_from_byte(10) }
+
+// `--stack-size` and `--heap-limit`'s sizes: bytes, or a number with `K`, `M` or `G`; -1 for one
+// that is not a size.
+pub fn sr_size(raw: Str) -> Int {
+    let n = str_len(raw)
+    if n == 0 { return 0 - 1 }
+    let last = str_byte(raw, n - 1)
+    let mut unit = 1
+    let mut digits = raw
+    if last == 75 || last == 107 { unit = 1024 }
+    if last == 77 || last == 109 { unit = 1048576 }
+    if last == 71 || last == 103 { unit = 1073741824 }
+    if unit > 1 { digits = str_slice(raw, 0, n - 1) }
+    if str_len(digits) == 0 || str_len(digits) > 12 { return 0 - 1 }
+    let mut v = 0
+    for i in 0..str_len(digits) {
+        let b = str_byte(digits, i)
+        if b < 48 || b > 57 { return 0 - 1 }
+        v = v * 10 + (b - 48)
+    }
+    v * unit
+}
+
+// `host-run`'s reading of an image (`heap_limit_of`): the counted heap linked, one heap limit, at
+// most 2 GiB. "" when it is admitted, else the refusal's name and why.
+pub fn sr_admitted(image: Str) -> Str {
+    if ut_find(image, "nz.heap_malloc", 0) < 0 {
+        return "no-counted-heap: the executable does not link the counted heap (`nz.heap_malloc` is not in it): build it with `--heap-limit`"
+    }
+    let found = sr_limits(image)
+    if strs_len(found) == 0 { return "no-heap-limit: the executable carries no heap limit (its `N0406` message is not in it)" }
+    if strs_len(found) > 1 { return "ambiguous-heap-limit: the executable names several heap limits" }
+    let limit = strs_get(found, 0)
+    if str_len(limit) > 10 || sr_size(limit) > 2147483648 {
+        return "heap-limit-too-large: its heap limit is " + limit + " bytes, over the 2 GiB (2147483648) a stage may have"
+    }
+    ""
+}
+
+// Every heap limit an image's `N0406` message names (`the heap limit of N bytes is reached`, N in
+// digits), each once.
+pub fn sr_limits(image: Str) -> Strs {
+    let before = "the heap limit of "
+    let after = " bytes is reached"
+    let found = strs_new()
+    let mut from = 0
+    let mut at = ut_find(image, before, from)
+    while at >= 0 {
+        let start = at + str_len(before)
+        let mut end = start
+        while end < str_len(image) && str_byte(image, end) >= 48 && str_byte(image, end) <= 57 { end += 1 }
+        if end > start && end + str_len(after) <= str_len(image) && str_slice(image, end, end + str_len(after)) == after {
+            let n = str_slice(image, start, end)
+            let mut seen = false
+            for i in 0..strs_len(found) { if strs_get(found, i) == n { seen = true } }
+            if !seen { strs_push(found, n) }
+        }
+        from = start
+        at = ut_find(image, before, from)
+    }
+    found
+}
+
+// The one heap limit an admitted image names.
+pub fn sr_limit_of(image: Str) -> Int { sr_size(strs_get(sr_limits(image), 0)) }
+
+// `host-run`'s state directory: where its withdrawal marker is.
+pub fn sr_state_dir(io: IoCap) -> Str {
+    let d = os_env_get("NAZM_HOST_RUN_DIR")
+    if d != "" { return d }
+    os_env_get("HOME") + "/.cache/nazm-host-run"
+}
+
+pub fn sr_check_stage(io: IoCap, path: Str, name: Str) -> Int {
+    let image = read_file(path)
+    let why = sr_admitted(image)
+    if why != "" { sr_fail(io, "nazm: " + name + " (`" + path + "`) is not admitted as a stage: " + why, 4) }
+    sr_limit_of(image)
+}
+
+// A stage run to its end: whether it started, its status, its output and errors, and its peak.
+pub struct SrRan {
+    started: Bool,
+    status: Int,
+    out: Str,
+    err: Str,
+    peak: Int,
+}
+
+pub fn sr_collect(from: OsHandle, into: Chan[Str]) -> Int ! { io } {
+    let all = match file_read_rest(File(handle: from)) {
+        Result.Ok(value: b) => bytes_to_str(b),
+        Result.Err(error: e) => "",
+    }
+    chan_send_of(into, all)
+    0
+}
+
+// `program` with `args`, its environment `env` (`NAME=value`) — this process's when `inherit` —
+// its standard input empty; its output and errors collected, and its peak resident memory.
+pub fn sr_run(io: IoCap, proc: ProcessCap, sp: SpawnCap, program: Str, args: Strs, inherit: Bool, env: Strs) -> SrRan ! { io, spawn } {
+    let all = strs_new()
+    if inherit {
+        for i in 0..os_env_count() { strs_push(all, os_env_at(i)) }
+    } else {
+        for i in 0..strs_len(env) { strs_push(all, strs_get(env, i)) }
+    }
+    let h = os_spawn_with(program, args, "", all, 2)
+    if os_status(h) < 0 { return SrRan(started: false, status: 0, out: "", err: ut_os_error(os_status(h)), peak: 0) }
+    let errors = chan_new_of[Str](1)
+    let out = os_child_pipe(h, 1)
+    let err = os_child_pipe(h, 2)
+    let got = vec_new[Str]()
+    let mut stdout = ""
+    scope {
+        spawn sr_collect(err, errors)
+        stdout = match file_read_rest(File(handle: out)) {
+            Result.Ok(value: b) => bytes_to_str(b),
+            Result.Err(error: e) => "",
+        }
+        chan_recv_of(errors, got);
+    }
+    os_close(out)
+    os_close(err)
+    let status = os_wait(h)
+    let peak = os_child_rusage(h)
+    os_close(h)
+    SrRan(started: true, status: status, out: stdout, err: if vec_len(got) > 0 { vec_get(got, 0) } else { "" }, peak: peak)
+}
+
+// A stage, run as `host-run` runs a program: refused while the rule is withdrawn; its peak and
+// `N0406` held to the withdrawal conditions against its own limit (design S4.2).
+pub fn sr_stage_run(io: IoCap, proc: ProcessCap, sp: SpawnCap, program: Str, limit: Int, args: Strs) -> SrRan ! { io, spawn } {
+    let marker = sr_state_dir(io) + "/withdrawn"
+    if ut_kind(io, marker) >= 0 {
+        sr_fail(io, "nazm: withdrawn: the rule is withdrawn: " + read_file(marker) + ". Host runs stay refused until it is investigated; then remove the marker file " + marker, 4)
+    }
+    let r = sr_run(io, proc, sp, program, args, true, strs_new())
+    if !r.started { return r }
+    let mut why = ""
+    if r.peak > limit + 268435456 {
+        why = "peak resident memory " + int_to_str(r.peak) + " bytes exceeds the heap limit " + int_to_str(limit) + " by more than 268435456"
+    } else if ut_contains(r.err, "error[N0406]") && r.status != 2 {
+        why = "an N0406 was written but the program did not stop with status 2 (it ended " + int_to_str(r.status) + ")"
+    }
+    if why != "" {
+        let why_at = why + " (running " + program + ")"
+        let made = strs_new()
+        ut_make_dirs(io, sr_state_dir(io), made)
+        write_file(marker, why_at)
+        sr_fail(io, "nazm: WITHDRAWAL CONDITION: " + why + ". The host rule is withdrawn: only `cargo xtask contained` until it is investigated (marker: " + marker + ")", 70)
+    }
+    r
+}
+
+pub fn sr_fail(io: IoCap, text: Str, code: Int) -> Int {
+    eprint(text + nl())
+    exit_with(code)
+    0
+}
+
+// `rm -r` of what this build made: every entry under `dir`, then `dir`.
+pub fn sr_remove(io: IoCap, dir: Str) -> Int {
+    let d = os_dir_open(dir)
+    if os_status(d) < 0 { return 0 }
+    let names = strs_new()
+    let buf = bytes_new(1024)
+    let mut n = os_dir_next(d, buf)
+    while n > 0 {
+        strs_push(names, bytes_to_str(bytes_slice(buf, 0, n)))
+        n = os_dir_next(d, buf)
+    }
+    os_close(d)
+    for i in 0..strs_len(names) {
+        let p = dir + "/" + strs_get(names, i)
+        if ut_kind(io, p) == 1 { sr_remove(io, p) } else { os_unlink(p) }
+    }
+    os_rmdir(dir)
+    0
+}
+
+// `scratch::exclusive`: `PARENT/STEM<pid>`, or `-N` after it, made new with mode 0700.
+pub fn sr_workdir(io: IoCap, output: Str) -> Str {
+    let parent = ut_parent(output)
+    let why = strs_new()
+    if parent != "" && !ut_make_dirs(io, parent, why) {
+        sr_fail(io, "nazm: cannot create " + parent + ": " + str_join(why, ""), 4)
+    }
+    let stem = ut_file_name(output) + ".nazm-"
+    let pid = int_to_str(os_pid())
+    for k in 0..64 {
+        let name = if k == 0 { stem + pid } else { stem + pid + "-" + int_to_str(k) }
+        let dir = if parent == "" { name } else { parent + "/" + name }
+        let r = os_mkdir(dir)
+        if r == 0 {
+            os_chmod(dir, 448)
+            return dir
+        }
+        if ut_kind(io, dir) < 0 { sr_fail(io, "nazm: cannot create " + dir + ": " + ut_os_error(r), 4) }
+    }
+    sr_fail(io, "nazm: cannot create a working directory beside " + output + ": no free scratch directory name", 4)
+    ""
+}

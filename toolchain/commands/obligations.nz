@@ -1,0 +1,618 @@
+// `nazm obligations`, written in Nazm (R8 slice 8, `openspec/changes/r8-cut-over/design.md`, task 8.1).
+//
+// A port of `crates/nazm-cli/src/obligations.rs` and `crates/nazm-core/src/obligations.rs`: the front end in
+// process (`coreir.nz`'s `ci_checked`, the root as a module), and the census read off the Core IR
+// document it publishes (`fx_core_document_with_sources`, which names every span by module and gives
+// each module its text and its path), walked the way `census` walks the IR: each function in order,
+// its obligations sorted by position and kind, then written one line each, or as `nazm.obligations/1`.
+//
+// What R2 does not publish is refused by name (status 6): the checker's record of a call's
+// preconditions proved for literal arguments (`Resolution::proved_call`, with its witness), so a
+// call of a function that states a precondition, with arguments that are all literals, is not
+// carried. A call with any other argument is `checked`, as the census says.
+
+use "@std/json"
+use "@std/hashmap"
+use "../../compiler/facts.nz"
+use "../../compiler/facts-core.nz"
+use "cli.nz"
+use "front.nz"
+use "util.nz"
+use "coreir.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+pub fn ob_refuse(io: IoCap, why: Str) -> Int {
+    eprint("nazm: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+pub fn obligations_cli() -> Cli {
+    let c = cli_command("obligations", "Print every obligation of a checked program, `nazm.obligations/1` (N87): each contract clause, call of a function with a "
+            + "precondition, operation that can overflow or divide by zero, index, allocation, call through a function value and call into C, each proved, "
+            + "checked as the program runs, or unknown. Compiler evidence, not certification", "")
+    cli_positional(c, "FILE", true, false, true, "", "")
+    cli_flag(c, "", "json", "`nazm.obligations/1` on one line, rather than a line per obligation", "")
+    cli_option(c, "", "source-root", "DIR", true, "", false, "Where this project begins. As `nazm check --source-root`", "")
+    c
+}
+
+// --- the JSON document ---------------------------------------------------------------------------------
+
+pub fn ob_kid(d: JsonDoc, n: Int, key: Str) -> Int {
+    if n < 0 { return 0 - 1 }
+    match json_get(d, n, key) {
+        Some(k) => if json_kind(d, k) == "null" { 0 - 1 } else { k },
+        None => 0 - 1,
+    }
+}
+
+pub fn ob_s(d: JsonDoc, n: Int, key: Str) -> Str {
+    let k = ob_kid(d, n, key)
+    if k < 0 { return "" }
+    match json_str(d, k) { Some(s) => s, None => "" }
+}
+
+pub fn ob_i(d: JsonDoc, n: Int, key: Str) -> Int {
+    let k = ob_kid(d, n, key)
+    if k < 0 { return 0 }
+    match json_int(d, k) { Some(v) => v, None => 0 }
+}
+
+pub fn ob_len(d: JsonDoc, n: Int) -> Int { if n < 0 { 0 } else { json_len(d, n) } }
+
+pub fn ob_at(d: JsonDoc, n: Int, i: Int) -> Int {
+    match json_at(d, n, i) { Some(k) => k, None => 0 - 1 }
+}
+
+// --- the census ----------------------------------------------------------------------------------------
+
+// The kinds in `Kind`'s order (the derived `Ord` that sorts a function's obligations), and the statuses.
+pub fn ob_kind_name(k: Int) -> Str {
+    if k == 0 { return "precondition" }
+    if k == 1 { return "postcondition" }
+    if k == 2 { return "call-precondition" }
+    if k == 3 { return "overflow" }
+    if k == 4 { return "division" }
+    if k == 5 { return "index" }
+    if k == 6 { return "allocation" }
+    if k == 7 { return "indirect-call" }
+    if k == 8 { return "foreign-call" }
+    if k == 9 { return "shift" }
+    "conversion"
+}
+
+pub fn ob_status_name(s: Int) -> Str {
+    if s == 0 { return "proved" }
+    if s == 1 { return "checked" }
+    "unknown"
+}
+
+// What the census holds: one obligation to a position in each column.
+pub struct Obs {
+    function: Strs,
+    // The definition it is in (the durable identity: a name alone may be another module's).
+    def: Strs,
+    kind: Ints,
+    status: Ints,
+    span: Strs,
+    start: Ints,
+    end: Ints,
+    witness: Strs,
+    // A call the census cannot decide (design: refused), by its position.
+    stuck: Strs,
+}
+
+struct Cx {
+    d: JsonDoc,
+    def: Str,
+    consts: Int,
+    name: Str,
+    out: Obs,
+    // Every function by definition: 1 for a foreign one, 2 for one whose body states a precondition.
+    info: HashMap[Str, Int],
+    // Where this function's own obligations begin in `out`.
+    base: Int,
+}
+
+fn ob_push(c: Cx, kind: Int, status: Int, e: Int, witness: Str) -> Int {
+    let at = ob_s(c.d, e, "at")
+    let colon = ob_last_colon(at)
+    let dots = ut_find(at, "..", colon)
+    strs_push(c.out.function, c.name)
+    strs_push(c.out.def, c.def)
+    ints_push(c.out.kind, kind)
+    ints_push(c.out.status, status)
+    strs_push(c.out.span, if colon >= 0 { str_slice(at, 0, colon) } else { at })
+    ints_push(c.out.start, if colon >= 0 && dots > colon { ob_num(str_slice(at, colon + 1, dots)) } else { 0 })
+    ints_push(c.out.end, if colon >= 0 && dots > colon { ob_num(str_slice(at, dots + 2, str_len(at))) } else { 0 })
+    strs_push(c.out.witness, witness)
+    0
+}
+
+fn ob_last_colon(s: Str) -> Int {
+    let mut i = str_len(s) - 1
+    while i >= 0 {
+        if str_byte(s, i) == 58 { return i }
+        i -= 1
+    }
+    0 - 1
+}
+
+fn ob_num(s: Str) -> Int {
+    let mut v = 0
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        if b >= 48 && b <= 57 { v = v * 10 + (b - 48) }
+    }
+    v
+}
+
+// The `Int` literal an expression is, or whether it is not one: `(known, value)`.
+fn ob_int(c: Cx, e: Int) -> Ints {
+    let out = ints_new()
+    if ob_s(c.d, e, "op") != "const" {
+        ints_push(out, 0)
+        ints_push(out, 0)
+        return out
+    }
+    let k = ob_at(c.d, c.consts, ob_i(c.d, e, "const"))
+    if ob_s(c.d, k, "type") != "Int" {
+        ints_push(out, 0)
+        ints_push(out, 0)
+        return out
+    }
+    ints_push(out, 1)
+    ints_push(out, ob_i(c.d, k, "value"))
+    out
+}
+
+fn ob_is_float(ty: Str) -> Bool { ty == "Float32" || ty == "Float64" }
+
+fn ob_block(c: Cx, b: Int) -> Int {
+    if b < 0 { return 0 }
+    let stmts = ob_kid(c.d, b, "stmts")
+    for i in 0..ob_len(c.d, stmts) { ob_stmt(c, ob_at(c.d, stmts, i)) }
+    let tail = ob_kid(c.d, b, "tail")
+    if tail >= 0 { ob_expr(c, tail) }
+    0
+}
+
+fn ob_stmt(c: Cx, s: Int) -> Int {
+    let op = ob_s(c.d, s, "op")
+    if op == "let" || op == "assign" || op == "return" || op == "eval" {
+        // `Assign`'s path steps hold index expressions too, but the census does not read them.
+        ob_expr(c, ob_kid(c.d, s, "value"))
+    } else if op == "if" {
+        ob_expr(c, ob_kid(c.d, s, "cond"))
+        ob_block(c, ob_kid(c.d, s, "then"))
+        ob_block(c, ob_kid(c.d, s, "else"))
+    } else if op == "match" {
+        ob_match(c, s)
+    } else if op == "loop" {
+        ob_expr(c, ob_kid(c.d, s, "cond"))
+        ob_block(c, ob_kid(c.d, s, "body"))
+    } else if op == "block" || op == "scope" {
+        ob_block(c, ob_kid(c.d, s, "body"))
+    } else if op == "spawn" {
+        let args = ob_kid(c.d, s, "args")
+        for i in 0..ob_len(c.d, args) { ob_expr(c, ob_at(c.d, args, i)) }
+    }
+    0
+}
+
+fn ob_match(c: Cx, m: Int) -> Int {
+    ob_expr(c, ob_kid(c.d, m, "scrutinee"))
+    let arms = ob_kid(c.d, m, "arms")
+    for i in 0..ob_len(c.d, arms) { ob_block(c, ob_kid(c.d, ob_at(c.d, arms, i), "body")) }
+    0
+}
+
+fn ob_args(c: Cx, e: Int) -> Int {
+    let args = ob_kid(c.d, e, "args")
+    for i in 0..ob_len(c.d, args) { ob_expr(c, ob_at(c.d, args, i)) }
+    0
+}
+
+// Whether the census has already pushed `kind` at this position (a postcondition's check is lowered
+// at every return, and is one obligation).
+fn ob_seen(c: Cx, e: Int, kind: Int) -> Bool {
+    let at = ob_s(c.d, e, "at")
+    let colon = ob_last_colon(at)
+    let dots = ut_find(at, "..", colon)
+    if colon < 0 || dots < colon { return false }
+    let module = str_slice(at, 0, colon)
+    let start = ob_num(str_slice(at, colon + 1, dots))
+    let end = ob_num(str_slice(at, dots + 2, str_len(at)))
+    for i in c.base..ints_len(c.out.kind) {
+        if ints_get(c.out.kind, i) == kind && ints_get(c.out.start, i) == start && ints_get(c.out.end, i) == end && strs_get(c.out.span, i) == module { return true }
+    }
+    false
+}
+
+fn ob_literal_only(c: Cx, e: Int) -> Bool {
+    if e < 0 { return true }
+    let op = ob_s(c.d, e, "op")
+    if op == "const" { return true }
+    if op == "local" || op == "call" || op == "builtin" || op == "call_indirect" || op == "call_trait" || op == "field" || op == "index"
+            || op == "match" || op == "if" || op == "block" || op == "closure" || op == "fn_value" || op == "record" || op == "variant"
+            || op == "array" || op == "array-repeat" { return false }
+    // An operator over its operands.
+    let operand = ob_kid(c.d, e, "operand")
+    if operand >= 0 { return ob_literal_only(c, operand) }
+    ob_literal_only(c, ob_kid(c.d, e, "lhs")) && ob_literal_only(c, ob_kid(c.d, e, "rhs"))
+}
+
+fn ob_expr(c: Cx, e: Int) -> Int {
+    if e < 0 { return 0 }
+    let op = ob_s(c.d, e, "op")
+    let ty = ob_s(c.d, e, "type")
+    if op == "const" || op == "local" || op == "fn_value" { return 0 }
+    if (op == "neg" || op == "~") && ob_is_float(ty) {
+        ob_expr(c, ob_kid(c.d, e, "operand"))
+        return 0
+    }
+    if (op == "+" || op == "-" || op == "*" || op == "/" || op == "%") && ob_is_float(ty) {
+        ob_expr(c, ob_kid(c.d, e, "lhs"))
+        ob_expr(c, ob_kid(c.d, e, "rhs"))
+        return 0
+    }
+    if op == "~" {
+        ob_expr(c, ob_kid(c.d, e, "operand"))
+    } else if op == "neg" && ty != "Int" {
+        ob_push(c, 3, 1, e, "")
+        ob_expr(c, ob_kid(c.d, e, "operand"))
+    } else if op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" {
+        if op == "<<" || op == ">>" { ob_push(c, 9, 1, e, "") }
+        ob_expr(c, ob_kid(c.d, e, "lhs"))
+        ob_expr(c, ob_kid(c.d, e, "rhs"))
+    } else if op == "convert" {
+        if ob_s(c.d, e, "mode") == "exact" && !ob_is_float(ty) { ob_push(c, 10, 1, e, "") }
+        ob_expr(c, ob_kid(c.d, e, "operand"))
+    } else if op == "fits" {
+        ob_expr(c, ob_kid(c.d, e, "operand"))
+    } else if op == "array" {
+        let elems = ob_kid(c.d, e, "elems")
+        for i in 0..ob_len(c.d, elems) { ob_expr(c, ob_at(c.d, elems, i)) }
+    } else if op == "array-repeat" {
+        ob_expr(c, ob_kid(c.d, e, "value"))
+    } else if op == "index" {
+        ob_push(c, 5, 1, e, "")
+        ob_expr(c, ob_kid(c.d, e, "base"))
+        ob_expr(c, ob_kid(c.d, e, "index"))
+    } else if op == "neg" {
+        let x = ob_kid(c.d, e, "operand")
+        let v = ob_int(c, x)
+        if ints_get(v, 0) == 1 && ints_get(v, 1) != 0 - 9223372036854775807 - 1 {
+            ob_push(c, 3, 0, e, "-(" + int_to_str(ints_get(v, 1)) + ") is " + int_to_str(0 - ints_get(v, 1)))
+        } else {
+            ob_push(c, 3, 1, e, "")
+        }
+        ob_expr(c, x)
+    } else if op == "+" || op == "-" || op == "*" || op == "/" || op == "%" {
+        ob_arith(c, e, op)
+        ob_expr(c, ob_kid(c.d, e, "lhs"))
+        ob_expr(c, ob_kid(c.d, e, "rhs"))
+    } else if op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=" {
+        ob_expr(c, ob_kid(c.d, e, "lhs"))
+        ob_expr(c, ob_kid(c.d, e, "rhs"))
+    } else if op == "call" {
+        ob_call(c, e)
+    } else if op == "call_indirect" {
+        ob_push(c, 7, 2, e, "")
+        ob_expr(c, ob_kid(c.d, e, "callee"))
+        ob_args(c, e)
+    } else if op == "call_trait" {
+        ob_args(c, e)
+    } else if op == "builtin" {
+        ob_builtin(c, e)
+    } else if op == "record" || op == "variant" {
+        let fields = ob_kid(c.d, e, "fields")
+        for i in 0..ob_len(c.d, fields) { ob_expr(c, ob_kid(c.d, ob_at(c.d, fields, i), "value")) }
+    } else if op == "field" {
+        ob_expr(c, ob_kid(c.d, e, "base"))
+    } else if op == "match" {
+        ob_match(c, e)
+    } else if op == "if" {
+        ob_expr(c, ob_kid(c.d, e, "cond"))
+        ob_block(c, ob_kid(c.d, e, "then"))
+        ob_block(c, ob_kid(c.d, e, "else"))
+    } else if op == "block" {
+        ob_block(c, ob_kid(c.d, e, "body"))
+    } else if op == "closure" {
+        ob_push(c, 6, 1, e, "")
+    }
+    0
+}
+
+fn ob_arith(c: Cx, e: Int, op: Str) -> Int {
+    let l = ob_int(c, ob_kid(c.d, e, "lhs"))
+    let r = ob_int(c, ob_kid(c.d, e, "rhs"))
+    if op == "+" || op == "-" || op == "*" {
+        if ints_get(l, 0) == 1 && ints_get(r, 0) == 1 {
+            let a = ints_get(l, 1)
+            let b = ints_get(r, 1)
+            // `checked_add`, `checked_sub`, `checked_mul`: the result where it fits an `Int`, found
+            // without overflowing here.
+            let top = 9223372036854775807
+            let bottom = 0 - 9223372036854775807 - 1
+            let mut fits = true
+            if op == "+" {
+                if (b > 0 && a > top - b) || (b < 0 && a < bottom - b) { fits = false }
+            } else if op == "-" {
+                if (b < 0 && a > top + b) || (b > 0 && a < bottom + b) { fits = false }
+            } else {
+                if a == 0 - 1 {
+                    if b == bottom { fits = false }
+                } else if b == 0 - 1 {
+                    if a == bottom { fits = false }
+                } else if a > 0 {
+                    if b > top / a || b < bottom / a { fits = false }
+                } else if a < 0 {
+                    if b < top / a || b > bottom / a { fits = false }
+                }
+            }
+            if fits {
+                let v = if op == "+" { a + b } else if op == "-" { a - b } else { a * b }
+                ob_push(c, 3, 0, e, int_to_str(a) + " " + op + " " + int_to_str(b) + " is " + int_to_str(v))
+                return 0
+            }
+        }
+        ob_push(c, 3, 1, e, "")
+        return 0
+    }
+    // `/` and `%`: a divisor other than 0 and -1 can neither be zero nor overflow `MIN / -1`.
+    if ints_get(r, 0) == 1 && ints_get(r, 1) != 0 && ints_get(r, 1) != 0 - 1 {
+        ob_push(c, 4, 0, e, "the divisor is " + int_to_str(ints_get(r, 1)))
+    } else {
+        ob_push(c, 4, 1, e, "")
+    }
+    0
+}
+
+fn ob_call(c: Cx, e: Int) -> Int {
+    let callee = ob_s(c.d, e, "callee")
+    let info = match hashmap_get(c.info, callee) { Some(v) => v, None => 0 }
+    if info % 2 == 1 { ob_push(c, 8, 2, e, "") }
+    if info >= 2 {
+        // `proved_call`'s witness, when every argument is a literal, is the checker's, not R2's.
+        let args = ob_kid(c.d, e, "args")
+        let mut literal = true
+        for i in 0..ob_len(c.d, args) { if !ob_literal_only(c, ob_at(c.d, args, i)) { literal = false } }
+        if literal {
+            strs_push(c.out.stuck, ob_s(c.d, e, "at"))
+        } else {
+            ob_push(c, 2, 1, e, "")
+        }
+    }
+    ob_args(c, e)
+    0
+}
+
+fn ob_builtin(c: Cx, e: Int) -> Int {
+    let name = ob_s(c.d, e, "builtin")
+    let args = ob_kid(c.d, e, "args")
+    if name == "contract_check" {
+        // The second argument's constant: 0 a precondition, anything else a postcondition.
+        let which = if ob_len(c.d, args) > 1 { ob_int(c, ob_at(c.d, args, 1)) } else { ints_new() }
+        let kind = if ints_len(which) == 2 && ints_get(which, 0) == 1 && ints_get(which, 1) == 0 { 0 } else { 1 }
+        if !ob_seen(c, e, kind) { ob_push(c, kind, 1, e, "") }
+    } else {
+        let mut kind = 0 - 1
+        if name == "str_byte" || name == "str_slice" || name == "ints_get" || name == "ints_set" || name == "strs_get" || name == "strs_set"
+                || name == "vec_get" || name == "vec_set" || name == "arg" || name == "str_from_byte" || name == "ints_pop" || name == "strs_pop"
+                || name == "vec_pop" { kind = 5 }
+        if name == "str_concat" || name == "int_to_str" || name == "str_join" || name == "ints_new" || name == "strs_new" || name == "vec_new"
+                || name == "ints_push" || name == "strs_push" || name == "vec_push" || name == "chan_new" || name == "chan_new_of"
+                || name == "atomic_new" || name == "read_file" || name == "cstr_copy" { kind = 6 }
+        if name == "ints_sum_from" || name == "atomic_add" { kind = 3 }
+        if kind >= 0 { ob_push(c, kind, 1, e, "") }
+    }
+    for i in 0..ob_len(c.d, args) { ob_expr(c, ob_at(c.d, args, i)) }
+    0
+}
+
+// Whether the function node `f` states a precondition: a `contract_check` in its body whose second
+// argument is the constant `0` (what `Resolution::checked_call`'s `preconditions` counts).
+fn ob_precondition(d: JsonDoc, f: Int) -> Bool {
+    let body = ob_kid(d, f, "body")
+    if body < 0 { return false }
+    ob_hunt(d, body, ob_kid(d, f, "consts"))
+}
+
+fn ob_hunt(d: JsonDoc, n: Int, consts: Int) -> Bool {
+    if n < 0 { return false }
+    let kind = json_kind(d, n)
+    if kind == "array" {
+        for i in 0..json_len(d, n) { if ob_hunt(d, ob_at(d, n, i), consts) { return true } }
+        return false
+    }
+    if kind != "object" { return false }
+    if ob_s(d, n, "builtin") == "contract_check" {
+        let args = ob_kid(d, n, "args")
+        if ob_len(d, args) > 1 {
+            let w = ob_at(d, args, 1)
+            if ob_s(d, w, "op") == "const" {
+                let k = ob_at(d, consts, ob_i(d, w, "const"))
+                if ob_s(d, k, "type") == "Int" && ob_i(d, k, "value") == 0 { return true }
+            }
+        }
+    }
+    for i in 0..json_len(d, n) {
+        match json_value_at(d, n, i) {
+            Some(v) => if ob_hunt(d, v, consts) { return true },
+            None => { },
+        }
+    }
+    false
+}
+
+// A function's obligations from `from` on, sorted by position and then kind, keeping the order of
+// equal ones (`sort_by_key`).
+fn ob_sort(o: Obs, from: Int) -> Int {
+    let n = ints_len(o.kind)
+    let mut i = from + 1
+    while i < n {
+        let mut j = i
+        while j > from && ob_before(o, j, j - 1) {
+            ob_swap(o, j, j - 1)
+            j -= 1
+        }
+        i += 1
+    }
+    0
+}
+
+fn ob_before(o: Obs, a: Int, b: Int) -> Bool {
+    if ints_get(o.start, a) != ints_get(o.start, b) { return ints_get(o.start, a) < ints_get(o.start, b) }
+    if ints_get(o.end, a) != ints_get(o.end, b) { return ints_get(o.end, a) < ints_get(o.end, b) }
+    ints_get(o.kind, a) < ints_get(o.kind, b)
+}
+
+fn ob_swap(o: Obs, a: Int, b: Int) -> Int {
+    let k = ints_get(o.kind, a)
+    ints_set(o.kind, a, ints_get(o.kind, b))
+    ints_set(o.kind, b, k)
+    let s = ints_get(o.status, a)
+    ints_set(o.status, a, ints_get(o.status, b))
+    ints_set(o.status, b, s)
+    let st = ints_get(o.start, a)
+    ints_set(o.start, a, ints_get(o.start, b))
+    ints_set(o.start, b, st)
+    let en = ints_get(o.end, a)
+    ints_set(o.end, a, ints_get(o.end, b))
+    ints_set(o.end, b, en)
+    let f = strs_get(o.function, a)
+    strs_set(o.function, a, strs_get(o.function, b))
+    strs_set(o.function, b, f)
+    let df = strs_get(o.def, a)
+    strs_set(o.def, a, strs_get(o.def, b))
+    strs_set(o.def, b, df)
+    let sp = strs_get(o.span, a)
+    strs_set(o.span, a, strs_get(o.span, b))
+    strs_set(o.span, b, sp)
+    let w = strs_get(o.witness, a)
+    strs_set(o.witness, a, strs_get(o.witness, b))
+    strs_set(o.witness, b, w)
+    0
+}
+
+// --- output ----------------------------------------------------------------------------------------------
+
+// The module `name`'s node in the document's `modules`, or -1.
+pub fn ob_module(d: JsonDoc, name: Str) -> Int {
+    let ms = ob_kid(d, json_root(d), "modules")
+    for i in 0..ob_len(d, ms) {
+        let m = ob_at(d, ms, i)
+        if ob_s(d, m, "name") == name { return m }
+    }
+    0 - 1
+}
+
+// The 1-based line of byte `at` of `text`, and its 1-based column in characters (`SourceMap::line_col`).
+pub fn ob_line(text: Str, at: Int) -> Int {
+    let mut line = 1
+    let n = if at < str_len(text) { at } else { str_len(text) }
+    for i in 0..n { if str_byte(text, i) == 10 { line += 1 } }
+    line
+}
+
+pub fn ob_column(text: Str, at: Int) -> Int {
+    let n = if at < str_len(text) { at } else { str_len(text) }
+    let mut begin = 0
+    for i in 0..n { if str_byte(text, i) == 10 { begin = i + 1 } }
+    let mut col = 1
+    for i in begin..n { if str_byte(text, i) < 128 || str_byte(text, i) >= 192 { col += 1 } }
+    col
+}
+
+fn ob_print(io: IoCap, d: JsonDoc, o: Obs, as_json: Bool) -> Int {
+    let n = ints_len(o.kind)
+    let mut proved = 0
+    let mut checked = 0
+    let mut unknown = 0
+    let rows = strs_new()
+    let lines = strs_new()
+    for i in 0..n {
+        let st = ints_get(o.status, i)
+        if st == 0 { proved += 1 } else if st == 1 { checked += 1 } else { unknown += 1 }
+        let m = ob_module(d, strs_get(o.span, i))
+        if m < 0 { ob_refuse(io, "an obligation at a position of no module (`" + strs_get(o.span, i) + "`)") }
+        let file = ob_s(d, m, "path")
+        let source = ob_s(d, m, "source")
+        let line = ob_line(source, ints_get(o.start, i))
+        let col = ob_column(source, ints_get(o.start, i))
+        let witness = strs_get(o.witness, i)
+        let mut row = "{\"column\":" + int_to_str(col) + ",\"file\":" + ob_quote(file) + ",\"function\":" + ob_quote(strs_get(o.function, i))
+                + ",\"kind\":\"" + ob_kind_name(ints_get(o.kind, i)) + "\",\"line\":" + int_to_str(line)
+                + ",\"status\":\"" + ob_status_name(st) + "\""
+        if st == 0 { row = row + ",\"witness\":" + ob_quote(witness) }
+        strs_push(rows, row + "}")
+        strs_push(lines, file + ":" + int_to_str(line) + ":" + int_to_str(col) + " " + strs_get(o.function, i) + " " + ob_kind_name(ints_get(o.kind, i))
+                + " " + ob_status_name(st) + (if st == 0 { " (" + witness + ")" } else { "" }) + nl())
+    }
+    if as_json {
+        print("{\"checked\":" + int_to_str(checked) + ",\"evidence\":\"compiler evidence, not certification\",\"obligations\":["
+                + str_join(rows, ",") + "],\"proved\":" + int_to_str(proved) + ",\"schema\":\"nazm.obligations/1\",\"unknown\":" + int_to_str(unknown) + "}" + nl())
+    } else {
+        print(str_join(lines, "") + int_to_str(proved) + " proved, " + int_to_str(checked) + " checked, " + int_to_str(unknown)
+                + " unknown — compiler evidence, not certification" + nl())
+    }
+    0
+}
+
+// --- the command -----------------------------------------------------------------------------------------
+
+pub fn ob_quote(s: Str) -> Str { json_quote(s) }
+
+pub fn obligations_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let file = cli_value(c, 0)
+    let as_json = cli_present(c, 1)
+    let f = ci_checked(io, file, cli_present(c, 2), cli_value(c, 2))
+    let raw = fx_core_document_with_sources(f)
+    if raw == "" { ob_refuse(io, "a program whose Core IR the front end does not carry") }
+    let text = ci_unprefix_paths(io, raw, file)
+    let d = match json_parse(text) {
+        Result.Ok(value: doc) => doc,
+        Result.Err(error: e) => { ob_refuse(io, "Core IR's document does not parse: " + e); json_new() },
+    }
+    ob_run(io, d, as_json)
+}
+
+// The census of the document `d` (Core IR with sources): every function's obligations, in order.
+pub fn ob_census(io: IoCap, d: JsonDoc) -> Obs {
+    let root = json_root(d)
+    let fns = ob_kid(d, root, "functions")
+    let n = ob_len(d, fns)
+    let info: HashMap[Str, Int] = hashmap_new()
+    for i in 0..n {
+        let f = ob_at(d, fns, i)
+        let mut bits = 0
+        if ob_kid(d, f, "foreign") >= 0 { bits += 1 }
+        if ob_precondition(d, f) { bits += 2 }
+        hashmap_set(info, ob_s(d, f, "def"), bits)
+    }
+    let o = Obs(function: strs_new(), def: strs_new(), kind: ints_new(), status: ints_new(), span: strs_new(), start: ints_new(), end: ints_new(),
+            witness: strs_new(), stuck: strs_new())
+    for i in 0..n {
+        let f = ob_at(d, fns, i)
+        // A foreign declaration has no body; its calls are the obligation, at the caller.
+        if ob_kid(d, f, "foreign") >= 0 { continue }
+        let before = ints_len(o.kind)
+        let c = Cx(d: d, def: ob_s(d, f, "def"), consts: ob_kid(d, f, "consts"), name: ob_s(d, f, "name"), out: o, info: info, base: before)
+        ob_block(c, ob_kid(d, f, "body"))
+        ob_sort(o, before)
+    }
+    if strs_len(o.stuck) > 0 {
+        ob_refuse(io, "a call of a function that states a precondition, with literal arguments, at `" + strs_get(o.stuck, 0)
+                + "` (the checker's proved-call witness is not published: R2 hand-back)")
+    }
+    o
+}
+
+fn ob_run(io: IoCap, d: JsonDoc, as_json: Bool) -> Int {
+    let o = ob_census(io, d)
+    ob_print(io, d, o, as_json)
+}
