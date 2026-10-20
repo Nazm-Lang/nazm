@@ -29,6 +29,7 @@ use "reload.nz"
 use "doctor.nz"
 use "semantic.nz"
 use "build.nz"
+use "buildcli.nz"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -252,6 +253,7 @@ fn command_cli(name: Str) -> Cli {
     if name == "diagnostics" { return diagnostics_cli() }
     if name == "resolve" { return resolve_cli() }
     if name == "references" { return references_cli() }
+    if name == "build" { return build_cli() }
     cli_command("", "", "")
 }
 
@@ -280,7 +282,7 @@ fn help_command(io: IoCap, k: Int) -> Int {
     show(io, cli_help(c, true))
 }
 
-fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap) -> Int {
+fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, tm: TimeCap) -> Int {
     let n = args_count()
     if n == 0 { missing(io) }
     let s = arg(0)
@@ -330,7 +332,6 @@ fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap) -> Int {
     if s == "help" { return help_command(io, 1) }
     if s == "patch" { return patch_command(io, patch_group()) }
     if s == "attest" { return attest_command(io, proc, sp, v, attest_group()) }
-    if s == "build" { return build_command(io, proc, sp) }
     let c = command_cli(s)
     if c.name == "" { not_carried(io, "nazm " + s) }
     cli_from(c, 1)
@@ -354,6 +355,7 @@ fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap) -> Int {
     if s == "diagnostics" { return diagnostics_command(io, c) }
     if s == "resolve" { return resolve_command(io, c) }
     if s == "references" { return references_command(io, c) }
+    if s == "build" { return build_command(io, proc, sp, tm, c) }
     check_command(io, c)
 }
 

@@ -70,6 +70,12 @@ pub struct Cli {
     req_b: Ints,
     // Where the command's own arguments begin: after `nazm CMD`, the argument after the command.
     first: Ints,
+    // Per argument, the values clap's `value_parser([..])` lists, comma-joined ("" for none); whether it is hidden
+    // from the help and the usage; and the value parser it has beyond `numeric` (3: a `u8` in 0..=3, 4: `--stack-size`'s
+    // size, 5: `--heap-limit`'s).
+    possible: Strs,
+    hidden: Ints,
+    vkind: Ints,
 }
 
 pub fn cli_command(name: Str, about: Str, long_about: Str) -> Cli {
@@ -77,7 +83,8 @@ pub fn cli_command(name: Str, about: Str, long_about: Str) -> Cli {
             value: strs_new(), required: ints_new(), multiple: ints_new(), path: ints_new(), default: strs_new(),
             has_default: ints_new(), help: strs_new(), long_help: strs_new(), order: ints_new(), explicit: ints_new(),
             val_arg: ints_new(), val_text: strs_new(), pend: ints_new(), pend_vals: strs_new(), delim: strs_new(), numeric: ints_new(), grp: ints_new(),
-            conf_a: ints_new(), conf_b: ints_new(), req_a: ints_new(), req_b: ints_new(), first: ints_new())
+            conf_a: ints_new(), conf_b: ints_new(), req_a: ints_new(), req_b: ints_new(), first: ints_new(),
+            possible: strs_new(), hidden: ints_new(), vkind: ints_new())
 }
 
 fn cli_add(c: Cli, kind: Int, short: Str, long: Str, value: Str, required: Bool, multiple: Bool, path: Bool,
@@ -96,6 +103,9 @@ fn cli_add(c: Cli, kind: Int, short: Str, long: Str, value: Str, required: Bool,
     strs_push(c.delim, "")
     ints_push(c.numeric, 0)
     ints_push(c.explicit, 0)
+    strs_push(c.possible, "")
+    ints_push(c.hidden, 0)
+    ints_push(c.vkind, 0)
     ints_len(c.kind) - 1
 }
 
@@ -131,6 +141,24 @@ pub fn cli_list(c: Cli, short: Str, long: Str, value: Str, delim: Str, help: Str
 // Argument `a`'s values are `u32`s: another is refused as `invalid value`.
 pub fn cli_numeric(c: Cli, a: Int) -> Int {
     ints_set(c.numeric, a, 1)
+    0
+}
+
+// Argument `a`'s values are one of `names`, comma-joined (`value_parser(["llvm", ..])`).
+pub fn cli_possible(c: Cli, a: Int, names: Str) -> Int {
+    strs_set(c.possible, a, names)
+    0
+}
+
+// Argument `a` is left out of the help and the usage (`hide = true`).
+pub fn cli_hidden(c: Cli, a: Int) -> Int {
+    ints_set(c.hidden, a, 1)
+    0
+}
+
+// Argument `a`'s value parser: 3 a `u8` in 0..=3, 4 a stack size, 5 a heap size.
+pub fn cli_vkind(c: Cli, a: Int, kind: Int) -> Int {
+    ints_set(c.vkind, a, kind)
     0
 }
 
@@ -353,11 +381,60 @@ fn cli_contains(xs: Strs, s: Str) -> Bool {
     false
 }
 
+fn cli_has(xs: Ints, a: Int) -> Bool {
+    for i in 0..ints_len(xs) {
+        if ints_get(xs, i) == a { return true }
+    }
+    false
+}
+
+// `unroll_arg_requires`: what argument `a` requires, and what that requires, in the order clap finds them.
+fn cli_unroll(c: Cli, a: Int) -> Ints {
+    let processed = ints_new()
+    let todo = ints_new()
+    let found = ints_new()
+    ints_push(todo, a)
+    while ints_len(todo) > 0 {
+        let x = ints_get(todo, ints_len(todo) - 1)
+        ints_pop(todo)
+        if cli_has(processed, x) { continue }
+        ints_push(processed, x)
+        for k in 0..ints_len(c.req_a) {
+            if ints_get(c.req_a, k) == x {
+                let y = ints_get(c.req_b, k)
+                if !cli_has(processed, y) {
+                    ints_push(found, y)
+                    ints_push(todo, y)
+                }
+            }
+        }
+    }
+    found
+}
+
 // `Usage::write_args`: the required options and those used, then every positional in order.
 fn cli_write_args(c: Cli, used: Ints) -> Str {
-    let incl = ints_new()
+    // The required set (`Validator::required`): the arguments that are required, then what each argument given
+    // `requires`, transitively, in the order they were given.
+    let req = ints_new()
     for a in 0..ints_len(c.kind) {
-        if cli_is_required(c, a) { ints_push(incl, a) }
+        if cli_is_required(c, a) { ints_push(req, a) }
+    }
+    for i in 0..ints_len(used) {
+        let g = ints_get(used, i)
+        if ints_get(c.explicit, g) == 1 {
+            let more = cli_unroll(c, g)
+            for k in 0..ints_len(more) {
+                if !cli_has(req, ints_get(more, k)) { ints_push(req, ints_get(more, k)) }
+            }
+        }
+    }
+    // `Usage::write_args`: each of them after what it requires, then those used.
+    let incl = ints_new()
+    for i in 0..ints_len(req) {
+        let more = cli_unroll(c, ints_get(req, i))
+        for k in 0..ints_len(more) { ints_push(incl, ints_get(more, k)) }
+        ints_push(incl, ints_get(req, i))
     }
     for i in 0..ints_len(used) {
         if !cli_in_group(c, ints_get(used, i)) { ints_push(incl, ints_get(used, i)) }
@@ -386,7 +463,7 @@ fn cli_write_args(c: Cli, used: Ints) -> Str {
 fn cli_needs_options_tag(c: Cli) -> Bool {
     for a in 0..ints_len(c.kind) {
         let k = ints_get(c.kind, a)
-        if (k == cli_k_flag() || k == cli_k_opt()) && !cli_is_required(c, a) && !cli_in_group(c, a) { return true }
+        if (k == cli_k_flag() || k == cli_k_opt()) && !cli_is_required(c, a) && !cli_in_group(c, a) && ints_get(c.hidden, a) == 0 { return true }
     }
     false
 }
@@ -452,6 +529,99 @@ fn cli_int_error(v: Str, kind: Int) -> Str {
     ""
 }
 
+// `v` (decimal digits) times `m`, as decimal digits.
+fn cli_mul_digits(v: Str, m: Int) -> Str {
+    let out = strs_new()
+    let mut carry = 0
+    let mut i = str_len(v)
+    while i > 0 {
+        i -= 1
+        let t = (str_byte(v, i) - 48) * m + carry
+        strs_push(out, str_slice("0123456789", t % 10, t % 10 + 1))
+        carry = t / 10
+    }
+    while carry > 0 {
+        strs_push(out, str_slice("0123456789", carry % 10, carry % 10 + 1))
+        carry = carry / 10
+    }
+    let mut digits = ""
+    let mut k = strs_len(out)
+    while k > 0 {
+        k -= 1
+        digits = digits + strs_get(out, k)
+    }
+    cli_digits(digits)
+}
+
+// Why a `--stack-size` (`kind` 4) or `--heap-limit` (5) value is not one, as `cli.rs`'s `stack_size` and
+// `nazm_package::heap_size` say it, or "".
+fn cli_size_error(raw: Str, kind: Int) -> Str {
+    let n = str_len(raw)
+    let last = if n > 0 { str_byte(raw, n - 1) } else { 0 }
+    let mut unit = 1
+    let mut digits = raw
+    if last == 75 || last == 107 { unit = 1024 }
+    if last == 77 || last == 109 { unit = 1048576 }
+    if last == 71 || last == 103 { unit = 1073741824 }
+    if unit > 1 { digits = str_slice(raw, 0, n - 1) }
+    if cli_int_error(digits, 2) != "" { return "`" + raw + "` is not a size: bytes, or a number with `K`, `M` or `G`" }
+    let bytes = cli_mul_digits(cli_digits(digits), unit)
+    if str_len(bytes) > 20 || (str_len(bytes) == 20 && cli_more(bytes, "18446744073709551615")) { return "`" + raw + "` is too large" }
+    let top = if kind == 4 { "4294967296" } else { "1099511627776" }
+    if cli_more("65536", bytes) || cli_more(bytes, top) {
+        let what = if kind == 4 { "a stack is from 64K to 4G" } else { "a heap limit is from 64K to 1024G" }
+        return "`" + raw + "` is " + bytes + " bytes; " + what
+    }
+    ""
+}
+
+// Why `v` is not a `u8` in 0..=3 (a `RangedI64ValueParser`), or "".
+fn cli_range_error(v: Str) -> Str {
+    if str_len(v) == 0 { return "cannot parse integer from empty string" }
+    let mut i = if str_byte(v, 0) == 43 { 1 } else { 0 }
+    if i == 1 && str_len(v) == 1 { return "invalid digit found in string" }
+    for j in i..str_len(v) {
+        if str_byte(v, j) < 48 || str_byte(v, j) > 57 { return "invalid digit found in string" }
+    }
+    let d = cli_digits(v)
+    if cli_more(d, "9223372036854775807") { return "number too large to fit in target type" }
+    if cli_more(d, "3") { return d + " is not in 0..=3" }
+    ""
+}
+
+fn cli_invalid_possible(io: IoCap, c: Cli, a: Int, v: Str, names: Strs) -> Int {
+    let mut text = "invalid value '" + v + "' for '" + cli_display(c, a) + "'" + cli_nl() + "  [possible values: " + str_join(names, ", ") + "]"
+    // `did_you_mean`: each value more than 0.7 like it, the likeliest first.
+    let cand = strs_new()
+    let scores = vec_new[Float64]()
+    for i in 0..strs_len(names) {
+        let score = cli_jaro(v, strs_get(names, i))
+        if score > 0.7 {
+            strs_push(cand, strs_get(names, i))
+            vec_push(scores, score)
+        }
+    }
+    let near = strs_new()
+    let taken = ints_new()
+    for _ in 0..strs_len(cand) { ints_push(taken, 0) }
+    for _ in 0..strs_len(cand) {
+        let mut best = 0 - 1
+        for j in 0..strs_len(cand) {
+            if ints_get(taken, j) == 0 && (best < 0 || vec_get(scores, j) > vec_get(scores, best)) { best = j }
+        }
+        ints_set(taken, best, 1)
+        strs_push(near, strs_get(cand, best))
+    }
+    if strs_len(near) == 1 {
+        text = text + cli_nl() + cli_nl() + "  tip: a similar value exists: '" + strs_get(near, 0) + "'"
+    } else if strs_len(near) > 1 {
+        let quoted = strs_new()
+        for i in 0..strs_len(near) { strs_push(quoted, "'" + strs_get(near, i) + "'") }
+        text = text + cli_nl() + cli_nl() + "  tip: some similar values exist: " + str_join(quoted, ", ")
+    }
+    cli_fail(io, text)
+}
+
 fn cli_empty_value(io: IoCap, c: Cli, a: Int) -> Int {
     cli_fail(io, "a value is required for '" + cli_display(c, a) + "' but none was supplied")
 }
@@ -498,9 +668,29 @@ fn cli_long_help_exists(c: Cli) -> Bool {
     false
 }
 
-fn cli_spec_vals(c: Cli, a: Int) -> Str {
-    if cli_takes_value(c, a) && ints_get(c.has_default, a) == 1 { return "[default: " + strs_get(c.default, a) + "]" }
-    ""
+// `spec_vals`: the default, then the possible values, joined by `sep` (a space in the short help, a line in the long).
+fn cli_spec_vals(c: Cli, a: Int, sep: Str) -> Str {
+    let parts = strs_new()
+    if cli_takes_value(c, a) && ints_get(c.has_default, a) == 1 { strs_push(parts, "[default: " + strs_get(c.default, a) + "]") }
+    if strs_get(c.possible, a) != "" {
+        let names = cli_split(strs_get(c.possible, a), 44)
+        strs_push(parts, "[possible values: " + str_join(names, ", ") + "]")
+    }
+    str_join(parts, sep)
+}
+
+// `s` cut at every byte `at`.
+fn cli_split(s: Str, at: Int) -> Strs {
+    let out = strs_new()
+    let mut from = 0
+    for i in 0..str_len(s) {
+        if str_byte(s, i) == at {
+            strs_push(out, str_slice(s, from, i))
+            from = i + 1
+        }
+    }
+    strs_push(out, str_slice(s, from, str_len(s)))
+    out
 }
 
 fn cli_arg_help(c: Cli, a: Int, use_long: Bool) -> Str {
@@ -528,7 +718,7 @@ fn cli_section(c: Cli, args: Ints, use_long: Bool) -> Str {
         let taken = longest + 4
         for i in 0..ints_len(args) {
             let a = ints_get(args, i)
-            let h_w = cli_width(cli_arg_help(c, a, false)) + cli_width(cli_spec_vals(c, a))
+            let h_w = cli_width(cli_arg_help(c, a, false)) + cli_width(cli_spec_vals(c, a, " "))
             if 100 >= taken && Float32(taken) / Float32(100) > Float32(0.40) && h_w > 100 - taken { next_line = true }
         }
     }
@@ -563,7 +753,7 @@ fn cli_section(c: Cli, args: Ints, use_long: Bool) -> Str {
         let spaces = if next_line { 10 } else { longest + 4 }
         if next_line { strs_push(parts, cli_nl() + "          ") }
         let mut help = cli_arg_help(c, a, use_long)
-        let specs = cli_spec_vals(c, a)
+        let specs = cli_spec_vals(c, a, if use_long { cli_nl() } else { " " })
         let help_empty = help == ""
         if specs != "" && !use_long {
             if !help_empty { help = help + " " }
@@ -604,6 +794,7 @@ fn cli_help_text(c: Cli, use_long: Bool) -> Str {
     let pos = ints_new()
     let opts = ints_new()
     for a in 0..ints_len(c.kind) {
+        if ints_get(c.hidden, a) == 1 { continue }
         if cli_is_pos(c, a) { ints_push(pos, a) } else { ints_push(opts, a) }
     }
     let mut first = true
@@ -757,6 +948,21 @@ fn cli_react(io: IoCap, c: Cli, a: Int, by: Int, vals: Strs, quiet: Bool) -> Int
         if v == "" && ints_get(c.path, a) == 1 {
             if quiet { return 1 }
             cli_empty_value(io, c, a)
+        }
+        if strs_get(c.possible, a) != "" {
+            let names = cli_split(strs_get(c.possible, a), 44)
+            if !cli_contains(names, v) {
+                if quiet { return 1 }
+                cli_invalid_possible(io, c, a, v, names)
+            }
+        }
+        let vk = ints_get(c.vkind, a)
+        if vk > 0 {
+            let why = if vk == 3 { cli_range_error(v) } else { cli_size_error(v, vk) }
+            if why != "" {
+                if quiet { return 1 }
+                cli_fail(io, "invalid value '" + v + "' for '" + cli_display(c, a) + "': " + why)
+            }
         }
         ints_push(c.val_arg, a)
         strs_push(c.val_text, v)
