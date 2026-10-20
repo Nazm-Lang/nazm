@@ -95,6 +95,12 @@ come from outside the process.
 `compiler/bootstrap.sh` and selfhost's four stage builders enforce this themselves: they
 refuse to start rather than run unbounded.
 
+**`nazm build` written in Nazm (R8 slice 4, accepted 2026-10-20).** The Nazm-built `nazm build`, itself
+started through `host-run`, starts the pipeline and the code generator as stages one at a time and checks
+each as `host-run` does (the counted heap linked, a limit of at most 2 GiB, the withdrawal conditions and
+the marker). While a stage runs, the waiting driver (its front end's state freed first) and that one
+stage are both Nazm-built processes; the copyright holder accepted this as one stage at a time.
+
 ### What the runner must enforce
 
 - **Memory and swap set equal.** A cap that can be swapped past is not a cap.
