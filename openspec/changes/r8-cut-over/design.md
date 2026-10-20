@@ -986,6 +986,11 @@ What could make two stages differ although their inputs agree, and what holds ea
 Direction-level only; every other choice in the three designs above is made on the recommendation of
 2026-10-20 (detail-level choices are delegated).
 
+**Questions 5 and 6 were settled by the copyright holder on 2026-10-20: both recommendations accepted.**
+Each Nazm runner is built with a counted heap of at most 256 MiB, checks its own image at start and holds
+the host-run lock for its whole life (slice 4's acceptance extended one level); the harness-only C shim
+for in-process libFuzzer is accepted, never shipped, as `fuzz/cov.c` is today.
+
 5. **The Nazm runners on the host (slice 13).** `nzx host-run` and `nzx contained` are themselves
    programs written in Nazm. While `nzx host-run` waits on a stage, two Nazm-built processes exist;
    on a `nazm build`, three (the runner, the waiting driver, the stage); and `nzx contained` waits on
