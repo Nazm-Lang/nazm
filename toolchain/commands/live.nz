@@ -1,0 +1,43 @@
+// `nazm comptime` and `nazm repl`, written in Nazm (R8 slice 7, `openspec/changes/r8-cut-over/design.md`, S7.4 and
+// S7.5): ports of `crates/nazm-cli/src/live.rs`, over the interpreter in this process (`interpret.nz`).
+
+use "cli.nz"
+use "interpret.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+pub fn comptime_cli() -> Cli {
+    let c = cli_command("comptime", "Evaluate a function at compile time (N65): one of no parameters, declared or inferred pure, under the "
+            + "interpreter's budgets — so it holds no capability and reaches nothing of the host", "")
+    cli_positional(c, "FILE", true, false, true, "", "")
+    cli_positional(c, "FUNCTION", true, false, false, "The function to evaluate, in the file's own module", "")
+    let iterations = cli_option(c, "", "max-iterations", "MAX_ITERATIONS", false, "10000000", true,
+            "As `nazm run --max-iterations`: a runaway evaluation stops with `N0402`", "")
+    cli_numeric_size(c, iterations)
+    let depth = cli_option(c, "", "max-depth", "MAX_DEPTH", false, "512", true, "As `nazm run --max-depth`", "")
+    cli_vkind(c, depth, 7)
+    c
+}
+
+pub fn repl_cli() -> Cli {
+    cli_command("repl", "An interactive session (N65): definitions and expressions a line at a time on standard input, checked as one program "
+            + "on every edit and evaluated by the interpreter. A redefinition that breaks another definition is refused by that one's name. "
+            + "`:defs`, `:reset`, `:quit`", "")
+}
+
+fn lv_int(raw: Str) -> Int {
+    let mut v = 0
+    for i in 0..str_len(raw) {
+        let b = str_byte(raw, i)
+        if b >= 48 && b <= 57 {
+            if v > 922337203685477579 { v = 9223372036854775807 } else { v = v * 10 + (b - 48) }
+        }
+    }
+    v
+}
+
+pub fn comptime_command(io: IoCap, out: OutCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    exit_with(ip_comptime(io, out, time, net, proc, rnd, cli_value(c, 0), cli_value(c, 1), lv_int(cli_value(c, 2)), lv_int(cli_value(c, 3))))
+    0
+}
