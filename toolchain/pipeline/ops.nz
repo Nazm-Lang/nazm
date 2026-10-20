@@ -5224,7 +5224,7 @@ pub fn lir_texts_needs(c: Cir, tt: TypeTable, p: MirProgram, needs: HashMap[Str,
 /// `debug`, as `nazm lir --ops --debug`, each unit followed by the names of the files its
 /// positions name (`; file INDEX PATH`).
 pub fn lir_texts_with(c: Cir, tt: TypeTable, p: MirProgram, needs: HashMap[Str, Bool], debug: Bool) -> Result[Strs, Str] ! {} {
-    if p.entry < 0 { return Err("this program has no `main` to compile") }
+    if p.entry < 0 && !hashmap_has(needs, "@lib") { return Err("this program has no `main` to compile") }
     let lx = lx_new(c, tt, p)
     let runtime: HashMap[Str, Str] = hashmap_new()
     for row in text_split(runtime_table(), "\n") {
