@@ -46,7 +46,8 @@ fn read_types(lx: Lx, kind: Str, ids: HashMap[Str, Int]) {
             hashmap_set(ids, t, ival(lx.c, e, "id"))
             hashmap_set(lx.display, t, sval(lx.c, e, "display"))
         }
-        if t == sval(lx.c, e, "definition") { hashmap_set(lx.defs, t, e) }
+        // Every tuple of every arity is the definition `(,)`: told apart by its fields' number.
+        if t == sval(lx.c, e, "definition") { hashmap_set(lx.defs, if text_contains(t, "record (,)") { t + "/" + int_to_str(count(lx.c, kid(lx.c, e, "fields"))) } else { t }, e) }
         let n = ival(lx.c, e, "id") + 1
         if kind == "records" && n > ints_get(lx.next, 0) { ints_set(lx.next, 0, n) }
         if kind == "enums" && n > ints_get(lx.next, 1) { ints_set(lx.next, 1, n) }
@@ -259,7 +260,9 @@ pub fn canonical_order(lx: Lx, n: Int) -> Ints ! {} {
 }
 
 pub fn def_node(lx: Lx, t: Str) -> Int ! {} {
-    match hashmap_get(lx.defs, spell(t).head) { Some(n) => n, None => 0 - 1 }
+    let s = spell(t)
+    let key = if text_contains(s.head, "record (,)") { s.head + "/" + int_to_str(strs_len(s.args)) } else { s.head }
+    match hashmap_get(lx.defs, key) { Some(n) => n, None => 0 - 1 }
 }
 
 /// A record's field types, in canonical order.

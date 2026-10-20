@@ -361,6 +361,8 @@ fn heap_renamed(text: Str, heap: Str) -> Str {
 /// the plan the driver links them by (R8 slice 4, `openspec/changes/r8-cut-over/design.md`, S4.3).
 fn build(io: IoCap, v: VouchCap, c: Cir, tt: TypeTable, p: MirProgram, target: Str, dir: Str, stack: Int, heap: Int, store: Str, generator: Str, fl: Flags) -> Int ! { io } {
     let names: HashMap[Str, Bool] = hashmap_new()
+    // A build names a module outside the source root as the loader did (`SourceNames`).
+    hashmap_set(names, "@display", true)
     // The LLVM text names the binding a variable holds beside it, which the LIR text carries then.
     if fl.llvm { hashmap_set(names, "@names", true) }
     // `--layout soa`: a `Vec` of records of `Int`s and `Bool`s one array per field.

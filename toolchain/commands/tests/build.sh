@@ -41,6 +41,7 @@
 #                 working directory (`prog.nazm-PID/`, in the debug map), so they are compared
 #                 through `dwarfdump --debug-info --debug-line` (UUIDs left out), not as bytes
 #   llvm-release  `--release -o prog`: canaries, position independent, stripped, signed
+#   (BUILD_TOOLCHAIN=1 adds the toolchain's own programs as inputs)
 #   llvm-soa      `--layout soa --emit-ir --objects objs` (soa: the same on `--backend nazm`)
 #
 # both sides run in directories of their own, the file named by its absolute path, and agree when
@@ -91,6 +92,15 @@ else
         "$ROOT"/tests/compat/v1/check/*.nz "$ROOT"/compiler/conformance/*.nz "$ROOT"/toolchain/codegen/tests/programs/*.nz; do
         [ -f "$f" ] && inputs+=("$f")
     done
+    # BUILD_TOOLCHAIN=1 adds the toolchain's own programs (the builder and the others of the self-build):
+    # large, several modules each, one of them reached through `..`.
+    if [ "${BUILD_TOOLCHAIN:-}" = 1 ]; then
+        for f in toolchain/commands/nazm.nz toolchain/pipeline/main.nz toolchain/codegen/main.nz compiler/diagnose.nz \
+            toolchain/commands/mcp.nz toolchain/harness/mutate/main.nz toolchain/harness/tools/jtool.nz \
+            toolchain/interp/main.nz toolchain/harness/check/main.nz; do
+            inputs+=("$ROOT/$f")
+        done
+    fi
 fi
 
 agree=0
