@@ -45,6 +45,7 @@ use "lockcheck.nz"
 use "group.nz"
 use "archive.nz"
 use "buildrt.nz"
+use "buildprov.nz"
 use "@std/file"
 use "@std/blake3"
 
@@ -56,6 +57,11 @@ fn nl() -> Str { str_from_byte(10) }
 // the code it exits with, over a second compilation of the root module as the language service reads it; with
 // the map when the program was loaded. The exit status is the build's.
 fn bd_summary(io: IoCap, o: Opts, status: Str, code: Int, with_map: Bool, artifact: Str) -> Int {
+    bd_summary_then(io, o, status, code, with_map, artifact, true)
+}
+
+// The same, going on afterwards (the provenance is written after a summary) unless `stop`.
+fn bd_summary_then(io: IoCap, o: Opts, status: Str, code: Int, with_map: Bool, artifact: Str, stop: Bool) -> Int {
     let library = os_env_get("NAZM_LIBRARY")
     let abs = fe_prefix(io, o.file) + o.file
     let g = fx_check_module_in(abs, "", library, fe_host_os(), fe_host_arch(), io)
@@ -64,7 +70,7 @@ fn bd_summary(io: IoCap, o: Opts, status: Str, code: Int, with_map: Bool, artifa
         exit_with(6)
     }
     print(sm_summary_for("build", artifact, g, g, ints_new(), status, code, bd_readable(io, abs), with_map) + nl())
-    exit_with(code)
+    if stop { exit_with(code) }
     0
 }
 
@@ -1366,7 +1372,7 @@ fn bd_report(how: Str, modules: Int, units: Int, compiled: Int, reused: Int, rej
             + ",\"reused\":" + int_to_str(instances_reused) + "}},\"link\":{\"performed\":" + (if linked { "true" } else { "false" }) + "}}"
 }
 
-pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, c: Cli) -> Int {
+pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, v: VouchCap, c: Cli) -> Int {
     let mut o = bo_read(io, c)
     let clock = bd_clock(tm)
     let entry = strs_new()
@@ -1396,7 +1402,6 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, c: 
     let cross = if target == host { "" } else { target }
     let llvm = o.backend == "llvm"
     if !llvm && o.debug { bd_refuse(io, o, "`nazm build --debug` with `--backend nazm` (debug information is the LLVM backend's here)") }
-    if o.has_provenance || o.has_sbom { bd_refuse(io, o, "`nazm build --provenance` and `--sbom`") }
     let pipeline = bd_stage(io, o, "NAZM_PIPELINE", "nazm-pipeline")
     let nzcg = if llvm { "" } else { bd_stage(io, o, "NAZM_NZCG", "nzcg") }
     let pipeline_limit = bd_check_stage(io, o, pipeline, "nazm-pipeline")
@@ -1607,8 +1612,7 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, c: 
             print(bd_report(how, modules, tally_units, compiled, reused, rejected, stored, instances, compiled_instances, reused_instances, false) + nl())
         }
         if !o.summary { eprint("nazm: wrote " + int_to_str(strs_len(all)) + " objects for " + target + " to " + o.objects + "; link them as " + o.objects + "/link.txt says" + nl()) }
-        if o.summary { bd_summary(io, o, "success", 0, true, "null") }
-        return 0
+        return bd_provenance(io, proc, sp, v, o, target, output, packages, nzcg)
     }
 
     // The link, in the working directory under the output's own name.
@@ -1687,7 +1691,11 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, c: 
     let moved = os_rename(exe, output)
     bd_remove(io, work)
     if moved != 0 { bd_fail(io, o, "nazm: cannot write " + output + ": " + ut_os_error(moved), 4) }
-    if o.summary { bd_summary(io, o, "success", 0, true, "{\"path\":" + bd_json_str(output) + "}") }
+    let after = o.has_provenance || o.has_sbom
+    if o.summary {
+        bd_summary_then(io, o, "success", 0, true, "{\"path\":" + bd_json_str(output) + "}", !after)
+        return bd_provenance(io, proc, sp, v, o, target, output, packages, nzcg)
+    }
     bd_mark(tm, clock, "link")
     if o.report {
         print(bd_report(how, modules, tally_units, compiled, reused, rejected, stored, instances, compiled_instances, reused_instances, true) + nl())
@@ -1695,8 +1703,21 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, c: 
     if o.timings { eprint(bd_timings(tm, clock) + nl()) }
     if authority != "" { eprint(authority + nl()) }
     print(output + nl())
+    bd_provenance(io, proc, sp, v, o, target, output, packages, nzcg)
+}
+
+// `provenance::write`: the record, the SBOM and the attestation, as asked, after a build that succeeded.
+fn bd_provenance(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, o: Opts, target: Str, output: Str, packages: Packages, nzcg: Str) -> Int {
+    if !o.has_provenance && !o.has_sbom { return 0 }
+    let root = if pk_packages_state(packages) == 1 { fe_canonical(io, strs_get(packages.dirs, pk_root_package(packages))) } else { "" }
+    let abi = bd_runtime_abi(io, o, proc, sp)
+    let code = bpv_write(io, proc, sp, v, o, target, output, root, abi, nzcg, version_text())
+    if code != 0 { exit_with(code) }
     0
 }
+
+// The toolchain's version, as the record writes it.
+fn version_text() -> Str { "0.10.0" }
 
 // A library's C header (`c_header`): every export, by symbol, in `<stdint.h>` and `<stdbool.h>` types. `exports` are the
 // plan's `SYMBOL RET PARAMS...` lines, by symbol.

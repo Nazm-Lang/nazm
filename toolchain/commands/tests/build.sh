@@ -288,6 +288,9 @@ for src in "${inputs[@]}"; do
             lib-objects) args=(--lib --objects objs); backend=() ;;
             rtlink) args=(--runtime "$OUT/rt" -o prog); backend=() ;;
             prov) args=(--provenance p.json --sbom s.json -o prog); backend=() ;;
+            prov-sign) args=(--provenance p.json --attest-with cat -o prog); backend=() ;;
+            prov-lib) args=(--lib --provenance p.json --sbom s.json -o libx.a); backend=() ;;
+            prov-objects) args=(--objects objs --provenance p.json --sbom s.json); backend=() ;;
             link) args=(--link "$OUT/foreign/foreign.o" -o prog); backend=() ;;
             *) echo "build-compare: no mode $mode"; exit 2 ;;
         esac
