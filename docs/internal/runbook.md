@@ -99,7 +99,9 @@ refuse to start rather than run unbounded.
 started through `host-run`, starts the pipeline and the code generator as stages one at a time and checks
 each as `host-run` does (the counted heap linked, a limit of at most 2 GiB, the withdrawal conditions and
 the marker). While a stage runs, the waiting driver (its front end's state freed first) and that one
-stage are both Nazm-built processes; the copyright holder accepted this as one stage at a time.
+stage are both Nazm-built processes; the copyright holder accepted this as one stage at a time. On the
+default LLVM backend (slice 5) the stages are the pipeline alone — it writes each unit as LLVM text and
+`clang` compiles it — and `nzcg` is only `--backend nazm`'s.
 
 ### What the runner must enforce
 
