@@ -759,7 +759,7 @@ pub fn emit_tls(t: Str) -> Str ! {} {
 /// where they are reached, `heap` under a heap limit (every unit but the stack's counted), else
 /// `small` where the program calls no C (every unit but the stack's and the TLS engine's renamed),
 /// and `entry`. `heap` is the limit in bytes, `stack` the stack size (`-1` for none of either).
-pub fn runtime_units(needs: Needs, triple: Str, entry: Str, roots: Int, calls_c: Bool, stack: Int, heap: Int) -> Vec[Strs] ! {} {
+pub fn runtime_units(needs: Needs, triple: Str, entry: Str, roots: Int, calls_c: Bool, stack: Int, heap: Int, small_ok: Bool) -> Vec[Strs] ! {} {
     let names = strs_new()
     let texts = strs_new()
     let t = switch_target(triple)
@@ -807,7 +807,7 @@ pub fn runtime_units(needs: Needs, triple: Str, entry: Str, roots: Int, calls_c:
     }
     // The small-block heap (R1.5 3.1) in a hosted program with no heap limit that calls no C:
     // every unit but the stack's and the TLS engine's renamed, and its own unit.
-    let small = heap < 0 && t != "" && !calls_c
+    let small = small_ok && heap < 0 && t != "" && !calls_c
     if small {
         for i in 0..strs_len(texts) {
             let name = strs_get(names, i)

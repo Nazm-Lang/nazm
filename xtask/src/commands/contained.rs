@@ -110,16 +110,20 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
         // builder (front end, pipeline, code generator, each written in Nazm), and each stage's
         // builder builds the next, under the bounded heap, to a fixpoint. The seed is built
         // here for the reason the bootstrap's is.
-        // `selfbuild stages=N` narrows a run for a slice's diagnosis; nothing else is passed.
+        // `selfbuild stages=N` narrows a run for a slice's diagnosis, and `backend=llvm` builds every
+        // stage on the LLVM backend (R8 slice 5); nothing else is passed.
         Some("selfbuild") => {
             bounds.deadline = Duration::from_secs(3600);
             let mut settings = String::new();
             for a in args.get(1..).unwrap_or_default() {
                 let ok = a
                     .strip_prefix("stages=")
-                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                    || matches!(a.as_str(), "backend=nazm" | "backend=llvm");
                 if !ok {
-                    eprintln!("contained: selfbuild takes only `stages=N`, not {a:?}");
+                    eprintln!(
+                        "contained: selfbuild takes only `stages=N` and `backend=nazm|llvm`, not {a:?}"
+                    );
                     return ExitCode::FAILURE;
                 }
                 settings.push(' ');

@@ -1,0 +1,222 @@
+// What the LLVM backend does to a unit's text after the instructions are written (R8 slice 5), as
+// `crates/nazm-lir/src/backend.rs` (`LlvmText::generate`), `crates/nazm-runtime/src/core.rs`
+// (`inline_reference_counting`, `plain_reference_counts`) and `crates/nazm-cli/src/build/release.rs`
+// (`stack_protected`) do: the thread-local state made plain in a program of one thread, the
+// reference counting the unit may inline, and `--release`'s stack canary.
+
+use "rtext.nz"
+use "@std/text"
+use "@std/hashmap"
+
+fn lp_nl() -> Str { str_from_byte(10) }
+
+// The lines of `text` as `str::lines` splits them: no empty one after a final newline.
+fn lp_lines(text: Str) -> Strs {
+    let out = text_split(text, lp_nl())
+    if strs_len(out) > 0 && str_len(strs_get(out, strs_len(out) - 1)) == 0 { strs_pop(out) }
+    out
+}
+
+// --- one thread ------------------------------------------------------------------------------------------
+
+// The failure state and stack limit a unit declares are ordinary globals in a program of one
+// thread, as the runtime defines them (`Needs::single`).
+pub fn lp_single_state(text: Str) -> Str ! {} {
+    let names = text_lines(rt_single_thread_state())
+    let out = strs_new()
+    for line in text_split(text, lp_nl()) {
+        let mut l = line
+        if str_len(line) > 0 && str_byte(line, 0) == 64 && text_contains(line, " thread_local global ") {
+            let mut one = false
+            for g in names { if text_starts_with(line, "@" + g + " = ") { one = true } }
+            if one { l = replace_first_in(line, " thread_local ", " ") }
+        }
+        strs_push(out, l)
+    }
+    str_join(out, lp_nl())
+}
+
+fn replace_first_in(s: Str, from: Str, to: Str) -> Str {
+    match text_find(s, from) {
+        Some(i) => str_slice(s, 0, i) + to + str_slice(s, i + str_len(from), str_len(s)),
+        None => s,
+    }
+}
+
+// --- reference counting -------------------------------------------------------------------------------------
+
+// The reference counting a program does most, which a unit may inline.
+fn lp_inlinable() -> Strs {
+    text_split("nz.arr_retain nz.arr_release nz.seq_release nz.str_retain nz.str_release nz.vec_release", " ")
+}
+
+// One count's atomic step as three plain instructions, or "" for any other line.
+fn lp_plain_count(line: Str) -> Str {
+    if !text_starts_with(line, "  %") { return "" }
+    let rest0 = str_slice(line, 3, str_len(line))
+    let a = match text_find(rest0, " = atomicrmw ") { Some(i) => i, None => 0 - 1 }
+    if a < 0 { return "" }
+    let result = str_slice(rest0, 0, a)
+    let rest1 = str_slice(rest0, a + 13, str_len(rest0))
+    let b = match text_find(rest1, " ptr ") { Some(i) => i, None => 0 - 1 }
+    if b < 0 { return "" }
+    let op = str_slice(rest1, 0, b)
+    let rest2 = str_slice(rest1, b + 5, str_len(rest1))
+    let c = match text_find(rest2, ", i64 1 ") { Some(i) => i, None => 0 - 1 }
+    if c < 0 { return "" }
+    let at = str_slice(rest2, 0, c)
+    let order = str_slice(rest2, c + 8, str_len(rest2))
+    if !(op == "add" || op == "sub") || !(order == "monotonic" || order == "release") { return "" }
+    "  %" + result + " = load i64, ptr " + at + lp_nl() + "  %" + result + ".plain = " + op + " i64 %" + result + ", 1" + lp_nl() + "  store i64 %" + result + ".plain, ptr " + at
+}
+
+// `text` with the counts of the one-thread functions made plain.
+fn lp_plain_counts(text: Str) -> Str {
+    let names = text_lines(rt_plain_in_one_thread())
+    let out = strs_new()
+    let mut inside = false
+    let lines = text_split(text, lp_nl())
+    let last = strs_len(lines) - 1
+    for k in 0..strs_len(lines) {
+        let bare = strs_get(lines, k)
+        // The final element of the split has no newline of its own.
+        let nlc = if k < last { lp_nl() } else { "" }
+        if text_starts_with(bare, "define ") {
+            inside = false
+            for n in names { if text_contains(bare, " @" + n + "(") { inside = true } }
+        } else if bare == "}" {
+            inside = false
+        }
+        if inside {
+            if bare == "  fence acquire" { continue }
+            let plain = lp_plain_count(bare)
+            if plain != "" {
+                strs_push(out, plain + nlc)
+                continue
+            }
+        }
+        strs_push(out, bare + nlc)
+    }
+    str_join(out, "")
+}
+
+// One runtime function's definition, as the runtime holds it: from its `define` line to the `}` line.
+fn lp_definition(texts: Strs, name: Str) -> Str {
+    let wanted = " @" + name + "("
+    for text in texts {
+        let mut start = 0
+        for line in text_split(text, lp_nl()) {
+            if text_starts_with(line, "define ") && text_contains(line, wanted) {
+                let tail = str_slice(text, start, str_len(text))
+                match text_find(tail, lp_nl() + "}" + lp_nl()) {
+                    Some(e) => { return str_slice(tail, 0, e + 3) },
+                    None => { return "" },
+                }
+            }
+            start += str_len(line) + 1
+        }
+    }
+    ""
+}
+
+// The definitions the units copy, by name, made once.
+pub fn lp_definitions() -> HashMap[Str, Str] ! {} {
+    let texts = strs_new()
+    strs_push(texts, rt_core_SEQUENCE_RUNTIME())
+    strs_push(texts, rt_core_STRING_RUNTIME())
+    strs_push(texts, rt_core_SHIM_SEQUENCE_RUNTIME())
+    let out: HashMap[Str, Str] = hashmap_new()
+    for n in lp_inlinable() { hashmap_set(out, n, lp_definition(texts, n)) }
+    out
+}
+
+// A hosted unit's text, its declarations of the reference counting replaced by copies of the
+// runtime's own definitions that the optimiser may inline and discards after: `available_externally`,
+// so the runtime's stays the one definition the program links. In a program of one thread the copies'
+// counts are plain, as the runtime unit's are there.
+pub fn lp_inline_counting(unit: Str, single: Bool, defs: HashMap[Str, Str]) -> Str ! {} {
+    let lines = lp_lines(unit)
+    let declared = strs_new()
+    for n in lp_inlinable() {
+        let mut d = false
+        for l in lines { if text_starts_with(l, "declare ") && text_contains(l, " @" + n + "(") { d = true } }
+        if d { strs_push(declared, n) }
+    }
+    if strs_len(declared) == 0 { return unit }
+    let seq_declared = strs_len(declared) > 0 && lp_has_name(declared, "nz.seq_release")
+    let wanted = strs_new()
+    for n in lp_inlinable() {
+        if lp_has_name(declared, n) || (n == "nz.arr_release" && seq_declared) { strs_push(wanted, n) }
+    }
+    let out = strs_new()
+    for line in lines {
+        let mut copied = false
+        if text_starts_with(line, "declare ") {
+            for n in wanted { if text_contains(line, " @" + n + "(") { copied = true } }
+        }
+        if !copied { strs_push(out, line + lp_nl()) }
+    }
+    if !lp_has(lines, "declare void @free(") { strs_push(out, "declare void @free(ptr)" + lp_nl()) }
+    if lp_has_name(wanted, "nz.vec_release") && !lp_has(lines, "declare void @nz.vec_free(") {
+        strs_push(out, "declare void @nz.vec_free(ptr, ptr, i64, ptr)" + lp_nl())
+    }
+    for g in text_split("nz.seq_reclaimed nz.str_reclaimed", " ") {
+        if !lp_has(lines, "@" + g + " = ") { strs_push(out, "@" + g + " = external global i64" + lp_nl()) }
+    }
+    for n in wanted {
+        let d = match hashmap_get(defs, n) { Some(x) => x, None => "" }
+        if d != "" {
+            let r = replace_first_in(d, "define hidden ", "define available_externally hidden ")
+            strs_push(out, if single { lp_plain_counts(r) } else { r })
+        }
+    }
+    str_join(out, "")
+}
+
+fn lp_has_name(names: Strs, n: Str) -> Bool {
+    for x in names { if x == n { return true } }
+    false
+}
+
+fn lp_has(lines: Strs, needle: Str) -> Bool {
+    for l in lines { if text_starts_with(l, needle) { return true } }
+    false
+}
+
+// --- --release's stack canary ------------------------------------------------------------------------------------
+
+// One `define` line with `sspstrong` after its parameter list, or "" for any other line.
+fn lp_protect_line(line: Str) -> Str {
+    if !text_starts_with(line, "define ") { return "" }
+    let brace = match text_find(line, "{") { Some(i) => i, None => str_len(line) }
+    let head = str_slice(line, 0, brace)
+    if text_contains(head, " ssp ") || text_contains(head, " sspstrong ") || text_contains(head, " sspreq ") { return "" }
+    let at = match text_find(line, "@") { Some(i) => i, None => 0 - 1 }
+    if at < 0 { return "" }
+    let mut open = at
+    while open < str_len(line) && str_byte(line, open) != 40 { open += 1 }
+    if open >= str_len(line) { return "" }
+    let mut depth = 0
+    let mut i = open
+    while i < str_len(line) {
+        let b = str_byte(line, i)
+        if b == 40 {
+            depth += 1
+        } else if b == 41 {
+            if depth > 0 { depth -= 1 }
+            if depth == 0 { return str_slice(line, 0, i + 1) + " sspstrong" + str_slice(line, i + 1, str_len(line)) }
+        }
+        i += 1
+    }
+    ""
+}
+
+// `text` with every function it defines protected by a stack canary (`sspstrong`).
+pub fn lp_stack_protected(text: Str) -> Str ! {} {
+    let out = strs_new()
+    for line in text_split(text, lp_nl()) {
+        let p = lp_protect_line(line)
+        strs_push(out, if p == "" { line } else { p })
+    }
+    str_join(out, lp_nl())
+}
