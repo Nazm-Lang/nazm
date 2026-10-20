@@ -1,0 +1,513 @@
+// `nazm build --provenance FILE`, `--sbom FILE` and `--attest-with CMD` (R8 slice 6: a port of
+// `crates/nazm-cli/src/provenance.rs`, N73 and N94).
+//
+// Written after a build has succeeded, never instead of one: `nazm.provenance/1` names every source module and package
+// with its digest, the target, the compiler's version, the C compiler's identity, the runtime's ABI revision and digest,
+// the backend and its options (with `--backend nazm`, the code generator's own digest), the profiles in force and the
+// output's digest. Every digest is plain BLAKE3 over the file's bytes — `blake3:` and 64 hex digits, as a package's — so
+// `b3sum` checks it without Nazm. No absolute path, time or host name enters it: two builds of one program with one
+// toolchain write the same file.
+//
+// Evidence, not a guarantee. The record says what this compiler read and wrote; it is not a proof that the output does what
+// the source says. An attestation is whatever the local command printed: Nazm runs it and keeps its output beside the
+// record, and neither signs nor checks anything itself.
+//
+// `cranelift`, the version of the Cranelift the Rust build links, stays in the record and the SBOM as the Rust build
+// writes it, so the two records agree byte for byte until the cut-over (the record's schema, `nazm.provenance/1`,
+// has the field).
+
+use "../../compiler/facts.nz"
+use "../../compiler/builtins.nz"
+use "front.nz"
+use "pkg.nz"
+use "proc.nz"
+use "util.nz"
+use "buildcli.nz"
+use "@std/json"
+use "@std/blake3"
+use "@std/file"
+
+fn pv_nl() -> Str { str_from_byte(10) }
+
+fn pv_digest(bytes: Str) -> Str { "blake3:" + blake3_hex(bytes_from_str(bytes)) }
+
+// An object with its members in the order of their keys (`serde_json`'s `Map` is a `BTreeMap`).
+fn pv_obj(doc: JsonDoc, keys: Strs, values: Ints) -> Int {
+    let ks = strs_new()
+    let vs = ints_new()
+    for i in 0..strs_len(keys) {
+        let mut at = 0
+        while at < strs_len(ks) && pv_less(strs_get(ks, at), strs_get(keys, i)) { at += 1 }
+        strs_push(ks, "")
+        ints_push(vs, 0)
+        let mut j = strs_len(ks) - 1
+        while j > at {
+            strs_set(ks, j, strs_get(ks, j - 1))
+            ints_set(vs, j, ints_get(vs, j - 1))
+            j -= 1
+        }
+        strs_set(ks, at, strs_get(keys, i))
+        ints_set(vs, at, ints_get(values, i))
+    }
+    json_add_object(doc, ks, vs)
+}
+
+fn pv_less(a: Str, b: Str) -> Bool {
+    let n = if str_len(a) < str_len(b) { str_len(a) } else { str_len(b) }
+    for i in 0..n {
+        if str_byte(a, i) != str_byte(b, i) { return str_byte(a, i) < str_byte(b, i) }
+    }
+    str_len(a) < str_len(b)
+}
+
+// An object from `NAME`, node pairs given as two lists.
+struct Pairs {
+    keys: Strs,
+    values: Ints,
+}
+
+fn pv_pairs() -> Pairs { Pairs(keys: strs_new(), values: ints_new()) }
+
+fn pv_put(p: Pairs, key: Str, value: Int) -> Int {
+    strs_push(p.keys, key)
+    ints_push(p.values, value)
+    0
+}
+
+fn pv_done(doc: JsonDoc, p: Pairs) -> Int { pv_obj(doc, p.keys, p.values) }
+
+fn pv_array(doc: JsonDoc, items: Ints) -> Int { json_add_array(doc, items) }
+
+// A file's digest, or null where it cannot be read (`file_digest`).
+fn pv_file_digest(io: IoCap, doc: JsonDoc, path: Str) -> Int {
+    if ut_read_error(io, path, false) != "" { return json_add_null(doc) }
+    json_add_str(doc, pv_digest(read_file(path)))
+}
+
+fn pv_named_digest(io: IoCap, doc: JsonDoc, name: Str, path: Str) -> Int {
+    let p = pv_pairs()
+    pv_put(p, "name", json_add_str(doc, name))
+    pv_put(p, "digest", pv_file_digest(io, doc, path))
+    pv_done(doc, p)
+}
+
+// The names of the regular files directly in `dir`, sorted.
+fn pv_files(io: IoCap, dir: Str) -> Strs {
+    let names = strs_new()
+    let d = os_dir_open(dir)
+    if os_status(d) < 0 { return names }
+    let buf = bytes_new(1024)
+    let mut n = os_dir_next(d, buf)
+    while n > 0 {
+        let name = bytes_to_str(bytes_slice(buf, 0, n))
+        if ut_kind(io, ut_join(dir, name)) == 0 {
+            let mut at = 0
+            while at < strs_len(names) && pv_less(strs_get(names, at), name) { at += 1 }
+            strs_push(names, "")
+            let mut j = strs_len(names) - 1
+            while j > at {
+                strs_set(names, j, strs_get(names, j - 1))
+                j -= 1
+            }
+            strs_set(names, at, name)
+        }
+        n = os_dir_next(d, buf)
+    }
+    os_close(d)
+    names
+}
+
+// The `blake3:HEX` digest's hex, "" where there is none.
+fn pv_hex(d: Str) -> Str { if ut_starts(d, "blake3:") { str_slice(d, 7, str_len(d)) } else { "" } }
+
+// `hashes`: the BLAKE3 hash of a digest, or none.
+fn pv_hashes(doc: JsonDoc, d: Str) -> Int {
+    let h = pv_hex(d)
+    let items = ints_new()
+    if h != "" {
+        let p = pv_pairs()
+        pv_put(p, "alg", json_add_str(doc, "BLAKE3"))
+        pv_put(p, "content", json_add_str(doc, h))
+        ints_push(items, pv_done(doc, p))
+    }
+    pv_array(doc, items)
+}
+
+// What the record says of a build, gathered: every digest a string, "" for none.
+struct Record {
+    // The sources: module, digest.
+    s_module: Strs,
+    s_digest: Strs,
+    // The packages: name, version, digest.
+    p_name: Strs,
+    p_version: Strs,
+    p_digest: Strs,
+    // The output: its kind, and its files by name, digest ("" for null).
+    kind: Str,
+    f_name: Strs,
+    f_digest: Strs,
+    c_driver: Str,
+    c_version: Str,
+    c_report: Str,
+    has_c: Bool,
+    nzcg: Str,
+    epoch: Str,
+    abi: Str,
+    runtime_digest: Str,
+    archive: Str,
+    has_archive: Bool,
+    compiler: Str,
+    target: Str,
+    backend: Str,
+}
+
+// `pv_write`'s failure: what the reference says before it writes anything.
+fn pv_none(io: IoCap, why: Str) -> Int {
+    eprint("nazm: no provenance: " + why + pv_nl())
+    4
+}
+
+// Writes the record, the SBOM and the attestation, as asked, after the build `o` made `output` for `target`: `root_dir` the
+// root package's directory ("" for none), `abi` the runtime's ABI revision and digest, `nzcg` the code generator's
+// file. The exit status.
+pub fn bpv_write(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, o: Opts, target: Str, output: Str, root_dir: Str, abi: Strs, nzcg: Str, version: Str) -> Int ! { io, spawn } {
+    let library = os_env_get("NAZM_LIBRARY")
+    let abs = fe_prefix(io, o.file) + o.file
+    let os = if ut_contains(target, "-apple-darwin") { "macos" } else if ut_contains(target, "-windows-") { "windows" } else { "linux" }
+    let arch = if ut_starts(target, "x86_64") { "x86_64" } else { "aarch64" }
+    let f = if o.lib { fx_check_module_in(abs, "", library, os, arch, io) } else { fx_check_in(abs, "", library, os, arch, io) }
+    if fx_refusal(f) != "" || !fx_carried(f) || fe_load_failed(f) { return pv_none(io, "the sources could not be read again") }
+    let doc = json_new()
+    let top = pv_pairs()
+    // The sources, by module.
+    let modules = strs_new()
+    let digests = strs_new()
+    for m in 0..fx_modules(f) {
+        let key = if fx_module_key(f, m) != "" { fx_module_key(f, m) } else { fx_module_name(f, m) }
+        let d = pv_digest(fx_module_text(f, m))
+        let mut at = 0
+        while at < strs_len(modules) && !pv_less(key, strs_get(modules, at)) { at += 1 }
+        strs_push(modules, "")
+        strs_push(digests, "")
+        let mut j = strs_len(modules) - 1
+        while j > at {
+            strs_set(modules, j, strs_get(modules, j - 1))
+            strs_set(digests, j, strs_get(digests, j - 1))
+            j -= 1
+        }
+        strs_set(modules, at, key)
+        strs_set(digests, at, d)
+    }
+    let sources = ints_new()
+    for i in 0..strs_len(modules) {
+        let p = pv_pairs()
+        pv_put(p, "module", json_add_str(doc, strs_get(modules, i)))
+        pv_put(p, "digest", json_add_str(doc, strs_get(digests, i)))
+        ints_push(sources, pv_done(doc, p))
+    }
+    // The packages, and the profiles their manifests require.
+    let mut r = Record(s_module: modules, s_digest: digests, p_name: strs_new(), p_version: strs_new(), p_digest: strs_new(), kind: "", f_name: strs_new(),
+            f_digest: strs_new(), c_driver: "", c_version: "", c_report: "", has_c: false, nzcg: "", epoch: strs_get(bi_identity(), 0), abi: strs_get(abi, 0),
+            runtime_digest: "blake3:" + strs_get(abi, 1), archive: "", has_archive: false, compiler: version, target: target, backend: o.backend)
+    let profiles = strs_new()
+    let packages = ints_new()
+    if root_dir != "" {
+        let dg = dgs_new()
+        let g = graph_resolve(io, root_dir, 0 - 1, strs_new(), dg)
+        for i in 0..graph_len(g) {
+            let p = pv_pairs()
+            pv_put(p, "name", json_add_str(doc, strs_get(g.name, i)))
+            pv_put(p, "version", json_add_str(doc, strs_get(g.version, i)))
+            pv_put(p, "digest", json_add_str(doc, strs_get(g.digest, i)))
+            ints_push(packages, pv_done(doc, p))
+            strs_push(r.p_name, strs_get(g.name, i))
+            strs_push(r.p_version, strs_get(g.version, i))
+            strs_push(r.p_digest, strs_get(g.digest, i))
+            let m = vec_get(g.mfs, i)
+            if ints_get(m.has_profile, 0) == 1 { strs_push(profiles, strs_get(m.profile, 0)) }
+        }
+    }
+    if o.has_profile { strs_push(profiles, o.profile) }
+    let sorted = strs_new()
+    for i in 0..strs_len(profiles) {
+        let name = strs_get(profiles, i)
+        let mut at = 0
+        let mut dup = false
+        while at < strs_len(sorted) && pv_less(strs_get(sorted, at), name) { at += 1 }
+        if at < strs_len(sorted) && strs_get(sorted, at) == name { dup = true }
+        if !dup {
+            strs_push(sorted, "")
+            let mut j = strs_len(sorted) - 1
+            while j > at {
+                strs_set(sorted, j, strs_get(sorted, j - 1))
+                j -= 1
+            }
+            strs_set(sorted, at, name)
+        }
+    }
+    let profile_nodes = ints_new()
+    for i in 0..strs_len(sorted) { ints_push(profile_nodes, json_add_str(doc, strs_get(sorted, i))) }
+    // The C compiler, by the first line of what it says it is.
+    let cc = pr_run(io, proc, sp, "clang", text_split_spaces_pv("--version"), strs_new(), false, "")
+    let c_node = if cc.started && cc.status == 0 {
+        let first = strs_get(text_split(cc.out, pv_nl()), 0)
+        let p = pv_pairs()
+        pv_put(p, "driver", json_add_str(doc, "clang"))
+        pv_put(p, "version", json_add_str(doc, ut_trim(first)))
+        pv_put(p, "report_digest", json_add_str(doc, pv_digest(cc.out)))
+        r.has_c = true
+        r.c_driver = "clang"
+        r.c_version = ut_trim(first)
+        pv_done(doc, p)
+    } else {
+        json_add_null(doc)
+    }
+    // The runtime the build linked, and the artifact's archive when one was.
+    let rt = pv_pairs()
+    pv_put(rt, "abi_revision", json_add_int(doc, bo_size(strs_get(abi, 0))))
+    pv_put(rt, "digest", json_add_str(doc, "blake3:" + strs_get(abi, 1)))
+    if o.has_runtime {
+        let archive = ut_join(o.runtime, "libnazmrt.a")
+        let n = pv_file_digest(io, doc, archive)
+        pv_put(rt, "archive", n)
+        if ut_read_error(io, archive, false) == "" {
+            r.has_archive = true
+            r.archive = pv_digest(read_file(archive))
+        }
+    }
+    // The backend and its options.
+    let be = pv_pairs()
+    pv_put(be, "name", json_add_str(doc, o.backend))
+    pv_put(be, "opt_level", json_add_int(doc, o.opt))
+    pv_put(be, "layout", json_add_str(doc, o.layout))
+    pv_put(be, "debug", json_add_bool(doc, o.debug))
+    pv_put(be, "stack_watermark", json_add_bool(doc, o.watermark))
+    pv_put(be, "stack_size", if o.stack >= 0 { json_add_int(doc, o.stack) } else { json_add_null(doc) })
+    pv_put(be, "heap_limit", if o.heap >= 0 { json_add_int(doc, o.heap) } else { json_add_null(doc) })
+    pv_put(be, "cranelift", json_add_str(doc, "0.136.1"))
+    if o.release { pv_put(be, "release", json_add_bool(doc, true)) }
+    if o.backend == "nazm" {
+        if ut_read_error(io, nzcg, false) != "" {
+            return pv_none(io, "Nazm's code generator could not be read again: `" + nzcg + "`: " + ut_read_error(io, nzcg, false))
+        }
+        r.nzcg = pv_digest(read_file(nzcg))
+        pv_put(be, "nzcg", json_add_str(doc, r.nzcg))
+    }
+    // What the build linked beside the program.
+    let linked = ints_new()
+    for i in 0..strs_len(o.links) { ints_push(linked, pv_named_digest(io, doc, ut_file_name(strs_get(o.links, i)), strs_get(o.links, i))) }
+    // The output: an executable or archive is one file, `--objects DIR` is every file in it.
+    let out = pv_pairs()
+    let files = ints_new()
+    if o.has_objects {
+        r.kind = "objects"
+        for name in pv_files(io, o.objects) {
+            let path = ut_join(o.objects, name)
+            ints_push(files, pv_named_digest(io, doc, name, path))
+            strs_push(r.f_name, name)
+            strs_push(r.f_digest, if ut_read_error(io, path, false) == "" { pv_digest(read_file(path)) } else { "" })
+        }
+    } else {
+        r.kind = if o.lib { "library" } else { "executable" }
+        ints_push(files, pv_named_digest(io, doc, ut_file_name(output), output))
+        strs_push(r.f_name, ut_file_name(output))
+        strs_push(r.f_digest, if ut_read_error(io, output, false) == "" { pv_digest(read_file(output)) } else { "" })
+        // A library's header is part of what it publishes.
+        if o.lib {
+            let header = ut_with_extension(output, "h")
+            ints_push(files, pv_named_digest(io, doc, ut_file_name(header), header))
+            strs_push(r.f_name, ut_file_name(header))
+            strs_push(r.f_digest, if ut_read_error(io, header, false) == "" { pv_digest(read_file(header)) } else { "" })
+        }
+    }
+    pv_put(out, "kind", json_add_str(doc, r.kind))
+    pv_put(out, "files", pv_array(doc, files))
+    // The compiler.
+    let comp = pv_pairs()
+    pv_put(comp, "name", json_add_str(doc, "nazm"))
+    pv_put(comp, "version", json_add_str(doc, version))
+    pv_put(top, "schema", json_add_str(doc, "nazm.provenance/1"))
+    pv_put(top, "digest_algorithm", json_add_str(doc, "blake3-256 over the file's bytes"))
+    pv_put(top, "sources", pv_array(doc, sources))
+    pv_put(top, "packages", pv_array(doc, packages))
+    pv_put(top, "target", json_add_str(doc, target))
+    pv_put(top, "compiler", pv_done(doc, comp))
+    pv_put(top, "semantic_epoch", json_add_int(doc, bo_size(r.epoch)))
+    pv_put(top, "c_compiler", c_node)
+    pv_put(top, "runtime", pv_done(doc, rt))
+    pv_put(top, "backend", pv_done(doc, be))
+    pv_put(top, "linked", pv_array(doc, linked))
+    pv_put(top, "profiles", pv_array(doc, profile_nodes))
+    pv_put(top, "output", pv_done(doc, out))
+    let record = json_with_root(doc, pv_done(doc, top))
+    if o.has_sbom {
+        let text = pv_sbom(r) + pv_nl()
+        if write_file(o.sbom, text) < 0 {
+            eprint("nazm: cannot write " + o.sbom + ": could not write" + pv_nl())
+            return 4
+        }
+    }
+    if !o.has_provenance { return 0 }
+    if write_file(o.provenance, json_encode_pretty(record) + pv_nl()) < 0 {
+        eprint("nazm: cannot write " + o.provenance + ": could not write" + pv_nl())
+        return 4
+    }
+    if !o.has_attest { return 0 }
+    // No shell: the words of CMD, then the record's path. What the command does with it is its own.
+    let words = text_split_spaces_pv(o.attest)
+    if strs_len(words) == 0 {
+        eprint("nazm: --attest-with names no command" + pv_nl())
+        return 5
+    }
+    let program = strs_get(words, 0)
+    let args = strs_new()
+    for i in 1..strs_len(words) { strs_push(args, strs_get(words, i)) }
+    strs_push(args, o.provenance)
+    // The command is the user's own word: named on the command line, not read out of a file.
+    let ran = pr_run(io, proc, sp, str_vouch(program), args, strs_new(), false, "")
+    let sig = o.provenance + ".sig"
+    if !ran.started {
+        eprint("nazm: cannot run the attesting command `" + program + "`: " + ran.why + pv_nl())
+        return 4
+    }
+    if ran.status != 0 {
+        eprint("nazm: the attesting command `" + o.attest + "` failed (" + pv_exit(ran.status) + "); the provenance is written, no attestation is:" + pv_nl()
+                + ut_trim_end(ran.err) + pv_nl())
+        return 4
+    }
+    if write_file(sig, ran.out) < 0 {
+        eprint("nazm: cannot write " + sig + ": could not write" + pv_nl())
+        return 4
+    }
+    0
+}
+
+// `ExitStatus`'s Display: `exit status: N`, or `signal: N` for a signal (status 256 plus its number here).
+fn pv_exit(status: Int) -> Str {
+    if status >= 256 { return "signal: " + int_to_str(status - 256) }
+    "exit status: " + int_to_str(status)
+}
+
+fn text_split_spaces_pv(s: Str) -> Strs {
+    let out = strs_new()
+    let mut from = 0
+    for i in 0..str_len(s) + 1 {
+        let b = if i < str_len(s) { str_byte(s, i) } else { 32 }
+        if b == 32 || (b >= 9 && b <= 13) {
+            if i > from { strs_push(out, str_slice(s, from, i)) }
+            from = i + 1
+        }
+    }
+    out
+}
+
+// The build as a CycloneDX 1.5 SBOM (`sbom`), read off what the provenance record says so the two cannot describe different
+// builds: the output as the metadata component, every package, every source module as a file, the runtime, and the tools.
+// Deterministic — no serial number or timestamp.
+fn pv_sbom(r: Record) -> Str {
+    let doc = json_new()
+    let components = ints_new()
+    for i in 0..strs_len(r.p_name) {
+        let p = pv_pairs()
+        let name = strs_get(r.p_name, i)
+        let version = strs_get(r.p_version, i)
+        pv_put(p, "type", json_add_str(doc, "library"))
+        pv_put(p, "bom-ref", json_add_str(doc, "package:" + name + "@" + version))
+        pv_put(p, "name", json_add_str(doc, name))
+        pv_put(p, "version", json_add_str(doc, version))
+        pv_put(p, "purl", json_add_str(doc, "pkg:generic/" + name + "@" + version))
+        pv_put(p, "hashes", pv_hashes(doc, strs_get(r.p_digest, i)))
+        ints_push(components, pv_done(doc, p))
+    }
+    for i in 0..strs_len(r.s_module) {
+        let p = pv_pairs()
+        let name = strs_get(r.s_module, i)
+        pv_put(p, "type", json_add_str(doc, "file"))
+        pv_put(p, "bom-ref", json_add_str(doc, "source:" + name))
+        pv_put(p, "name", json_add_str(doc, name))
+        pv_put(p, "hashes", pv_hashes(doc, strs_get(r.s_digest, i)))
+        ints_push(components, pv_done(doc, p))
+    }
+    let rt = pv_pairs()
+    pv_put(rt, "type", json_add_str(doc, "library"))
+    pv_put(rt, "bom-ref", json_add_str(doc, "runtime"))
+    pv_put(rt, "name", json_add_str(doc, "nazm-runtime"))
+    pv_put(rt, "version", json_add_str(doc, "abi-" + r.abi))
+    pv_put(rt, "hashes", pv_hashes(doc, r.runtime_digest))
+    ints_push(components, pv_done(doc, rt))
+    for i in 1..strs_len(r.f_name) {
+        let p = pv_pairs()
+        pv_put(p, "type", json_add_str(doc, "file"))
+        pv_put(p, "bom-ref", json_add_str(doc, "output:" + strs_get(r.f_name, i)))
+        pv_put(p, "name", json_add_str(doc, strs_get(r.f_name, i)))
+        pv_put(p, "hashes", pv_hashes(doc, strs_get(r.f_digest, i)))
+        ints_push(components, pv_done(doc, p))
+    }
+    let tools = ints_new()
+    let t1 = pv_pairs()
+    pv_put(t1, "type", json_add_str(doc, "application"))
+    pv_put(t1, "name", json_add_str(doc, "nazm"))
+    pv_put(t1, "version", json_add_str(doc, r.compiler))
+    ints_push(tools, pv_done(doc, t1))
+    let t2 = pv_pairs()
+    pv_put(t2, "type", json_add_str(doc, "library"))
+    pv_put(t2, "name", json_add_str(doc, "cranelift"))
+    pv_put(t2, "version", json_add_str(doc, "0.136.1"))
+    ints_push(tools, pv_done(doc, t2))
+    if pv_hex(r.nzcg) != "" {
+        let t3 = pv_pairs()
+        pv_put(t3, "type", json_add_str(doc, "application"))
+        pv_put(t3, "name", json_add_str(doc, "nzcg"))
+        pv_put(t3, "hashes", pv_hashes(doc, r.nzcg))
+        ints_push(tools, pv_done(doc, t3))
+    }
+    if r.has_c {
+        let t4 = pv_pairs()
+        pv_put(t4, "type", json_add_str(doc, "application"))
+        pv_put(t4, "name", json_add_str(doc, r.c_driver))
+        pv_put(t4, "version", json_add_str(doc, r.c_version))
+        ints_push(tools, pv_done(doc, t4))
+    }
+    let main_name = if strs_len(r.f_name) > 0 { json_add_str(doc, strs_get(r.f_name, 0)) } else { json_add_null(doc) }
+    let main_digest = if strs_len(r.f_digest) > 0 { strs_get(r.f_digest, 0) } else { "" }
+    let props = ints_new()
+    let pa = pv_pairs()
+    pv_put(pa, "name", json_add_str(doc, "nazm:target"))
+    pv_put(pa, "value", json_add_str(doc, r.target))
+    ints_push(props, pv_done(doc, pa))
+    let pb = pv_pairs()
+    pv_put(pb, "name", json_add_str(doc, "nazm:backend"))
+    pv_put(pb, "value", json_add_str(doc, r.backend))
+    ints_push(props, pv_done(doc, pb))
+    let pc = pv_pairs()
+    pv_put(pc, "name", json_add_str(doc, "nazm:semantic_epoch"))
+    pv_put(pc, "value", json_add_str(doc, r.epoch))
+    ints_push(props, pv_done(doc, pc))
+    let comp = pv_pairs()
+    pv_put(comp, "type", json_add_str(doc, if r.kind == "executable" { "application" } else { "library" }))
+    pv_put(comp, "bom-ref", json_add_str(doc, "output"))
+    pv_put(comp, "name", main_name)
+    pv_put(comp, "hashes", pv_hashes(doc, main_digest))
+    pv_put(comp, "properties", pv_array(doc, props))
+    let tool_list = pv_pairs()
+    pv_put(tool_list, "components", pv_array(doc, tools))
+    let meta = pv_pairs()
+    pv_put(meta, "tools", pv_done(doc, tool_list))
+    pv_put(meta, "component", pv_done(doc, comp))
+    let depends = ints_new()
+    for i in 0..strs_len(r.p_name) { ints_push(depends, json_add_str(doc, "package:" + strs_get(r.p_name, i) + "@" + strs_get(r.p_version, i))) }
+    ints_push(depends, json_add_str(doc, "runtime"))
+    let dep = pv_pairs()
+    pv_put(dep, "ref", json_add_str(doc, "output"))
+    pv_put(dep, "dependsOn", pv_array(doc, depends))
+    let deps = ints_new()
+    ints_push(deps, pv_done(doc, dep))
+    let top = pv_pairs()
+    pv_put(top, "bomFormat", json_add_str(doc, "CycloneDX"))
+    pv_put(top, "specVersion", json_add_str(doc, "1.5"))
+    pv_put(top, "version", json_add_int(doc, 1))
+    pv_put(top, "metadata", pv_done(doc, meta))
+    pv_put(top, "components", pv_array(doc, components))
+    pv_put(top, "dependencies", pv_array(doc, deps))
+    json_encode_pretty(json_with_root(doc, pv_done(doc, top)))
+}

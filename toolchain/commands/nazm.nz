@@ -357,7 +357,7 @@ fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, tm: TimeCap) -> 
     if s == "diagnostics" { return diagnostics_command(io, c) }
     if s == "resolve" { return resolve_command(io, c) }
     if s == "references" { return references_command(io, c) }
-    if s == "build" { return build_command(io, proc, sp, tm, c) }
+    if s == "build" { return build_command(io, proc, sp, tm, v, c) }
     check_command(io, c)
 }
 
