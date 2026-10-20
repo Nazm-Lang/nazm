@@ -53,10 +53,22 @@
       exact refusal texts for the targets it names
 
 ## 5. Slice 5 — the LLVM path
-- [ ] 5.1 LIR → LLVM IR text (`nazm-lir`'s `op/llvm.rs`, `op/soa.rs`, `debug.rs`), byte for byte
-      with `nazm build --emit-ir`
-- [ ] 5.2 `build` group 2: `--backend llvm` the default, `--opt-level`, `--emit-ir`, `--debug`,
-      `--layout soa`, `--release`
+- [x] 5.1 LIR → LLVM IR text (`toolchain/pipeline/{llvm,lldebug,llpost}.nz`, `--layout soa` in `ops.nz`), byte for
+      byte with `nazm build --emit-ir`: the 78 buildable programs of the corpus for `aarch64-apple-darwin`,
+      `x86_64-apple-darwin`, `x86_64-pc-windows-gnu`, `--heap-limit`, `--debug`, `--release`, and the
+      toolchain's own nine programs (`design.md`, *Slice 5 — the evidence*)
+- [x] 5.2 `build` group 2: `--backend llvm` the default, `--opt-level` (ThinLTO at `-O2` and above on
+      macOS), `--emit-ir`, `--debug` (`dsymutil`), `--layout`, `--release` (`strip`, `codesign`); the
+      comparison `toolchain/commands/tests/build.sh`: 123 inputs × 14 LLVM modes **1722 agree, 0 differ**,
+      `--layout soa` 246 agree, slice 4's six modes 738 agree (two defects the toolchain's programs found in
+      slice 4's text are fixed: a module outside the source root named `#N`, and tuples of different arity
+      sharing one layout)
+- [x] 5.3 `cargo xtask contained selfbuild backend=llvm`: the seed's, stage 1's, 2's and 3's builders
+      identical (`nazm`, `pl`, `cg` of stage 0 equal stage 1's: Nazm's text is the Rust build's), 9 programs
+      per stage identical, 66 corpus programs run as the seed's, the interpreter and `nazm-check` agree;
+      the default (`backend=nazm`) self-build passes again
+- [ ] 5.4 Left: the LLVM objects through the object store and the ThinLTO cache (derived data),
+      `--build-report`, `--summary-json`, `--timings`, `--lib`; the released set's backend is slice 15's
 
 ## 6. Slice 6 — the rest of `build`
 - [ ] 6.1 `build` group 3; `nazm runtime build` and `verify`
