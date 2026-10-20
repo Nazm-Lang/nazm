@@ -401,8 +401,36 @@ fn report(io: IoCap, p: Plan, r: Results, failed: Int, json: Bool) -> Int {
     0
 }
 
+fn env_has(io: IoCap, name: Str) -> Bool {
+    for i in 0..os_env_count() {
+        if ut_starts(os_env_at(i), name + "=") { return true }
+    }
+    false
+}
+
+// This executable's own path, the reference's `current_exe()`. `arg(0)` is the first argument, not the program's name, so the
+// system is asked: `/proc/self/exe` where there is one, else the path `ps` reports for this process id; "" when it cannot be found.
+fn own_path(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Str ! { io, spawn } {
+    let mut found = ""
+    let linked = fe_canonical(io, "/proc/self/exe")
+    if linked != "" { found = linked }
+    if found == "" {
+        let a = strs_new()
+        strs_push(a, "-p")
+        strs_push(a, int_to_str(os_pid()))
+        strs_push(a, "-o")
+        strs_push(a, "comm=")
+        let r = run_program(io, proc, sp, "ps", a, false)
+        if r.started && r.status == 0 {
+            let said = ut_trim(r.out)
+            if said != "" { found = fe_canonical(io, said) }
+        }
+    }
+    found
+}
+
 // `nazm test`, its arguments read into `c` (`test_cli`) from where `cli_from` says.
-pub fn test_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int ! { io, spawn } {
+pub fn test_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, c: Cli) -> Int ! { io, spawn } {
     cli_parse(io, c)
     let paths = cli_values(c, 0)
     let json = cli_present(c, 1)
@@ -411,8 +439,21 @@ pub fn test_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int ! 
     let has_filter = cli_present(c, 4)
     let filter = cli_value(c, 4)
     let fuzz = to_int(cli_value(c, 5))
-    let driver = os_env_get("NAZM_TEST_DRIVER")
-    if driver == "" { refuse(io, "the legs run another `nazm` (set NAZM_TEST_DRIVER): `run` and `build` are not ported") }
+    // The driver is `NAZM_TEST_DRIVER` when it is set (the seam), else this executable.
+    let mut driver = os_env_get("NAZM_TEST_DRIVER")
+    if driver == "" && !env_has(io, "NAZM_TEST_DRIVER") {
+        driver = str_vouch(own_path(io, proc, sp))
+        if driver == "" {
+            if summary {
+                let none = Plan(name: strs_new(), file: strs_new(), expect: ints_new(), want: strs_new(), harness: strs_new(), kind: ints_new(),
+                        without: strs_new(), error: strs_new())
+                return summarized(io, "toolchain_failed", 4, !interpret_only, none, empty_results(), 0)
+            }
+            eprint("nazm: cannot find this executable: no such file or directory (os error 2)" + nl())
+            exit_with(4)
+            return 4
+        }
+    }
     let p = Plan(name: strs_new(), file: strs_new(), expect: ints_new(), want: strs_new(), harness: strs_new(), kind: ints_new(),
             without: strs_new(), error: strs_new())
     let r = empty_results()

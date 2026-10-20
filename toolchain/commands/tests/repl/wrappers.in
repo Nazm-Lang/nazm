@@ -1,0 +1,14 @@
+1 + 2
+10 / 3
+7 > 3
+1 == 2
+"hello"
+"a" + "b"
+str_len("four")
+int_to_str(42)
+true
+false
+if 1 < 2 { 10 } else { 20 }
+let x = 5
+x
+[1, 2, 3]

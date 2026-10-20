@@ -46,6 +46,8 @@ use "group.nz"
 use "archive.nz"
 use "buildrt.nz"
 use "buildprov.nz"
+use "harness.nz"
+use "runexe.nz"
 use "@std/file"
 use "@std/blake3"
 
@@ -312,7 +314,6 @@ fn bd_preflight(io: IoCap, proc: ProcessCap, sp: SpawnCap, o: Opts) -> Str {
     if !bd_carried(io, t) {
         bd_refuse(io, o, "the target `" + t + "` (Nazm builds for aarch64-apple-darwin, x86_64-apple-darwin and x86_64-pc-windows-gnu; Linux, WebAssembly, WASI, Android, iOS and the boards are not built after the cut-over)")
     }
-    if o.has_harness { bd_refuse(io, o, "`nazm build --harness` (R8 slice 7)") }
     t
 }
 
@@ -363,7 +364,7 @@ fn bd_verify_locked(io: IoCap, o: Opts, packages: Packages) -> Int {
 // A package's directory stands for its `main`; `--locked` holds the package to its lockfile; the profiles in
 // force are held (`prepare`). `o.file` becomes the entry. What this port does not carry — a manifest
 // it does not read, a restriction profile — is refused by name.
-fn bd_prepare(io: IoCap, o: Opts, entry_out: Strs) -> Packages {
+pub fn bd_prepare(io: IoCap, o: Opts, entry_out: Strs) -> Packages {
     let mut file = o.file
     let named = file
     let prefix = fe_prefix(io, file)
@@ -432,7 +433,7 @@ fn bd_prepare(io: IoCap, o: Opts, entry_out: Strs) -> Packages {
 
 // `Graph::enable` of a package that declares no features (the front end reads no `[features]`): each one asked for
 // is refused, the messages sorted and each once, status 1.
-fn bd_undeclared_features(io: IoCap, o: Opts, p: Packages) -> Int {
+pub fn bd_undeclared_features(io: IoCap, o: Opts, p: Packages) -> Int {
     let name = pk_name(p, pk_root_package(p))
     let out = strs_new()
     for i in 0..strs_len(o.features) {
@@ -706,7 +707,25 @@ fn bd_front(io: IoCap, o: Opts, packages: Packages, target: Str, output: Str) ->
     let root = pk_decide(abs, io)
     let packaged = pk_packages_state(packages) == 1
     // A library has no `main` to require: it is checked as the module it is (`Entry::Absent`).
-    let f = if o.lib { fx_check_module_in(abs, "", library, bd_os(target), bd_arch(target), io) } else { fx_check_in(abs, "", library, bd_os(target), bd_arch(target), io) }
+    // `--harness`: the entry is read as the harness makes it (`harness::loaded`).
+    let over_paths = strs_new()
+    let over_texts = strs_new()
+    if o.has_harness {
+        let original = if ut_kind(io, abs) == 0 { read_file(abs) } else { "" }
+        match hs_text(original, hs_parse(o.harness)) {
+            Ok(t) => {
+                strs_push(over_paths, abs)
+                strs_push(over_texts, t)
+                0
+            },
+            Err(why) => {
+                eprint(hs_missing(why, o.json))
+                exit_with(1)
+                0
+            },
+        }
+    }
+    let f = if o.lib { fx_check_module_in(abs, "", library, bd_os(target), bd_arch(target), io) } else { fx_check_over(abs, "", over_paths, over_texts, library, bd_os(target), bd_arch(target), io) }
     if fx_refusal(f) != "" {
         let why = fx_refusal(f)
         let unreadable = ut_starts(why, "could not read") || ut_ends(why, "is not a directory")
@@ -750,21 +769,31 @@ fn bd_front(io: IoCap, o: Opts, packages: Packages, target: Str, output: Str) ->
     let warnings = ints_new()
     let errors = ints_new()
     let mut unsupported = false
+    let mut native_only = false
     for i in 0..dg_len(d) {
         if strs_get(d.severity, i) == "warning" { ints_push(warnings, i) } else { ints_push(errors, i) }
         if strs_get(d.severity, i) != "warning" && strs_get(d.code, i) == "N0101" { unsupported = true }
+        // `nazm run` falls back to nothing: a refusal only a native build makes says what runs the program instead.
+        let code = strs_get(d.code, i)
+        if o.run && strs_get(d.severity, i) != "warning" && (code == "N0101" || code == "N0357" || code == "N0358") {
+            native_only = true
+            strs_set(d.help, i, "`nazm run` compiles, with Nazm's code generator, and falls back to nothing; `nazm run --interpret` runs this program in the interpreter")
+        }
     }
     if ints_len(errors) > 0 {
         if o.summary { bd_summary_facts(io, o, f, errors, "rejected", 1, true) }
         bd_emit(f, names, errors, o.json, out)
         eprint(str_join(out, ""))
         let n = ints_len(errors)
+        if native_only {
+            bd_fail(io, o, "nazm: " + int_to_str(n) + " error" + ut_plural(n) + " in compiling this program. Nothing ran; `nazm run --interpret` runs it in the interpreter.", 1)
+        }
         if unsupported {
             bd_fail(io, o, "nazm: " + int_to_str(n) + " construct" + ut_plural(n) + " outside `nazm build`'s subset. Nothing was written; `nazm run --interpret` still executes this program.", 1)
         }
         bd_fail(io, o, "nazm: " + int_to_str(n) + " error" + ut_plural(n), 1)
     }
-    if ints_len(warnings) > 0 {
+    if ints_len(warnings) > 0 && !o.run {
         let w = ints_len(warnings)
         if o.deny { eprint("nazm: " + int_to_str(w) + " warning" + ut_plural(w) + ", refused by --deny-warnings" + nl()) }
         if o.deny && o.summary { bd_summary_facts(io, o, f, warnings, "rejected", 1, true) }
@@ -1380,7 +1409,14 @@ fn bd_report(how: Str, modules: Int, units: Int, compiled: Int, reused: Int, rej
 }
 
 pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, v: VouchCap, c: Cli) -> Int {
-    let mut o = bo_read(io, c)
+    let o = bo_read(io, c)
+    bd_build(io, proc, sp, tm, v, o)
+}
+
+// The build `o` asks for. `nazm run` (`o.run`) builds the program for running: the executable is run from the work directory
+// and the build says nothing — no path, no authority line, no report, no checker warnings.
+pub fn bd_build(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, v: VouchCap, o0: Opts) -> Int {
+    let mut o = o0
     let clock = bd_clock(tm)
     let entry = strs_new()
     let packages = bd_prepare(io, o, entry)
@@ -1698,6 +1734,11 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, v: 
             eprint("nazm: cannot write " + header + ": could not write" + nl())
             exit_with(4)
         }
+    }
+    // A build for `nazm run`: the program is run from the work directory, which is then removed, and `nazm` ends with its status.
+    if o.run {
+        rx_run(io, proc, sp, exe, o.run_args, work)
+        return 0
     }
     // Published last, so an existing output survives every failure above.
     let moved = os_rename(exe, output)

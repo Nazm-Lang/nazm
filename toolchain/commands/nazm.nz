@@ -364,7 +364,7 @@ fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, tm: TimeCap, out
     if s == "doc" { return doc_command(io, c) }
     if s == "fix" { return fix_command(io, c) }
     if s == "lsp" { return lsp_command(io, c) }
-    if s == "test" { return test_command(io, proc, sp, c) }
+    if s == "test" { return test_command(io, proc, sp, v, c) }
     if s == "interface" { return interface_command(io, c) }
     if s == "docs" { return docs_command(io, c) }
     if s == "bindgen" { return bindgen_command(io, c) }
@@ -390,8 +390,9 @@ fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, tm: TimeCap, out
     if s == "explain-cost" { return explain_cost_command(io, c) }
     if s == "explain-flow" { return explain_flow_command(io, c) }
     if s == "profile" { return profile_command(io, c) }
-    if s == "run" { return run_command(io, out, tm, net, proc, rnd, c) }
+    if s == "run" { return run_command(io, out, tm, net, proc, sp, v, rnd, c) }
     if s == "comptime" { return comptime_command(io, out, tm, net, proc, rnd, c) }
+    if s == "repl" { return repl_command(io, out, tm, net, proc, rnd, c) }
     check_command(io, c)
 }
 
