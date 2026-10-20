@@ -693,7 +693,8 @@ fn bd_front(io: IoCap, o: Opts, packages: Packages, target: Str, output: Str) ->
     let abs = prefix + file
     let root = pk_decide(abs, io)
     let packaged = pk_packages_state(packages) == 1
-    let f = fx_check_in(abs, "", library, bd_os(target), bd_arch(target), io)
+    // A library has no `main` to require: it is checked as the module it is (`Entry::Absent`).
+    let f = if o.lib { fx_check_module_in(abs, "", library, bd_os(target), bd_arch(target), io) } else { fx_check_in(abs, "", library, bd_os(target), bd_arch(target), io) }
     if fx_refusal(f) != "" {
         let why = fx_refusal(f)
         let unreadable = ut_starts(why, "could not read") || ut_ends(why, "is not a directory")
@@ -1395,7 +1396,6 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, c: 
     let cross = if target == host { "" } else { target }
     let llvm = o.backend == "llvm"
     if !llvm && o.debug { bd_refuse(io, o, "`nazm build --debug` with `--backend nazm` (debug information is the LLVM backend's here)") }
-    if o.lib { bd_refuse(io, o, "`nazm build --lib`") }
     if o.has_provenance || o.has_sbom { bd_refuse(io, o, "`nazm build --provenance` and `--sbom`") }
     let pipeline = bd_stage(io, o, "NAZM_PIPELINE", "nazm-pipeline")
     let nzcg = if llvm { "" } else { bd_stage(io, o, "NAZM_NZCG", "nzcg") }
@@ -1425,6 +1425,7 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, c: 
     if o.layout == "soa" { strs_push(pargs, "--soa") }
     if llvm && o.debug { strs_push(pargs, "--debug") }
     if llvm && o.release { strs_push(pargs, "--release") }
+    if o.lib { strs_push(pargs, "--lib") }
     // A foreign object may free what the program allocated: C's allocator stays.
     if strs_len(o.links) > 0 { strs_push(pargs, "--no-small") }
     // A runtime artifact is linked instead of a generated runtime: the program's units keep the failure state per thread.
@@ -1518,7 +1519,7 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, c: 
 
     // The LLVM backend's executable at `-O2` and above on macOS is linked from bitcode and
     // optimised as one program (R1.5 3.4): not objects for another linker, not a debug build.
-    let whole = llvm && !o.has_objects && !o.debug && bd_os(target) == "macos" && o.opt >= 2
+    let whole = llvm && !o.lib && !o.has_objects && !o.debug && bd_os(target) == "macos" && o.opt >= 2
     let env = bd_passed(io)
     // The LLVM units, program's and runtime's, in link order: each from the object stores or by clang.
     let tally = ints_new()
@@ -1612,14 +1613,33 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, c: 
 
     // The link, in the working directory under the output's own name.
     let exe = work + "/" + ut_file_name(output)
-    let linked = bd_link(io, proc, sp, target, cross, exe, objects, o.links, strs_new(), o.opt, whole, o.release)
+    let mut linked = Ran(started: true, status: 0, out: "", err: "", peak: 0)
+    if o.lib && !o.shared {
+        // A static archive of the objects, and the foreign inputs after them, written by Nazm itself.
+        let members = strs_new()
+        for i in 0..strs_len(objects) { strs_push(members, strs_get(objects, i)) }
+        for i in 0..strs_len(o.links) { strs_push(members, strs_get(o.links, i)) }
+        let said = ar_write(io, exe, members)
+        if said != "" {
+            bd_remove(io, work)
+            bd_fail(io, o, "nazm: the static archive was not written: " + said, 4)
+        }
+    } else if o.lib {
+        linked = bd_link_shared(io, proc, sp, target, cross, exe, objects, o.links, strs_new(), o.opt, ut_file_name(output))
+    } else {
+        linked = bd_link(io, proc, sp, target, cross, exe, objects, o.links, strs_new(), o.opt, whole, o.release)
+    }
     let mut result = linked
-    if (!linked.started || linked.status != 0) && tls {
+    if (!linked.started || linked.status != 0) && tls && !(o.lib && !o.shared) {
         let t = bd_tls_args(io, target)
         if strs_len(t) > 0 && ut_starts(strs_get(t, 0), "!") {
             eprint("nazm: " + str_slice(strs_get(t, 0), 1, str_len(strs_get(t, 0))) + nl())
         } else {
-            result = bd_link(io, proc, sp, target, cross, exe, objects, o.links, t, o.opt, whole, o.release)
+            result = if o.shared {
+                bd_link_shared(io, proc, sp, target, cross, exe, objects, o.links, t, o.opt, ut_file_name(output))
+            } else {
+                bd_link(io, proc, sp, target, cross, exe, objects, o.links, t, o.opt, whole, o.release)
+            }
         }
     }
     if !result.started || result.status != 0 {
@@ -1654,6 +1674,15 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, c: 
             eprint("nazm: the debug information was not gathered: " + g.err + nl())
         }
     }
+    // A library's header, beside it: written before the archive is published, so a published archive always has its header.
+    if o.lib {
+        let header = ut_with_extension(output, "h")
+        if write_file(header, bd_c_header(output, bd_plan(plan, "export"))) < 0 {
+            bd_remove(io, work)
+            eprint("nazm: cannot write " + header + ": could not write" + nl())
+            exit_with(4)
+        }
+    }
     // Published last, so an existing output survives every failure above.
     let moved = os_rename(exe, output)
     bd_remove(io, work)
@@ -1667,6 +1696,61 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, c: 
     if authority != "" { eprint(authority + nl()) }
     print(output + nl())
     0
+}
+
+// A library's C header (`c_header`): every export, by symbol, in `<stdint.h>` and `<stdbool.h>` types. `exports` are the
+// plan's `SYMBOL RET PARAMS...` lines, by symbol.
+fn bd_c_type(t: Str) -> Str {
+    if t == "Bool" { return "bool" }
+    if t == "Int8" { return "int8_t" }
+    if t == "Int16" { return "int16_t" }
+    if t == "Int32" { return "int32_t" }
+    if t == "UInt8" { return "uint8_t" }
+    if t == "UInt16" { return "uint16_t" }
+    if t == "UInt32" { return "uint32_t" }
+    if t == "UInt64" { return "uint64_t" }
+    if t == "Float32" { return "float" }
+    if t == "Float64" { return "double" }
+    if t == "Int128" { return "__int128" }
+    if t == "UInt128" { return "unsigned __int128" }
+    "int64_t"
+}
+
+fn bd_c_header(output: Str, exports: Strs) -> Str {
+    let stem = strs_new()
+    let name = ut_stem(output)
+    let mut i = 0
+    while i < str_len(name) {
+        let b = str_byte(name, i)
+        let w = if b >= 240 { 4 } else if b >= 224 { 3 } else if b >= 192 { 2 } else { 1 }
+        if w == 1 && ((b >= 48 && b <= 57) || (b >= 65 && b <= 90)) {
+            strs_push(stem, str_slice(name, i, i + 1))
+        } else if w == 1 && b >= 97 && b <= 122 {
+            strs_push(stem, str_slice("ABCDEFGHIJKLMNOPQRSTUVWXYZ", b - 97, b - 96))
+        } else {
+            strs_push(stem, "_")
+        }
+        i += w
+    }
+    let guard = "NAZM_" + str_join(stem, "") + "_H"
+    let out = strs_new()
+    strs_push(out, "/* Generated by nazm build --lib. Do not edit. */" + nl())
+    strs_push(out, "#ifndef " + guard + nl() + "#define " + guard + nl() + nl())
+    strs_push(out, "#include <stdbool.h>" + nl() + "#include <stdint.h>" + nl() + nl())
+    strs_push(out, "#ifdef __cplusplus" + nl() + "extern \"C\" {" + nl() + "#endif" + nl() + nl())
+    strs_push(out, "/* A Nazm failure inside any of these is reported on standard error and ends the" + nl()
+            + "   process with status 2: nothing unwinds into C. */" + nl())
+    for k in 0..strs_len(exports) {
+        let words = text_split_spaces(strs_get(exports, k))
+        let sym = strs_get(words, 0)
+        let ret = strs_get(words, 1)
+        let params = strs_new()
+        for j in 2..strs_len(words) { strs_push(params, bd_c_type(strs_get(words, j)) + " a" + int_to_str(j - 2)) }
+        let ps = if strs_len(params) == 0 { "void" } else { str_join(params, ", ") }
+        strs_push(out, bd_c_type(ret) + " " + sym + "(" + ps + ");" + nl())
+    }
+    strs_push(out, nl() + "#ifdef __cplusplus" + nl() + "}" + nl() + "#endif" + nl() + nl() + "#endif" + nl())
+    str_join(out, "")
 }
 
 // `Harness::parse`: `test:NAME`, `fuzz:NAME:CASES` or `bench:NAME:ITERATIONS`.
@@ -1727,6 +1811,27 @@ fn bd_link(io: IoCap, proc: ProcessCap, sp: SpawnCap, target: Str, cross: Str, e
     if bd_family(target) == "macho" { strs_push(a, "-Wl,-dead_strip") }
     if bd_family(target) == "elf" { strs_push(a, "-Wl,--gc-sections") }
     if release { strs_push(a, "-Wl,-pie") }
+    let env = bd_passed(io)
+    strs_push(env, "ZERO_AR_DATE=1")
+    bd_run(io, proc, sp, "clang", a, false, env)
+}
+
+// A shared library (`Backend::link_shared`): the link of an executable but for dead-stripping, then `-shared`, named
+// to the loader by its own file name (`@rpath/NAME` on macOS).
+fn bd_link_shared(io: IoCap, proc: ProcessCap, sp: SpawnCap, target: Str, cross: Str, exe: Str, objects: Strs, links: Strs, extra: Strs, opt: Int, name: Str) -> Ran ! { io, spawn } {
+    let a = strs_new()
+    strs_push(a, "-O" + int_to_str(opt))
+    strs_push(a, "-Wno-override-module")
+    bd_target_args(cross, a)
+    strs_push(a, "-o")
+    strs_push(a, exe)
+    for i in 0..strs_len(objects) { strs_push(a, strs_get(objects, i)) }
+    for i in 0..strs_len(links) { strs_push(a, strs_get(links, i)) }
+    for i in 0..strs_len(extra) { strs_push(a, strs_get(extra, i)) }
+    if bd_os(target) == "linux" { strs_push(a, "-lm") }
+    if bd_os(target) == "windows" { bd_windows_libraries(a) }
+    strs_push(a, "-shared")
+    if bd_os(target) == "macos" { strs_push(a, "-Wl,-install_name,@rpath/" + name) } else { strs_push(a, "-Wl,-soname," + name) }
     let env = bd_passed(io)
     strs_push(env, "ZERO_AR_DATE=1")
     bd_run(io, proc, sp, "clang", a, false, env)
