@@ -1479,7 +1479,10 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, v: 
         }
         if strs_get(fit, 0) == "err" {
             bd_remove(io, work)
-            bd_fail(io, o, "nazm: " + strs_get(fit, 2), bo_size(strs_get(fit, 1)))
+            // Only a refusal before the file is written, so silent under `--summary-json` (as `bd_refuse`'s are).
+            if o.summary { bd_summary(io, o, "refused", bo_size(strs_get(fit, 1)), true, "null") }
+            eprint("nazm: " + strs_get(fit, 2) + nl())
+            exit_with(bo_size(strs_get(fit, 1)))
         }
         prebuilt = strs_get(fit, 1)
     }
