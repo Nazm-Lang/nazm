@@ -281,6 +281,7 @@ for src in "${inputs[@]}"; do
             report-nazm) args=(--build-report -o prog) ;;
             report-cached) args=(--build-report -o prog); backend=(); nocache=(); rounds=2 ;;
             report-cached-nazm) args=(--build-report -o prog); nocache=(); rounds=2 ;;
+            llvm-O2-cached) args=(--opt-level 2 --build-report -o prog); backend=(); nocache=(); rounds=2 ;;
             summary) args=(--summary-json -o prog); backend=() ;;
             timings) args=(--timings -o prog); backend=() ;;
             lib) args=(--lib -o libx.a); backend=() ;;
