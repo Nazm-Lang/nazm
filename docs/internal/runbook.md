@@ -103,6 +103,12 @@ stage are both Nazm-built processes; the copyright holder accepted this as one s
 default LLVM backend (slice 5) the stages are the pipeline alone — it writes each unit as LLVM text and
 `clang` compiles it — and `nzcg` is only `--backend nazm`'s.
 
+Slice 6 adds stages of the same kind, each admitted and run the same way, one at a time: the pipeline asked for
+the `clang -###` probe's identity, for the object stores' lookups and fillings (`llvm-get`, `llvm-put`), for
+the runtime's identity (`runtime-abi`) and, in `nazm runtime build`, for the runtime's texts
+(`runtime-artifact`). `nazm runtime build` and `verify`, `--lib`, `--runtime` and the provenance files add no
+other kind of process: `clang`, `strip`, `codesign`, `dsymutil` and the command `--attest-with` names.
+
 ### What the runner must enforce
 
 - **Memory and swap set equal.** A cap that can be swapped past is not a cap.

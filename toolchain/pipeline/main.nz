@@ -471,7 +471,7 @@ fn build(io: IoCap, v: VouchCap, c: Cir, tt: TypeTable, p: MirProgram, target: S
     let tls = hashmap_has(names, "tls")
     if tls { hashmap_set(all, "tls", true) }
     if single { hashmap_set(all, "single", true) }
-    let small = fl.small_ok && heap < 0 && switch_target(target) != "" && !calls_c
+    let small = fl.small_ok && !fl.lib && !fl.prebuilt && heap < 0 && switch_target(target) != "" && !calls_c
     let renaming = if heap >= 0 { "heap" } else if small { "small" } else { "" }
     // The LLVM backend's runtime is what its units reach, and the program's own `single`.
     if fl.llvm && single { hashmap_set(names, "single", true) }
