@@ -501,6 +501,60 @@ fn sample_after() -> std::time::Duration {
 /// campaign showed the earlier, output-only versions of this test could not see the spin.
 /// The CPU time `ps` reports for a running process, in seconds: `00:00:01` (procps) or `0:01.49`
 /// (BSD) — seconds, minutes, hours from the right.
+/// Runs a pool program (one worker) and samples its processor time `sample_after()` into the run,
+/// while it is still running: `(exit code, stdout, stderr, seconds, what the sampler said)`.
+/// On Windows one PowerShell starts the program and samples it, so a slow PowerShell start can no
+/// longer land after the program has ended (`Get-Process … Cannot find a process`, CI 2026-10-20).
+fn run_sampled(exe: &Path) -> (Option<i32>, String, String, f64, String) {
+    if cfg!(windows) {
+        let dir = exe.parent().unwrap();
+        let (out, err) = (dir.join("sampled.out"), dir.join("sampled.err"));
+        let script = format!(
+            "$env:NAZM_SCHEDULER='pool'; $env:NAZM_WORKERS='1'; \
+             $p = Start-Process -FilePath '{}' -NoNewWindow -PassThru \
+             -RedirectStandardOutput '{}' -RedirectStandardError '{}'; \
+             Start-Sleep -Milliseconds {}; $p.Refresh(); \
+             $c = $p.TotalProcessorTime.TotalSeconds; $p.WaitForExit(); \
+             Write-Output $c; exit $p.ExitCode",
+            exe.display(),
+            out.display(),
+            err.display(),
+            sample_after().as_millis()
+        );
+        let o = Command::new("powershell")
+            .args(["-NoProfile", "-Command", &script])
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&o.stdout).trim().to_owned();
+        let note = format!("{text}{}", String::from_utf8_lossy(&o.stderr));
+        let read = |f: &Path| std::fs::read_to_string(f).unwrap_or_default();
+        return (
+            o.status.code(),
+            read(&out),
+            read(&err),
+            text.parse::<f64>().unwrap_or(f64::MAX),
+            note,
+        );
+    }
+    let child = Command::new(exe)
+        .env("NAZM_SCHEDULER", "pool")
+        .env("NAZM_WORKERS", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(sample_after());
+    let (seconds, text) = cpu_seconds(child.id());
+    let o = child.wait_with_output().unwrap();
+    (
+        o.status.code(),
+        String::from_utf8_lossy(&o.stdout).into_owned(),
+        String::from_utf8_lossy(&o.stderr).into_owned(),
+        seconds,
+        text,
+    )
+}
+
 fn cpu_seconds(pid: u32) -> (f64, String) {
     // Windows has no `ps`: its own accounting of the process's processor time, in seconds.
     if cfg!(windows) {
@@ -555,23 +609,10 @@ fn a_pool_task_waiting_on_a_deadline_parks_without_spinning() {
         src.to_owned()
     };
     built(d.path(), "near", &src, "llvm");
-    let child = Command::new(d.path().join(crate::common::exe_name("near")))
-        .env("NAZM_SCHEDULER", "pool")
-        .env("NAZM_WORKERS", "1")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    std::thread::sleep(sample_after());
-    let (seconds, text) = cpu_seconds(child.id());
-    let o = child.wait_with_output().unwrap();
-    assert_eq!(
-        o.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&o.stderr)
-    );
-    assert_eq!(String::from_utf8_lossy(&o.stdout), "-20\n");
+    let (code, stdout, stderr, seconds, text) =
+        run_sampled(&d.path().join(crate::common::exe_name("near")));
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(stdout, "-20\n");
     assert!(
         seconds < if cfg!(windows) { 0.5 } else { 1.0 },
         "a pool task waiting four seconds used {text} of CPU in three"
@@ -603,23 +644,10 @@ fn a_deadline_past_the_nanosecond_range_parks_without_spinning() {
         src.to_owned()
     };
     built(d.path(), "far", &src, "llvm");
-    let child = Command::new(d.path().join(crate::common::exe_name("far")))
-        .env("NAZM_SCHEDULER", "pool")
-        .env("NAZM_WORKERS", "1")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    std::thread::sleep(sample_after());
-    let (seconds, text) = cpu_seconds(child.id());
-    let o = child.wait_with_output().unwrap();
-    assert_eq!(
-        o.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&o.stderr)
-    );
-    assert_eq!(String::from_utf8_lossy(&o.stdout), "00\n");
+    let (code, stdout, stderr, seconds, text) =
+        run_sampled(&d.path().join(crate::common::exe_name("far")));
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(stdout, "00\n");
     assert!(
         seconds < if cfg!(windows) { 0.5 } else { 1.0 },
         "a parked task with a far deadline used {text} of CPU in three seconds"
