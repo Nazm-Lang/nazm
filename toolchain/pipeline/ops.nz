@@ -250,7 +250,17 @@ fn str_value(lo: Lo, bytes: Str) -> Int {
 fn position(lo: Lo, at: Str) -> Str {
     let lc = line_col(lo, at)
     if ints_len(lc) == 0 { return at }
-    span_file(at) + ":" + int_to_str(ints_get(lc, 0)) + ":" + int_to_str(ints_get(lc, 1))
+    shown_name(lo, span_file(at)) + ":" + int_to_str(ints_get(lc, 0)) + ":" + int_to_str(ints_get(lc, 1))
+}
+
+/// What generated code calls a module (`SourceNames::name`): its durable name, and for a module with
+/// none (`#N` in Core IR: outside the source root) the name the loader gave it.
+fn shown_name(lo: Lo, name: Str) -> Str {
+    if !hashmap_has(lo.needs, "@display") || str_len(name) == 0 || str_byte(name, 0) != 35 { return name }
+    match hashmap_get(lo.files, name) {
+        Some(f) => match hashmap_get(lo.paths, f) { Some(p) => p, None => name },
+        None => name,
+    }
 }
 
 /// A span's file: its text before the last `:`.
@@ -5147,7 +5157,7 @@ fn plain_entry(lo: Lo, sym: Int, body: Int) -> Str {
 
 fn print_module(lo: Lo) -> Str {
     let lines = strs_new()
-    strs_push(lines, "; unit " + lo.unit.module)
+    strs_push(lines, "; unit " + shown_name(lo, lo.unit.module))
     for i in 0..strs_len(lo.sym_name) {
         let k = strs_get(lo.sym_kind, i)
         strs_push(lines, strs_get(lo.sym_link, i) + " " + k + " @" + strs_get(lo.sym_name, i) + " " + strs_get(lo.sym_sig, i))
