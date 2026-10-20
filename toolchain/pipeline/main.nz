@@ -42,6 +42,8 @@
 //     pipeline llvm-put TOOL CONFIG DIR ROOT NAME [ROOT NAME]...
 //                                  each unit's object DIR/NAME.o filed under ROOT by its unit's key:
 //                                  `stored NAME`, or `failed NAME`
+//     (`build` also takes `--lib` before it: a library, no `main` and no entry unit, one failure state per
+//     thread; the plan then has an `export SYMBOL RET PARAMS...` line for each export, by symbol)
 //     pipeline runtime-abi         print the runtime's ABI revision and digest
 //     pipeline runtime-artifact DIR
 //                                  for `nazm runtime build` (R8 slice 6): the hosted runtime's text for the
@@ -97,7 +99,7 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
     // LLVM backend's flags (`--llvm`, `--debug`, `--release`, `--no-small`), which `build` reads.
     let mut target = "aarch64-apple-darwin"
     let mut from = 0
-    let mut fl = Flags(llvm: false, debug: false, release: false, small_ok: true, soa: false, prebuilt: false)
+    let mut fl = Flags(llvm: false, debug: false, release: false, small_ok: true, soa: false, prebuilt: false, lib: false)
     let mut more = true
     while more && from < strs_len(given) {
         let a = strs_get(given, from)
@@ -125,6 +127,9 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
             from += 1
         } else if a == "--prebuilt" {
             fl.prebuilt = true
+            from += 1
+        } else if a == "--lib" {
+            fl.lib = true
             from += 1
         } else {
             more = false
@@ -264,6 +269,7 @@ struct Flags {
     small_ok: Bool,
     soa: Bool,
     prebuilt: Bool,
+    lib: Bool,
 }
 
 fn bytes_arg(a: Str) -> Int {
@@ -345,6 +351,15 @@ fn llvm_unit(t: Str, target: Str, single: Bool, renaming: Str, fl: Flags, defs: 
 
 fn yes(b: Bool) -> Str { if b { "yes" } else { "no" } }
 
+/// Whether `a` is before `b`, byte by byte.
+fn text_less(a: Str, b: Str) -> Bool {
+    let n = if str_len(a) < str_len(b) { str_len(a) } else { str_len(b) }
+    for i in 0..n {
+        if str_byte(a, i) != str_byte(b, i) { return str_byte(a, i) < str_byte(b, i) }
+    }
+    str_len(a) < str_len(b)
+}
+
 /// Each service reached, by its stable name, in a fixed order (`Needs::names`).
 fn needs_names(n: Needs) -> Strs {
     let out = strs_new()
@@ -416,6 +431,8 @@ fn build(io: IoCap, v: VouchCap, c: Cir, tt: TypeTable, p: MirProgram, target: S
     if fl.llvm { hashmap_set(names, "@names", true) }
     // `--layout soa`: a `Vec` of records of `Int`s and `Bool`s one array per field.
     if fl.soa { hashmap_set(names, "@soa", true) }
+    // A library has no `main`.
+    if fl.lib { hashmap_set(names, "@lib", true) }
     let texts = match lir_texts_with(c, tt, p, names, fl.llvm && fl.debug) {
         Ok(ts) => ts,
         Err(e) => {
@@ -423,10 +440,11 @@ fn build(io: IoCap, v: VouchCap, c: Cir, tt: TypeTable, p: MirProgram, target: S
             return 1
         },
     }
-    let main = vec_get(p.fns, p.entry)
+    let main_params = if fl.lib { strs_new() } else { params_of(vec_get(p.fns, p.entry)) }
+    let entry_name = if fl.lib { "@lib" } else { "@" + symbol_of(vec_get(p.fns, p.entry)) }
     let mut roots = 0
-    let mut single = true
-    for t in params_of(main) {
+    let mut single = !fl.lib
+    for t in main_params {
         if t == "IoCap" || t == "SpawnCap" || t == "ForeignCap" || t == "VouchCap" || t == "TimeCap" || t == "MmioCap" || t == "OutCap" || t == "NetCap" || t == "RandomCap" || t == "ProcessCap" {
             roots += 1
         }
@@ -459,9 +477,22 @@ fn build(io: IoCap, v: VouchCap, c: Cir, tt: TypeTable, p: MirProgram, target: S
     if fl.llvm && single { hashmap_set(names, "single", true) }
     // What the program reaches of the runtime, by name, as a runtime artifact's manifest lists them.
     let reached = settled(needs_of(if fl.llvm { names } else { all }))
-    let units = runtime_units(needs_of(if fl.llvm { names } else { all }), target, "@" + symbol_of(main), roots, calls_c, stack, heap, fl.small_ok && !fl.prebuilt)
+    let units = runtime_units(needs_of(if fl.llvm { names } else { all }), target, entry_name, roots, calls_c, stack, heap, fl.small_ok && !fl.prebuilt && !fl.lib)
     let mut rt_names = vec_get(units, 0)
     let mut rt_texts = vec_get(units, 1)
+    // A library has no process entry: C's `main` is the caller's.
+    if fl.lib {
+        let kept_names = strs_new()
+        let kept_texts = strs_new()
+        for i in 0..strs_len(rt_names) {
+            if strs_get(rt_names, i) != "entry" {
+                strs_push(kept_names, strs_get(rt_names, i))
+                strs_push(kept_texts, strs_get(rt_texts, i))
+            }
+        }
+        rt_names = kept_names
+        rt_texts = kept_texts
+    }
     // A runtime artifact (`--runtime`) is linked instead of a generated runtime: the entry alone is the program's.
     if fl.prebuilt {
         let only_names = strs_new()
@@ -546,6 +577,27 @@ fn build(io: IoCap, v: VouchCap, c: Cir, tt: TypeTable, p: MirProgram, target: S
     strs_push(plan, "calls-c " + yes(calls_c))
     strs_push(plan, "tls " + yes(tls))
     strs_push(plan, "needs " + str_join(needs_names(reached), " "))
+    // Each export, by symbol: its C signature's Nazm types, for a library's header.
+    let sym_names = strs_new()
+    let sym_lines = strs_new()
+    for f in p.fns {
+        if f.export != "" && f.foreign == "" {
+            let line = "export " + f.export + " " + f.ret + (if strs_len(params_of(f)) > 0 { " " + str_join(params_of(f), " ") } else { "" })
+            let mut at = 0
+            while at < strs_len(sym_names) && text_less(strs_get(sym_names, at), f.export) { at += 1 }
+            strs_push(sym_names, "")
+            strs_push(sym_lines, "")
+            let mut j = strs_len(sym_names) - 1
+            while j > at {
+                strs_set(sym_names, j, strs_get(sym_names, j - 1))
+                strs_set(sym_lines, j, strs_get(sym_lines, j - 1))
+                j -= 1
+            }
+            strs_set(sym_names, at, f.export)
+            strs_set(sym_lines, at, line)
+        }
+    }
+    for i in 0..strs_len(sym_lines) { strs_push(plan, strs_get(sym_lines, i)) }
     for k in 0..vec_len(plans) {
         let u = vec_get(plans, k)
         // A standard or prelude module's own unit is every project's: it is filed in the user cache.
