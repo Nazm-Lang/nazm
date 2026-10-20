@@ -1,0 +1,227 @@
+// The interpreter in `nazm`'s own process (R8 slice 7, `openspec/changes/r8-cut-over/design.md`, S7.1–S7.5):
+// the front end over the program in memory, its Core IR document handed to `toolchain/interp/entry.nz`,
+// and what `nazm run --interpret`, `nazm comptime` and `nazm repl` write of it. The one module of
+// `toolchain/commands/` that imports `toolchain/interp/`: it never imports `compiler/syntax.nz` directly
+// (`Prog` and `fail` are exported on both sides), and takes the document as text.
+//
+// Ports of `crates/nazm-cli/src/{interpret,live}.rs`. What the front end does not carry is said on standard
+// error and exits 6 (R5's convention).
+
+use "../interp/entry.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/package.nz"
+use "../../compiler/facts.nz"
+use "../../compiler/facts-core.nz"
+use "front.nz"
+use "util.nz"
+use "harness.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+fn ip_refuse(io: IoCap, why: Str) -> Int {
+    eprint("nazm: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+// Whether the environment names `name`, set to anything (`var_os(..).is_some()`).
+pub fn ip_env_set(io: IoCap, name: Str) -> Bool {
+    for i in 0..os_env_count() {
+        if ut_starts(os_env_at(i), name + "=") { return true }
+    }
+    false
+}
+
+fn ip_library(io: IoCap) -> Str {
+    let library = os_env_get("NAZM_LIBRARY")
+    if library == "" { ip_refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
+    library
+}
+
+// The diagnostics of `f` that are errors (`check` reports no warning), in order.
+fn ip_errors(f: Facts) -> Ints {
+    let d = fx_diags(f)
+    let out = ints_new()
+    for i in 0..dg_len(d) {
+        if strs_get(d.severity, i) != "warning" { ints_push(out, i) }
+    }
+    out
+}
+
+// `emit` of the diagnostics `which` of `f`, plain or as `nazm.diagnostic/1` lines, to standard error.
+fn ip_emit(f: Facts, names: Strs, which: Ints, json: Bool) -> Int {
+    let d = fx_diags(f)
+    let texts = fe_texts(f)
+    let bases = fe_bases(f)
+    let out = strs_new()
+    for k in 0..ints_len(which) {
+        let i = ints_get(which, k)
+        if json { strs_push(out, dg_json(d, i) + nl()) } else { strs_push(out, dg_render(d, i, names, texts, bases)) }
+    }
+    eprint(str_join(out, ""))
+    0
+}
+
+// The program at `file` checked as `run` checks one, and its Core IR document: every refusal, load failure and
+// error ended as `run --interpret` ends it (status 3 for a root that cannot be read, else 1; `nazm: N error(s)`),
+// else the document. `spec` is `--harness`'s, `[]` for none; `over` the root's text when it is read through one.
+// The facts are this function's alone, and go when it returns.
+fn ip_document(io: IoCap, file: Str, json: Bool, harness: Strs, features: Bool, profile: Bool, root_over: Strs) -> Str {
+    let library = ip_library(io)
+    let prefix = fe_prefix(io, file)
+    let abs = prefix + file
+    let paths = strs_new()
+    let texts = strs_new()
+    if strs_len(harness) > 0 {
+        let original = if ut_kind(io, abs) == 0 { read_file(abs) } else { "" }
+        match hs_text(original, harness) {
+            Ok(t) => {
+                strs_push(paths, abs)
+                strs_push(texts, t)
+                strs_push(root_over, t)
+            },
+            Err(why) => {
+                eprint(hs_missing(why, json))
+                exit_with(1)
+            },
+        }
+    }
+    let f = fx_check_over(abs, "", paths, texts, library, fe_host_os(), fe_host_arch(), io)
+    if fx_refusal(f) != "" {
+        let why = fx_refusal(f)
+        eprint("nazm: " + why + nl())
+        let unreadable = ut_starts(why, "could not read") || ut_ends(why, "is not a directory")
+        exit_with(if unreadable { 3 } else { 1 })
+    }
+    let d = fx_diags(f)
+    fe_unprefix_diags(io, d, prefix, abs)
+    let names = fe_names(f, prefix)
+    if fe_load_failed(f) {
+        if !fx_carried(f) { ip_refuse(io, fx_why(f)) }
+        let all = ints_new()
+        let mut missing = true
+        for i in 0..dg_len(d) {
+            if strs_get(d.code, i) != "N0205" { missing = false }
+            ints_push(all, i)
+        }
+        ip_emit(f, names, all, json)
+        exit_with(if missing { 3 } else { 1 })
+    }
+    if features { ip_refuse(io, "`--features` (a package's features)") }
+    if profile { ip_refuse(io, "`--profile` (a restriction profile)") }
+    if !fx_carried(f) { ip_refuse(io, fx_why(f)) }
+    let errors = ip_errors(f)
+    let n = ints_len(errors)
+    if n > 0 {
+        ip_emit(f, names, errors, json)
+        eprint("nazm: " + int_to_str(n) + " error" + ut_plural(n) + nl())
+        exit_with(1)
+    }
+    let doc = fx_core_document(f)
+    if doc == "" { ip_refuse(io, "a program whose Core IR the front end does not carry") }
+    doc
+}
+
+// `nazm run --interpret FILE [-- ARGS]`: the status it ends with.
+pub fn ip_run(io: IoCap, out: OutCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap, file: Str, json: Bool,
+        program_args: Strs, max_iterations: Int, max_depth: Int, harness: Strs, features: Bool, profile: Bool) -> Int {
+    let over = strs_new()
+    let doc = ip_document(io, file, json, harness, features, profile, over)
+    ip_run_with(doc, file, over, max_iterations, max_depth, program_args, json, out, io, time, net, proc, rnd)
+}
+
+fn ip_run_with(doc: Str, file: Str, over: Strs, max_iterations: Int, max_depth: Int, program_args: Strs, json: Bool,
+        out: OutCap, io: IoCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap) -> Int {
+    interp_run(doc, file, os_env_get("NAZM_LIBRARY"), if strs_len(over) > 0 { strs_get(over, 0) } else { "" }, strs_len(over) > 0,
+            max_iterations, max_depth, program_args, json,
+            ip_env_set(io, "NAZM_MEMORY_REPORT"), ip_env_set(io, "NAZM_SCHED_REPORT"), ip_env_set(io, "NAZM_RESULT_REPORT"),
+            out, io, time, net, proc, rnd)
+}
+
+// --- comptime -------------------------------------------------------------------------------------------
+
+fn ip_comptime_refused(io: IoCap, f: Facts, names: Strs, start: Int, end: Int, message: Str, primary: Str, help: Str) -> Int {
+    let d = dg_new()
+    dg_error(d, "N0393", start, end, message, primary, help)
+    let texts = fe_texts(f)
+    let bases = fe_bases(f)
+    eprint(dg_render(d, 0, names, texts, bases))
+    exit_with(1)
+    0
+}
+
+// `nazm comptime FILE FUNCTION`: one function of the root module, of no parameters and declared pure, run to its value.
+// Every error — a refusal, a check error, a failure at run time — is text on standard error and status 1.
+pub fn ip_comptime(io: IoCap, out: OutCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap, file: Str, function: Str,
+        max_iterations: Int, max_depth: Int) -> Int {
+    let library = ip_library(io)
+    let prefix = fe_prefix(io, file)
+    let abs = prefix + file
+    let f = fx_check_module_in(abs, "", library, fe_host_os(), fe_host_arch(), io)
+    if fx_refusal(f) != "" {
+        let why = fx_refusal(f)
+        eprint("nazm: " + why + nl())
+        let unreadable = ut_starts(why, "could not read") || ut_ends(why, "is not a directory")
+        exit_with(if unreadable { 3 } else { 1 })
+    }
+    let d = fx_diags(f)
+    fe_unprefix_diags(io, d, prefix, abs)
+    let names = fe_names(f, prefix)
+    if fe_load_failed(f) {
+        if !fx_carried(f) { ip_refuse(io, fx_why(f)) }
+        let all = ints_new()
+        let mut missing = true
+        for i in 0..dg_len(d) {
+            if strs_get(d.code, i) != "N0205" { missing = false }
+            ints_push(all, i)
+        }
+        ip_emit(f, names, all, false)
+        exit_with(if missing { 3 } else { 1 })
+    }
+    if !fx_carried(f) { ip_refuse(io, fx_why(f)) }
+    if dg_len(d) > 0 {
+        let all = ints_new()
+        for i in 0..dg_len(d) { ints_push(all, i) }
+        ip_emit(f, names, all, false)
+        exit_with(1)
+    }
+    // The function: the first of the root module's functions of that name (a method's name is `Type.method`).
+    let c = fx_checker(f)
+    let mut at = 0 - 1
+    for i in 0..ck_fn_count(c) {
+        if at < 0 && ck_fn_module(c, i) == 0 && ck_fn_name(c, i) == function && !ck_fn_closure(c, i) { at = i }
+    }
+    if at < 0 {
+        ip_comptime_refused(io, f, names, 0, 0, "there is no function `" + function + "` in this module to evaluate",
+                "there is no function `" + function + "` in this module to evaluate", "")
+    }
+    let doc = fx_core_document(f)
+    if doc == "" { ip_refuse(io, "a program whose Core IR the front end does not carry") }
+    let params = ck_fn_param_count(c, at)
+    let pure = ck_fn_required(c, at) <= 0 && ck_fn_declared(c, at) <= 0
+    let reason = if params > 0 {
+        "it has parameters, so it is not a constant"
+    } else if !pure {
+        "it is not pure: it declares or requires an effect, so it could reach the host"
+    } else {
+        ""
+    }
+    if reason != "" {
+        ip_comptime_refused(io, f, names, ck_fn_name_start(c, at), ck_fn_name_end(c, at),
+                "`" + function + "` cannot be evaluated at compile time: " + reason, "not evaluable at compile time",
+                "comptime evaluates a function of no parameters declared `! {}`")
+    }
+    let def = fx_fn_identity(f, at)
+    match interp_constant(doc, file, library, max_iterations, max_depth, def, out, io, time, net, proc, rnd) {
+        Ok(v) => {
+            print(v + nl())
+            exit_with(0)
+        },
+        Err(e) => {
+            eprint(e)
+            exit_with(1)
+        },
+    }
+    0
+}

@@ -1,0 +1,206 @@
+// `--harness SPEC` of `run` and `build` (R8 slice 7, `openspec/changes/r8-cut-over/design.md`, S7.6): a
+// port of `crates/nazm-cli/src/harness.rs`'s `Harness::parse` and `text`.
+//
+// A `@test`, `@fuzz` or `@bench` function is not a program: the entry file's text is read with its own
+// `main` blanked (every offset kept) and a generated `main` appended, which calls the function and turns
+// what it answers into a status. The text is handed to the front end in memory (`fx_check_over`); the
+// file on disk is never rewritten.
+
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+
+fn hs_nl() -> Str { str_from_byte(10) }
+
+// The backslash of an escape in the generated text, which this file's own literals cannot hold.
+fn hs_bs() -> Str { str_from_byte(92) }
+
+fn hs_q() -> Str { str_from_byte(34) }
+
+// `Harness::parse`: the kind (`test`, `fuzz` or `bench`), the function and the count as `[kind, name, count]`;
+// an empty list where the spec is not one.
+pub fn hs_parse(spec: Str) -> Strs {
+    let out = strs_new()
+    let n = str_len(spec)
+    let mut c1 = 0 - 1
+    let mut c2 = 0 - 1
+    for i in 0..n {
+        if str_byte(spec, i) == 58 {
+            if c1 < 0 { c1 = i } else if c2 < 0 { c2 = i }
+        }
+    }
+    if c1 < 0 { return out }
+    let kind = str_slice(spec, 0, c1)
+    let name = if c2 >= 0 { str_slice(spec, c1 + 1, c2) } else { str_slice(spec, c1 + 1, n) }
+    let has_count = c2 >= 0
+    let count = if has_count { str_slice(spec, c2 + 1, n) } else { "" }
+    if str_len(name) == 0 { return out }
+    for i in 0..str_len(name) {
+        let b = str_byte(name, i)
+        if !((b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 95) { return out }
+    }
+    if kind == "test" {
+        if has_count { return out }
+    } else if kind == "fuzz" || kind == "bench" {
+        if !has_count || str_len(count) == 0 || str_len(count) > 10 { return out }
+        let mut v = 0
+        for i in 0..str_len(count) {
+            let b = str_byte(count, i)
+            if b < 48 || b > 57 { return out }
+            v = v * 10 + (b - 48)
+        }
+        if v > 4294967295 { return out }
+    } else {
+        return out
+    }
+    strs_push(out, kind)
+    strs_push(out, name)
+    strs_push(out, count)
+    out
+}
+
+// `parsed`: a malformed spec is a usage error, status 5.
+pub fn hs_require(io: IoCap, spec: Str) -> Strs {
+    let h = hs_parse(spec)
+    if strs_len(h) == 0 {
+        eprint("nazm: `--harness " + spec + "` is not `test:NAME`, `fuzz:NAME:CASES` or `bench:NAME:ITERATIONS`" + hs_nl())
+        exit_with(5)
+    }
+    h
+}
+
+fn hs_spaces(n: Int) -> Str {
+    let parts = strs_new()
+    for _ in 0..n { strs_push(parts, " ") }
+    str_join(parts, "")
+}
+
+fn hs_line(out: Strs, indent: Int, text: Str) -> Int {
+    strs_push(out, hs_spaces(indent) + text + hs_nl())
+    0
+}
+
+// `text`: the entry's text as the harness makes it, or why it cannot be: the function is not a top-level one.
+// `h` is `hs_parse`'s answer.
+pub fn hs_text(original: Str, h: Strs) -> Result[Str, Str] {
+    let kind = strs_get(h, 0)
+    let name = strs_get(h, 1)
+    let count = strs_get(h, 2)
+    let t = sx_tree()
+    let program = sx_parse_source(original, t, dg_new())
+    let fns = sx_items(t, sx_field(t, program, "functions"))
+    let mut target = 0 - 1
+    let mut main = 0 - 1
+    for i in 0..ints_len(fns) {
+        let f = ints_get(fns, i)
+        if sx_is_some(t, sx_field(t, f, "method_of")) { continue }
+        if target < 0 && sx_name(t, f, "name") == name { target = i }
+        if main < 0 && sx_name(t, f, "name") == "main" { main = i }
+    }
+    if target < 0 { return Err("no top-level function `" + name + "` to run") }
+    let skip = if kind == "fuzz" { 1 } else { 0 }
+    let params = sx_items(t, sx_field(t, ints_get(fns, target), "params"))
+    let mut plist = ""
+    let mut alist = ""
+    let mut args_alone = ""
+    for k in skip..ints_len(params) {
+        let i = k - skip
+        let pn = "nz_harness_" + int_to_str(i)
+        let ty = sx_name(t, sx_field(t, ints_get(params, k), "ty"), "name")
+        plist = plist + ", " + pn + ": " + ty
+        alist = alist + ", " + pn
+    }
+    if str_len(alist) >= 2 { args_alone = str_slice(alist, 2, str_len(alist)) }
+    let mut text = original
+    // The file's own `main` is read as blanks, its lines kept, so every offset after it is where it was.
+    if main >= 0 {
+        let m = ints_get(fns, main)
+        let span = sx_field(t, m, "span")
+        let mut start = sx_s(t, span)
+        let attrs = sx_items(t, sx_field(t, m, "attrs"))
+        for k in 0..ints_len(attrs) {
+            let a = sx_s(t, sx_field(t, ints_get(attrs, k), "span"))
+            if a < start { start = a }
+        }
+        let end = sx_e(t, span)
+        if end > str_len(original) || start > end { return Err("this file's `main` is not where it was parsed") }
+        let blank = strs_new()
+        strs_push(blank, str_slice(original, 0, start))
+        for i in start..end {
+            let b = str_byte(original, i)
+            if b == 10 { strs_push(blank, hs_nl()) } else if b < 128 || b >= 192 { strs_push(blank, " ") }
+        }
+        strs_push(blank, str_slice(original, end, str_len(original)))
+        text = str_join(blank, "")
+    }
+    let bs = hs_bs()
+    let q = hs_q()
+    let nlx = bs + "n"
+    let out = strs_new()
+    let failed = "Result.Err(error: e) => { print(str_concat(e, " + q + nlx + q + ")); exit_with(2) }"
+    if kind == "test" {
+        hs_line(out, 0, "fn main(nz_harness_io: IoCap, nz_harness_out: OutCap" + plist + ") -> Int {")
+        hs_line(out, 4, "match " + name + "(" + args_alone + ") {")
+        hs_line(out, 8, "Result.Ok(value: v) => 0,")
+        hs_line(out, 8, failed)
+        hs_line(out, 4, "}")
+        hs_line(out, 0, "}")
+    } else if kind == "fuzz" {
+        hs_line(out, 0, "fn nz_harness_next(s: UInt64) -> UInt64 {")
+        hs_line(out, 4, "let a = s ^ (s << 13);")
+        hs_line(out, 4, "let b = a ^ (a >> 7);")
+        hs_line(out, 4, "b ^ (b << 17)")
+        hs_line(out, 0, "}")
+        hs_line(out, 0, "")
+        hs_line(out, 0, "fn main(nz_harness_io: IoCap, nz_harness_out: OutCap" + plist + ") -> Int {")
+        hs_line(out, 4, "let mut state = UInt64(88172645463325252);")
+        hs_line(out, 4, "let mut case = 0;")
+        hs_line(out, 4, "while case < " + count + " {")
+        hs_line(out, 8, "state = nz_harness_next(state);")
+        hs_line(out, 8, "let len = Int(state % UInt64(65));")
+        hs_line(out, 8, "let input = bytes_new(len);")
+        hs_line(out, 8, "let mut i = 0;")
+        hs_line(out, 8, "while i < len {")
+        hs_line(out, 12, "state = nz_harness_next(state);")
+        hs_line(out, 12, "bytes_set(input, i, UInt8(state & UInt64(255)));")
+        hs_line(out, 12, "i = i + 1;")
+        hs_line(out, 8, "}")
+        hs_line(out, 8, "match " + name + "(input" + alist + ") {")
+        hs_line(out, 12, "Result.Ok(value: v) => 0,")
+        hs_line(out, 12, "Result.Err(error: e) => { print(str_concat(str_concat(str_concat(" + q + "case " + q + ", int_to_str(case)), " + q + ": " + q + "), str_concat(e, " + q + nlx + q + "))); exit_with(2) }")
+        hs_line(out, 8, "};")
+        hs_line(out, 8, "case = case + 1;")
+        hs_line(out, 4, "}")
+        hs_line(out, 4, "0")
+        hs_line(out, 0, "}")
+    } else {
+        hs_line(out, 0, "fn main(nz_harness_io: IoCap, nz_harness_out: OutCap, nz_harness_time: TimeCap" + plist + ") -> Int {")
+        hs_line(out, 4, "let start = time_now_ns();")
+        hs_line(out, 4, "let mut i = 0;")
+        hs_line(out, 4, "let mut sink = 0;")
+        hs_line(out, 4, "while i < " + count + " {")
+        hs_line(out, 8, "sink = sink ^ " + name + "(" + args_alone + ");")
+        hs_line(out, 8, "i = i + 1;")
+        hs_line(out, 4, "}")
+        hs_line(out, 4, "let took = time_now_ns() - start;")
+        hs_line(out, 4, "print(str_concat(str_concat(str_concat(" + q + "nazm-bench: " + q + ", int_to_str(took)), str_concat(" + q + " " + q + ", int_to_str(sink))), " + q + nlx + q + "));")
+        hs_line(out, 4, "0")
+        hs_line(out, 0, "}")
+    }
+    if str_len(text) == 0 || str_byte(text, str_len(text) - 1) != 10 { text = text + hs_nl() }
+    Ok(text + hs_nl() + str_join(out, ""))
+}
+
+// The diagnostic a harness whose function is not there is, as a load error at the entry: its rendering
+// (`N0619`, no file, the synthetic span), plain or as one `nazm.diagnostic/1` line.
+pub fn hs_missing(why: Str, json: Bool) -> Str {
+    let d = dg_new()
+    dg_error(d, "N0619", 0, 0, why, why, "`nazm test` and `nazm bench` run a `@test`, `@fuzz` or `@bench` function the file declares")
+    if json { return dg_json(d, 0) + hs_nl() }
+    let names = strs_new()
+    strs_push(names, "")
+    let texts = strs_new()
+    strs_push(texts, "")
+    let bases = ints_new()
+    ints_push(bases, 0)
+    dg_render(d, 0, names, texts, bases)
+}

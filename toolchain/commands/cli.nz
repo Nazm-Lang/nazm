@@ -73,7 +73,7 @@ pub struct Cli {
     first: Ints,
     // Per argument, the values clap's `value_parser([..])` lists, comma-joined ("" for none); whether it is hidden
     // from the help and the usage; and the value parser it has beyond `numeric` (3: a `u8` in 0..=3, 4: `--stack-size`'s
-    // size, 5: `--heap-limit`'s).
+    // size, 5: `--heap-limit`'s, 7: `--max-depth`'s).
     possible: Strs,
     hidden: Ints,
     vkind: Ints,
@@ -608,6 +608,29 @@ fn cli_range_error(v: Str, top: Str) -> Str {
     ""
 }
 
+// Why `v` is not a depth budget (`cli.rs`'s `max_depth`, 7): not a `usize`, 0, or more than the interpreter can back with
+// stack (`stack_for`: 24 MiB and 40 KiB a call, saturating), or "".
+fn cli_depth_error(v: Str) -> Str {
+    let mut ok = str_len(v) > 0
+    let i = if str_len(v) > 0 && str_byte(v, 0) == 43 { 1 } else { 0 }
+    if i == 1 && str_len(v) == 1 { ok = false }
+    for j in i..str_len(v) {
+        if str_byte(v, j) < 48 || str_byte(v, j) > 57 { ok = false }
+    }
+    if !ok || cli_more(cli_digits(v), "18446744073709551615") { return "`" + v + "` is not a number" }
+    let d = cli_digits(v)
+    if d == "0" { return "a depth budget of 0 would refuse every call" }
+    if !cli_more(d, "1000000") { return "" }
+    let gib = if str_len(d) > 15 || (str_len(d) == 15 && cli_more(d, "450359962737049")) {
+        "17179869183"
+    } else {
+        let mut n = 0
+        for j in 0..str_len(d) { n = n * 10 + (str_byte(d, j) - 48) }
+        int_to_str((24576 + 40 * n) / 1048576)
+    }
+    "at most 1000000; " + d + " calls would need " + gib + " GiB of stack reserved, which no machine will grant — and a budget the interpreter cannot back with stack is not a limit, it is a crash waiting for the right program"
+}
+
 fn cli_invalid_possible(io: IoCap, c: Cli, a: Int, v: Str, names: Strs) -> Int {
     let mut text = "invalid value '" + v + "' for '" + cli_display(c, a) + "'" + cli_nl() + "  [possible values: " + str_join(names, ", ") + "]"
     // `did_you_mean`: each value more than 0.7 like it, the likeliest first.
@@ -977,7 +1000,7 @@ fn cli_react(io: IoCap, c: Cli, a: Int, by: Int, vals: Strs, quiet: Bool) -> Int
         }
         let vk = ints_get(c.vkind, a)
         if vk > 0 {
-            let why = if vk == 3 { cli_range_error(v, "3") } else if vk == 6 { cli_range_error(v, "255") } else { cli_size_error(v, vk) }
+            let why = if vk == 3 { cli_range_error(v, "3") } else if vk == 6 { cli_range_error(v, "255") } else if vk == 7 { cli_depth_error(v) } else { cli_size_error(v, vk) }
             if why != "" {
                 if quiet { return 1 }
                 cli_fail(io, "invalid value '" + v + "' for '" + cli_display(c, a) + "': " + why)

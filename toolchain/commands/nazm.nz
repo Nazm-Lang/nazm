@@ -37,6 +37,8 @@ use "obligations.nz"
 use "trace.nz"
 use "inspect.nz"
 use "explain.nz"
+use "run.nz"
+use "live.nz"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -271,6 +273,9 @@ fn command_cli(name: Str) -> Cli {
     if name == "explain-cost" { return explain_cost_cli() }
     if name == "explain-flow" { return explain_flow_cli() }
     if name == "profile" { return profile_cli() }
+    if name == "run" { return run_cli() }
+    if name == "comptime" { return comptime_cli() }
+    if name == "repl" { return repl_cli() }
     cli_command("", "", "")
 }
 
@@ -300,7 +305,7 @@ fn help_command(io: IoCap, k: Int) -> Int {
     show(io, cli_help(c, true))
 }
 
-fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, tm: TimeCap) -> Int {
+fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, tm: TimeCap, out: OutCap, net: NetCap, rnd: RandomCap) -> Int {
     let n = args_count()
     if n == 0 { missing(io) }
     let s = arg(0)
@@ -385,6 +390,8 @@ fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, tm: TimeCap) -> 
     if s == "explain-cost" { return explain_cost_command(io, c) }
     if s == "explain-flow" { return explain_flow_command(io, c) }
     if s == "profile" { return profile_command(io, c) }
+    if s == "run" { return run_command(io, out, tm, net, proc, rnd, c) }
+    if s == "comptime" { return comptime_command(io, out, tm, net, proc, rnd, c) }
     check_command(io, c)
 }
 
