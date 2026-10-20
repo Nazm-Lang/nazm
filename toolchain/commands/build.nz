@@ -101,7 +101,12 @@ fn bd_end(io: IoCap, o: Opts, status: Str, with_map: Bool, text: Str, code: Int)
 
 // One after the program was loaded; the summary's status is the toolchain's for 4, a refusal otherwise.
 fn bd_fail(io: IoCap, o: Opts, text: Str, code: Int) -> Int {
-    bd_end(io, o, if code == 4 { "toolchain_failed" } else { "refused" }, true, text, code)
+    // What a failing stage or write says goes to standard error whatever the summary: only a refusal before the
+    // build began is silent under `--summary-json`.
+    eprint(text + nl())
+    if o.summary { bd_summary(io, o, if code == 4 { "toolchain_failed" } else { "refused" }, code, true, "null") }
+    exit_with(code)
+    0
 }
 
 // The same before it was: the summary names no source map.
@@ -807,7 +812,7 @@ fn bd_clobbers(io: IoCap, o: Opts, abs: Str, files: Strs, output: Str) -> Int {
     for i in 0..strs_len(files) {
         if bd_same(io, strs_get(files, i), output) { hit = true }
     }
-    if hit { bd_fail(io, o, "nazm: refusing to write the executable over its own source (" + output + "). Pass -o with a different path.", 1) }
+    if hit { bd_end(io, o, "refused", true, "nazm: refusing to write the executable over its own source (" + output + "). Pass -o with a different path.", 1) }
     0
 }
 
