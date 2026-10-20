@@ -10,7 +10,11 @@
 // command: `fmt`, `init`, `check`, `doc`, `fix`, `lsp`, `test`, `patch`, `interface`, `docs`, `attest`, `lock`, `update`, `publish`, `yank`, `bindgen`, `reload-check`, `doctor`, `snapshot`, `delta`, `diagnostics`, `resolve` and `references` are carried
 // (`fmt.nz`, `init.nz`, `check.nz`, `doc.nz`, `fix.nz`, `lsp.nz`, ..., `semantic.nz`), and so are `build` (`build.nz`) and the inspection commands
 // (R8 slice 8): `core-ir`, `mir`, `lir`, `capabilities` (`coreir.nz`), `obligations`, `trace`, `inspect`, and `explain-cost`, `explain-flow`
-// and `profile`, which parse their command line and refuse what R2 and R3 do not yet publish (`explain.nz`). Every other says it is not carried and exits 6.
+// and `profile`, which parse their command line and refuse what R2 and R3 do not yet publish (`explain.nz`); and the interactive tier
+// (R8 slice 7): `run`, in this process with `--interpret` and built and run otherwise (`run.nz`), `comptime` and `repl` (`live.nz`), over the
+// interpreter as a module (`interpret.nz`). Every other says it is not carried and exits 6. A command that ends the process does so with
+// `exit_with`, never by returning from `main`: this program's own runtime answers `NAZM_RESULT_REPORT`, `NAZM_MEMORY_REPORT` and
+// `NAZM_SCHED_REPORT` about itself when `main` returns, and those variables are the interpreted program's.
 
 use "cli.nz"
 use "fmt.nz"
