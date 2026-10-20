@@ -621,7 +621,7 @@ fn cli_depth_error(v: Str) -> Str {
     let d = cli_digits(v)
     if d == "0" { return "a depth budget of 0 would refuse every call" }
     if !cli_more(d, "1000000") { return "" }
-    let gib = if str_len(d) > 15 || (str_len(d) == 15 && cli_more(d, "450359962737049")) {
+    let gib = if str_len(d) > 15 || (str_len(d) == 15 && cli_more(d, "450359962736435")) {
         "17179869183"
     } else {
         let mut n = 0
@@ -1229,8 +1229,13 @@ pub fn cli_parse(io: IoCap, c: Cli) -> Int {
         if group_missing { strs_push(lines, cli_group_text(c)) }
         let used = cli_used(c, false)
         for i in 0..ints_len(missing) { ints_push(used, ints_get(missing, i)) }
-        // An argument another asks for is written where it is declared (clap's usage of `requires`).
-        if ints_len(c.req_a) > 0 {
+        // An argument another asks for is written where it is declared (clap's usage of `requires`); a missing
+        // positional is not one of those, and the options keep the order they were given.
+        let mut asked_for = false
+        for i in 0..ints_len(missing) {
+            if !cli_is_pos(c, ints_get(missing, i)) { asked_for = true }
+        }
+        if ints_len(c.req_a) > 0 && asked_for {
             let mut x = 1
             while x < ints_len(used) {
                 let mut y = x

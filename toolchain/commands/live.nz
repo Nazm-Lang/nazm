@@ -3,6 +3,8 @@
 
 use "cli.nz"
 use "interpret.nz"
+use "util.nz"
+use "@std/io"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -39,5 +41,176 @@ fn lv_int(raw: Str) -> Int {
 pub fn comptime_command(io: IoCap, out: OutCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap, c: Cli) -> Int {
     cli_parse(io, c)
     exit_with(ip_comptime(io, out, time, net, proc, rnd, cli_value(c, 0), cli_value(c, 1), lv_int(cli_value(c, 2)), lv_int(cli_value(c, 3))))
+    0
+}
+
+// --- repl -----------------------------------------------------------------------------------------------
+
+// A session: the definitions in the order first given (a redefinition in its predecessor's place), each its name and text.
+struct Session {
+    names: Strs,
+    texts: Strs,
+}
+
+fn rp_ident(b: Int) -> Bool { (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 95 }
+
+// The name a definition line defines, or "".
+fn rp_defines(line: Str) -> Str {
+    let rest = if ut_starts(line, "pub ") { str_slice(line, 4, str_len(line)) } else { line }
+    let mut at = 0 - 1
+    if ut_starts(rest, "fn ") { at = 3 } else if ut_starts(rest, "struct ") { at = 7 } else if ut_starts(rest, "enum ") { at = 5 }
+    if at < 0 { return "" }
+    let mut e = at
+    while e < str_len(rest) && rp_ident(str_byte(rest, e)) { e += 1 }
+    str_slice(rest, at, e)
+}
+
+// The session's text: every definition and a newline, then `tail`.
+fn rp_source(names: Strs, texts: Strs, tail: Str) -> Str {
+    let out = strs_new()
+    for i in 0..strs_len(texts) { strs_push(out, strs_get(texts, i) + nl()) }
+    strs_push(out, tail)
+    str_join(out, "")
+}
+
+// The definition a diagnostic's start falls in, by the session text's layout, or "".
+fn rp_owner(names: Strs, texts: Strs, at: Int) -> Str {
+    let mut start = 0
+    for i in 0..strs_len(texts) {
+        let end = start + str_len(strs_get(texts, i)) + 1
+        if at >= start && at < end { return strs_get(names, i) }
+        start = end
+    }
+    ""
+}
+
+fn rp_bs() -> Str { str_from_byte(92) }
+
+fn rp_wrapper(kind: Int, expr: Str) -> Str {
+    let head = "fn main(io: IoCap) -> Int ! { io } { "
+    if kind == 0 { return head + expr + " }" + nl() }
+    if kind == 1 { return head + "if " + expr + " { 1 } else { 0 } }" + nl() }
+    head + "print(" + expr + "); print(" + str_from_byte(34) + rp_bs() + "n" + str_from_byte(34) + "); 0 }" + nl()
+}
+
+// One line of input: what it answers, and whether the session ends (`:quit`).
+fn rp_line(io: IoCap, out: OutCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap, s: Session, raw: Str) -> Strs {
+    let line = ut_trim(raw)
+    let reply = strs_new()
+    if line == ":quit" || line == ":q" {
+        strs_push(reply, "quit")
+        return reply
+    }
+    if line == ":reset" {
+        while strs_len(s.names) > 0 {
+            strs_pop(s.names)
+            strs_pop(s.texts)
+        }
+        strs_push(reply, "the session is empty" + nl())
+        return reply
+    }
+    if line == ":defs" {
+        let all = strs_new()
+        for i in 0..strs_len(s.texts) { strs_push(all, strs_get(s.texts, i) + nl()) }
+        strs_push(reply, str_join(all, ""))
+        return reply
+    }
+    let name = rp_defines(line)
+    if name != "" {
+        if name == "main" {
+            strs_push(reply, "`main` is the REPL's: an expression line is evaluated as its body")
+            return reply
+        }
+        let next_names = strs_new()
+        let next_texts = strs_new()
+        let mut replaced = 0 - 1
+        for i in 0..strs_len(s.names) {
+            strs_push(next_names, strs_get(s.names, i))
+            strs_push(next_texts, strs_get(s.texts, i))
+            if replaced < 0 && strs_get(s.names, i) == name { replaced = i }
+        }
+        if replaced >= 0 {
+            strs_set(next_texts, replaced, line)
+        } else {
+            strs_push(next_names, name)
+            strs_push(next_texts, line)
+        }
+        let source = rp_source(next_names, next_texts, "fn main() -> Int { 0 }" + nl())
+        let c = ip_check_source(io, source, false)
+        if str_len(c.text) > 0 {
+            // A redefinition that breaks another definition is refused by that one's name.
+            let mut head = ""
+            if replaced >= 0 {
+                let mut other = ""
+                for i in 0..ints_len(c.starts) {
+                    let o = rp_owner(next_names, next_texts, ints_get(c.starts, i))
+                    if other == "" && o != "" && o != name { other = o }
+                }
+                if other != "" { head = "redefining `" + name + "` is refused: `" + other + "` no longer checks against it" + nl() }
+            }
+            strs_push(reply, head + c.text)
+            return reply
+        }
+        while strs_len(s.names) > 0 {
+            strs_pop(s.names)
+            strs_pop(s.texts)
+        }
+        for i in 0..strs_len(next_names) {
+            strs_push(s.names, strs_get(next_names, i))
+            strs_push(s.texts, strs_get(next_texts, i))
+        }
+        strs_push(reply, (if replaced >= 0 { "redefined `" } else { "defined `" }) + name + "`" + nl())
+        return reply
+    }
+    // An expression: the body of `main`, as an `Int`, then a `Bool`, then a `Str`.
+    let mut first = ""
+    for kind in 0..3 {
+        let source = rp_source(s.names, s.texts, rp_wrapper(kind, line))
+        let c = ip_check_source(io, source, true)
+        if str_len(c.text) > 0 {
+            if first == "" { first = c.text }
+            continue
+        }
+        let r = ip_session_run(io, out, time, net, proc, rnd, c.doc, source)
+        if r.kind == 0 {
+            if kind == 0 { strs_push(reply, "= " + r.value + nl()) } else if kind == 1 { strs_push(reply, "= " + (if r.value == "1" { "true" } else { "false" }) + nl()) } else { strs_push(reply, "") }
+            return reply
+        }
+        if r.kind == 1 || r.kind == 2 {
+            strs_push(reply, r.diag)
+        } else {
+            strs_push(reply, "interp: " + (if r.kind == 5 { "this program has no `main` function" } else { r.diag }) + nl())
+        }
+        return reply
+    }
+    strs_push(reply, first)
+    reply
+}
+
+pub fn repl_command(io: IoCap, out: OutCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let s = Session(names: strs_new(), texts: strs_new())
+    let mut going = true
+    while going {
+        match io_stdin_read_line(io) {
+            Result.Ok(value: got) => {
+                match got {
+                    Option.Some(value: raw) => {
+                        if str_len(ut_trim(raw)) > 0 {
+                            let reply = rp_line(io, out, time, net, proc, rnd, s, raw)
+                            if strs_get(reply, 0) == "quit" {
+                                going = false
+                            } else {
+                                let wrote = print(strs_get(reply, 0))
+                            }
+                        }
+                    },
+                    Option.None => { going = false },
+                }
+            },
+            Result.Err(error: e) => { going = false },
+        }
+    }
+    exit_with(0)
     0
 }

@@ -1,0 +1,21 @@
+# `nazm comptime`'s command lines, run from the repository's root by `tests/interactive.sh args`.
+--help
+-h
+(none)
+examples/max.nz
+--bogus examples/max.nz f
+examples/max.nz f
+examples/max.nz main
+examples/max.nz f --max-iterations 3
+examples/max.nz f --max-iterations x
+examples/max.nz f --max-iterations -1
+examples/max.nz f --max-iterations
+examples/max.nz f --max-depth 0
+examples/max.nz f --max-depth x
+examples/max.nz f --max-depth 1000001
+examples/max.nz f --max-depth 99999999999999
+examples/max.nz f --max-depth 18446744073709551616
+--max-depth 5 examples/max.nz f
+absent.nz f
+examples/max.nz f g
+examples/max.nz -- f

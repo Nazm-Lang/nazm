@@ -1,0 +1,7 @@
+fn shout(s: Str) -> Str { s + "!" }
+shout("hi")
+println("direct")
+print("no newline")
+println(1)
+println(true)
+{ println("a"); 5 }
