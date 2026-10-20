@@ -41,6 +41,7 @@
 #                 working directory (`prog.nazm-PID/`, in the debug map), so they are compared
 #                 through `dwarfdump --debug-info --debug-line` (UUIDs left out), not as bytes
 #   llvm-release  `--release -o prog`: canaries, position independent, stripped, signed
+#   llvm-soa      `--layout soa --emit-ir --objects objs` (soa: the same on `--backend nazm`)
 #
 # both sides run in directories of their own, the file named by its absolute path, and agree when
 # standard output, standard error, the exit status and every file written (the executable, or every
@@ -57,7 +58,7 @@ ROOT=$stage_root
 NAZM=${NAZM:-$(stage_checkout_nazm "$ROOT")}
 REF=${NAZM_REF:-$NAZM}
 OUT=${BUILD_OUT:-${TMPDIR:-/tmp}/nazm-build-compare}
-MODES=${BUILD_MODES:-exe heap objects x86 windows cached llvm llvm-heap llvm-objects llvm-x86 llvm-windows llvm-x86exe llvm-ir llvm-irexe llvm-O1 llvm-O2 llvm-O3 llvm-debug llvm-debugexe llvm-release}
+MODES=${BUILD_MODES:-exe heap objects x86 windows cached llvm llvm-heap llvm-objects llvm-x86 llvm-windows llvm-x86exe llvm-ir llvm-irexe llvm-O1 llvm-O2 llvm-O3 llvm-debug llvm-debugexe llvm-release soa llvm-soa}
 mkdir -p "$OUT/bin"
 for p in nazm:toolchain/commands/nazm.nz nazm-pipeline:toolchain/pipeline/main.nz nzcg:toolchain/codegen/main.nz; do
     name=${p%%:*}
@@ -110,6 +111,8 @@ for src in "${inputs[@]}"; do
             objects) args=(--objects objs) ;;
             x86) args=(--objects objs --target x86_64-apple-darwin) ;;
             windows) args=(--objects objs --target x86_64-pc-windows-gnu) ;;
+            soa) args=(--layout soa --objects objs) ;;
+            llvm-soa) args=(--layout soa --emit-ir --objects objs); backend=() ;;
             llvm) args=(-o prog); backend=() ;;
             llvm-heap) args=(--heap-limit 64M -o prog); backend=() ;;
             llvm-objects) args=(--objects objs); backend=() ;;

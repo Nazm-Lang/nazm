@@ -1029,7 +1029,11 @@ fn release_value(fx: Fx, v: Int, t: Str) {
         // `Ints` and `Strs` are `Vec[Int]` and `Vec[Str]` (R1, 5b.18): a vector of strings
         // releases each element as any vector of owned elements does.
         let elem = strs_get(s.args, 0)
-        if owns_ty(fx, elem) {
+        if strs_len(soa_elem_fields(fx.lo, elem)) > 0 {
+            // A field-by-field vector: its fields own nothing, and its data is one allocation,
+            // which the sequence release frees.
+            rt(fx, "nz.seq_release", ints_of(v))
+        } else if owns_ty(fx, elem) {
             let h = helper(fx.lo, "vel", elem)
             let f = addr_of(fx, h)
             let stride = iconst(fx, size_of(fx, elem))
@@ -1120,6 +1124,102 @@ fn box_fresh(fx: Fx, dst: Int, t: Str) {
 }
 
 /// `box_fill`: the one element written into the room `box_fresh` made (`prims::box_fill`).
+// --- the field-by-field layout (`--layout soa`, N68, `op/soa.rs`) ---------------------------------
+
+/// The fields of a `Vec`'s record element when that `Vec` is laid out one array per field: every
+/// field an `Int` or a `Bool`, and at least one (the empty list for any other element).
+fn soa_elem_fields(lo: Lo, elem: Str) -> Strs {
+    if !hashmap_has(lo.needs, "@soa") || elem == "" || class(elem) != "record" { return strs_new() }
+    let fs = record_fields(lo.lx, elem)
+    if strs_len(fs) == 0 { return strs_new() }
+    for f in fs {
+        let k = class(f)
+        if k != "int" && k != "bool" { return strs_new() }
+    }
+    fs
+}
+
+/// Where field `k` of element `i` lives: `data + (k * cap + i) * 8`.
+fn soa_slot(fx: Fx, h: Int, k: Int, i: Int) -> Int {
+    let cap = load(fx, "i64", h, 8)
+    let data = load(fx, "ptr", h, 16)
+    let kk = iconst(fx, k)
+    let base = bin(fx, "mul", cap, kk)
+    let at_ = bin(fx, "add", base, i)
+    let eight = iconst(fx, 8)
+    let bytes = bin(fx, "mul", at_, eight)
+    ptr_add(fx, data, bytes)
+}
+
+fn soa_gather(fx: Fx, h: Int, i: Int, d: Int, fields: Strs, offsets: Ints) {
+    for k in 0..strs_len(fields) {
+        let p = soa_slot(fx, h, k, i)
+        let v = load(fx, mclass(strs_get(fields, k)), p, 0)
+        store(fx, d, ints_get(offsets, k), v);
+    }
+}
+
+fn soa_scatter(fx: Fx, h: Int, i: Int, src: Int, fields: Strs, offsets: Ints) {
+    for k in 0..strs_len(fields) {
+        let v = load(fx, mclass(strs_get(fields, k)), src, ints_get(offsets, k))
+        let p = soa_slot(fx, h, k, i)
+        store(fx, p, 0, v);
+    }
+}
+
+/// The bounds check every indexed operation makes, before any field is touched.
+fn soa_bounds(fx: Fx, h: Int, i: Int) {
+    let len = load(fx, "i64", h, 0)
+    let neg = cmp_imm(fx, "lt", i, "i64", 0)
+    let past = cmp(fx, "ge", i, len)
+    let bad = bin(fx, "or", neg, past)
+    guard(fx, bad, "N0405", "this index is outside the sequence");
+}
+
+/// A `Vec[R]` operation over the field-by-field layout; false for one that is the same in both
+/// layouts (new, len), or for a `Vec` that is not laid out so.
+fn soa_primitive(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) -> Bool {
+    if op != "vec_get" && op != "vec_set" && op != "vec_push" && op != "vec_pop" { return false }
+    let fields = soa_elem_fields(fx.lo, elem)
+    if strs_len(fields) == 0 { return false }
+    let st = structure(fx.lo.lx, record_fields(fx.lo.lx, elem))
+    let offsets = ints_new()
+    for k in 0..strs_len(fields) { ints_push(offsets, ints_get(st, k)) }
+    let h = if vec_len(args) > 0 { opvalue(fx, vec_get(args, 0)) } else { null(fx) }
+    if op == "vec_get" {
+        let i = arg_value(fx, args, 1)
+        soa_bounds(fx, h, i);
+        let d = addr(fx, dst)
+        soa_gather(fx, h, i, d, fields, offsets);
+    } else if op == "vec_set" {
+        let i = arg_value(fx, args, 1)
+        soa_bounds(fx, h, i);
+        let src = if vec_len(args) > 2 { place(fx, vec_get(args, 2)) } else { null(fx) }
+        soa_scatter(fx, h, i, src, fields, offsets);
+        set(fx, dst, i);
+    } else if op == "vec_push" {
+        let nf = iconst(fx, strs_len(fields))
+        let data = rt_v(fx, "nz.soa_grow", ints_of2(h, nf), "ptr")
+        let none = is_null(fx, data)
+        guard(fx, none, "N0406", "out of memory");
+        let len = load(fx, "i64", h, 0)
+        let src = if vec_len(args) > 1 { place(fx, vec_get(args, 1)) } else { null(fx) }
+        soa_scatter(fx, h, len, src, fields, offsets);
+        let grown = add_imm(fx, len, 1)
+        store(fx, h, 0, grown);
+        set(fx, dst, grown);
+    } else {
+        let len = load(fx, "i64", h, 0)
+        let empty = cmp_imm(fx, "le", len, "i64", 0)
+        guard(fx, empty, "N0405", "this sequence is empty");
+        let last = add_imm(fx, len, 0 - 1)
+        let d = addr(fx, dst)
+        soa_gather(fx, h, last, d, fields, offsets);
+        store(fx, h, 0, last);
+    }
+    true
+}
+
 fn box_fill(fx: Fx, dst: Int, args: Vec[Operand], t: Str) {
     let h = arg_value(fx, args, 0)
     let data = load(fx, "ptr", h, 16)
@@ -1134,6 +1234,11 @@ fn primitive(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) {
     // their operations is the `Vec` one it means.
     // A box's storage is made with it, exactly one element (`prims::box_fresh`), and its one element
     // written there (`prims::box_fill`).
+    // A box of a record laid out field by field is its `Vec`'s one element (`--layout soa`).
+    if (op == "box_fresh" || op == "box_fill") && strs_len(soa_elem_fields(fx.lo, element(op, elem))) > 0 {
+        primitive(fx, dst, if op == "box_fresh" { "vec_new" } else { "vec_push" }, elem, args)
+        return
+    }
     if op == "box_fresh" { box_fresh(fx, dst, element(op, elem)); return }
     if op == "box_fill" { box_fill(fx, dst, args, element(op, elem)); return }
     if op == "chain_empty" { primitive(fx, dst, "vec_new", elem, args); return }
@@ -1147,6 +1252,7 @@ fn primitive(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) {
         primitive(fx, dst, "vec_get", elem, first);
         return
     }
+    if soa_primitive(fx, dst, op, elem, args) { return }
     if num_primitive(fx, dst, op, elem, args) { return }
     if seq_primitive(fx, dst, op, elem, args) { return }
     if chan_primitive(fx, dst, op, elem, args) { return }

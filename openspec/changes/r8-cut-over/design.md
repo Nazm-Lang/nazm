@@ -384,6 +384,51 @@ check runs the last stage's `fe --coredoc-sources` beside the seed's `core-ir --
   stage's heap limit from the first `the heap limit of` text in its image — the pipeline carries
   that text as a template — and so taking the stage as unlimited: fixed (`bd_limits`).
 
+## Slice 5 — the LLVM path (2026-10-20)
+
+Group 2 of `build`'s flags on the default backend: `--backend llvm` (now the default), `--opt-level`,
+`--emit-ir`, `--debug`, `--release`, `--layout`. The Rust `build` is the oracle, as in slice 4.
+
+- **Where it lives.** In the pipeline stage, not the driver: `nazm-pipeline build --llvm`
+  (`toolchain/pipeline/main.nz`) writes each unit as LLVM text (`OUTDIR/NAME.ll`) beside the runtime's
+  units (`OUTDIR/rt/NAME.ll`) and the plan; there is no code-generator stage on this backend, so the driver
+  starts one stage and `clang`. The emitter reads the unit's instruction text (what `nazm lir --ops`
+  prints) rather than LIR structures: `ops.nz` already writes that text and the generator's reader
+  already depends on its grammar. Two additions the LLVM text needs and the printed form lacks are
+  written only for it (a flag in the needs map, so `nazm lir --ops` is unchanged): the binding each
+  variable and slot holds (`vname`/`sname` lines, shown as comments) and the root file's name.
+- **Ports.** `llvm.nz` is `op/llvm.rs` (failure bit or unwinding per target, `notail` in call cycles,
+  weighted branches, the inlined stack check, `nz.failed_now` read in place); `lldebug.nz` is `debug.rs`;
+  `llpost.nz` is what `LlvmText::generate` does after the text (plain thread-local state in a
+  one-thread program, `inline_reference_counting`, the counted or small-block heap's renaming) and
+  `release.rs`'s `stack_protected`; `ops.nz` gains `op/soa.rs` (`--layout soa`, for both backends). The
+  runtime is the units' reach (`runtime_units`, as `pipeline runtime` already gave it), not the Nazm
+  backend's every part; `--link` turns the small-block heap off, as the Rust build does.
+- **The driver.** `clang -O{n} -Wno-override-module -c` per unit (a section per function on ELF,
+  `-flto=thin` for whole-program), the link as `Backend::link` (`-flto=thin -Wl,-mcpu,CPU` at `-O2` and
+  above on macOS, `-Wl,-pie` for `--release`, then `strip` and `codesign --force --sign - --options
+  runtime`), `dsymutil` for `--debug`, `--emit-ir` beside the output. `--release` conflicts, its
+  usage refusals (exit 5) and `--layout`'s are the Rust build's. The LLVM backend's objects are not
+  filed in the object store (derived data), and the whole-program link keeps no ThinLTO cache.
+- **A `--debug` executable is not reproducible between two processes**, Rust or Nazm: its debug map holds
+  the build's working directory (`prog.nazm-PID/`), so the comparison does the units' text and objects
+  byte for byte and the executable through `dwarfdump`.
+- **Not carried** (still status 6): `--build-report`, `--summary-json`, `--timings`, `--lib`, the
+  flags of groups 3 and 4.
+
+### Slice 5 — the evidence
+
+- **The text**, the pipeline's against the Rust `build --emit-ir` over the 78 programs of
+  `tests/compat/v1/{run,trap}`, `compiler/conformance/` and `toolchain/codegen/tests/programs/` that
+  the Rust build builds: every unit and every runtime unit byte for byte for `aarch64-apple-darwin`,
+  `x86_64-apple-darwin`, `x86_64-pc-windows-gnu`, `--heap-limit 64M`, `--debug` and (host) `--release`.
+- **The comparison**, `toolchain/commands/tests/build.sh`, one `host-run` at a time, 123 inputs × the
+  modes `llvm`, `llvm-heap`, `llvm-objects`, `llvm-x86`, `llvm-windows`, `llvm-x86exe`, `llvm-ir`,
+  `llvm-irexe`, `llvm-O1`, `llvm-O2`, `llvm-O3`, `llvm-debug`, `llvm-debugexe`, `llvm-release`:
+  **1722 agree, 0 differ, 0 refused**; `soa` and `llvm-soa` (`--layout soa`) 246 agree, 0 differ;
+  slice 4's six modes again: see `tasks.md` 5.1.
+- **The self-build on the LLVM backend**: see `tasks.md` 5.3.
+
 ## Slice 1 — the evidence
 
 - The checkout's `nazm check` of `toolchain/interp/main.nz` and `toolchain/harness/check/main.nz`:
