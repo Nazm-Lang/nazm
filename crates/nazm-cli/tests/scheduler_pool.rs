@@ -544,7 +544,17 @@ fn a_pool_task_waiting_on_a_deadline_parks_without_spinning() {
                    let c = chan_new_of[Int](1); let res = chan_new_of[Int](1); let got = vec_new[Int]();\n\
                    scope { spawn waiter(io, tm, c, res); let r = chan_recv_of(res, got); }\n\
                    print(int_to_str(vec_get(got, 0))); 0 }\n";
-    built(d.path(), "near", src, "llvm");
+    // As the far-deadline test below: PowerShell can take seconds to start on a busy runner, so on
+    // Windows the task waits twelve seconds and is still running when it is sampled.
+    let src = if cfg!(windows) {
+        src.replace(
+            "chan_select_until(cs, out, 4000)",
+            "chan_select_until(cs, out, 12000)",
+        )
+    } else {
+        src.to_owned()
+    };
+    built(d.path(), "near", &src, "llvm");
     let child = Command::new(d.path().join(crate::common::exe_name("near")))
         .env("NAZM_SCHEDULER", "pool")
         .env("NAZM_WORKERS", "1")
