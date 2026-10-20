@@ -245,7 +245,8 @@ fn bd_preflight(io: IoCap, proc: ProcessCap, sp: SpawnCap, o: Opts) -> Str {
         bd_early(io, o, "nazm: `--backend cranelift` builds no mobile target; `" + t + "` is the LLVM backend's", 5)
     }
     // Nazm's own code generator builds for the two macOS targets and Windows x86_64.
-    if o.backend == "nazm" && t != "aarch64-apple-darwin" && t != "x86_64-apple-darwin" && t != "x86_64-pc-windows-gnu" {
+    // (The two Linux triples too inside the contained runner, for the self-build: the one difference from the Rust build.)
+    if o.backend == "nazm" && !bd_carried(io, t) {
         bd_early(io, o, "nazm: `--backend nazm` builds for aarch64-apple-darwin, x86_64-apple-darwin and x86_64-pc-windows-gnu before 1.0; `" + t + "` is the LLVM backend's", 5)
     }
     // RISC-V is code generation the host's `clang` may not have.
@@ -1211,6 +1212,7 @@ fn bd_llvm_objects(io: IoCap, o: Opts, proc: ProcessCap, sp: SpawnCap, pipeline:
         let put = bd_stage_run(io, o, proc, sp, pipeline, pipeline_limit, p)
         if put.started && put.status == 0 { ints_set(tally, 3, ints_get(tally, 3) + strs_len(bd_said(put.out, "stored"))) }
     }
+    ints_set(tally, 6, if usable { 1 } else { 0 })
     0
 }
 
@@ -1528,7 +1530,7 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, v: 
     let env = bd_passed(io)
     // The LLVM units, program's and runtime's, in link order: each from the object stores or by clang.
     let tally = ints_new()
-    for _ in 0..6 { ints_push(tally, 0) }
+    for _ in 0..7 { ints_push(tally, 0) }
     let llvm_names = strs_new()
     if llvm {
         for k in 0..strs_len(units) { strs_push(llvm_names, strs_get(units, k)) }
@@ -1552,6 +1554,8 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, v: 
     let mut reused = ints_get(tally, 1)
     let mut reused_instances = ints_get(tally, 5)
     let rejected = ints_get(tally, 2)
+    // A whole-program link keeps what it optimised beside the project's objects, where the build keeps objects.
+    let lto = if whole && ints_get(tally, 6) == 1 { store + "/lto" } else { "" }
     stored += ints_get(tally, 3)
     // What the units were: every one, compiled here or reused; the generator's (`--backend nazm`) are counted
     // as the store gave them.
@@ -1631,7 +1635,7 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, v: 
     } else if o.lib {
         linked = bd_link_shared(io, proc, sp, target, cross, exe, objects, o.links, strs_new(), o.opt, ut_file_name(output))
     } else {
-        linked = bd_link(io, proc, sp, target, cross, exe, objects, o.links, strs_new(), o.opt, whole, o.release)
+        linked = bd_link(io, proc, sp, target, cross, exe, objects, o.links, strs_new(), o.opt, whole, lto, o.release)
     }
     let mut result = linked
     if (!linked.started || linked.status != 0) && tls && !(o.lib && !o.shared) {
@@ -1642,7 +1646,7 @@ pub fn build_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, v: 
             result = if o.shared {
                 bd_link_shared(io, proc, sp, target, cross, exe, objects, o.links, t, o.opt, ut_file_name(output))
             } else {
-                bd_link(io, proc, sp, target, cross, exe, objects, o.links, t, o.opt, whole, o.release)
+                bd_link(io, proc, sp, target, cross, exe, objects, o.links, t, o.opt, whole, lto, o.release)
             }
         }
     }
@@ -1811,7 +1815,7 @@ fn text_parse_count(s: Str) -> Int {
 // The link: `clang` with the build's arguments, the objects in order, the foreign inputs, the
 // system libraries, and the linker's dead-stripping (`Backend::link`); `extra` after the libraries
 // (TLS's, on the second attempt).
-fn bd_link(io: IoCap, proc: ProcessCap, sp: SpawnCap, target: Str, cross: Str, exe: Str, objects: Strs, links: Strs, extra: Strs, opt: Int, whole: Bool, release: Bool) -> Ran ! { io, spawn } {
+fn bd_link(io: IoCap, proc: ProcessCap, sp: SpawnCap, target: Str, cross: Str, exe: Str, objects: Strs, links: Strs, extra: Strs, opt: Int, whole: Bool, lto: Str, release: Bool) -> Ran ! { io, spawn } {
     let a = strs_new()
     strs_push(a, "-O" + int_to_str(opt))
     strs_push(a, "-Wno-override-module")
@@ -1821,6 +1825,8 @@ fn bd_link(io: IoCap, proc: ProcessCap, sp: SpawnCap, target: Str, cross: Str, e
         // The CPU a separately optimised object is compiled for, which the linker's code generation
         // must name (`whole_program_cpu`).
         strs_push(a, "-Wl,-mcpu," + (if bd_arch(target) == "x86_64" { "penryn" } else { "apple-m1" }))
+        // Where the linker keeps what it optimised, by content, for the next link of a whole-program build.
+        if lto != "" { strs_push(a, "-Wl,-cache_path_lto," + lto) }
     }
     strs_push(a, "-o")
     strs_push(a, exe)
