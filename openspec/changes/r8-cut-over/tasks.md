@@ -105,8 +105,20 @@
       `run --interpret`, `comptime`, `repl` through `host-run`
 
 ## 8. Slice 8 — the inspection commands
-- [ ] 8.1 `core-ir`, `mir`, `lir`, `capabilities`, `inspect`, `obligations`, `explain-cost`,
-      `explain-flow`, `trace`, `profile`
+- [x] 8.1 `core-ir`, `mir`, `lir`, `capabilities`, `inspect`, `obligations`, `explain-cost`,
+      `explain-flow`, `trace`, `profile`. Evidence (`tests/inspect.sh`, Nazm `nazm` against the Rust
+      one, stdout, stderr and status byte for byte, one host-run at a time, heap limit 2G; 0 differ
+      everywhere). Over the corpus: core-ir 1748 agree, 0 refused; mir 1064 agree, 247 refused
+      (245 `--spans`: R3 hand-back, the MIR printer names no statement's position; 2 not lowered);
+      lir 1744 agree, 4 refused (not lowered); capabilities 2 agree; obligations 868 agree, 6 refused
+      (proved-call witness: R2 hand-back); inspect 429 agree, 8 refused (package inspect: slice 6;
+      foreign function; not lowered); explain-cost 384 agree, 490 refused (cost sites, vectorizer
+      reasons, layouts: R3 hand-back); explain-flow 466 agree, 408 refused (sinks and origin traces:
+      R2 hand-back); trace 25 agree, 2 refused (non-TOML requirements); profile 0 agree, 2 refused
+      (builds with counters, wall time). Command lines (`args` part): core-ir 22/0/0, mir 17/0/2,
+      lir 23/0/4, capabilities 10/0/0, obligations 15/0/3, inspect 16/0/0, explain-cost 9/0/2,
+      explain-flow 9/0/2, trace 11/0/2, profile 11/0/7 (agree/differ/refused). `build.sh`
+      `BUILD_PART=args` after the cli.nz merge with slice 6: 158 agree, 0 differ, 16 refused.
 
 ## 9. Slice 9 — the agent commands whole
 - [ ] 9.1 R2 publishes a function's effects; `context` and MCP `nazm.semantic_context`
