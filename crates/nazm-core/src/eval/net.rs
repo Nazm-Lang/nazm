@@ -199,14 +199,73 @@ fn done(r: std::io::Result<()>) -> i64 {
     r.map_or_else(|e| status(&e), |()| 0)
 }
 
+/// How long a blocked socket call waits before it looks whether its handle was closed (Windows).
+const SLICE: Duration = Duration::from_millis(20);
+
+/// One blocking socket call `op`, after `arm` sets the call's bound, until it answers, the handle's
+/// deadline runs out, or the handle is closed (`Err(CLOSED)`).
+///
+/// POSIX wakes a call blocked in `recv` or `send` when another thread shuts the socket (`shut`).
+/// Winsock does not reliably: a blocked `recv` can stay blocked through `shutdown`, so a close that
+/// lands while the task waits would never wake it (the race that hung CI on `windows-latest`). So
+/// on Windows the wait is taken in short slices and the close is noticed between them, as
+/// [`udp_recv`] does; natively the reactor's wake is what the slice stands for.
+fn bounded<T>(
+    h: i64,
+    arm: impl Fn(Option<Duration>),
+    mut op: impl FnMut() -> std::io::Result<T>,
+) -> Result<std::io::Result<T>, i64> {
+    if !cfg!(windows) {
+        arm(timeout_of(h));
+        let r = op();
+        return if object(h).is_err() {
+            Err(CLOSED)
+        } else {
+            Ok(r)
+        };
+    }
+    let deadline = timeout_of(h).map(|d| Instant::now() + d);
+    loop {
+        if object(h).is_err() {
+            return Err(CLOSED);
+        }
+        let wait = deadline.map_or(SLICE, |d| {
+            d.saturating_duration_since(Instant::now()).min(SLICE)
+        });
+        if wait.is_zero() {
+            return Ok(Err(std::io::ErrorKind::TimedOut.into()));
+        }
+        arm(Some(wait));
+        match op() {
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            r => {
+                return if object(h).is_err() {
+                    Err(CLOSED)
+                } else {
+                    Ok(r)
+                };
+            }
+        }
+    }
+}
+
 /// A read from a connected socket, bounded by the handle's deadline.
 pub(super) fn tcp_read(h: i64, s: &TcpStream, buf: &BytesView) -> i64 {
-    let _ = s.set_read_timeout(timeout_of(h));
     let mut got = vec![0; buf.len];
-    let r = (&*s).read(&mut got);
-    if object(h).is_err() {
-        return CLOSED;
-    }
+    let r = match bounded(
+        h,
+        |d| {
+            let _ = s.set_read_timeout(d);
+        },
+        || (&*s).read(&mut got),
+    ) {
+        Ok(r) => r,
+        Err(closed) => return closed,
+    };
     match r {
         Ok(n) => {
             buf.write(0, got.get(..n).unwrap_or_default());
@@ -218,11 +277,17 @@ pub(super) fn tcp_read(h: i64, s: &TcpStream, buf: &BytesView) -> i64 {
 
 /// A write to a connected socket, bounded by the handle's deadline.
 pub(super) fn tcp_write(h: i64, s: &TcpStream, data: &BytesView) -> i64 {
-    let _ = s.set_write_timeout(timeout_of(h));
-    let r = (&*s).write(&data.read());
-    if object(h).is_err() {
-        return CLOSED;
-    }
+    let bytes = data.read();
+    let r = match bounded(
+        h,
+        |d| {
+            let _ = s.set_write_timeout(d);
+        },
+        || (&*s).write(&bytes),
+    ) {
+        Ok(r) => r,
+        Err(closed) => return closed,
+    };
     match r {
         Ok(n) => i64::try_from(n).unwrap_or(-EINVAL),
         Err(e) => status(&e),
