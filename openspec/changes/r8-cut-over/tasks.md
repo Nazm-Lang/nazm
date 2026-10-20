@@ -1,6 +1,8 @@
 ## 0. The plan
 - [x] 0.1 The inventory, the slices in order with sizes and models, the open questions (`design.md`)
-- [ ] 0.2 The copyright holder's answers to `design.md`'s four open questions
+- [x] 0.2 The copyright holder's answers to `design.md`'s four open questions (accepted 2026-10-20)
+- [ ] 0.3 The copyright holder's answers to questions 5 and 6 (`design.md`, *Open questions —
+      slices 7, 13 and 16*)
 
 ## 1. Slice 1 — R6 gap 1: the interpreter and `nazm-check` on the checkout's language
 - [x] 1.1 `toolchain/interp/{types,values,vm}.nz` and `toolchain/harness/check/supply.nz`: `List[T]`
@@ -60,9 +62,28 @@
 - [ ] 6.1 `build` group 3; `nazm runtime build` and `verify`
 
 ## 7. Slice 7 — the interactive tier
-- [ ] 7.1 Design (Opus): `run` without Cranelift; the interpreter inside `nazm`
-- [ ] 7.2 `run` (compiled, `--interpret`, `--json`, arguments, exit status), `repl`, `comptime`;
-      `test` without `NAZM_TEST_DRIVER`
+- [x] 7.1 Design (Opus): `design.md`, *Slice 7*, S7.1–S7.8
+- [ ] 7.2 The interpreter as a module: `toolchain/interp/entry.nz` (`report`, `refused`, `show`,
+      `memory_line`, result handling moved from `main.nz`; `interp_run`, `interp_constant`);
+      `interp/main.nz` calls them; the self-build's interpreter comparison still agrees
+- [ ] 7.3 `toolchain/commands/interpret.nz` (the one importer of `toolchain/interp/`, no direct
+      `compiler/syntax.nz`/`lex.nz` import); `nazm.nz`'s `main` gains `OutCap`, `TimeCap`, `NetCap`,
+      `RandomCap`; a test that `nazm`'s own runtime reports never fire (S7.1)
+- [ ] 7.4 `--harness SPEC` (`toolchain/commands/harness.nz`, S7.6), accepted by `build` (removed
+      from `bd_later`) and `run`
+- [ ] 7.5 `run --interpret` (S7.3), its flags and value parsers (S7.2.1)
+- [ ] 7.6 `build.nz`: `build_command`'s body as `bd_build(BuildRequest)` with `run_mode`; compiled
+      `run` (S7.2): `--backend nazm`, no heap limit, cache on, the temporary directory, the three
+      relays, `passed_through`'s status
+- [ ] 7.7 `comptime` (S7.4): first check that the entry-less document keeps every root function
+      (else add the mode to `compiler/core.nz`); `N0393`'s three refusals; status 1 for every error
+- [ ] 7.8 `repl` (S7.5): definitions only, `owner`'s refusal, the three wrappers, `:quit`/`:q`,
+      `:reset`, `:defs`
+- [ ] 7.9 `test` without `NAZM_TEST_DRIVER`: the driver from `arg(0)` (S7.7); the status-6 refusal
+      removed
+- [ ] 7.10 `toolchain/commands/tests/interactive.sh` and `tests/repl/*.in` (contained only):
+      the comparison of S7.8 with the four intended differences counted apart; the host smoke of
+      `run --interpret`, `comptime`, `repl` through `host-run`
 
 ## 8. Slice 8 — the inspection commands
 - [ ] 8.1 `core-ir`, `mir`, `lir`, `capabilities`, `inspect`, `obligations`, `explain-cost`,
@@ -84,8 +105,27 @@
       layout
 
 ## 13. Slice 13 — the harness remainder (`r7-harness` 6.2, 6.3)
-- [ ] 13.1 Design (Opus): the contained runner and fuzzing in Nazm (question 3)
-- [ ] 13.2 The contained runner, `host-run`, the mutation campaign runner, `bench`, fuzzing
+- [x] 13.1 Design (Opus): `design.md`, *Slice 13*, S13.1–S13.8; questions 5 and 6 open
+- [ ] 13.2 `toolchain/harness/build.sh` (`target/nzx/`); `nzx`'s self-check of its own image
+      (`runner-unbounded`); `nzx host-run` byte for byte with `xtask/src/host_run.rs` (S13.2); its
+      tests ported from `xtask/tests/host_run.rs`, run against both runners; `stage-run.sh` prefers
+      `nzx`
+- [ ] 13.3 `nzx contained` (S13.3): the workload table, `run_argv` element for element with
+      `--print-argv` (and the seed's matching `--print-argv`), the volume key equal to Rust's,
+      supervision, reaping, the tar export, the host-run lock; then `nzx contained probe` and
+      `nzx contained selfbuild` pass
+- [ ] 13.4 The campaign runner (S13.4): `nazm-mutate session` (entry split, killer mapping,
+      `unmapped`, the warm session, `use`-closure rebuilds, three tiers, `lib/procs.nz`, journal
+      `nazm.mutation-campaign/2` under `target/mutation-campaigns-nz/`, resume, lock, `recover`,
+      `--verify-killer`); `nzx contained mutate` and `mutate-seed`; compared with the Rust campaign
+      on 20 mapped entries
+- [ ] 13.5 Fuzzing (S13.5), after slice 5: the image probe (and `libclang-rt-19-dev` if needed);
+      `build --emit-units` (hidden); the five targets; `shim.c`; `nazm-fuzz build|run`; the
+      `nazm.fuzz/1` report and exports; `lib/gen.nz` and `nazm-fuzz diff`; `nzx contained fuzz`
+- [ ] 13.6 `nazm-bench` (S13.6), verified without timing: the schema, the expected-output check,
+      `--check`'s verdicts on fixed record pairs against the Rust function's
+- [ ] 13.7 The drafts of the runbook's changes for slices 19 and 20 (`nzx` named; `xtask`'s
+      `contained` and `host-run` removed; question 5's answer recorded)
 
 ## 14. Slice 14 — the tests are the contract
 - [ ] 14.1 The black-box suite against the Nazm-built `nazm`; `rewrite-in-nazm` 3.1, 3.2, 3.4
@@ -95,7 +135,17 @@
 - [ ] 15.1 Seed → stage 1 → 2 → 3 through Nazm's `nazm build`, the released set, contained
 
 ## 16. Slice 16 — the fixpoint on macOS
-- [ ] 16.1 As question 2 decides; aarch64, and x86_64 under Rosetta
+- [x] 16.0 Design (Opus): `design.md`, *Slice 16*, S16.1–S16.5 (the runbook amendment as a draft)
+- [ ] 16.1 `toolchain/selfbuild/programs.txt` shared by both scripts; `host-selfbuild.sh ARCH OUT`
+      (S16.1): its refusals, every Nazm-built step one `host-run`, the release configuration,
+      `SELFBUILD_BACKEND=nazm`, `peaks.txt` in bytes, `environment.txt`, `SDKROOT` and
+      `MACOSX_DEPLOYMENT_TARGET` pinned
+- [ ] 16.2 The comparisons (S16.2): the fixpoint whole with the localisation on a difference, Core
+      IR, the corpus at `--heap-limit 256M` (programs with no counted heap counted apart), the
+      interpreter, `nazm-check`, the 256 MiB probe
+- [ ] 16.3 aarch64: the run passes on the host
+- [ ] 16.4 x86_64 under Rosetta (S16.4): the `PATH` and `rosetta-clang` probe; the run passes
+- [ ] 16.5 The runbook amendment (S16.5) applied with 16.3's evidence
 
 ## 17. Slice 17 — Windows x86_64
 - [ ] 17.1 The released set built by Nazm for `x86_64-pc-windows-gnu`; the host-safe suite on the

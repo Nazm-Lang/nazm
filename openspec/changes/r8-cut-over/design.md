@@ -397,3 +397,610 @@ check runs the last stage's `fe --coredoc-sources` beside the seed's `core-ir --
   peaks 3–12 MiB. `nazm-check` over the tree: its 16 gates' report lines are each in `cargo xtask
   check`'s report — **agree**; peak 82 MiB; both exited 0.
 - `cargo xtask contained selfbuild` with the interpreter and `nazm-check` added: see `tasks.md` 1.4.
+
+## Slice 7 — the interactive tier (design, 2026-10-20)
+
+`run` (compiled and `--interpret`), `repl`, `comptime`, and `test` without `NAZM_TEST_DRIVER`. The
+oracles are `crates/nazm-cli/src/{compiled_run,interpret,live,test,harness}.rs` and `cli.rs`'s
+declarations; every output, word and status is theirs (decision 2) except the differences S7.8
+lists. Depends on slice 4 (the driver) and, for `test`'s native leg as the reference runs it, on
+slice 5 (the default backend).
+
+### S7.1 Process structure: the interpreter in process, the build as `nazm build` runs it
+
+| command | what runs | in process | children |
+| --- | --- | --- | --- |
+| `run FILE` | the front end, the build, the program | the front end and the driver (S4.1) | the pipeline and the generator as stages (S4.2), the platform's `clang`, then **the program** |
+| `run --interpret FILE` | the front end, then the interpreter | both | none |
+| `repl` | per line: the front end over the session text, then the interpreter | both | none |
+| `comptime FILE F` | the front end, then the interpreter on one function | both | none |
+| `test PATHS` | per case: two legs | discovery only | `nazm run --interpret …`, and `nazm build …` + the executable, as the reference |
+
+**The interpreter is a module of `nazm`, not a stage.** `repl` and `comptime` need it in process
+(a REPL line is milliseconds of work; a stage per line would cost a process and a Core IR file per
+line), and `run --interpret` then shares the path. It is bounded by the `nazm` process's own
+counted heap (2 GiB in the development builds; the released `nazm` is built without a limit, as the
+Rust one has none — slice 18 builds it so), so it needs no admission of its own. The `interp`
+program stays (the self-build compares it with the seed's `run --interpret`); both are one code
+path:
+
+- **`toolchain/interp/entry.nz`** (new): `report`, `refused`, `show`, `memory_line` and the result
+  handling move here from `toolchain/interp/main.nz`, made `pub`; `interp/main.nz` keeps only its
+  argument parsing and calls them. Added: `pub fn interp_run(doc: Str, root: Str, std: Str, limits:
+  Limits, args: Strs, json: Bool, reports: Reports, caps: Caps) -> Int` — load the Core IR document
+  (`load`), make the VM (`vm_new`), `run_program`, and write the outcome exactly as `interp/main.nz`
+  does today, returning the status (never `exit_with` inside); and `pub fn interp_constant(doc,
+  root, std, limits, fid) -> Result[Str, Str]` (S7.4).
+- **`toolchain/commands/interpret.nz`** (new): the only module of `toolchain/commands/` that imports
+  `toolchain/interp/`. It never imports `compiler/syntax.nz` or `compiler/lex.nz` directly (`Prog`
+  and `fail` are exported on both sides: `N0207`); it receives the Core IR document as a `Str` from
+  `front.nz`'s functions. `run.nz` and `live.nz` (`repl`, `comptime`) import it.
+- **The document is the seam.** The front end prints the document in process
+  (`fx_core_document_with_sources`) and the interpreter `load`s that text — the path the self-build
+  already compares. Building `Prog` from the facts directly is not done: it would be a second loader
+  with no oracle.
+- **Capabilities.** `toolchain/commands/nazm.nz`'s `main` gains `OutCap`, `TimeCap`, `NetCap` and
+  `RandomCap` (it has `IoCap`, `ProcessCap`, `SpawnCap`, `VouchCap`), passed into the interpreter's
+  `Caps`.
+- **The runtime's own reports.** The Nazm-built `nazm` is itself a Nazm program: its runtime answers
+  `NAZM_RESULT_REPORT`, `NAZM_MEMORY_REPORT` and `NAZM_SCHED_REPORT` when `main` *returns*
+  (`crates/nazm-runtime/src/entry.rs`). So every command path of `nazm.nz` ends in
+  `exit_with(status)` and `main` never returns (true today; a test holds it:
+  `NAZM_MEMORY_REPORT=1 NAZM_SCHED_REPORT=1 NAZM_RESULT_REPORT=1 nazm run --interpret F` prints the
+  interpreted program's lines only, as the Rust `nazm` does). The interpreted program's reports are
+  the interpreter's `Reports` record, which `run.nz` fills from those variables — what
+  `interp/main.nz`'s flags give it.
+
+### S7.2 `run FILE [-- ARGS]`, compiled
+
+1. **The flags** are `cli.rs`'s: `FILE`, `ARGS` after `--`, `--json`, `--interpret`,
+   `--max-iterations N` and `--max-depth N` (both `requires = "interpret"`; the reference's value
+   parsers and words: depth 0 and > 1,000,000 refused), `--locked` (accepted and ignored, as the
+   reference does), `--harness SPEC` (hidden; S7.6). `--profile` and `--features` are refused by
+   name, status 6, until slice 6 gives `build` packages; then `run` passes them on.
+2. **The build** is `build.nz`'s, called as a function: `build_command`'s body becomes `pub fn
+   bd_build(req: BuildRequest) -> Int` (`BuildRequest`: file, output, target, backend, opt level,
+   heap limit, cache on/off, harness spec, `run_mode: Bool`); `build_command` parses its flags into
+   a request and calls it. `run` calls it with: the host target; **`--backend nazm`**, the code
+   generator (the reference's `run` used Cranelift at `OPT_LEVEL 2` for compile speed; Cranelift is
+   gone by decision 3 of `rewrite-in-nazm`, and the R9 generator is the fast-to-compile backend that
+   replaces it; `--backend llvm` stays `build`'s default); no heap limit (the reference passes
+   `heap_limit: None`); the object cache on (the project store, and the user store once 4.4 lands);
+   `run_mode = true`, which is the reference's `Choice.run`: no path line, no authority line, no
+   build report, no checker warnings, and the native-only refusals (`UNSUPPORTED_CONSTRUCT`,
+   `UNBOUNDED_SPECIALISATION`, `GENERIC_INSTANCE_LIMIT`) carry `build/lower.rs`'s run help and end
+   with its `N error(s) in compiling this program. Nothing ran; …` line and status 1. A build that
+   fails returns its status unchanged; nothing runs.
+3. **Where.** The executable is `WORK/STEM` (`STEM.exe` on Windows) in `WORK = os_mkdtemp($TMPDIR
+   or /tmp)`, mode 0700, made by this call; failing that, the reference's "cannot make a working
+   directory…" words and status 4. On every path out the executable and `WORK` are removed (the
+   driver already removes its own work directory). The directory's name is not observable (the
+   reference's `nazm-run-PID`, the port's `nazm-` and twelve characters): not a difference.
+4. **Arguments, environment, streams.** The program is started with `os_spawn_with(EXE, ARGS, "",
+   ENV, 0)`: `ARGS` exactly as given after `--`; `ENV` this process's environment whole
+   (`env_vars`), so `NAZM_RESULT_REPORT` and the rest reach the program as they do through the
+   reference's inherited environment; the same process group (Ctrl-C reaches both, as with the
+   reference). The language has no spawn with inherited streams, so `run` **relays**, in three
+   tasks: this process's standard input to the child's (64 KiB reads; at end of input the child's
+   input is closed; a write the child refuses — it closed its input — ends that relay quietly); the
+   child's standard output to `os_stdout()` and its errors to `os_stderr()` with `os_write`, raw
+   bytes, each chunk as it arrives. `run` waits for the child, then for both output relays to reach
+   end of file; the input relay is abandoned (it may be blocked on a terminal; `exit_with` ends it).
+   Failing to start: "could not run the built program: …", status 4.
+5. **The status** is `compiled_run.rs`'s `passed_through`: the child's code; killed by signal `s`
+   (`os_wait` answers `256 + s`) → `128 + s`; anything else → 255. `run` ends with `exit_with` of it.
+
+### S7.3 `run --interpret`
+
+`interpret.rs` in order: the root decided (`could not read…`/`is not a directory` → 3, else 1);
+`--harness` applied when given (S7.6); the program loaded and checked by the front end in process
+(all-`MODULE_NOT_FOUND` → 3; other errors: their diagnostics, `nazm: N error(s)`, 1); the document
+printed and handed to `interp_run` with `--max-iterations`/`--max-depth` (defaults 10,000,000 and
+512), the arguments after `--`, `--json` for a failure's rendering, and the reports from the
+environment. Outcomes: a runtime failure is one diagnostic and status 2; a result is
+`end_with_result`'s (`NAZM_RESULT_REPORT` set: printed, 0; an `Int` 0–255: the status, nothing
+printed; outside: `N0416`, 2; any other value printed, 0). The `NAZM_MEMORY_REPORT` and
+`NAZM_SCHED_REPORT` lines are the interpreted program's, on standard error, after the run. The front
+end's facts are released before the VM is made (S4.2's discipline: one large structure at a time).
+
+### S7.4 `comptime FILE FUNCTION [--max-iterations N] [--max-depth N]`
+
+- **The boundary** is the reference's: one function of the **root module**, with **no parameters**
+  and declared **`! {}`** (no effect, so it cannot reach the host), evaluated whole by the
+  interpreter under the iteration and depth budgets — no time limit, no partial evaluation, nothing
+  else folded. Nothing of the file's `main` runs; the file needs none.
+- **The steps.** The file opened as `opened::opened` does (status 3 or 1 as there); the front end
+  lowers it **without an entry** (the document's `entry` is `null` and every function of the root
+  module is in it: the reference's `Entry::Absent`; the slice's first task checks that
+  `fx_core_document_with_sources` of a file without `main` keeps every root function, and if it
+  prunes from `main`, adds the entry-less mode to `compiler/core.nz` in this slice); the function
+  looked up by name among the root module's facts and refused with `N0393` and the reference's three
+  messages, label and help (absent; has parameters; not pure); then `interp_constant` with its id:
+  the VM's entry set to that function (`Prog.entry`), run with no capabilities, the value rendered
+  with the interpreter's `show` — the reference's `Display`.
+- **Output and status.** The value and a newline on standard output, 0. Every error — a refusal, a
+  check error, a runtime failure (`N0400`, `N0402`, `N0403`) — is rendered as text (never JSON) on
+  standard error with status **1, not 2**: the reference's choice, kept.
+
+### S7.5 `repl`
+
+- **What the session keeps between lines: definitions only.** An ordered list of `{name, text}` —
+  `fn`, `struct` or `enum` lines (with an optional `pub `), in first-given order; a redefinition
+  takes its predecessor's place. **No `let` bindings, no values, no imports** carry from one line to
+  the next (each expression line is a fresh program), exactly as `live.rs`.
+- **A definition line** is checked as the session text — every definition joined by `\n`, then
+  `fn main() -> Int { 0 }` — through the front end's in-memory check (`fx_check_over`, the session
+  text as the root's contents, under the name `live.rs` gives it). Defining `main` is refused with
+  the reference's sentence. On errors, a diagnostic whose span lies in another definition (by byte
+  layout: `owner`) gives "redefining `g` is refused: `f` no longer checks against it" and the
+  rendered diagnostics; the session is left unchanged. Otherwise `defined `n`` or `redefined `n``.
+- **An expression line** is tried in three wrappers in order, and the first that checks is run in
+  the interpreter with the default limits: `fn main(io: IoCap) -> Int ! { io } { EXPR }` → `= N`;
+  `… { if EXPR { 1 } else { 0 } }` → `= true`/`= false`; `… { print(EXPR); print("\n"); 0 }` → the
+  printed text and nothing else. None checks: the first wrapper's diagnostics. A runtime failure is
+  shown rendered.
+- **Commands** `:quit`/`:q`, `:reset` ("the session is empty"), `:defs`. No prompt; blank lines
+  skipped; everything — errors included — on standard output, flushed after each line; status 0 at
+  end of input or `:quit`.
+- **Memory.** Each line's front-end facts and VM are let go before the next line is read; the
+  session text is the only state. A line that drives `nazm` to its own heap limit ends the session
+  with `N0406` (status 2) in the development builds; the released `nazm` has no limit.
+
+### S7.6 `--harness SPEC` on `run` and `build`
+
+`test`'s legs pass `--harness test:NAME`, `fuzz:NAME:CASES` or `bench:NAME:N` to `run --interpret`
+and to `build` (`harness.rs`); `build.nz` refuses `--harness` today (`bd_later`). Ported as
+`toolchain/commands/harness.nz`: the spec parsed (malformed: "`--harness X` is not `test:NAME`…",
+status 5); the file's text transformed exactly as `harness::text` does (its `main` blanked with
+offsets kept, the generated `main(nz_harness_io: IoCap, nz_harness_out: OutCap…)` appended, an `Err`
+printed and `exit_with(2)`; fuzz inputs from the xorshift seeded 88172645463325252, lengths 0..64);
+the result checked through `fx_check_over` with the transformed text in memory (the file on disk is
+not rewritten), so diagnostics still name the user's file and its offsets.
+
+### S7.7 `test` whole
+
+- **The driver** is `NAZM_TEST_DRIVER` when set (the seam stays: the comparison scripts point it at
+  the reference), else **this executable**, the reference's `current_exe()`. Nazm has no
+  `current_exe`; the port resolves `arg(0)`: containing a `/`, `os_realpath` of it (relative to the
+  working directory); otherwise the first `PATH` entry holding an executable file of that name, then
+  `os_realpath`. Not found: the reference's driver-failure words, status 4. The "not carried"
+  refusal (status 6) is removed.
+- **Discovery and reporting are already the reference's** (`test.nz`, R5, byte for byte): a
+  directory's `.nz` files sorted; `NAME.nz` with `NAME.expected` a golden case; every top-level
+  `@test`/`@fuzz` function a case `STEM::fn` (`@bench` skipped); `@test(...)` with arguments expects
+  status 2; `--filter` a substring; the legs `DRIVER run --interpret [--harness SPEC] FILE` and
+  `DRIVER build [--harness SPEC] FILE -o TMP/caseI` + the executable, each with
+  `NAZM_RESULT_REPORT=1`, sequential; the text report, `nazm.test/1`, `nazm.test-summary/1`;
+  statuses 0, 1, 3, 4. This slice changes only that the legs now exist in the `nazm` under test. The
+  `@cfg` feature/package/profile refusal stays until slice 6.
+- **Under the R6 rule** `test` builds and runs programs without a heap limit, so in this repository
+  it runs only contained (the runbook already lists it), and so does `run`'s compiled leg (S7.8).
+
+### S7.8 What is compared, and the intended differences
+
+- **Comparison scripts** (`toolchain/commands/tests/interactive.sh`, contained only, as `run.sh`
+  is): over `tests/compat/v1/{run,trap,refuse,check}`, `compiler/conformance/`, `bench/programs/`,
+  the interpreter's R4 suites and the 66 self-build corpus programs, the Rust `nazm run`, `run
+  --interpret`, `comptime` (every parameterless `! {}` function of each file, and one refusal of
+  each kind per file) and `test` (each directory) against the Nazm-built one — standard output,
+  standard error, status, byte for byte; `repl` over scripted sessions
+  (`toolchain/commands/tests/repl/*.in`: definitions, redefinitions refused and accepted, the three
+  wrappers, `:defs`, `:reset`, runtime failures) against the reference. `run` is also given
+  arguments, 1 MiB of standard input, programs ending 0–255, and one killed by a signal. Agree,
+  differ, refused and skipped are counted apart.
+- **Intended differences, not counted:** (1) `run`'s native-refusal help says the program
+  "compiles, with Nazm's code generator" where the reference says "with Cranelift"; (2) the
+  runaway-recursion wording (`N0403` "at N calls" against the fixed depth), accepted in slice 1 —
+  compared by code, output and status; (3) a program whose grandchild keeps its standard output open
+  keeps `nazm run` waiting until that pipe closes (the relay), where the reference returns at the
+  child's exit; (4) a program the code generator refuses and Cranelift compiled — each listed with
+  its construct; none is expected after R9, and any found is a generator defect for slice 5's
+  backlog, not a reason to route `run` through LLVM.
+- **Host smoke** (`host-run`, one at a time): `run --interpret`, `comptime` and `repl` (single
+  processes, the interpreter inside the bounded `nazm`) over slice 1's five programs.
+
+## Slice 13 — the harness remainder in Nazm (design, 2026-10-20)
+
+R7's 6.2 and 6.3: the contained runner, `host-run`, the mutation campaign runner, `bench` and
+fuzzing, written in Nazm, so that `xtask` is needed only to build and test the seed. Question 4
+(accepted) lets this finish after the cut-over (slice 18), before the release gate (10.3).
+
+### S13.1 The programs
+
+| program | source | runs where | replaces |
+| --- | --- | --- | --- |
+| `nzx` | `toolchain/harness/nzx/main.nz` | the macOS host, started directly | `cargo xtask contained`, `cargo xtask host-run` |
+| `nazm-mutate` (extended) | `toolchain/harness/mutate/` | `session` inside the container; `plan`, `check`, `apply`, `restore`, `recover` anywhere | `xtask mutate`, `mutate-recover` (for non-seed entries) |
+| `nazm-fuzz` | `toolchain/harness/fuzz/main.nz`, `shim.c`, `targets/*.nz` | inside the container | `fuzz/run.sh`, the Rust `nazm-fuzz` |
+| `nazm-bench` | `toolchain/harness/bench/main.nz` | inside the container | `xtask bench` |
+
+`toolchain/harness/build.sh` builds the four with the checkout's `nazm` (`stage.sh`'s
+`stage_checkout_nazm`: the seed before slice 18, the Nazm-built `nazm` after) into `target/nzx/`:
+`nzx` with `--heap-limit 256M`, the others with `2G`. Inside the container a workload's first step
+builds what it runs the same way, from `/src` into `/work/nzx/`. They share `toolchain/harness/lib/`
+(`run.nz`'s bounded child, `scratch.nz`) and a new `lib/procs.nz` (S13.4's process tree).
+
+**The runners are themselves Nazm-built processes on the host** (**question 5**, below): `nzx` is
+built with a counted heap of 256 MiB and, as its first act, checks its own image exactly as
+`host-run` checks a stage (`nz.heap_malloc` present, one `N0406` limit, at most 256 MiB; refusal
+`runner-unbounded`, status 1), finding its image from `arg(0)` as S7.7 does. It holds no work of its
+own: it reads an image, starts one child, drains it into bounded buffers and waits.
+
+### S13.2 `nzx host-run` — the port of `xtask/src/host_run.rs`
+
+The runbook's contract (*What may run on the host*), byte for byte with the Rust runner: the
+arguments (`--deadline-secs` 1–3600, default 900; `--report FILE`; `--max-output-mib` 1–256, default
+4; hidden `--margin-bytes`, only tighter, ≤ 256 MiB); the admission order and the eleven refusal
+names (`not-macos`, `host-environment`, `usage`, `no-executable` — a regular executable file of at
+most 512 MiB —, `no-counted-heap`, `no-heap-limit`, `ambiguous-heap-limit`, `heap-limit-too-large`,
+`withdrawn`, `another-stage-running`, `contained-workload-running`) with `host-run: refused [NAME]:
+WHY` and status 1; the state directory (`NAZM_HOST_RUN_DIR`, else `~/.cache/nazm-host-run`); the lock
+(`os_try_lock` on `DIR/lock`, exclusive, held for the run); `docker ps -q --filter
+label=nazm.owner=nazm-contained-runner` non-empty → refused; the run (`/usr/bin/time -l -o
+DIR/time-PID.txt EXE ARGS`, standard input null, a new process group, both streams drained to the cap
+in tasks, `os_wait_until` against the deadline, then `os_kill_group(pgid, 9)`); the report line word
+for word, the Rust `Debug` spelling `exit Some(N)` included; the withdrawal conditions (peak
+unreadable unless the deadline was reached; peak > limit + margin; `error[N0406]` without status 2)
+with the marker, `WITHDRAWAL CONDITION` and status 70; statuses 124, 125, 126, otherwise the
+program's. Its tests are `xtask/tests/host_run.rs` ported to `toolchain/harness/nzx/tests/
+host_run.nz`, run against both runners (the refusals need no stage; the runs use a fixture built
+with `nazm build --heap-limit 16M`).
+
+`stage-run.sh` uses `target/nzx/nzx host-run` when it exists and `cargo xtask host-run` otherwise,
+until slice 19 removes the second.
+
+### S13.3 `nzx contained [--platform amd64] [--profile P] [--cache bench] WORKLOAD` — the port of `contained.rs`
+
+- **Workloads:** every one the Rust runner has — `probe`, `cache [list|clear]`, `tests`, `selfhost`,
+  `bootstrap`, `selfbuild [stages=N]`, `release`, `archive`, `mutate`, `bench`, `fuzz [SECONDS]
+  [TARGET…]`, `run COMMAND…` — with the same deadlines, profiles (P1, P4T4, the `p4w*` names;
+  defaults `tests`, `selfhost`, `fuzz` P4T4, the rest P1), export policies (allowlists, sizes,
+  destinations) and final line (`contained: NAME OUTCOME in Xs — stdout N B, stderr N B,
+  oom_killed=…, survivors=N`); plus `mutate-seed` (S13.4). The table is data in
+  `nzx/workloads.nz`: name, script, deadline, default profile, cache namespace, export policy.
+  `tests`, `selfhost`, `bootstrap`, `mutate-seed` and `selfbuild`'s seed step run `cargo` *inside*
+  the container: they build or test the seed, and the runner does not care what its script runs.
+  `mutate`, `fuzz` and `bench` get new scripts that build and run S13.1's programs.
+- **The `docker run` argv** is `run_argv`'s element for element: `run --rm` (or `run` with an
+  export), `--name nazm-WORKLOAD-PID`, the three labels, `--memory` and `--memory-swap` equal (4096
+  MiB default), `--cpus`, `--pids-limit 512`, `--storage-opt size=8G`, `--ulimit fsize=536870912`,
+  `--tmpfs /scratch:rw,exec,size=512m`, `--init`, `--network none`, `--log-driver none`, the
+  read-only bind of the checkout at `/src`, the optional cache volume at `/work/target`, the five
+  `--env` (`NAZM_CONTAINED=1`, `NAZM_PROFILE`, `NAZM_CARGO_JOBS`, `NAZM_TEST_THREADS`,
+  `CARGO_TARGET_DIR`), `--platform linux/amd64` when asked, the image, `sh -c "cd /src && …"`. A test
+  asserts the never-present list (`--privileged`, `--cap-add`, `--device`, `--pid`, `--ipc`,
+  `--userns`, `-v`, `--volume`, the Docker socket). `nzx contained --print-argv WORKLOAD` (hidden)
+  prints the argv one element per line; the comparison diffs it with the Rust runner's for every
+  workload and profile (an `xtask contained --print-argv` of the same shape is added to the seed's
+  runner for this, its only change).
+- **Volumes and keys:** namespaces `mutate`, `src`, `bench`; the name `nazm-verify-NS-KEY16`; the
+  key BLAKE3, length-prefixed, over `nazm.verification-cache`, the cache version `1`, the image id,
+  the image's `Config.Env`, BLAKE3 of `Cargo.lock` and of `rust-toolchain.toml`, and the profile —
+  the Rust key exactly, so both runners share the volumes during the overlap (a test computes both
+  for the same inputs). Labels, two generations per namespace, the 16 GiB emptying guard, and `cache
+  list`/`clear` touching only owner-labelled volumes: as Rust.
+- **Supervision:** refuse (`Unavailable`) with either containment variable set or `docker info`
+  failing; reap stale containers by the exact Rust rule (the owner label, the name `nazm-W-PID` with
+  the label's pid, this host — `uname -n` —, `ps -p PID` dead; nothing else, never by name alone);
+  refuse a missing image with the `docker build …` hint; start; drain both streams in tasks to the 4
+  MiB caps, counting the total; at the deadline `docker kill NAME` (the container, not the client);
+  `docker inspect -f {{.State.OOMKilled}}`; the outcome in the Rust order (Timeout; MemoryLimit — OOM
+  or 137; Passed or OutputOverflow; Failed(code)); on Passed only, the export.
+- **Export:** `docker cp NAME:SRC -` read as a tar stream by `nzx/tar.nz` (ustar: name, size,
+  typeflag, 512-byte blocks): the manifest first (≤ 4096 B; lines `name size`; names on the
+  allowlist, none twice, sizes within the policy), then each file; a symbolic link, a directory or a
+  size that disagrees with its header refused; staged under `$TMPDIR/nazm-export-NAME` and moved to
+  the destination only when every file validated. Then `docker rm -f`.
+- **Accounting** as Rust: wall-clock seconds in the final line (no timing is claimed from it), the
+  cgroup's `memory.peak` only for `tests`, survivors counted by `docker ps -aq --filter name=nazm-`.
+  Logs are printed, not stored, except the campaign journal (S13.4).
+- **New, stated:** `nzx contained` holds the host-run lock (`~/.cache/nazm-host-run/lock`) for the
+  container's life, refusing with `host-stage-running` when it cannot take it — so a host stage and
+  a container never overlap by construction (the Rust runner relies on `host-run`'s `docker ps`
+  alone), and two `nzx contained` never run at once.
+
+### S13.4 The mutation campaign runner
+
+- **Which entries.** One catalogue, `xtask/mutations/mutations.toml`. An entry whose `file` is under
+  `crates/`, `xtask/` or `fuzz/` mutates the seed: it stays the Rust campaign's (`nzx contained
+  mutate-seed`: the existing in-container `xtask mutate` session). Every other entry (`compiler/`,
+  `library/`, `toolchain/`: 238 at `84ed3a61`) is the Nazm campaign's (`nzx contained mutate`).
+- **Killers are mapped, not rewritten.** A killer `{package = "nazm-cli", test = T, name =
+  "FILE::fn"}` maps to the Nazm test `toolchain/harness/cli/FILE.nz`, function `fn`, run as `$NAZM
+  test --filter FILE::fn toolchain/harness/cli/FILE.nz` (R7 decision 1), when that file and
+  function exist and `stays-rust.txt` does not list the test. Other killers have no mapping. An
+  entry with no mapped killer is reported `unmapped` (a count, never a verdict) and is decided by the
+  full tier alone. The schema is unchanged (`plan.rs` is the seed's and rejects unknown fields); a
+  Nazm-only killer field waits for slice 19, when the Rust gate is frozen.
+- **The session** (`nazm-mutate session`, inside the container; one container is one session — the
+  warm-worker law): the tree copied to `/work/mut` (`.git`, `target/`, `.nazm/` excluded, fresh
+  modification times); the toolchain built once from the copy — the released set (`nazm`,
+  `nazm-pipeline`, `nzcg`, `nazm-mcp`) and the harness tools — with the checkout's `nazm build
+  --heap-limit 2G` into `/work/mut-bin/`; each unique mapped killer run once on the pristine tree
+  (the mutation baseline, keyed by the tree's digest, the killer and the parallelism, held for the
+  session; a failing one refuses the session); then each selected mutant in turn, bucketed by the
+  set of programs its file reaches, then first killer, then catalogue order:
+  **apply** (exactly once; the v2 backup record `nazm-mutate apply` already writes);
+  **build** — only the programs whose `use` closure holds the file (the `use "…"` lines followed
+  transitively from each program's root; a `library/` file is in every closure), rebuilt into
+  `/work/mut-bin/`; a failure is `UNUSABLE`;
+  **judge** by tiers — Direct: each mapped killer; Focused: each mapped killer's whole file; Full:
+  the whole Nazm suite (every `toolchain/harness/cli/*.nz` and the `toolchain/*/tests` suites), and
+  only Full may say `SURVIVED`;
+  **restore** and read back (digest equal, else `NOT RESTORED` and the session stops);
+  **journal**. Pass 1 decides at Tier 1; deferred mutants get the Full baseline once, then pass 2 —
+  the runbook's law, unchanged. At the end the tree must digest to what it began as. Before every
+  killer run, `.nazm/` caches under the copy are removed, except the object store, which is keyed by
+  the generator's digest and the LIR text and so cannot answer for an unmutated toolchain.
+- **Deadlines and process trees** (`lib/procs.nz`, the port of `procs.rs`): every build and test in
+  its own process group; at a deadline the tree walked by parent id (`ps -A -o pid=,ppid=`), stopped,
+  then killed (`kill -KILL -- -PGID`); after an ordinary exit the group swept; a watchdog `sh -c
+  'read _; kill -KILL -- -PGID'` in its own group, its standard input held by the session, kills the
+  group if the session dies. Build 1800 s, killer 1200, focused 1500, full 2400; the session 3000 s
+  with a 2400 s budget, incomplete as exit 3; output capped at 32 MiB a step.
+- **Verdicts:** the runbook's eight words and rules (a timeout or runner error is never a verdict
+  and never reused).
+- **Journal and resume.** Identity `{schema "nazm.mutation-campaign/2", the tree's digest, the
+  catalogue's BLAKE3, the harness digest (the `toolchain/harness/` tree), the toolchain digest
+  (BLAKE3 of the `nazm` that built the session's programs), strategy, selected names, deadlines, the
+  reset rule, parallelism, the cgroup's cpu.max}`; the key the first 16 hex characters of its
+  JSON's BLAKE3. Lines as `campaign.rs`'s (`kind` `campaign` and `mutant`, the same fields; `secs`
+  recorded, never compared), each fsynced and printed as `nazm-journal KEY JSON`; `nzx` appends them
+  to the host's `target/mutation-campaigns-nz/KEY/journal.jsonl` — never the Rust runner's
+  directory, so the two campaigns' journals cannot be confused. `--resume` reuses only an identical
+  identity and only the five semantic verdicts. Lock `target/.nazm-mutation-lock.nz`
+  (`os_try_lock`); a stranded backup refuses the session; `nazm-mutate recover --confirm-no-writers`
+  repairs, as `mutate-recover` does.
+- **`--verify-killer NAME --killer FILE::fn`** prints the pristine, mutant and restored observations
+  and the catalogue's `killers = [...]` line in the Rust shape; `--plan` is `nazm-mutate plan`
+  (already byte for byte with Rust's over the whole catalogue).
+- **Compared** (contained, once per change to the runner): the Nazm campaign and the Rust campaign
+  over the same 20 `compiler/`/`library/` entries whose killers all map (`--only`): the same verdict
+  per mutant, tier for tier — the Rust killers against the Rust tests, the mapped ones against the
+  ports.
+
+### S13.5 Fuzzing — coverage-guided (SanitizerCoverage and libFuzzer, the platform's) and differential
+
+Fuzzing stays contained only (runbook), so "the platform's `clang`" is the contained image's
+(Debian trixie, clang 19). Nothing is bundled. This needs slice 5: SanitizerCoverage is an LLVM pass,
+so only programs whose units are LLVM IR can be instrumented.
+
+- **Targets** are small Nazm programs, one per Rust target, each reading the file its one argument
+  names: `front` (`toolchain/harness/fuzz/targets/front.nz`: parse and check, `compiler/`); `lower`
+  (check, Core IR, MIR and the MIR validator: `compiler/` and `toolchain/pipeline/`); `lir` (on to
+  LIR and its validator — the Rust target's LIR interpreter has no Nazm counterpart and is not
+  carried); `run` (check, Core IR, the interpreter with a 2 s budget, through S7.1's seam);
+  `manifest` (`toolchain/commands/toml.nz`'s manifest reader). Built with `--heap-limit 2G`, so a
+  runaway allocation is `N0406`, not an out-of-memory kill.
+- **The build.** `nazm build --backend llvm --emit-units DIR` (new, **hidden**, harness-only; an
+  intended difference like the Linux triples): every program and runtime unit's LLVM IR text as
+  `NN-NAME.ll`, `link.txt` as `--objects` writes it, and `units.txt` naming the program's units.
+  `nazm-fuzz build TARGET` compiles the program's units with `clang -O1 -c
+  -fsanitize-coverage=inline-8bit-counters,pc-table`, the runtime's without; renames the runtime
+  entry object's `main` to `nz_program_main` (the image's `llvm-objcopy --redefine-sym`); and links
+  them with `shim.c` and `-fsanitize=fuzzer` (libFuzzer's `main`).
+- **The shim** (`toolchain/harness/fuzz/shim.c`, about 150 lines, the harness's, never shipped, as
+  `fuzz/cov.c` is today — **question 6**): `LLVMFuzzerTestOneInput(data, size)` writes the input to
+  a `memfd`, then **forks**. The child points standard input and output at `/dev/null` and its
+  errors at a second `memfd`, registers an `atexit` handler that copies the counters
+  (`__start___sancov_cntrs` … `__stop___sancov_cntrs`) into a `MAP_SHARED` region the parent mapped
+  before forking, and calls `nz_program_main(2, {TARGET, "/proc/self/fd/N"})`. The parent waits
+  under a deadline (2 s for `run`, 10 s otherwise; past it the child is killed and the input written
+  to `OUT/hangs/` — a hang, not a crash, as the Rust fuzzer keeps them), copies the shared counters
+  into its own, and classifies: status 0 or 1 (and for `run`, status 2 when the failure is the
+  interpreted program's) — an ordinary input; `N0406` in the errors — counted as `oom`, the input
+  kept under `OUT/oom/`; a signal, status 70, or a status-2 failure whose location is a source file of
+  the target program itself (a defect of the toolchain) — `abort()`, so libFuzzer records a crash.
+  A fork per input keeps every run a fresh program: no state, heap or exit path of the toolchain
+  has to be made re-entrant.
+- **The run** (`nazm-fuzz run SECONDS [TARGET…]`, from `nzx contained fuzz`): per target, libFuzzer
+  with `-max_total_time=SECONDS -seed=24301 -max_len=65536 -rss_limit_mb=3072 -timeout=30
+  -dict=toolchain/harness/fuzz/nazm.dict` (the language's tokens: the Rust mutator's list)
+  `-artifact_prefix=OUT/T/crashes/`, over the corpora the Rust run uses (`fuzz/corpus/T`, read-only,
+  as seeds; `examples/`, `library/`, `bench/programs/`, `crates/nazm-cli/tests/fuzz-corpus`;
+  `examples/` only for `manifest`), then `-merge=1` into `OUT/T/min/`. The report: one line per
+  target in `fuzz/src/main.rs`'s `nazm.fuzz/1` shape (`target`, `seconds`, `seed`, `execs`,
+  `guards` — the counters' length —, `covered`, `seeded`, `kept`, `hangs`, `crashes`, from
+  libFuzzer's final statistics and the shim's counts) and each crash's input; `fuzz-min.tar` and
+  `report.txt` exported as the Rust workload does; exit 1 on any crash. The minimised corpora become
+  `toolchain/harness/fuzz/corpus/T/` only by a person's commit.
+- **Differential** (`nazm-fuzz diff COUNT SEED`): R7's generator (`toolchain/harness/cli/
+  fuzz_diff.nz`'s xorshift and draws) moved to `toolchain/harness/lib/gen.nz` and shared; each
+  generated program run by `nazm run --interpret`, `nazm build` at `--opt-level 0` and `2`, and
+  `--backend nazm` — four legs (the Rust test's Cranelift and LIR-interpreter legs go with the seed)
+  — standard output, errors and status compared; a disagreement written as `OUT/diff/N.nz` with the
+  four outcomes, exit 1. `nzx contained fuzz` runs it after the coverage targets, over `SECONDS × 2`
+  programs.
+- **First, a probe** (the fuzz part's first task): in the image, `clang -fsanitize=fuzzer` links a C
+  file, and `clang -c -fsanitize-coverage=inline-8bit-counters,pc-table` of a `.ll` emits
+  `__sancov_cntrs`. If libFuzzer's archive is missing, `docker/contained.Dockerfile` adds Debian's
+  `libclang-rt-19-dev` (the platform's package) — a harness change, so the lifecycle suite
+  `gate-plan` names for `docker/` runs.
+
+### S13.6 `bench`
+
+`nazm-bench` ports `xtask/src/bench.rs`: the refusal before anything is read unless contained
+(`NAZM_CONTAINED=1` and a numeric `memory.max`); `bench/programs/*.nz` checked against their
+`.expected` first; the stages (check, build `-O0`, build `-O2`, `run --interpret`, the native `-O2`
+executable) and the self-compile, against the `nazm` the workload names (the Nazm-built one after
+slice 18); the references where present (`bench/reference/`) and recorded absent otherwise; min,
+median, p90, max and MAD over `--runs N` (5), native sizes, peak resident memory once per program
+(`os_child_rusage`); `record.json` in `nazm.bench/2`, field for field; `--save` to `baseline.json`
+or `baseline-SLUG.json`; `--check` on the same host only, a regression past both 25 % and 5 ms.
+Time is read with the language's monotonic clock at the finest unit it offers; the slice adds
+nothing to the language for it. **Verified without timing** (the agent rule; the quiet window
+measures): a record's schema validated, the expected-output check, and `--check`'s verdicts over
+fixed pairs of records equal to the Rust function's on the same pairs.
+
+### S13.7 What `xtask` keeps
+
+After slice 13, `xtask` is the seed's: `check`'s eight Rust-architecture gates (one resolver, Core IR
+boundary, span identity, sema purity, cache soundness, native identity, object cache, runtime
+parity — the other 16 are `nazm-check`'s), `workspace-tests`, `notices`, `evidence`, `gate-plan`,
+`guide`, `check-mutations`, the in-container `mutate` session and `mutate-recover` for the seed's
+entries, and the `lint` alias. `contained` and `host-run` stay in `xtask`, unchanged but for
+`--print-argv`, until slice 19, so the runbook's commands keep working during the overlap; slice 19
+removes them and slice 20 names `nzx` in the runbook (the drafts of those runbook changes are this
+slice's last task).
+
+### S13.8 Order inside the slice
+
+1. `nzx host-run` (the smallest; every later host step uses it) and its ported tests.
+2. `nzx contained`: argv, keys, supervision, export, reaping; compared by `--print-argv` and the key;
+   then `nzx contained probe` passes (0 mismatches, 0 survivors) and `nzx contained selfbuild`
+   passes, which exercises a long workload end to end.
+3. The campaign runner (`nazm-mutate session`), compared as S13.4 says.
+4. The fuzz probe, the targets, `--emit-units`, the shim, the run; then the differential mode.
+5. `bench` (last: it is verified without measuring).
+6. The runbook drafts for slices 19 and 20.
+
+## Slice 16 — the fixpoint on macOS (design, 2026-10-20)
+
+Question 2, accepted: a **serial host self-build** — every step one `host-run` (2 GiB, one at a
+time, the withdrawal conditions as now), the stage loop outside the runner; aarch64 natively, then
+x86_64 under Rosetta. Depends on slice 5 (the default backend), slice 15 (the chain on Linux) and,
+for the release configuration, slice 18's build flags.
+
+### S16.1 The stage loop: `toolchain/selfbuild/host-selfbuild.sh ARCH OUT`
+
+A new script beside `selfbuild.sh` (which stays the contained Linux one; the two share only the
+program list, moved to `toolchain/selfbuild/programs.txt`). It sources `stage.sh` in host mode and
+refuses unless: `uname -s` is Darwin; neither containment variable is set; no container carries the
+runner's label; there is no withdrawal marker; `ARCH` is `aarch64` or `x86_64`; and for `x86_64`
+Rosetta answers (`arch -x86_64 /usr/bin/true`, else `no-rosetta`). **It runs no Nazm-built program
+itself:** every such step is one `host-run` (`stage-run.sh`, its report appended to
+`OUT/peaks.txt`), strictly one after another, with a deadline of 1800 s for a build and 900 s
+otherwise. A refusal, or status 70, from any step stops the loop: the run has **failed**, never
+skipped, and any withdrawal marker is left for a person.
+
+| stage | built by | builds, into `OUT/stageS/` |
+| --- | --- | --- |
+| 0 | the seed, the Rust `nazm build` (not a Nazm program: run directly) | `nazm`, `pl`, `cg` for the target |
+| 1, 2, 3 | `OUT/stage(S−1)/nazm build`, one `host-run` per program | the nine programs of `programs.txt` |
+
+Every build is `NAZM_LIBRARY=$root/library NAZM_PIPELINE=$B/pl NAZM_NZCG=$B/cg $B/nazm build
+--no-cache --heap-limit 2G --target T SRC -o OUT/stageS/NAME`, in the **release configuration**
+slice 18 builds the released binaries with (the default LLVM backend and `--release`: canaries, PIE,
+strip, the ad hoc signature): the fixpoint is of what ships. `SELFBUILD_BACKEND=nazm` runs the same
+loop with `--backend nazm` (the Linux self-build's configuration) as a second, optional run. That is
+27 builds per architecture, each a driver and one stage at a time (S4.2), the largest 1.5 GB on
+Linux.
+
+### S16.2 What is compared, byte for byte
+
+1. **The fixpoint:** stage 1 against 2 and 2 against 3, every executable whole (`cmp`), signature and
+   load commands included. Nothing is normalised before comparing: a difference is a failure. On a
+   difference the script localises it for the report only — `otool -l` of both, `codesign -d
+   -vvv`, `dwarfdump --uuid`, and `cmp` again of copies with the signature removed (`codesign
+   --remove-signature`) — and the run still fails.
+2. **Core IR against the seed:** the last stage's `fe --coredoc-sources` (one `host-run` each)
+   against the seed's `nazm core-ir --with-sources`, nine documents.
+3. **Behaviour against the seed:** the 66 corpus programs built by the last stage's `nazm build` and
+   by the seed's, **both with `--heap-limit 256M`** (on the host every Nazm-built program needs a
+   counted heap to be run); each executable run through `host-run` (deadline 60 s); output, errors
+   and status equal. A program that never allocates links no counted heap and `host-run` refuses
+   it: it is counted as `not run on the host (no counted heap)`, by name, never as agreeing — the
+   contained Linux self-build is its evidence.
+4. **The interpreter** (`interp`, one `host-run` each) against the seed's `run --interpret` (the Rust
+   `nazm`, run directly) over the same corpus, with slice 1's `N0403` rule; **`nazm-check`** once.
+5. **The bound on macOS:** the last stage's `fe` rebuilt with `--heap-limit 256M` and run on
+   `toolchain/commands/nazm.nz`: `N0406` and status 2, its peak recorded — the first measurement of
+   the counted heap under the macOS allocator, which the R6 caveat asked for.
+6. **Memory:** `peaks.txt`, `host-run`'s lines (bytes on macOS, not `selfbuild.sh`'s KiB), summed
+   per program and stage in MiB. No time is taken or reported.
+
+### S16.3 Mach-O determinism
+
+What could make two stages differ although their inputs agree, and what holds each still:
+
+- **`LC_UUID`.** ld64 derives it from the output's content; with `ZERO_AR_DATE=1` (both drivers set
+  it) no time enters it (N46; `bootstrap.md` records the runnable binaries identical). Kept: the
+  link's environment is `PASSED` plus `ZERO_AR_DATE=1`. No `-no_uuid`: a binary without `LC_UUID`
+  does not load, so it cannot be what ships.
+- **The ad hoc signature.** The linker's on arm64, and `codesign --sign -` under `--release`: a code
+  directory of page hashes and the identifier — the file's basename — with no time (an ad hoc
+  signature carries no CMS blob and no timestamp). Kept: the same basename in every stage directory
+  (`OUT/stageS/NAME`), and the link done in the work directory under that basename (S4.4).
+- **Timestamps.** Neither the generator's objects (`macho.nz`: none) nor ld64's executables carry
+  one; archives would (`ZERO_AR_DATE`), and none is made.
+- **Paths.** The driver's work directory holds the process id. A debug map (`N_OSO`) would carry it;
+  the release configuration builds without `--debug`, so the objects carry no DWARF and the
+  executable no debug map. A `--debug` fixpoint is not attempted. A ThinLTO cache, if slice 5
+  carries `-Wl,-cache_path_lto`, is off under `--no-cache`.
+- **Linker and SDK.** `LC_BUILD_VERSION`'s `minos` and `sdk` follow `SDKROOT` and
+  `MACOSX_DEPLOYMENT_TARGET` (measured: the SDK moved `minos`), and ld64 may record its own version.
+  The script pins both once (`SDKROOT=$(xcrun --show-sdk-path)`; `MACOSX_DEPLOYMENT_TARGET` the value
+  slice 18's release path pins, until then `11.0`, the generator's own `minos`) for every step, and
+  writes `OUT/environment.txt`: `sw_vers`, `xcrun --show-sdk-version`, `clang --version`, `ld -v`,
+  `uname -m`, the Rosetta answer. **The fixpoint claims one machine and one toolchain**; nothing is
+  claimed across hosts, as `release-candidate.sh`'s provenance already says.
+
+### S16.4 x86_64 under Rosetta
+
+- **What runs as x86_64.** Stage 0: the (arm64) seed builds `nazm`, `pl`, `cg` with `--target
+  x86_64-apple-darwin`. Stages 1–3: those x86_64 executables run under Rosetta — `host-run` (arm64)
+  starts `/usr/bin/time`, which executes the x86_64 image, which the kernel hands to Rosetta — and
+  each builds the next stage with `--target x86_64-apple-darwin` named explicitly (S16.1's command
+  line), so the triple never depends on which architecture a child process runs as.
+- **The `xcrun` hazard** (`scripts/clean-install-test.sh`): a translated process that starts the
+  `/usr/bin/clang` shim makes it an x86_64 process, and the Command Line Tools' `libxcrun` on Apple
+  silicon is arm64 only. The script puts the real compiler first —
+  `PATH=$(dirname "$(xcrun --find clang)"):/usr/bin:/bin` — and exports `SDKROOT` before any step,
+  and probes once, from an x86_64 process, that `clang -target x86_64-apple-darwin
+  -print-target-triple` answers (`arch -x86_64 sh -c …`), else refuses with `rosetta-clang`.
+- **Memory under Rosetta.** `/usr/bin/time -l` reports the translated process's resident set, which
+  includes Rosetta's own; the withdrawal margin (256 MiB over the limit) is unchanged. A run that
+  crosses it is a withdrawal to investigate, never a reason to raise the margin.
+- **Order.** aarch64 first; x86_64 only after it has passed; never both at once (the host-run lock
+  makes that so). The two fixpoints are separate claims; aarch64 and x86_64 executables are never
+  compared with each other.
+
+### S16.5 The runbook amendment (draft; applied when slice 16 lands, not before)
+
+> ### The macOS self-build: serial host steps — R8 slice 16 (decided 2026-10-20)
+>
+> *Decided by the copyright holder on 2026-10-20 (`openspec/changes/r8-cut-over/`, question 2), as an
+> extension of the rule above.*
+>
+> The self-build on macOS (`toolchain/selfbuild/host-selfbuild.sh aarch64|x86_64 OUT`) runs on the
+> host as a **series of single steps**: every program written in Nazm that it builds or runs is
+> started by one `host-run`, under the conditions of *What may run on the host*, one after another.
+> The script itself is a shell loop: it starts no Nazm-built program except through `host-run`, runs
+> nothing in parallel, and stops at the first refusal or withdrawal. A step is a `nazm build` (the
+> waiting driver and one checked stage at a time, as accepted for slice 4), a front end, an
+> interpreter, `nazm-check`, or a corpus program built with `--heap-limit`. A program that links no
+> counted heap is not run on the host; the contained self-build is its evidence.
+>
+> x86_64 runs under Rosetta, only after aarch64 has passed and never beside it; its peaks are read as
+> `host-run` reads every peak, with the same 256 MiB margin.
+>
+> The withdrawal conditions are unchanged. A withdrawal during the self-build stops it, leaves the
+> marker, and puts the macOS self-build back to *not run* until a person has investigated; the Linux
+> self-build stays `cargo xtask contained selfbuild`.
+>
+> **Still contained only:** the Linux self-build, and everything listed above. The macOS self-build is
+> not a workload of the contained runner and never runs beside one.
+
+## Open questions — slices 7, 13 and 16 (for the copyright holder)
+
+Direction-level only; every other choice in the three designs above is made on the recommendation of
+2026-10-20 (detail-level choices are delegated).
+
+5. **The Nazm runners on the host (slice 13).** `nzx host-run` and `nzx contained` are themselves
+   programs written in Nazm. While `nzx host-run` waits on a stage, two Nazm-built processes exist;
+   on a `nazm build`, three (the runner, the waiting driver, the stage); and `nzx contained` waits on
+   the Docker client for up to an hour. No runner can be admitted by another. **Recommended:** accept
+   them as slice 4's waiting-driver reading extended one level — each runner built with a counted
+   heap of at most 256 MiB, checking its own image at start (refused otherwise), holding the
+   host-run lock for its whole run, holding no work but bounded drains — and record it in the
+   runbook with S13.7's change. Their own peak is not measured from outside (nothing else on the
+   host is there to do it); the counted heap is their bound. **The alternative** keeps `host-run` and
+   the contained launcher in Rust (`xtask`) after the cut-over, frozen with the seed: the harness is
+   then in Nazm except its two outermost runners.
+6. **One C file in the harness (slice 13).** In-process libFuzzer needs `LLVMFuzzerTestOneInput`, a C
+   function of a pointer and a length; Nazm exports only effect-free functions of numbers (`pub
+   extern "C"`), so a harness-only `shim.c` (about 150 lines, compiled by the platform's `clang`,
+   never shipped — as `fuzz/cov.c` is today) forks and runs the target per input. **Recommended:**
+   accept it as within `rewrite-in-nazm` decision 1's "harness in Nazm", as the runtime's units are
+   LLVM IR text compiled by the platform's `clang`. **The alternative** is a language extension (an
+   exported function taking `Bytes`): a constitution change made for a test tool.
