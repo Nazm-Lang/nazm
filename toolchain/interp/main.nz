@@ -13,12 +13,7 @@
 // about itself (`crates/nazm-runtime/src/core.rs`). Whoever runs it — the suite now, `nazm run` at
 // R5 — reads the variables and passes the flags (`design.md`, *Requests*).
 
-use "types.nz"
-use "load.nz"
-use "vm.nz"
-use "heap.nz"
-use "diag.nz"
-use "sched.nz"
+use "entry.nz"
 
 fn usage(out: OutCap) -> Int {
     eprint("usage: interp [--json] [--std DIR] [--max-iterations N] [--max-depth N] [--memory-report] [--sched-report] [--result-report] CORE_IR.json ROOT.nz [-- ARGS...]\n")
@@ -33,131 +28,6 @@ fn parse_int(s: Str) -> Int {
         n = n * 10 + (b - 48)
     }
     if str_len(s) == 0 { 0 - 1 } else { n }
-}
-
-/// The directory part of `path`, with its `/`, or `""`.
-fn dir_of(path: Str) -> Str {
-    let mut i = str_len(path) - 1
-    while i >= 0 {
-        if str_byte(path, i) == 47 { return str_slice(path, 0, i + 1) }
-        i -= 1
-    }
-    ""
-}
-
-/// The module a definition key names: what precedes its `::`.
-fn module_of(key: Str) -> Str {
-    for i in 0..str_len(key) - 1 {
-        if str_byte(key, i) == 58 && str_byte(key, i + 1) == 58 { return str_slice(key, 0, i) }
-    }
-    key
-}
-
-/// The failure, as `nazm run` writes it.
-/// The failure, as `nazm run` writes it: rendered, or with `--json` one `nazm.diagnostic/1` line.
-///
-/// The root module is the file as the user named it; another of the program's modules is its key
-/// beside the root; a library module (`@std/seq`) is its key with `.nz`, read from `std` — the
-/// library the Rust toolchain embeds.
-fn report(out: OutCap, io: IoCap, p: Prog, vm: Vm, root: Str, std: Str, json: Bool) {
-    let m = ints_get(vm.errat, 0)
-    let key = if m >= 0 { strs_get(p.mods, m) } else { "" }
-    let root_key = module_of(strs_get(p.fkey, p.entry))
-    let file = display(key, root_key, root)
-    let text = source(io, key, root_key, root, std)
-    let lo = ints_get(vm.errat, 1)
-    let hi = ints_get(vm.errat, 2)
-    if json {
-        // Offsets into the concatenation of every file, as `SourceMap::global` gives them: the
-        // files in the order they were loaded, which is the order the Core IR's functions first
-        // name their modules in — a module with no function is not counted (`design.md`).
-        let mut base = 0
-        for i in 0..strs_len(p.morder) {
-            let k = strs_get(p.morder, i)
-            if k == key { break }
-            base += str_len(source(io, k, root_key, root, std))
-        }
-        eprint(render_json(strs_get(vm.err, 0), strs_get(vm.err, 1), strs_get(vm.err, 2), base + lo, base + hi) + "\n")
-    } else {
-        eprint(render(strs_get(vm.err, 0), strs_get(vm.err, 1), strs_get(vm.err, 2), file, text, lo, hi))
-    }
-}
-
-/// What the program is refused for before it starts (`Prog.refusal`), rendered as `report` renders a
-/// failure. A span given by a name is that name's first occurrence from the span's start.
-fn refused(out: OutCap, io: IoCap, p: Prog, root: Str, std: Str, json: Bool) {
-    let r = p.refusal
-    let m = ints_get(p.refat, 1)
-    let key = if m >= 0 { strs_get(p.mods, m) } else { "" }
-    let root_key = module_of(strs_get(p.fkey, p.entry))
-    let text = source(io, key, root_key, root, std)
-    let mut lo = ints_get(p.refat, 2)
-    let mut hi = ints_get(p.refat, 3)
-    let find = strs_get(r, 4)
-    if find != "" {
-        let n = str_len(find)
-        let mut i = lo
-        while i + n <= str_len(text) {
-            if str_slice(text, i, i + n) == find {
-                lo = i
-                hi = i + n
-                break
-            }
-            i += 1
-        }
-    }
-    if json {
-        let mut base = 0
-        for i in 0..strs_len(p.morder) {
-            let k = strs_get(p.morder, i)
-            if k == key { break }
-            base += str_len(source(io, k, root_key, root, std))
-        }
-        eprint(render_json_labelled(strs_get(r, 0), strs_get(r, 1), strs_get(r, 2), strs_get(r, 3), base + lo, base + hi) + "\n")
-    } else {
-        eprint(render_labelled(strs_get(r, 0), strs_get(r, 1), strs_get(r, 2), strs_get(r, 3),
-                display(key, root_key, root), text, lo, hi))
-    }
-}
-
-/// The name a module's file goes by: the root as the user named it, another of the program's
-/// modules its key beside the root, a library module (`@std/seq`) its key with `.nz`.
-fn display(key: Str, root_key: Str, root: Str) -> Str {
-    if key == root_key { root } else if str_len(key) > 0 && str_byte(key, 0) == 64 { key + ".nz" } else { dir_of(root) + key }
-}
-
-/// A module's text: a library module's from `std`, the library the Rust toolchain embeds.
-fn source(io: IoCap, key: Str, root_key: Str, root: Str, std: Str) -> Str {
-    let path = if str_len(key) > 0 && str_byte(key, 0) == 64 {
-        std + "/" + str_slice(key, 1, str_len(key)) + ".nz"
-    } else {
-        display(key, root_key, root)
-    }
-    if file_exists(path) { read_file(path) } else { "" }
-}
-
-/// The memory report's line (`interpret.rs`): allocated, reclaimed and live per class.
-fn memory_line(out: OutCap, h: Heap) {
-    let c = h.counts
-    let names = ["sequences", "strings", "channels", "closures"]
-    let mut line = "nazm-memory:"
-    for k in 0..4 {
-        let a = ints_get(c, 2 * k)
-        let r = ints_get(c, 2 * k + 1)
-        let live = a - r
-        line = line + f" {names[k]} allocated={a} reclaimed={r} live={live}"
-    }
-    eprint(line + "\n")
-}
-
-/// `main`'s value, as `nazm run` ends with it (`interpret.rs`, `end_with_result`).
-fn show(v: V) -> Str {
-    match v {
-        V.Int(v: x) => int_to_str(x),
-        V.Bool(v: b) => if b { "true" } else { "false" },
-        V.Str(s: s, obj: o, start: st) => s,
-        _ => "value",
-    }
 }
 
 fn main(out: OutCap, io: IoCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap) -> Int {
@@ -202,66 +72,6 @@ fn main(out: OutCap, io: IoCap, time: TimeCap, net: NetCap, proc: ProcessCap, rn
     }
     if strs_len(positional) != 2 || max_iterations < 0 || max_depth < 0 { return usage(out) }
     let root = strs_get(positional, 1)
-    let p = match load(read_file(strs_get(positional, 0))) {
-        Ok(p) => p,
-        Err(e) => {
-            eprint(f"interp: {e}\n")
-            return 70
-        },
-    }
-    if p.entry < 0 {
-        eprint("error[N0201]: this program has no `main` function\n")
-        return 2
-    }
-    let vm = vm_new(heap_new(), max_iterations, max_depth, program_args)
-    if ints_get(p.refat, 0) < 99 {
-        // Refused before it starts (`nazm_core::pipeline`): the reports, with nothing counted,
-        // the diagnostic and the count, and the check's status (`interpret.rs`).
-        if memory { memory_line(out, vm.heap) }
-        if sched_report { eprint("nazm-sched: spawned=0 joined=0 selects=0 timeouts=0\n") }
-        refused(out, io, p, root, std, json)
-        eprint("nazm: 1 error\n")
-        return 1
-    }
-    let caps = Caps(out: out, io: io, time: time, net: net, proc: proc, rnd: rnd)
-    let ran = run_program(p, vm, caps)
-    if ran == 2 {
-        // The Rust interpreter's threads would wait for ever here; this one says so (`design.md`,
-        // open question 1).
-        eprint("interp: every task is waiting and none can proceed\n")
-        return 70
-    }
-    if memory {
-        memory_line(out, vm.heap)
-    }
-    if sched_report {
-        let c = vm.heap.sched
-        let spawned = ints_get(c, SC_SPAWNED)
-        let joined = ints_get(c, SC_JOINED)
-        let selects = ints_get(c, SC_SELECTS)
-        let timeouts = ints_get(c, SC_TIMEOUTS)
-        eprint(f"nazm-sched: spawned={spawned} joined={joined} selects={selects} timeouts={timeouts}\n")
-    }
-    let result = if vec_len(vm.res) > 0 { vec_get(vm.res, 0) } else { V.Unset }
-    if failed(vm) {
-        report(out, io, p, vm, root, std, json)
-        return 2
-    }
-    if result_report {
-        println(show(result))
-        return 0
-    }
-    match result {
-        V.Int(v: x) => {
-            if x < 0 || x > 255 {
-                eprint("error[N0416]: `main`'s result is an exit status, and this one is outside 0 to 255\n")
-                return 2
-            }
-            x
-        },
-        other => {
-            println(show(other))
-            0
-        },
-    }
+    interp_run(read_file(strs_get(positional, 0)), root, std, "", false, max_iterations, max_depth, program_args, json,
+            memory, sched_report, result_report, out, io, time, net, proc, rnd)
 }

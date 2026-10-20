@@ -1,0 +1,273 @@
+// The interpreter as a module (R8 slice 7, `openspec/changes/r8-cut-over/design.md`, S7.1): what
+// `interp/main.nz` ran as a program, made callable, so `nazm run --interpret`, `nazm comptime` and
+// `nazm repl` (`toolchain/commands/interpret.nz`) run it in their own process, and the `interp`
+// program (which the self-build compares with the seed's `run --interpret`) is one path with them.
+//
+// Nothing here ends the process: every function answers, and the caller writes what it answers.
+
+use "types.nz"
+use "load.nz"
+use "vm.nz"
+use "heap.nz"
+use "diag.nz"
+use "sched.nz"
+use "@std/hash"
+use "@std/hashmap"
+
+/// What a run of a Core IR document came to. `kind`: 0 a value (`value`
+/// its text; `is_int` says `code` is `main`'s `Int`), 1 refused before it started, 2 failed at run time (`diag` the rendered failure),
+/// 3 not loadable (`diag` says why; status 70), 4 every task waiting (status 70), 5 no `main`.
+pub struct IeRun {
+    kind: Int,
+    is_int: Bool,
+    code: Int,
+    value: Str,
+    diag: Str,
+    memory: Str,
+    sched: Str,
+}
+
+fn nl() -> Str { str_from_byte(10) }
+
+/// The directory part of `path`, with its `/`, or `""`.
+fn dir_of(path: Str) -> Str {
+    let mut i = str_len(path) - 1
+    while i >= 0 {
+        if str_byte(path, i) == 47 { return str_slice(path, 0, i + 1) }
+        i -= 1
+    }
+    ""
+}
+
+/// The module a definition key names: what precedes its `::`.
+fn module_of(key: Str) -> Str {
+    for i in 0..str_len(key) - 1 {
+        if str_byte(key, i) == 58 && str_byte(key, i + 1) == 58 { return str_slice(key, 0, i) }
+    }
+    key
+}
+
+/// The name a module's file goes by: the root as the user named it, another of the program's
+/// modules its key beside the root, a library module (`@std/seq`) its key with `.nz`.
+fn display(key: Str, root_key: Str, root: Str) -> Str {
+    if key == root_key { root } else if str_len(key) > 0 && str_byte(key, 0) == 64 { key + ".nz" } else { dir_of(root) + key }
+}
+
+/// A module's text: the root's own when `over` stands in for it (a harness's text, a session's), a
+/// library module's from `std`, any other read from its file.
+fn source(io: IoCap, key: Str, root_key: Str, root: Str, std: Str, over: Str, has_over: Bool) -> Str {
+    if has_over && key == root_key { return over }
+    let path = if str_len(key) > 0 && str_byte(key, 0) == 64 {
+        std + "/" + str_slice(key, 1, str_len(key)) + ".nz"
+    } else {
+        display(key, root_key, root)
+    }
+    if file_exists(path) { read_file(path) } else { "" }
+}
+
+/// The failure, as `nazm run` writes it: rendered, or with `json` one `nazm.diagnostic/1` line.
+///
+/// The root module is the file as the user named it; another of the program's modules is its key
+/// beside the root; a library module (`@std/seq`) is its key with `.nz`, read from `std` — the
+/// library the toolchain carries.
+fn report(io: IoCap, p: Prog, vm: Vm, root: Str, std: Str, over: Str, has_over: Bool, json: Bool) -> Str {
+    let m = ints_get(vm.errat, 0)
+    let key = if m >= 0 { strs_get(p.mods, m) } else { "" }
+    let root_key = module_of(strs_get(p.fkey, p.entry))
+    let file = display(key, root_key, root)
+    let text = source(io, key, root_key, root, std, over, has_over)
+    let lo = ints_get(vm.errat, 1)
+    let hi = ints_get(vm.errat, 2)
+    if json {
+        // Offsets into the concatenation of every file, as `SourceMap::global` gives them: the
+        // files in the order they were loaded, which is the order the Core IR's functions first
+        // name their modules in — a module with no function is not counted (`design.md`).
+        let mut base = 0
+        for i in 0..strs_len(p.morder) {
+            let k = strs_get(p.morder, i)
+            if k == key { break }
+            base += str_len(source(io, k, root_key, root, std, over, has_over))
+        }
+        render_json(strs_get(vm.err, 0), strs_get(vm.err, 1), strs_get(vm.err, 2), base + lo, base + hi) + nl()
+    } else {
+        render(strs_get(vm.err, 0), strs_get(vm.err, 1), strs_get(vm.err, 2), file, text, lo, hi)
+    }
+}
+
+/// What the program is refused for before it starts (`Prog.refusal`), rendered as `report` renders a
+/// failure. A span given by a name is that name's first occurrence from the span's start.
+fn refused(io: IoCap, p: Prog, root: Str, std: Str, over: Str, has_over: Bool, json: Bool) -> Str {
+    let r = p.refusal
+    let m = ints_get(p.refat, 1)
+    let key = if m >= 0 { strs_get(p.mods, m) } else { "" }
+    let root_key = module_of(strs_get(p.fkey, p.entry))
+    let text = source(io, key, root_key, root, std, over, has_over)
+    let mut lo = ints_get(p.refat, 2)
+    let mut hi = ints_get(p.refat, 3)
+    let find = strs_get(r, 4)
+    if find != "" {
+        let n = str_len(find)
+        let mut i = lo
+        while i + n <= str_len(text) {
+            if str_slice(text, i, i + n) == find {
+                lo = i
+                hi = i + n
+                break
+            }
+            i += 1
+        }
+    }
+    if json {
+        let mut base = 0
+        for i in 0..strs_len(p.morder) {
+            let k = strs_get(p.morder, i)
+            if k == key { break }
+            base += str_len(source(io, k, root_key, root, std, over, has_over))
+        }
+        render_json_labelled(strs_get(r, 0), strs_get(r, 1), strs_get(r, 2), strs_get(r, 3), base + lo, base + hi) + nl()
+    } else {
+        render_labelled(strs_get(r, 0), strs_get(r, 1), strs_get(r, 2), strs_get(r, 3),
+                display(key, root_key, root), text, lo, hi)
+    }
+}
+
+/// The memory report's line (`interpret.rs`): allocated, reclaimed and live per class.
+fn memory_line(h: Heap) -> Str {
+    let c = h.counts
+    let names = ["sequences", "strings", "channels", "closures"]
+    let mut line = "nazm-memory:"
+    for k in 0..4 {
+        let a = ints_get(c, 2 * k)
+        let r = ints_get(c, 2 * k + 1)
+        let live = a - r
+        line = line + f" {names[k]} allocated={a} reclaimed={r} live={live}"
+    }
+    line + nl()
+}
+
+fn sched_line(h: Heap) -> Str {
+    let c = h.sched
+    let spawned = ints_get(c, SC_SPAWNED)
+    let joined = ints_get(c, SC_JOINED)
+    let selects = ints_get(c, SC_SELECTS)
+    let timeouts = ints_get(c, SC_TIMEOUTS)
+    f"nazm-sched: spawned={spawned} joined={joined} selects={selects} timeouts={timeouts}" + nl()
+}
+
+/// `main`'s value, as `nazm run` ends with it (`interpret.rs`, `end_with_result`).
+pub fn ie_show(v: V) -> Str {
+    match v {
+        V.Int(v: x) => int_to_str(x),
+        V.Bool(v: b) => if b { "true" } else { "false" },
+        V.Str(s: s, obj: o, start: st) => s,
+        _ => "value",
+    }
+}
+
+fn outcome(kind: Int, diag: Str) -> IeRun {
+    IeRun(kind: kind, is_int: false, code: 0, value: "", diag: diag, memory: "", sched: "")
+}
+
+/// Load `doc`, run its `main` with the arguments, and say what came of it. `over` stands in for the
+/// root module's file when `has_over`.
+pub fn interp_exec(doc: Str, root: Str, std: Str, over: Str, has_over: Bool, max_iterations: Int, max_depth: Int,
+        program_args: Strs, json: Bool, out: OutCap, io: IoCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap) -> IeRun {
+    let p = match load(doc) {
+        Ok(p) => p,
+        Err(e) => { return outcome(3, e) },
+    }
+    if p.entry < 0 { return outcome(5, "") }
+    let vm = vm_new(heap_new(), max_iterations, max_depth, program_args)
+    if ints_get(p.refat, 0) < 99 {
+        // Refused before it starts (`nazm_core::pipeline`): the reports, with nothing counted,
+        // the diagnostic and the count, and the check's status (`interpret.rs`).
+        return IeRun(kind: 1, is_int: false, code: 0, value: "", diag: refused(io, p, root, std, over, has_over, json),
+                memory: memory_line(vm.heap), sched: "nazm-sched: spawned=0 joined=0 selects=0 timeouts=0" + nl())
+    }
+    let caps = Caps(out: out, io: io, time: time, net: net, proc: proc, rnd: rnd)
+    let ran = run_program(p, vm, caps)
+    // The Rust interpreter's threads would wait for ever here; this one says so (`design.md`, open question 1).
+    if ran == 2 { return outcome(4, "") }
+    let memory = memory_line(vm.heap)
+    let sched = sched_line(vm.heap)
+    let result = if vec_len(vm.res) > 0 { vec_get(vm.res, 0) } else { V.Unset }
+    if failed(vm) {
+        return IeRun(kind: 2, is_int: false, code: 0, value: "", diag: report(io, p, vm, root, std, over, has_over, json), memory: memory, sched: sched)
+    }
+    let code = match result {
+        V.Int(v: x) => x,
+        _ => 0,
+    }
+    let is_int = match result {
+        V.Int(v: x) => true,
+        _ => false,
+    }
+    IeRun(kind: 0, is_int: is_int, code: code, value: ie_show(result), diag: "", memory: memory, sched: sched)
+}
+
+/// `nazm run --interpret` after the front end: the run and what it writes, as `interp/main.nz` always
+/// did; the status it ends with. The report lines are asked for by the caller, which reads the
+/// environment variables (this process's own runtime answers them about itself).
+pub fn interp_run(doc: Str, root: Str, std: Str, over: Str, has_over: Bool, max_iterations: Int, max_depth: Int,
+        program_args: Strs, json: Bool, memory: Bool, sched_report: Bool, result_report: Bool,
+        out: OutCap, io: IoCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap) -> Int {
+    let r = interp_exec(doc, root, std, over, has_over, max_iterations, max_depth, program_args, json, out, io, time, net, proc, rnd)
+    if r.kind == 3 {
+        eprint(f"interp: {r.diag}" + nl())
+        return 70
+    }
+    if r.kind == 5 {
+        eprint("error[N0201]: this program has no `main` function" + nl())
+        return 2
+    }
+    if r.kind == 4 {
+        eprint("interp: every task is waiting and none can proceed" + nl())
+        return 70
+    }
+    if memory { eprint(r.memory) }
+    if sched_report { eprint(r.sched) }
+    if r.kind == 1 {
+        eprint(r.diag)
+        eprint("nazm: 1 error" + nl())
+        return 1
+    }
+    if r.kind == 2 {
+        eprint(r.diag)
+        return 2
+    }
+    if result_report {
+        println(r.value)
+        return 0
+    }
+    if r.is_int {
+        if r.code < 0 || r.code > 255 {
+            eprint("error[N0416]: `main`'s result is an exit status, and this one is outside 0 to 255" + nl())
+            return 2
+        }
+        return r.code
+    }
+    println(r.value)
+    0
+}
+
+/// One function of no parameters run to its value, with no capability of the host held
+/// (`live.rs`, `comptime`): `def` is its Core IR key. The value shown, or the failure rendered.
+pub fn interp_constant(doc: Str, root: Str, std: Str, max_iterations: Int, max_depth: Int, def: Str,
+        out: OutCap, io: IoCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap) -> Result[Str, Str] {
+    let mut p = match load(doc) {
+        Ok(p) => p,
+        Err(e) => { return Err(f"interp: {e}") },
+    }
+    let f = match hashmap_get(p.fmap, def) {
+        Some(i) => i,
+        None => { return Err(f"interp: no function {def}") },
+    }
+    p.entry = f
+    let vm = vm_new(heap_new(), max_iterations, max_depth, strs_new())
+    let caps = Caps(out: out, io: io, time: time, net: net, proc: proc, rnd: rnd)
+    let ran = run_program(p, vm, caps)
+    if ran == 2 { return Err("interp: every task is waiting and none can proceed" + nl()) }
+    if failed(vm) { return Err(report(io, p, vm, root, std, "", false, false)) }
+    let result = if vec_len(vm.res) > 0 { vec_get(vm.res, 0) } else { V.Unset }
+    Ok(ie_show(result))
+}
