@@ -7,6 +7,7 @@
 // text drops it where the cut-over edits it (slice 18).
 
 use "cli.nz"
+use "group.nz"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -229,4 +230,33 @@ pub fn bo_size(raw: Str) -> Int {
         if b >= 48 && b <= 57 { v = v * 10 + (b - 48) }
     }
     v * unit
+}
+
+// Every option off: what the commands that are not `build` hand the helpers `build` shares.
+pub fn bo_default() -> Opts {
+    Opts(file: "", out: "", json: false, target: "", has_target: false, objects: "", has_objects: false, links: strs_new(), no_cache: false,
+            heap: 0 - 1, stack: 0 - 1, deny: false, backend: "llvm", opt: 0, emit_ir: false, debug: false, release: false, layout: "aos",
+            report: false, summary: false, timings: false, lib: false, shared: false, runtime: "", has_runtime: false, board: "", has_board: false,
+            watermark: false, harness: "", has_harness: false, features: strs_new(), locked: false, profile: "", has_profile: false,
+            provenance: "", has_provenance: false, attest: "", has_attest: false, sbom: "", has_sbom: false)
+}
+
+// The group, as `crates/nazm-cli/src/cli.rs` declares `nazm runtime`.
+pub fn runtime_group() -> Group {
+    let g = grp_new("runtime", "Build or check a runtime artifact (N82, `docs/internal/architecture.md` §7.83): the whole runtime for one target and "
+            + "profile, compiled once into `libnazmrt.a` beside a `nazm.runtime/1` manifest, which `nazm build --runtime DIR` links", "")
+    let b = cli_command("runtime build", "Compile the whole runtime for one target and profile into `OUT/libnazmrt.a`, with its manifest "
+            + "`OUT/nazm-runtime.json`", "")
+    cli_option(b, "", "target", "TRIPLE", false, "", false, "The target; the host's when absent", "")
+    cli_option(b, "", "profile", "PROFILE", false, "", false, "`hosted`, `board` or `wasm`: the target's own, which is the default", "")
+    let opt = cli_option(b, "O", "opt-level", "OPT_LEVEL", false, "2", true, "Optimisation level handed to `clang`", "")
+    cli_vkind(b, opt, 6)
+    let out = cli_option(b, "o", "out", "OUT", true, "", false, "The directory to write the archive and manifest into", "")
+    ints_set(b.required, out, 1)
+    grp_add(g, b)
+    let v = cli_command("runtime verify", "Check that the artifact in DIR is whole and fits this compiler and the target", "")
+    cli_positional(v, "DIR", true, false, true, "", "")
+    cli_option(v, "", "target", "TRIPLE", false, "", false, "The target; the host's when absent", "")
+    grp_add(g, v)
+    g
 }
