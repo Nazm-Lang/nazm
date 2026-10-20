@@ -1,0 +1,11 @@
+# `nazm capabilities`'s command lines, run from the repository's root by `tests/inspect.sh args`.
+--help
+-h
+--json
+--bogus
+--jsn
+extra
+--json extra
+--json --json
+--json=1
+(none)

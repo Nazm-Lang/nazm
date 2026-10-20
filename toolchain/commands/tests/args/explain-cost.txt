@@ -1,0 +1,12 @@
+# `nazm explain-cost`'s command lines, run from the repository's root by `tests/inspect.sh args`.
+--help
+-h
+--bogus examples/max.nz
+--jsn examples/max.nz
+-x examples/max.nz
+examples/max.nz extra
+(none)
+absent.nz
+examples/bad/assign_to_immutable.nz
+--json examples/max.nz
+examples/max.nz --json
