@@ -1,0 +1,33 @@
+@test
+fn passes() -> Result[Int, Str] {
+    Ok(1)
+}
+
+@test
+fn fails() -> Result[Int, Str] {
+    Err("it failed")
+}
+
+@test(fails)
+fn expected_to_fail() -> Result[Int, Str] {
+    Err("on purpose")
+}
+
+@test(fails)
+fn surprisingly_passes() -> Result[Int, Str] {
+    Ok(0)
+}
+
+@fuzz
+fn never_empty(input: Bytes) -> Result[Int, Str] {
+    if bytes_len(input) > 100 { Err("too long") } else { Ok(0) }
+}
+
+@fuzz
+fn short_only(input: Bytes) -> Result[Int, Str] {
+    if bytes_len(input) > 30 { Err("long input") } else { Ok(0) }
+}
+
+fn helper() -> Int {
+    7
+}
