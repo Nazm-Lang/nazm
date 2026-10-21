@@ -667,6 +667,37 @@ not rewritten), so diagnostics still name the user's file and its offsets.
 - **Host smoke** (`host-run`, one at a time): `run --interpret`, `comptime` and `repl` (single
   processes, the interpreter inside the bounded `nazm`) over slice 1's five programs.
 
+### Slice 7 — the evidence
+
+`toolchain/commands/tests/interactive.sh`, the Nazm `nazm` against the Rust one, standard output, standard error and status byte for
+byte (2026-10-21). `run --interpret`, `comptime` and the command lines on the macOS host, one `host-run` at a time, heap limit 2G;
+`repl`, compiled `run` and `test` (which need standard input or build without a heap limit) in `cargo xtask contained run`, from a
+checkout under `$HOME`, in slices of the corpus (`INTERACTIVE_SLICE=K/N`, a contained run is held to an hour).
+
+| part | agree | differ | refused | intended |
+| --- | --- | --- | --- | --- |
+| command lines (`run` 57, `comptime` 20, `repl` 7) | 84 | 0 | 0 | 0 |
+| `run --interpret` over 445 inputs, plain, `--json`, with arguments, and the three report variables | 1341 | 0 | 0 | 0 |
+| `comptime` (every function of no parameters, the budgets, and a refusal of each kind per input) | 1448 | 0 | 0 | 0 |
+| `repl` (6 scripted sessions) | 6 | 0 | 0 | 0 |
+| `run`, compiled (445 inputs; arguments, 1 MiB of input, every status, a signal) | 451 | 0 | 1 | 12 |
+| `test` (every directory of inputs in four variants, and a fixture of every kind of case) | 234 | 0 | 8 | 0 |
+
+- **Refused by name.** `run`: `compiler/conformance/refused/expanding-instances.nz` (the pipeline refuses N0358 where the Rust
+  build reports it); `test`: the `@cfg` of a feature, package or profile (R5's refusal, until slice 6 gives `test` packages).
+- **Intended differences, counted apart.** Eleven native refusals whose help says "with Nazm's code generator" where the reference says
+  "with Cranelift" (difference 1), and the failing links of two foreign-function programs (`ffi.nz`, `fail_callback.nz`), whose
+  linker lines name the working directory and the code generator's offsets while the sentence `nazm` ends with is the same.
+- **Found and fixed.** `comptime` showed a non-scalar result as `value`: the reference's `Display` (`record(7 fields)`,
+  `variant 0(1 fields)`, floats) is `ie_show`. The usage line of a missing `FILE` listed the options in declaration order after a
+  `requires` (`cli.nz`); `--` hands the next value to the `last(true)` positional (`run -- FILE` is a missing `FILE`);
+  `--max-depth`'s message names the GiB of stack `stack_for` computes (saturating at `usize::MAX`); a program ending 6 is not a
+  refusal; `--harness` reaches the compiled path.
+- **The runtime's own reports** never fire: `NAZM_MEMORY_REPORT`, `NAZM_SCHED_REPORT` and `NAZM_RESULT_REPORT` set, `run --interpret`
+  and compiled `run` print the program's lines only, as the reference does.
+- **Not done here.** The compiled leg's source-root, package and `--features` runs (slice 6's packages); the host smoke of `repl` (a
+  `host-run` has no standard input).
+
 ## Slice 13 — the harness remainder in Nazm (design, 2026-10-20)
 
 R7's 6.2 and 6.3: the contained runner, `host-run`, the mutation campaign runner, `bench` and
