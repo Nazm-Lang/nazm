@@ -15,7 +15,7 @@ deadline=$1
 shift
 case ${STAGE_MODE:-} in
     contained) exec perl -e 'alarm shift; exec @ARGV or exit 127' "$deadline" "$@" < "${STAGE_STDIN:-/dev/null}" ;;
-    host) exec "$STAGE_XTASK" host-run --deadline-secs "$deadline" --report "${STAGE_PEAKS:-/dev/null}" --max-output-mib 64 -- "$@" ;;
+    host) exec "$STAGE_XTASK" host-run --deadline-secs "$deadline" --report "${STAGE_PEAKS:-/dev/null}" --max-output-mib "${STAGE_MAX_OUTPUT_MIB:-192}" -- "$@" ;;
     *)
         echo "stage-run: STAGE_MODE is not set: source toolchain/lib/stage.sh and call stage_init" >&2
         exit 2
