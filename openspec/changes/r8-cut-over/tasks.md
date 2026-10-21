@@ -82,27 +82,19 @@
 
 ## 7. Slice 7 — the interactive tier
 - [x] 7.1 Design (Opus): `design.md`, *Slice 7*, S7.1–S7.8
-- [ ] 7.2 The interpreter as a module: `toolchain/interp/entry.nz` (`report`, `refused`, `show`,
-      `memory_line`, result handling moved from `main.nz`; `interp_run`, `interp_constant`);
-      `interp/main.nz` calls them; the self-build's interpreter comparison still agrees
-- [ ] 7.3 `toolchain/commands/interpret.nz` (the one importer of `toolchain/interp/`, no direct
-      `compiler/syntax.nz`/`lex.nz` import); `nazm.nz`'s `main` gains `OutCap`, `TimeCap`, `NetCap`,
-      `RandomCap`; a test that `nazm`'s own runtime reports never fire (S7.1)
-- [ ] 7.4 `--harness SPEC` (`toolchain/commands/harness.nz`, S7.6), accepted by `build` (removed
-      from `bd_later`) and `run`
-- [ ] 7.5 `run --interpret` (S7.3), its flags and value parsers (S7.2.1)
-- [ ] 7.6 `build.nz`: `build_command`'s body as `bd_build(BuildRequest)` with `run_mode`; compiled
-      `run` (S7.2): `--backend nazm`, no heap limit, cache on, the temporary directory, the three
-      relays, `passed_through`'s status
-- [ ] 7.7 `comptime` (S7.4): first check that the entry-less document keeps every root function
-      (else add the mode to `compiler/core.nz`); `N0393`'s three refusals; status 1 for every error
-- [ ] 7.8 `repl` (S7.5): definitions only, `owner`'s refusal, the three wrappers, `:quit`/`:q`,
-      `:reset`, `:defs`
-- [ ] 7.9 `test` without `NAZM_TEST_DRIVER`: the driver from `arg(0)` (S7.7); the status-6 refusal
-      removed
-- [ ] 7.10 `toolchain/commands/tests/interactive.sh` and `tests/repl/*.in` (contained only):
-      the comparison of S7.8 with the four intended differences counted apart; the host smoke of
-      `run --interpret`, `comptime`, `repl` through `host-run`
+- [x] 7.2 The interpreter as a module: `toolchain/interp/entry.nz` (`interp_exec`, `interp_run`, `interp_constant`, `ie_show` with the
+      reference's `Display`); `interp/main.nz` calls it
+- [x] 7.3 `toolchain/commands/interpret.nz` (the one importer of `toolchain/interp/`); `nazm.nz`'s `main` gains `OutCap`, `NetCap`,
+      `RandomCap`; the reports never fire (`interactive.sh interpret`, the report variables)
+- [x] 7.4 `--harness SPEC` (`toolchain/commands/harness.nz`), accepted by `build` and `run`
+- [x] 7.5 `run --interpret` and its flags and value parsers (`--max-depth`'s, clap's `last(true)` after `--`)
+- [x] 7.6 `bd_build(Opts)` with `run` mode; compiled `run` (`runexe.nz`): `--backend nazm`, no heap limit, cache on, run from the
+      build's own work directory, three relays, `passed_through`'s status
+- [x] 7.7 `comptime`: the entry-less document keeps every root function (no `compiler/core.nz` change needed); `N0393`'s refusals
+- [x] 7.8 `repl` (`live.nz`)
+- [x] 7.9 `test` without `NAZM_TEST_DRIVER`: the driver found by `own_path` (decisions log: `arg(0)` is not the program's name)
+- [x] 7.10 `toolchain/commands/tests/interactive.sh`, `tests/repl/*.in`, `tests/test-fixture/`, `tests/args/{run,comptime,repl}.txt`;
+      evidence in `design.md`, *Slice 7 — the evidence*
 
 ## 8. Slice 8 — the inspection commands
 - [x] 8.1 `core-ir`, `mir`, `lir`, `capabilities`, `inspect`, `obligations`, `explain-cost`,

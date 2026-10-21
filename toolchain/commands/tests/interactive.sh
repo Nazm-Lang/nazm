@@ -15,7 +15,7 @@
 # file on both sides. A case agrees when standard output, standard error and the exit status are the same bytes.
 # A status 6 from the Nazm side (what it does not carry) is counted apart, with its reason, and is never an agreement;
 # so is a build the code generator refuses and Cranelift compiled (the design's intended difference 4), listed with its
-# construct. Prints a line per case that does not agree, then one line per part: `PART: A agree, D differ, R refused`.
+# construct. A link that fails is counted as intended (the linker's lines name the working directory): `, N intended`. Prints a line per case that does not agree, then one line per part: `PART: A agree, D differ, R refused`.
 # Exit 0 only when nothing differs.
 #
 #   args       every command line of tests/args/{run,comptime,repl}.txt
@@ -68,26 +68,41 @@ PORT=${NAZM_PORT:-$OUT/bin/nazm}
 
 if [ ${#files[@]} -eq 0 ]; then
     cd "$ROOT" || exit 2
+    # The tracked programs; where there is no `git` (the contained image) every `.nz` file of the same trees.
+    tracked() {
+        if command -v git > /dev/null 2>&1; then
+            git ls-files "$@"
+        else
+            for g in "$@"; do
+                find "${g%%/\**}" -path "./$g" -o -path "$g" 2> /dev/null | grep '\.nz$'
+            done
+        fi
+    }
     while IFS= read -r f; do files+=("$f"); done < <(
         {
-            git ls-files 'examples/*.nz' 'examples/bad/*.nz' 'tests/compat/v1/*.nz' 'compiler/conformance/*.nz' \
+            tracked 'examples/*.nz' 'examples/bad/*.nz' 'tests/compat/v1/*.nz' 'compiler/conformance/*.nz' \
                 'toolchain/codegen/tests/programs/*.nz' 'crates/nazm-cli/tests/refusals/*.nz' 'crates/nazm-cli/tests/transfers/*.nz' \
                 'toolchain/frontend-tests/inputs/check/*.nz' 'toolchain/frontend-tests/inputs/modules/*.nz' 'bench/programs/*.nz'
-            if [ "${BIG:-}" = 1 ]; then git ls-files 'compiler/*.nz' 'toolchain/commands/*.nz' 'toolchain/pipeline/*.nz'; fi
+            if [ "${BIG:-}" = 1 ]; then tracked 'compiler/*.nz' 'toolchain/commands/*.nz' 'toolchain/pipeline/*.nz'; fi
         } | LC_ALL=C sort -u
     )
 fi
 
-# INTERACTIVE_SLICE=K/N: every Nth input from the Kth (a contained run is held to an hour), so the corpus goes in several.
-if [ -n "${INTERACTIVE_SLICE:-}" ]; then
+# `slice ITEM...`: with INTERACTIVE_SLICE=K/N, every Nth item from the Kth (a contained run is held to an hour, so the corpus
+# goes in several); all of them without.
+slice() {
+    if [ -z "${INTERACTIVE_SLICE:-}" ]; then
+        printf '%s\n' "$@"
+        return
+    fi
     k=${INTERACTIVE_SLICE%/*}
     n=${INTERACTIVE_SLICE#*/}
-    sel=()
-    for i in "${!files[@]}"; do
-        [ $((i % n)) -eq "$k" ] && sel+=("${files[$i]}")
+    i=0
+    for x in "$@"; do
+        [ $((i % n)) -eq "$k" ] && printf '%s\n' "$x"
+        i=$((i + 1))
     done
-    files=("${sel[@]}")
-fi
+}
 
 export NAZM_LIBRARY="$ROOT/library" NAZM_PIPELINE="$OUT/bin/nazm-pipeline" NAZM_NZCG="$OUT/bin/nzcg"
 cd "$ROOT" || exit 2
@@ -95,6 +110,7 @@ cd "$ROOT" || exit 2
 agree=0
 differ=0
 refused=0
+intended=0
 total_differ=0
 DEADLINE=${INTERACTIVE_DEADLINE:-300}
 
@@ -135,6 +151,13 @@ case_in() {
         echo "refused  $label: code generator: $(grep -m1 'code generator' "$W/got.err" | cut -c1-160)"
         return
     fi
+    # A link that fails (a foreign function with no `--link`): the linker's own lines name the working directory and the code
+    # generator's offsets, which are not the same on the two sides; the sentence `nazm` ends with, the status and the output are.
+    if [ "$rc" = 4 ] && [ "$(cat "$W/ref.status")" = 4 ] && grep -q 'linking failed' "$W/ref.err" && grep -q 'linking failed' "$W/got.err" \
+        && cmp -s "$W/ref.out" "$W/got.out" && [ "$(tail -1 "$W/ref.err")" = "$(tail -1 "$W/got.err")" ]; then
+        intended=$((intended + 1))
+        return
+    fi
     # The runaway-recursion wording is intended difference 2: compared by code, output and status.
     if grep -q 'N0403' "$W/ref.err" && grep -q 'N0403' "$W/got.err" && cmp -s "$W/ref.out" "$W/got.out" && cmp -s "$W/ref.status" "$W/got.status"; then
         agree=$((agree + 1))
@@ -142,6 +165,12 @@ case_in() {
     fi
     if cmp -s "$W/ref.out" "$W/got.out" && cmp -s "$W/ref.err" "$W/got.err" && cmp -s "$W/ref.status" "$W/got.status"; then
         agree=$((agree + 1))
+        return
+    fi
+    # Intended difference 1: a native refusal's help says "with Nazm's code generator" where the reference says "with Cranelift".
+    sed "s/compiles, with Cranelift, and falls back/compiles, with Nazm's code generator, and falls back/" "$W/ref.err" > "$W/ref.err.said"
+    if cmp -s "$W/ref.out" "$W/got.out" && cmp -s "$W/ref.err.said" "$W/got.err" && cmp -s "$W/ref.status" "$W/got.status"; then
+        intended=$((intended + 1))
         return
     fi
     differ=$((differ + 1))
@@ -162,7 +191,7 @@ case_run() {
 }
 
 report() {
-    echo "$1: $agree agree, $differ differ, $refused refused"
+    echo "$1: $agree agree, $differ differ, $refused refused$([ "$intended" -gt 0 ] && echo ", $intended intended")"
     total_differ=$((total_differ + differ))
 }
 
@@ -170,6 +199,7 @@ reset() {
     agree=0
     differ=0
     refused=0
+    intended=0
 }
 
 part_args() {
@@ -194,7 +224,7 @@ part_args() {
 
 part_interpret() {
     reset
-    for f in "${files[@]}"; do
+    for f in $(slice "${files[@]}"); do
         case_run "run --interpret $f" run --interpret "$f"
         case_run "run --interpret --json $f" run --interpret --json "$f"
         case_run "run --interpret $f -- a 'b c'" run --interpret "$f" -- a 'b c'
@@ -215,7 +245,7 @@ nullary() {
 
 part_comptime() {
     reset
-    for f in "${files[@]}"; do
+    for f in $(slice "${files[@]}"); do
         first=
         for fn in $(nullary "$f"); do
             [ -n "$first" ] || first=$fn
@@ -242,10 +272,11 @@ part_repl() {
 part_run() {
     reset
     head -c 1048576 /dev/urandom | base64 | head -c 1048576 > "$OUT/work/big.in"
-    for f in "${files[@]}"; do
+    for f in $(slice "${files[@]}"); do
         case_run "run $f" run "$f"
     done
-    # Arguments, standard input, every status and a signal.
+    # Arguments, standard input, every status and a signal: once, in the first slice.
+    case ${INTERACTIVE_SLICE:-0/1} in 0/*) ;; *) report run; return ;; esac
     cat > "$OUT/work/args.nz" <<'EOF'
 fn main(io: IoCap, out: OutCap) -> Int {
     let mut i = 0
@@ -307,7 +338,22 @@ part_test() {
     reset
     export NAZM_TEST_DRIVER=
     unset NAZM_TEST_DRIVER
-    for d in $(printf '%s\n' "${files[@]}" | xargs -n1 dirname | LC_ALL=C sort -u); do
+    # A fixture of every kind of case: a passing and a mismatched recorded output, an exit status, `@test`, `@test(fails)`, `@fuzz`,
+    # a trap, a program that does not check, and a file that is no case.
+    fx=$OUT/work/fixture
+    rm -rf "$fx"
+    case ${INTERACTIVE_SLICE:-0/1} in 0/*) ;; *) fx= ;; esac
+    if [ -n "$fx" ]; then
+        mkdir -p "$fx"
+        cp "$ROOT"/toolchain/commands/tests/test-fixture/* "$fx"/
+        for v in "" --json --summary-json "--interpret-only" "--fuzz 7" "--filter units::" "--filter ok" "--filter nothing" "--interpret-only --json --filter ::"; do
+            # shellcheck disable=SC2086
+            case_run "test $v fixture" test $v "$fx"
+            # shellcheck disable=SC2086
+            case_run "test $v fixture/units.nz" test $v "$fx/units.nz"
+        done
+    fi
+    for d in $(slice $(printf '%s\n' "${files[@]}" | xargs -n1 dirname | LC_ALL=C sort -u)); do
         case_run "test $d" test "$d"
         case_run "test --json $d" test --json "$d"
         case_run "test --summary-json $d" test --summary-json "$d"

@@ -1,0 +1,4 @@
+fn main() -> Int {
+    println("code")
+    3
+}
