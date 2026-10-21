@@ -3,7 +3,7 @@
 # against the Rust toolchain, on every input.
 #
 #   toolchain/frontend-tests/run.sh [MODE...]      MODE: tokens, tree, syntax, check, render, facts,
-#                                                  core, keys, units, refs, calls, provenance, coredigests, coresources, mir, diagids, fieldtypes (default: the first three)
+#                                                  core, keys, units, refs, calls, provenance, effects, coredigests, coresources, mir, diagids, fieldtypes (default: the first three)
 #
 # `render` compares the diagnostics' text, as `nazm check` writes them (design D4, task 4.2), and
 # `facts` what `nazm doc` reads of each compilation with what `compiler/facts.nz` answers (D24),
@@ -70,7 +70,7 @@ for mode in $modes; do
     tree) driver=tree ;;
     # Diagnostics as `nazm check --json` objects (design D4): `syntax` compares the lexer's and the
     # parser's alone, `check` every one — which needs the checker, slice by slice.
-    syntax|check|render|facts|core|keys|units|refs|calls|provenance|coredigests|coresources|mir|diagids|fieldtypes) driver=diagnose ;;
+    syntax|check|render|facts|core|keys|units|refs|calls|provenance|effects|coredigests|coresources|mir|diagids|fieldtypes) driver=diagnose ;;
     *) echo "run.sh: unknown mode $mode" >&2; exit 2 ;;
   esac
   exe="$out/bin/$driver"
@@ -177,6 +177,11 @@ for mode in $modes; do
         "$R2_REF" provenance "$R2_ROOT/$f" > "$want" 2>/dev/null || true
         "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" --provenance "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
+      effects)
+        # A function's effects (R8 slice 9): what it declares, requires and publishes, and the first reason for each effect it requires.
+        "$R2_REF" effects "$R2_ROOT/$f" > "$want" 2>/dev/null || true
+        "$R2_STAGE_RUN" "$R2_DEADLINE" "$R2_EXE" --effects "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
+        [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
       coredigests)
         # The Core IR digests of each function (R5 hand-back), as inspect reports them.
         "$R2_REF" coredigests "$R2_ROOT/$f" > "$want" 2>/dev/null || true
@@ -246,7 +251,7 @@ for mode in $modes; do
     skipped=$(find "$out/$mode" -name '*.skip' | wc -l | tr -d ' ')
     exact=$(find "$out/$mode" -name '*.exact' | wc -l | tr -d ' ')
     echo "$mode: $agree agree, $differ differ ($skipped without MIR or a whole Core IR document); of the agreements $exact are also nazm mir itself"
-  elif [ "$mode" = check ] || [ "$mode" = render ] || [ "$mode" = facts ] || [ "$mode" = refs ] || [ "$mode" = calls ] || [ "$mode" = provenance ] || [ "$mode" = coredigests ] || [ "$mode" = diagids ] || [ "$mode" = fieldtypes ]; then
+  elif [ "$mode" = check ] || [ "$mode" = render ] || [ "$mode" = facts ] || [ "$mode" = refs ] || [ "$mode" = calls ] || [ "$mode" = provenance ] || [ "$mode" = effects ] || [ "$mode" = coredigests ] || [ "$mode" = diagids ] || [ "$mode" = fieldtypes ]; then
     # The inputs the checker carries whole: no `.stop` left behind; among them, a difference is a
     # defect rather than a gap.
     carried=0; carried_ok=0

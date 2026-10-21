@@ -365,6 +365,9 @@ pub struct Ck {
     // Per function, what its body requires once its module's effects are settled
     // (`inferred_effects`), as a mask like `fneff`'s; -1 for none recorded.
     fnreq: Ints,
+    // Why each function requires each effect (`effect_reasons`), the first reason met, of every module's functions in
+    // the order they were recorded: what `analyse_effects` settled, kept for the tools (R8 slice 9).
+    fnrs: Reasons,
     // What Core IR reads of the bindings and literals (slice 5): each binding's declaration
     // (absolute; a parameter's name) and whether it is `let mut`; each literal's type, by span.
     bds: Ints,
@@ -1497,7 +1500,7 @@ fn new_ck(t: Tree) -> Ck {
             tsname: strs_new(), tsid: ints_new(), bfn: ints_new(), bty: ints_new(), bnm: strs_new(), bshr: ints_new(), sbid: ints_new(),
             fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), capat: ints_new(), fbf: ints_new(), fbc: ints_new(), fbl: ints_new(), fcf: ints_new(), fcc: ints_new(), fcl: ints_new(), clid: ints_new(), clty: ints_new(), mvar: sm_new(), mclo: sm_new(), crfn: ints_new(), crb: ints_new(), mzero: sm_new(), mtyn: sm_new(), marr: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
             stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new(), epown: ints_new(), epnm: strs_new(),
-            sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new(), fnreq: ints_new(), bds: ints_new(), bde: ints_new(),
+            sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new(), fnreq: ints_new(), fnrs: Reasons(fnid: ints_new(), effect: ints_new(), start: ints_new(), end: ints_new(), source: ints_new(), which: ints_new()), bds: ints_new(), bde: ints_new(),
             bmut: ints_new(), mlit: sm_new(), mfld: sm_new(), mfldty: sm_new(), ipend: ints_new(), rlog: ints_new(), elog: ints_new(), mvty: sm_new(), mvix: sm_new(),
             minit: sm_new(), mfini: sm_new(), mcref: sm_new(), mtrm: sm_new(), rix: rix_new(), mconst: sm_new(), uk: ints_new(), ui: ints_new(), us: strs_new(), mconv: sm_new(), cvto: ints_new(),
             cvmode: strs_new(), cvres: ints_new(), sargf: ints_new(), sargc: ints_new(), sargs: ints_new(), sret: ints_new());
@@ -11388,7 +11391,7 @@ fn analyse_effects(c: Ck, m: Int) -> Int {
     }
     // Round zero, each body's own effects; then rounds over the edges until nothing changes.
     let sets = ints_new();
-    let rs = Reasons(fnid: ints_new(), effect: ints_new(), start: ints_new(), end: ints_new(), source: ints_new(), which: ints_new());
+    let rs = c.fnrs;
     let mut n = 0;
     while n < ints_len(nodes) {
         let me = ints_get(nodes, n);
@@ -14457,6 +14460,65 @@ pub fn ck_fn_declared(c: Ck, i: Int) -> Int {
 pub fn ck_fn_required(c: Ck, i: Int) -> Int {
     if i >= ints_len(c.fnreq) { return 0 - 1; }
     ints_get(c.fnreq, i)
+}
+
+// What a caller in another module must assume of function `i` (`declared_effects`, else `assumed`): its declared set,
+// or, where it declares none, every effect the compatibility bridge covers — `foreign` too where one of its
+// parameters can carry a `ForeignCap` — as a mask.
+pub fn ck_fn_published(c: Ck, i: Int) -> Int {
+    let d = ck_fn_declared(c, i);
+    if d >= 0 { return d; }
+    if receives_foreign(c, i) { return 7; }
+    3
+}
+
+// Why function `i` requires each effect it does (`effect_reasons`): the first thing in its body that requires it,
+// in effect order. `ck_reasons(c, i)` are the reasons' numbers; each has the effect's id
+// (`ck_reason_effect`), where it is (`ck_reason_start`, `ck_reason_end`, over the whole compilation's text), what
+// it is (`ck_reason_source`: `builtin`, `spawn`, `inferred`, `declared`, `undeclared` or `indirect`) and, for the
+// first of these, the built-in's name (`ck_reason_builtin`), for the next three the callee's number
+// (`ck_reason_callee`, -1 for none).
+pub fn ck_reasons(c: Ck, i: Int) -> Ints {
+    let out = ints_new();
+    let rs = c.fnrs;
+    let mut r = 0;
+    while r < ints_len(rs.fnid) {
+        if ints_get(rs.fnid, r) == i {
+            // Kept in effect order (the reference lists them so), recorded order within an effect.
+            let mut at = ints_len(out);
+            while at > 0 && ints_get(rs.effect, ints_get(out, at - 1)) > ints_get(rs.effect, r) { at = at - 1; }
+            ints_push(out, 0);
+            let mut k = ints_len(out) - 1;
+            while k > at {
+                ints_set(out, k, ints_get(out, k - 1));
+                k = k - 1;
+            }
+            ints_set(out, at, r);
+        }
+        r = r + 1;
+    }
+    out
+}
+pub fn ck_reason_effect(c: Ck, r: Int) -> Int { ints_get(c.fnrs.effect, r) }
+pub fn ck_reason_start(c: Ck, r: Int) -> Int { ints_get(c.fnrs.start, r) }
+pub fn ck_reason_end(c: Ck, r: Int) -> Int { ints_get(c.fnrs.end, r) }
+pub fn ck_reason_source(c: Ck, r: Int) -> Str {
+    let s = ints_get(c.fnrs.source, r);
+    if s == 1 { return "builtin"; }
+    if s == 2 { return "declared"; }
+    if s == 3 { return "inferred"; }
+    if s == 4 { return "undeclared"; }
+    if s == 5 { return "indirect"; }
+    "spawn"
+}
+pub fn ck_reason_builtin(c: Ck, r: Int) -> Str {
+    if ints_get(c.fnrs.source, r) != 1 { return ""; }
+    strs_get(c.bname, ints_get(c.fnrs.which, r))
+}
+pub fn ck_reason_callee(c: Ck, r: Int) -> Int {
+    let s = ints_get(c.fnrs.source, r);
+    if s == 2 || s == 3 || s == 4 { return ints_get(c.fnrs.which, r); }
+    0 - 1
 }
 
 // A mask's effects by name, in id order, as `EffectSet::names` lists them: `io`, `spawn`,

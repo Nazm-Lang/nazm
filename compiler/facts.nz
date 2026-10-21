@@ -752,6 +752,31 @@ pub fn fx_prov_passes_on(f: Facts, i: Int) -> Ints { ck_prov_passes_on(f.c, i) }
 pub fn fx_prov_reaches(f: Facts, i: Int) -> Ints { ck_prov_reaches(f.c, i) }
 pub fn fx_prov_receives(f: Facts, i: Int, k: Int) -> Strs { ck_prov_receives(f.c, i, k) }
 
+// --- a function's effects (R8 slice 9, task 9.1; `FnDef::{declared_effects, inferred_effects, effect_reasons}`, N36) ---
+//
+// What function `i` (`ck_fn_*`'s numbering) may do, as masks (`io` 1, `spawn` 2, `foreign` 4, the effect parameter 8:
+// `fx_effects_names` writes one by name, in effect-id order): its declared set (-1 where it declares none), what its
+// body requires (-1 where none was checked: `fx_fn_required`), and what a caller in another module must assume of it
+// (`fx_fn_published`: the declared set, or every effect the compatibility bridge covers, `foreign` too where a
+// parameter can carry a `ForeignCap`). And why it requires each effect: `fx_reason_count(f, i)` reasons, `k` in
+// effect order, the first thing in its body that requires the effect. A reason has the
+// effect's id (`fx_reason_effect`), where it is (`fx_reason_start`, `fx_reason_end`, over the whole compilation's
+// text), what it is (`fx_reason_source`: `builtin`, `spawn`, `inferred`, `declared`, `undeclared` or `indirect`) and,
+// for a `builtin`, its name (`fx_reason_builtin`; "" otherwise) and, for an `inferred`, `declared` or `undeclared`
+// one, the callee's function number (`fx_reason_callee`; -1 otherwise).
+pub fn fx_fn_declared(f: Facts, i: Int) -> Int { ck_fn_declared(f.c, i) }
+pub fn fx_fn_required(f: Facts, i: Int) -> Int { ck_fn_required(f.c, i) }
+pub fn fx_fn_published(f: Facts, i: Int) -> Int { ck_fn_published(f.c, i) }
+pub fn fx_effects_names(mask: Int) -> Strs { ck_effect_names(mask) }
+pub fn fx_reason_count(f: Facts, i: Int) -> Int { ints_len(ck_reasons(f.c, i)) }
+fn reason_at(f: Facts, i: Int, k: Int) -> Int { ints_get(ck_reasons(f.c, i), k) }
+pub fn fx_reason_effect(f: Facts, i: Int, k: Int) -> Int { ck_reason_effect(f.c, reason_at(f, i, k)) }
+pub fn fx_reason_start(f: Facts, i: Int, k: Int) -> Int { ck_reason_start(f.c, reason_at(f, i, k)) }
+pub fn fx_reason_end(f: Facts, i: Int, k: Int) -> Int { ck_reason_end(f.c, reason_at(f, i, k)) }
+pub fn fx_reason_source(f: Facts, i: Int, k: Int) -> Str { ck_reason_source(f.c, reason_at(f, i, k)) }
+pub fn fx_reason_builtin(f: Facts, i: Int, k: Int) -> Str { ck_reason_builtin(f.c, reason_at(f, i, k)) }
+pub fn fx_reason_callee(f: Facts, i: Int, k: Int) -> Int { ck_reason_callee(f.c, reason_at(f, i, k)) }
+
 fn cat3(a: Str, b: Str, c: Str) -> Str { str_concat(str_concat(a, b), c) }
 
 // --- the diagnostics' identities (R5 hand-back; N30, `nazm.diagnostic-index/1`) ---------------
