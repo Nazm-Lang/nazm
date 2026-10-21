@@ -416,23 +416,46 @@ pub struct Ck {
 }
 
 // A map from a span — its two absolute ends — to an `Int`, as the reference's `HashMap<Span, _>`:
-// a chain per start, the last value put for a span the one it holds.
+// a chain per bucket of starts, the last value put for a span the one it holds. The buckets are
+// as many as the entries, not as the compilation's bytes: one slot per byte, in each of the two
+// dozen maps, was most of the checker's memory over a large program (R8 slice 7, the self-build's
+// heap). `top` is one past the greatest start put.
 pub struct Smap {
     hd: Ints,
     ks: Ints,
     ke: Ints,
     kv: Ints,
     nx: Ints,
+    top: Ints,
 }
 
-fn sm_new() -> Smap { Smap(hd: ints_new(), ks: ints_new(), ke: ints_new(), kv: ints_new(), nx: ints_new()) }
+fn sm_new() -> Smap {
+    let m = Smap(hd: ints_new(), ks: ints_new(), ke: ints_new(), kv: ints_new(), nx: ints_new(), top: ints_new());
+    ints_push(m.top, 0);
+    m
+}
+
+// The buckets made `n`, every entry chained again, the earlier put further down its chain.
+fn sm_rehash(m: Smap, n: Int) -> Int {
+    while ints_len(m.hd) > 0 { ints_pop(m.hd); }
+    while ints_len(m.hd) < n { ints_push(m.hd, 0 - 1); }
+    let mut i = 0;
+    while i < ints_len(m.ks) {
+        let b = ints_get(m.ks, i) % n;
+        ints_set(m.nx, i, ints_get(m.hd, b));
+        ints_set(m.hd, b, i);
+        i = i + 1;
+    }
+    0
+}
 
 fn sm_put(m: Smap, s: Int, e: Int, v: Int) -> Int {
     if s < 0 { return 0; }
-    while ints_len(m.hd) <= s { ints_push(m.hd, 0 - 1); }
-    let mut i = ints_get(m.hd, s);
+    if ints_len(m.hd) == 0 { sm_rehash(m, 64); }
+    let b = s % ints_len(m.hd);
+    let mut i = ints_get(m.hd, b);
     while i >= 0 {
-        if ints_get(m.ke, i) == e {
+        if ints_get(m.ks, i) == s && ints_get(m.ke, i) == e {
             ints_set(m.kv, i, v);
             return 0;
         }
@@ -441,20 +464,25 @@ fn sm_put(m: Smap, s: Int, e: Int, v: Int) -> Int {
     ints_push(m.ks, s);
     ints_push(m.ke, e);
     ints_push(m.kv, v);
-    ints_push(m.nx, ints_get(m.hd, s));
-    ints_set(m.hd, s, ints_len(m.ks) - 1);
+    ints_push(m.nx, ints_get(m.hd, b));
+    ints_set(m.hd, b, ints_len(m.ks) - 1);
+    if s + 1 > ints_get(m.top, 0) { ints_set(m.top, 0, s + 1); }
+    if ints_len(m.ks) > 2 * ints_len(m.hd) { sm_rehash(m, 4 * ints_len(m.hd)); }
     0
 }
 
 fn sm_get(m: Smap, s: Int, e: Int) -> Int {
-    if s < 0 || s >= ints_len(m.hd) { return 0 - 1; }
-    let mut i = ints_get(m.hd, s);
+    if s < 0 || s >= ints_get(m.top, 0) { return 0 - 1; }
+    let mut i = ints_get(m.hd, s % ints_len(m.hd));
     while i >= 0 {
-        if ints_get(m.ke, i) == e { return ints_get(m.kv, i); }
+        if ints_get(m.ks, i) == s && ints_get(m.ke, i) == e { return ints_get(m.kv, i); }
         i = ints_get(m.nx, i);
     }
     0 - 1
 }
+
+// One past the greatest start put: every start is below it.
+fn sm_top(m: Smap) -> Int { ints_get(m.top, 0) }
 
 // Empty a map that is used again, touching only what was put.
 fn sm_clear(m: Smap) -> Int {
@@ -463,8 +491,9 @@ fn sm_clear(m: Smap) -> Int {
         ints_pop(m.ke);
         ints_pop(m.kv);
         ints_pop(m.nx);
-        ints_set(m.hd, s, 0 - 1);
+        ints_set(m.hd, s % ints_len(m.hd), 0 - 1);
     }
+    ints_set(m.top, 0, 0);
     0
 }
 
@@ -15848,8 +15877,13 @@ fn ix_less(ds: Ints, de: Ints, kind: Ints, a: Int, b: Int) -> Bool {
 // The map's entries that begin at `s`, shortest first.
 fn ix_chain(m: Smap, s: Int) -> Ints {
     let sorted = ints_new();
-    let mut j = ints_get(m.hd, s);
+    if s < 0 || s >= sm_top(m) { return sorted; }
+    let mut j = ints_get(m.hd, s % ints_len(m.hd));
     while j >= 0 {
+        if ints_get(m.ks, j) != s {
+            j = ints_get(m.nx, j);
+            continue;
+        }
         let mut p = 0;
         while p < ints_len(sorted) && ints_get(m.ke, ints_get(sorted, p)) < ints_get(m.ke, j) { p = p + 1; }
         ints_push(sorted, 0);
@@ -16102,7 +16136,7 @@ fn ix_build(c: Ck) -> Int {
         i = i + 1;
     }
     let mut s = 0;
-    while s < ints_len(at.hd) {
+    while s < sm_top(at) {
         let chain = ix_chain(at, s);
         let mut a = 0;
         while a < ints_len(chain) {
@@ -16117,7 +16151,7 @@ fn ix_build(c: Ck) -> Int {
         s = s + 1;
     }
     s = 0;
-    while s < ints_len(at.hd) {
+    while s < sm_top(at) {
         let chain = ix_chain(at, s);
         let mut a = 0;
         while a < ints_len(chain) {
@@ -16187,7 +16221,7 @@ fn ix_build(c: Ck) -> Int {
         i = i + 1;
     }
     s = 0;
-    while s < ints_len(at.hd) {
+    while s < sm_top(at) {
         let chain = ix_chain(at, s);
         let mut a = 0;
         while a < ints_len(chain) {

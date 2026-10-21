@@ -62,6 +62,37 @@ fn js_hex_digit(b: Int) -> Int {
     0
 }
 
+// The string whose opening quote is at `p`, decoded into `out` as pieces: where its closing quote
+// is, or `s`'s length where it has none (and then `out` lacks its last piece).
+fn js_scan(s: Str, p: Int, out: Strs) -> Int {
+    let mut i = p + 1;
+    let mut from = i;
+    while i < str_len(s) && str_byte(s, i) != 34 {
+        if str_byte(s, i) == 92 {
+            strs_push(out, str_slice(s, from, i));
+            let e = str_byte(s, i + 1);
+            if e == 110 { strs_push(out, str_from_byte(10)); }
+            if e == 114 { strs_push(out, str_from_byte(13)); }
+            if e == 116 { strs_push(out, str_from_byte(9)); }
+            if e == 98 { strs_push(out, str_from_byte(8)); }
+            if e == 102 { strs_push(out, str_from_byte(12)); }
+            if e == 34 || e == 92 || e == 47 { strs_push(out, str_from_byte(e)); }
+            if e == 117 {
+                // Only the control characters are written `\u00XX`.
+                let v = js_hex_digit(str_byte(s, i + 4)) * 16 + js_hex_digit(str_byte(s, i + 5));
+                strs_push(out, str_from_byte(v));
+                i = i + 4;
+            }
+            i = i + 2;
+            from = i;
+        } else {
+            i = i + 1;
+        }
+    }
+    if i < str_len(s) { strs_push(out, str_slice(s, from, i)); }
+    i
+}
+
 // One value at the reading position (compact JSON: no white space).
 fn js_value(j: Js, s: Str) -> Int {
     let p = js_pos(j);
@@ -115,32 +146,8 @@ fn js_value(j: Js, s: Str) -> Int {
     }
     if b == 34 {
         let out = strs_new();
-        let mut i = p + 1;
-        let mut from = i;
-        while i < str_len(s) && str_byte(s, i) != 34 {
-            if str_byte(s, i) == 92 {
-                strs_push(out, str_slice(s, from, i));
-                let e = str_byte(s, i + 1);
-                if e == 110 { strs_push(out, str_from_byte(10)); }
-                if e == 114 { strs_push(out, str_from_byte(13)); }
-                if e == 116 { strs_push(out, str_from_byte(9)); }
-                if e == 98 { strs_push(out, str_from_byte(8)); }
-                if e == 102 { strs_push(out, str_from_byte(12)); }
-                if e == 34 || e == 92 || e == 47 { strs_push(out, str_from_byte(e)); }
-                if e == 117 {
-                    // Only the control characters are written `\u00XX`.
-                    let v = js_hex_digit(str_byte(s, i + 4)) * 16 + js_hex_digit(str_byte(s, i + 5));
-                    strs_push(out, str_from_byte(v));
-                    i = i + 4;
-                }
-                i = i + 2;
-                from = i;
-            } else {
-                i = i + 1;
-            }
-        }
+        let i = js_scan(s, p, out);
         if i >= str_len(s) { return js_fail(j); }
-        strs_push(out, str_slice(s, from, i));
         js_go(j, i + 1);
         return js_node(j, 3, str_join(out, ""));
     }
@@ -837,6 +844,133 @@ pub fn cdg_pretty(compact: Str) -> Str {
     js_write(j, root, 0, out);
     strs_push(out, str_from_byte(10));
     str_join(out, "")
+}
+
+// `cdg_pretty` of the object whose members are `names[k]`: `values[k]` (compact JSON), except that
+// member `list_at`'s value is the array of `items` (compact JSON each) — the bytes `cdg_pretty` writes
+// of that object's compact text, written as each value is read instead of from a tree of the whole
+// document, which for a large program's Core IR held many times the document's size (R8 slice 7, the
+// self-build's heap). Each value is read as `js_value` reads it; "?" where one is not exactly one value
+// it reads cleanly, as no value the lowering prints is, and the caller then asks `cdg_pretty`.
+pub fn cdg_pretty_document(names: Strs, values: Strs, list_at: Int, items: Strs) -> Str {
+    if strs_len(names) == 0 { return "?"; }
+    let j = js_new();
+    let parts = strs_new();
+    let out = strs_new();
+    strs_push(out, "{");
+    let mut k = 0;
+    while k < strs_len(names) {
+        if k > 0 { strs_push(out, ","); }
+        js_newline(j, out, 1);
+        js_quote(strs_get(names, k), out);
+        strs_push(out, ": ");
+        if k == list_at {
+            if strs_len(items) == 0 {
+                strs_push(out, "[]");
+            } else {
+                strs_push(out, "[");
+                let mut i = 0;
+                while i < strs_len(items) {
+                    if i > 0 { strs_push(out, ","); }
+                    js_newline(j, out, 2);
+                    // Each item's text joined on its own, so the pieces never outnumber one item's.
+                    strs_push(parts, str_join(out, ""));
+                    while strs_len(out) > 0 { strs_pop(out); }
+                    if jp_whole(j, strs_get(items, i), 2, out) == false { return "?"; }
+                    i = i + 1;
+                }
+                js_newline(j, out, 1);
+                strs_push(out, "]");
+            }
+        } else {
+            if jp_whole(j, strs_get(values, k), 1, out) == false { return "?"; }
+        }
+        k = k + 1;
+    }
+    js_newline(j, out, 0);
+    strs_push(out, "}");
+    strs_push(out, str_from_byte(10));
+    strs_push(parts, str_join(out, ""));
+    str_join(parts, "")
+}
+
+// Whether `s` is exactly one value, read cleanly, its indented text at `level` appended to `out`.
+fn jp_whole(j: Js, s: Str, level: Int, out: Strs) -> Bool {
+    js_go(j, 0);
+    ints_set(j.st, 1, 0);
+    if jp_value(j, s, level, out) == false { return false; }
+    js_pos(j) == str_len(s)
+}
+
+// The value at the reading position, as `js_value` reads it and `js_write` writes it at `level`;
+// false where `js_value` would fail, or where an object's member name is not a string.
+fn jp_value(j: Js, s: Str, level: Int, out: Strs) -> Bool {
+    let p = js_pos(j);
+    if p >= str_len(s) { return false; }
+    let b = str_byte(s, p);
+    if b == 123 || b == 91 {
+        let close = b + 2;
+        if p + 1 >= str_len(s) { return false; }
+        if str_byte(s, p + 1) == close {
+            if b == 91 { strs_push(out, "[]"); } else { strs_push(out, "{}"); }
+            js_go(j, p + 2);
+            return true;
+        }
+        if b == 91 { strs_push(out, "["); } else { strs_push(out, "{"); }
+        js_go(j, p + 1);
+        let mut more = true;
+        let mut first = true;
+        while more {
+            if first == false { strs_push(out, ","); }
+            first = false;
+            js_newline(j, out, level + 1);
+            if b == 123 {
+                let q = js_pos(j);
+                if q >= str_len(s) || str_byte(s, q) != 34 { return false; }
+                if jp_string(j, s, out) == false { return false; }
+                js_go(j, js_pos(j) + 1);
+                strs_push(out, ": ");
+            }
+            if jp_value(j, s, level + 1, out) == false { return false; }
+            let q = js_pos(j);
+            if q >= str_len(s) { return false; }
+            if str_byte(s, q) == 44 {
+                js_go(j, q + 1);
+            } else {
+                if str_byte(s, q) != close { return false; }
+                js_go(j, q + 1);
+                more = false;
+            }
+        }
+        js_newline(j, out, level);
+        if b == 91 { strs_push(out, "]"); } else { strs_push(out, "}"); }
+        return true;
+    }
+    if b == 34 { return jp_string(j, s, out); }
+    let mut i = p;
+    while i < str_len(s) && str_byte(s, i) != 44 && str_byte(s, i) != 93 && str_byte(s, i) != 125 { i = i + 1; }
+    strs_push(out, str_slice(s, p, i));
+    js_go(j, i);
+    true
+}
+
+// The string at the reading position, decoded and quoted again as `js_write` does: as written where
+// it holds no escape and no control character, which quoting it again would not change.
+fn jp_string(j: Js, s: Str, out: Strs) -> Bool {
+    let p = js_pos(j);
+    let mut i = p + 1;
+    while i < str_len(s) && str_byte(s, i) != 34 && str_byte(s, i) != 92 && str_byte(s, i) >= 32 { i = i + 1; }
+    if i < str_len(s) && str_byte(s, i) == 34 {
+        strs_push(out, str_slice(s, p, i + 1));
+        js_go(j, i + 1);
+        return true;
+    }
+    let pieces = strs_new();
+    let e = js_scan(s, p, pieces);
+    if e >= str_len(s) { return false; }
+    js_quote(str_join(pieces, ""), out);
+    js_go(j, e + 1);
+    true
 }
 
 // A line break and `level` indentations, as one part made once per level: a part for each
