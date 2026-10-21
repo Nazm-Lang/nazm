@@ -112,6 +112,17 @@ impl ExecutionProfile {
         test_threads: 4,
         test_workers: 1,
     };
+    /// Eight CPUs, eight jobs, eight test threads: the whole of the Linux VM's CPUs (R1.5 8.2,
+    /// approved by the copyright holder 2026-10-22). Opt-in by name, under the same memory,
+    /// swap and pid ceilings as every profile: a workload whose eight jobs cross them is
+    /// stopped as any other, and keeps its calibrated default.
+    pub(crate) const P8T8: Self = Self {
+        name: "p8t8",
+        milli_cpus: 8000,
+        cargo_jobs: 8,
+        test_threads: 8,
+        test_workers: 1,
+    };
     /// The scheduled suite's calibration candidates (N32-H3): the same four CPUs and four
     /// build jobs as P4T4, with test binaries run at once. Opt-in by name; no workload
     /// defaults to one, so a machine that has not measured them keeps P4T4.
@@ -134,6 +145,7 @@ impl ExecutionProfile {
     pub(crate) const ALL: &'static [Self] = &[
         Self::P1,
         Self::P4T4,
+        Self::P8T8,
         Self::P4W1T4,
         Self::P4W2T2,
         Self::P4W3T2,

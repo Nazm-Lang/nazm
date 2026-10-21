@@ -891,4 +891,22 @@ mod tests {
         );
         assert_eq!(mutate_parallelism(p), "--cargo-jobs 4 --test-threads 4");
     }
+
+    #[test]
+    fn p8t8_is_chosen_by_name_and_is_no_workload_s_default() {
+        let p = ExecutionProfile::P8T8;
+        assert_eq!(ExecutionProfile::by_name("p8t8"), Some(p));
+        assert_eq!((p.milli_cpus, p.cargo_jobs, p.test_threads), (8000, 8, 8));
+        for w in [
+            "tests",
+            "selfhost",
+            "selfbuild",
+            "bootstrap",
+            "mutate",
+            "bench",
+            "run",
+        ] {
+            assert_ne!(default_profile(w), p, "{w}");
+        }
+    }
 }
