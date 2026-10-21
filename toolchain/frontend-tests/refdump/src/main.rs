@@ -455,6 +455,59 @@ fn provenance(path: &str) -> String {
     out
 }
 
+/// A function's effects, one line per function whose body was checked: `FUNCTION<TAB>DECLARED<TAB>REQUIRED<TAB>PUBLISHED<TAB>REASONS`: the
+/// function by its number, its declared set (`none` where it declares none), what its body requires and what a caller in another module must
+/// assume of it, each `{a,b}` by name in effect order, and the first reason for each effect required — `EFFECT@START-END:SOURCE`, the place over
+/// the whole compilation's text and the source `builtin:NAME`, `spawn`, `inferred:fn:N`, `declared:fn:N`, `undeclared:fn:N` or `indirect` — joined
+/// by semicolons, `-` for none.
+fn effects(path: &str) -> String {
+    use nazm_core::sema::{EffectSet, EffectSource, FnId};
+    let (loaded, a) = match analysed(path) {
+        Ok(x) => x,
+        Err(w) => return format!("{w}\n"),
+    };
+    let map = &loaded.map;
+    let res = &a.resolution;
+    let set = |s: EffectSet| format!("{{{}}}", s.names().join(","));
+    let mut out = String::new();
+    for (i, f) in res.functions().iter().enumerate() {
+        let Some(required) = f.inferred_effects else {
+            continue;
+        };
+        let declared = f.declared_effects.map_or_else(|| "none".to_owned(), set);
+        let published = f
+            .declared_effects
+            .unwrap_or_else(|| nazm_core::assumed_effects(FnId::from_index(i), res));
+        let reasons: Vec<String> = f
+            .effect_reasons
+            .iter()
+            .map(|r| {
+                let (s, e) = at(map, r.at);
+                let source = match r.source {
+                    EffectSource::Builtin(b) => format!("builtin:{}", b.name()),
+                    EffectSource::Spawn => "spawn".to_owned(),
+                    EffectSource::Inferred(g) => format!("inferred:fn:{}", g.index()),
+                    EffectSource::Declared(g) => format!("declared:fn:{}", g.index()),
+                    EffectSource::Undeclared(g) => format!("undeclared:fn:{}", g.index()),
+                    EffectSource::Indirect(_) => "indirect".to_owned(),
+                };
+                format!("{}@{s}-{e}:{source}", r.effect.name())
+            })
+            .collect();
+        let reasons = if reasons.is_empty() {
+            "-".to_owned()
+        } else {
+            reasons.join(";")
+        };
+        out.push_str(&format!(
+            "{i}\t{declared}\t{}\t{}\t{reasons}\n",
+            set(required),
+            set(published)
+        ));
+    }
+    out
+}
+
 /// Each function's Core IR digests as `nazm inspect` reports them (`cir::digests`), one line a
 /// function: `IDENTITY<TAB>SEMANTIC<TAB>BODY`, in the order the lowering lists the functions.
 fn coredigests(path: &str) -> String {
@@ -586,7 +639,14 @@ fn main() {
     };
     if matches!(
         mode.as_str(),
-        "keys" | "refs" | "calls" | "provenance" | "coredigests" | "diagids" | "fieldtypes"
+        "keys"
+            | "refs"
+            | "calls"
+            | "provenance"
+            | "effects"
+            | "coredigests"
+            | "diagids"
+            | "fieldtypes"
     ) {
         let path = path.clone();
         let mode = mode.clone();
@@ -596,6 +656,7 @@ fn main() {
                 "keys" => keys(&path),
                 "refs" => refs(&path),
                 "provenance" => provenance(&path),
+                "effects" => effects(&path),
                 "coredigests" => coredigests(&path),
                 "diagids" => diagids(&path),
                 "fieldtypes" => fieldtypes(&path),
