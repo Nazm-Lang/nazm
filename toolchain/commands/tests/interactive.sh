@@ -158,8 +158,10 @@ case_in() {
         intended=$((intended + 1))
         return
     fi
-    # The runaway-recursion wording is intended difference 2: compared by code, output and status.
-    if grep -q 'N0403' "$W/ref.err" && grep -q 'N0403' "$W/got.err" && cmp -s "$W/ref.out" "$W/got.out" && cmp -s "$W/ref.status" "$W/got.status"; then
+    # The runaway-recursion wording is intended difference 2: compared by code, output and status. A native
+    # stack overflow (N0408) is too: which frame of a cycle meets the guard page depends on each backend's frame sizes.
+    if { { grep -q 'N0403' "$W/ref.err" && grep -q 'N0403' "$W/got.err"; } || { grep -q 'N0408' "$W/ref.err" && grep -q 'N0408' "$W/got.err"; }; } \
+        && cmp -s "$W/ref.out" "$W/got.out" && cmp -s "$W/ref.status" "$W/got.status"; then
         agree=$((agree + 1))
         return
     fi
