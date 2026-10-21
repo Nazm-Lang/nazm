@@ -34,7 +34,7 @@ def work(cmd):
         report = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"nazm-growth-{os.getpid()}.txt")
         try:
             r = subprocess.run([os.environ["STAGE_XTASK"], "host-run", "--deadline-secs", "900",
-                                "--report", report, "--"] + cmd,
+                                "--report", report, "--max-output-mib", "256", "--"] + cmd,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             with open(report) as f:
                 m = re.search(r"instructions retired (\d+)", f.read())
