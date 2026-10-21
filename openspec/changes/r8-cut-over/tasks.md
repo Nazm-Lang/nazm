@@ -93,6 +93,11 @@
 - [x] 7.7 `comptime`: the entry-less document keeps every root function (no `compiler/core.nz` change needed); `N0393`'s refusals
 - [x] 7.8 `repl` (`live.nz`)
 - [x] 7.9 `test` without `NAZM_TEST_DRIVER`: the driver found by `own_path` (decisions log: `arg(0)` is not the program's name)
+- [ ] 7.11 OPEN: the contained self-build fails at stage 1: the stage-0 `nazm` (counted heap 2 GiB, the rule's ceiling) runs out of memory
+      (`N0406`) building `toolchain/commands/nazm.nz` with the interpreter and the interactive tier in it. At ae42fbe5 the same build passes at a
+      peak resident 1.61 GB; with this slice it needs about 1.95 GB resident (it passes in a contained run with a 3 GiB builder). Needs a decision:
+      trim the front end's memory per module (R2), move the interpreter-bearing commands to a libexec child, or raise the builder's ceiling
+      (relaxes the 2 GiB rule: the copyright holder's)
 - [x] 7.10 `toolchain/commands/tests/interactive.sh`, `tests/repl/*.in`, `tests/test-fixture/`, `tests/args/{run,comptime,repl}.txt`;
       evidence in `design.md`, *Slice 7 — the evidence*
 
