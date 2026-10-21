@@ -204,6 +204,45 @@ pub fn ie_show(h: Heap, v: V) -> Str {
     }
 }
 
+// `main`'s value as an `Int`, 0 for any other.
+fn ie_int(v: V) -> Int {
+    match v {
+        V.Int(v: x) => x,
+        V.Unset => 0,
+        V.Bool(v: b) => 0,
+        V.Str(s: s, obj: o, start: st) => 0,
+        V.Rec(def: d, obj: o) => 0,
+        V.Enm(def: d, variant: k, obj: o) => 0,
+        V.Arr(items: xs) => 0,
+        V.Ref(obj: o) => 0,
+        V.Cap(kind: k) => 0,
+        V.Num(kind: k, v: x) => 0,
+        V.Flt(kind: k, v: x) => 0,
+        V.Byt(b: b, obj: o) => 0,
+        V.Osh(h: x, sock: k) => 0,
+        V.Atm(a: a) => 0,
+    }
+}
+
+fn ie_is_int(v: V) -> Bool {
+    match v {
+        V.Int(v: x) => true,
+        V.Unset => false,
+        V.Bool(v: b) => false,
+        V.Str(s: s, obj: o, start: st) => false,
+        V.Rec(def: d, obj: o) => false,
+        V.Enm(def: d, variant: k, obj: o) => false,
+        V.Arr(items: xs) => false,
+        V.Ref(obj: o) => false,
+        V.Cap(kind: k) => false,
+        V.Num(kind: k, v: x) => false,
+        V.Flt(kind: k, v: x) => false,
+        V.Byt(b: b, obj: o) => false,
+        V.Osh(h: x, sock: k) => false,
+        V.Atm(a: a) => false,
+    }
+}
+
 fn outcome(kind: Int, diag: Str) -> IeRun {
     IeRun(kind: kind, is_int: false, code: 0, value: "", diag: diag, memory: "", sched: "")
 }
@@ -234,14 +273,8 @@ pub fn interp_exec(doc: Str, root: Str, std: Str, over: Str, has_over: Bool, max
     if failed(vm) {
         return IeRun(kind: 2, is_int: false, code: 0, value: "", diag: report(io, p, vm, root, std, over, has_over, json), memory: memory, sched: sched)
     }
-    let code = match result {
-        V.Int(v: x) => x,
-        _ => 0,
-    }
-    let is_int = match result {
-        V.Int(v: x) => true,
-        _ => false,
-    }
+    let code = ie_int(result)
+    let is_int = ie_is_int(result)
     IeRun(kind: 0, is_int: is_int, code: code, value: ie_show(vm.heap, result), diag: "", memory: memory, sched: sched)
 }
 
