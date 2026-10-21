@@ -216,6 +216,19 @@ pub fn cr_core_units(f: Facts, dir: Str, keys: Strs, io: IoCap) -> Str {
 fn cr_core_with(f: Facts, functions: Str, sources: Bool) -> Str {
     let parts = cr_parts_with(f, sources);
     let lines = strs_new();
+    strs_push(lines, functions);
+    strs_push(lines, parts);
+    let doc = co_pretty_of(functions, parts);
+    if doc != "" {
+        strs_push(lines, str_concat("%%document", co_nl()));
+        strs_push(lines, doc);
+    }
+    str_join(lines, "")
+}
+
+// The document `nazm core-ir` prints of the functions' lines and the parts' (`cr_core_with`'s), where
+// every one was carried; "" otherwise.
+fn co_pretty_of(functions: Str, parts: Str) -> Str {
     let fl = co_lines(functions);
     let pl = co_lines(parts);
     let mut whole = true;
@@ -228,8 +241,12 @@ fn cr_core_with(f: Facts, functions: Str, sources: Bool) -> Str {
         strs_push(objects, value);
         i = i + 1;
     }
-    let members = strs_new();
-    strs_push(members, co_field_first("schema", json_str("nazm.core-ir/3")));
+    // The members by name and value, the functions' array after the entry's.
+    let names = strs_new();
+    let values = strs_new();
+    let mut list_at = 0 - 1;
+    strs_push(names, "schema");
+    strs_push(values, json_str("nazm.core-ir/3"));
     i = 0;
     while i < strs_len(pl) {
         let line = strs_get(pl, i);
@@ -237,30 +254,58 @@ fn cr_core_with(f: Facts, functions: Str, sources: Bool) -> Str {
         let name = str_slice(line, 1, tab);
         let value = str_slice(line, tab + 1, str_len(line));
         if co_stopped_value(value) { whole = false; }
-        strs_push(members, co_field(name, value));
-        if name == "entry" { strs_push(members, co_field("functions", co_list(objects))); }
+        strs_push(names, name);
+        strs_push(values, value);
+        if name == "entry" {
+            list_at = strs_len(names);
+            strs_push(names, "functions");
+            strs_push(values, "");
+        }
         i = i + 1;
     }
-    strs_push(lines, functions);
-    strs_push(lines, parts);
-    if whole {
-        let doc = cdg_pretty(co_object(members));
-        if doc != "" {
-            strs_push(lines, str_concat("%%document", co_nl()));
-            strs_push(lines, doc);
-        }
+    if whole == false { return ""; }
+    // Written as it is read (`cdg_pretty_document`); from the whole compact text, as before, only
+    // where a value is not one that reader reads cleanly.
+    let doc = cdg_pretty_document(names, values, list_at, objects);
+    if doc != "?" { return doc; }
+    let members = strs_new();
+    i = 0;
+    while i < strs_len(names) {
+        let mut value = strs_get(values, i);
+        if i == list_at { value = co_list(objects); }
+        if i == 0 { strs_push(members, co_field_first(strs_get(names, i), value)); } else { strs_push(members, co_field(strs_get(names, i), value)); }
+        i = i + 1;
     }
-    str_join(lines, "")
+    cdg_pretty(co_object(members))
+}
+
+// The document of `cr_core_with`'s output: as `co_document_of` finds it there, without making that
+// output — unless the functions' or the parts' lines already hold the marker it looks for.
+fn co_document_direct(f: Facts, functions: Str, sources: Bool) -> Str {
+    let parts = cr_parts_with(f, sources);
+    if co_has_marker(functions) || co_has_marker(parts) { return co_document_of(cr_core_with(f, functions, sources)); }
+    co_pretty_of(functions, parts)
+}
+
+fn co_has_marker(s: Str) -> Bool {
+    let marker = str_concat("%%document", co_nl());
+    let n = str_len(marker);
+    let mut at = 0;
+    while at + n <= str_len(s) {
+        if (at == 0 || str_byte(s, at - 1) == 10) && str_byte(s, at) == 37 && str_slice(s, at, at + n) == marker { return true; }
+        at = at + 1;
+    }
+    false
 }
 
 // The document `nazm core-ir` prints (indented, as `print.rs` writes it), where the lowering carried
 // every function and every part; "" otherwise.
-pub fn cr_document(f: Facts) -> Str { co_document_of(cr_core(f)) }
+pub fn cr_document(f: Facts) -> Str { co_document_direct(f, cr_functions(f), false) }
 
 // `cr_document` with each module's source text, file index and path (`print_with_sources`, what
 // `nazm core-ir --json --with-sources` prints): what the R3 pipeline needs to name a failure's
 // `file:line:column` (R6, the self-build).
-pub fn cr_document_with_sources(f: Facts) -> Str { co_document_of(cr_core_with(f, cr_functions_with(f, true), true)) }
+pub fn cr_document_with_sources(f: Facts) -> Str { co_document_direct(f, cr_functions_with(f, true), true) }
 
 fn co_document_of(whole: Str) -> Str {
     let marker = str_concat(str_concat("%%document", co_nl()), "");
