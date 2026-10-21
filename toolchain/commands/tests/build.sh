@@ -86,6 +86,7 @@ ROOT=$stage_root
 NAZM=${NAZM:-$(stage_checkout_nazm "$ROOT")}
 REF=${NAZM_REF:-$NAZM}
 OUT=${BUILD_OUT:-${TMPDIR:-/tmp}/nazm-build-compare}
+mkdir -p "$OUT" && OUT=$(cd "$OUT" && pwd -P)   # the physical path: a message names it so (macOS: /var is /private/var)
 PART=${BUILD_PART:-all}
 MODES=${BUILD_MODES:-exe heap objects x86 windows cached llvm llvm-heap llvm-objects llvm-x86 llvm-windows llvm-x86exe llvm-ir llvm-irexe llvm-O1 llvm-O2 llvm-O3 llvm-debug llvm-debugexe llvm-release soa llvm-soa report report-objects report-nazm report-cached report-cached-nazm summary timings lib lib-shared lib-objects rtlink prov link}
 mkdir -p "$OUT/bin"
