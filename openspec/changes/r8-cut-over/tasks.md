@@ -93,11 +93,17 @@
 - [x] 7.7 `comptime`: the entry-less document keeps every root function (no `compiler/core.nz` change needed); `N0393`'s refusals
 - [x] 7.8 `repl` (`live.nz`)
 - [x] 7.9 `test` without `NAZM_TEST_DRIVER`: the driver found by `own_path` (decisions log: `arg(0)` is not the program's name)
-- [ ] 7.11 OPEN: the contained self-build fails at stage 1: the stage-0 `nazm` (counted heap 2 GiB, the rule's ceiling) runs out of memory
-      (`N0406`) building `toolchain/commands/nazm.nz` with the interpreter and the interactive tier in it. At ae42fbe5 the same build passes at a
-      peak resident 1.61 GB; with this slice it needs about 1.95 GB resident (it passes in a contained run with a 3 GiB builder). Needs a decision:
-      trim the front end's memory per module (R2), move the interpreter-bearing commands to a libexec child, or raise the builder's ceiling
-      (relaxes the 2 GiB rule: the copyright holder's)
+- [x] 7.11 the front end builds `toolchain/commands/nazm.nz` in a quarter of the heap (76347cf5: span maps by buckets, the Core IR
+      document indented as each value is read); the 2 GiB rule stands. Evidence: the contained self-build's stage 1 `nazm` build peaks at
+      817424 KiB (`backend=nazm`, 792.6 MiB largest step) and 811644 KiB (`backend=llvm`), where it needed about 1.95 GB before (N0406 at
+      the 2 GiB ceiling); stages 1/2 and 2/3 byte-identical (9 files each), 66 corpus programs and 68 interpreted programs agree, nazm-check
+      agrees; `contained selfhost` and `contained bootstrap` pass. Output unchanged: `coresources` 2015 agree, 0 differ (byte for byte,
+      104 MB documents), `core` 3361/0, `coredigests` 3361/0, `mir` 2015/0; `inspect.sh` 0 differ in every part; `interactive.sh`
+      args 79/0, interpret 1344/0, comptime 1449/0, repl 6/0, test 230/0, run 450 agree and 1 differ (`examples/bad/mutual_recursion.nz`:
+      the position a native stack overflow is reported at, 5:4 against 1:4, a frame-layout matter of the two backends, not of the front
+      end); `build.sh` args 159/0 and a corpus pass (`exe llvm`) 403+/0. Harness fixes found on the way: `host-run` kept only 64 MiB of
+      output (nazm.nz's document is 104 MB: the four toolchain inputs looked truncated), growth.py kept the 4 MiB default, `build.sh` named
+      `/var` where messages say `/private/var`
 - [x] 7.10 `toolchain/commands/tests/interactive.sh`, `tests/repl/*.in`, `tests/test-fixture/`, `tests/args/{run,comptime,repl}.txt`;
       evidence in `design.md`, *Slice 7 — the evidence*
 
