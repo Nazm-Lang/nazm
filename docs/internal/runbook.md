@@ -149,6 +149,8 @@ workload, chosen by a named profile.
 | `contained bootstrap`, `release`, `run` | P1 | not calibrated |
 | `contained bench` | P1, permanently | a measurement shares the machine with nothing |
 
+`--profile p8t8` (8 CPUs, 8 jobs, 8 test threads; R1.5 8.2, approved 2026-10-22) is opt-in for any workload but `bench`, under the same memory ceiling: a run it pushes past the ceiling is stopped like any other and the workload keeps its default.
+
 `cargo xtask contained --profile p1 <workload>` reproduces any older result. What did not
 change: containment is mandatory, the memory, swap, pid, storage and deadline ceilings are
 the same numbers, workloads never overlap, mutants never run two at once, and a campaign's
