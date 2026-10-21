@@ -430,6 +430,61 @@ pub fn fd_provenance(f: Facts) -> Str {
     str_join(out, "")
 }
 
+// A function's effects, one line per function whose body was checked (R8 slice 9, 9.1; what `refdump effects` prints from the reference's
+// `declared_effects`, `inferred_effects`, `effect_reasons` and `assumed`): `FUNCTION<TAB>DECLARED<TAB>REQUIRED<TAB>PUBLISHED<TAB>REASONS`:
+// the function by its number, its declared set (`none` where it declares none), what its body requires and what a caller in another module must
+// assume of it, each `{a,b}` by name in effect order, and the first reason for each effect required — `EFFECT@START-END:SOURCE`, the place over
+// the whole compilation's text and the source `builtin:NAME`, `spawn`, `inferred:fn:N`, `declared:fn:N`, `undeclared:fn:N` or `indirect` — joined by
+// semicolons, `-` for none.
+pub fn fd_effects(f: Facts) -> Str {
+    if fx_carried(f) == false { return str_concat("stops", nl()); }
+    if fx_refusal(f) != "" { return str_concat("refused", nl()); }
+    if fx_loaded(f) == false || fx_failed(f) { return str_concat("fails", nl()); }
+    let out = strs_new();
+    let c = fx_checker(f);
+    let mut i = 0;
+    while i < ck_fn_count(c) {
+        if fx_fn_required(f, i) >= 0 {
+            let reasons = strs_new();
+            let mut k = 0;
+            while k < fx_reason_count(f, i) {
+                let source = fx_reason_source(f, i, k);
+                let mut detail = source;
+                if source == "builtin" { detail = str_concat("builtin:", fx_reason_builtin(f, i, k)); }
+                if fx_reason_callee(f, i, k) >= 0 { detail = cat3(source, ":fn:", int_to_str(fx_reason_callee(f, i, k))); }
+                strs_push(reasons, cat3(strs_get(fx_effects_names(pow2(fx_reason_effect(f, i, k))), 0), "@", cat3(int_to_str(fx_reason_start(f, i, k)), "-", cat3(int_to_str(fx_reason_end(f, i, k)), ":", detail))));
+                k = k + 1;
+            }
+            let mut declared = "none";
+            if fx_fn_declared(f, i) >= 0 { declared = effect_set_text(fx_fn_declared(f, i)); }
+            strs_push(out, int_to_str(i));
+            strs_push(out, tab());
+            strs_push(out, declared);
+            strs_push(out, tab());
+            strs_push(out, effect_set_text(fx_fn_required(f, i)));
+            strs_push(out, tab());
+            strs_push(out, effect_set_text(fx_fn_published(f, i)));
+            strs_push(out, tab());
+            strs_push(out, dash(str_join(reasons, ";")));
+            strs_push(out, nl());
+        }
+        i = i + 1;
+    }
+    str_join(out, "")
+}
+
+fn pow2(e: Int) -> Int {
+    let mut bit = 1;
+    let mut k = 0;
+    while k < e {
+        bit = bit * 2;
+        k = k + 1;
+    }
+    bit
+}
+
+fn effect_set_text(mask: Int) -> Str { cat3("{", str_join(fx_effects_names(mask), ","), "}") }
+
 fn dash(s: Str) -> Str {
     if s == "" { return "-"; }
     s
