@@ -106,7 +106,7 @@
 ## 8. Faster verification (the copyright holder's choices, 2026-10-14)
 - [ ] 8.1 A faster linker (mold or lld) for the contained image's Rust builds; measured against the
       current image on the build, suite and mutation cells of `docs/internal/performance-log.md`
-- [ ] 8.2 An eight-CPU profile calibrated like P4T4: approved by the copyright holder, and adopted only
+- [x] 8.2 An eight-CPU profile calibrated like P4T4: approved by the copyright holder, and adopted only
       where it stays inside a memory ceiling the calibration justifies (P6 crossed 4 GiB, 2026-09)
 - [ ] 8.3 Mutants scheduled by crate, leaf crates together, so consecutive mutants rebuild less
 - [ ] 8.4 The baseline suite a contained mutate session runs before its suite tier is kept across
