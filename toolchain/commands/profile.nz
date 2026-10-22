@@ -1,0 +1,628 @@
+// Restriction profiles (N47, `docs/internal/architecture.md` §7.49), in Nazm (R8 slice 11, task 11.1): `crates/nazm-service/src/profile.rs` (the rules, their
+// verdicts, the diagnostics and `nazm.profile-report/1`) and `crates/nazm-cli/src/profile.rs` (the profiles in force, what a rule reads off MIR), over R2's facts
+// (`compiler/facts.nz`) and the pipeline's `profile-facts` (`toolchain/pipeline/cost.nz`).
+//
+// A profile is a set of rules. A rule reads a fact the checker settled — the effect set `main` requires and the chain that brought each effect there, a
+// function's declared contract, the call sites, the sinks as solved — or one MIR settled (an allocation in a loop, a call cycle, a call through a function
+// value), and passes or fails with witnesses. A profile only refuses: it never changes what an accepted program means.
+
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/package.nz"
+use "../../compiler/facts.nz"
+use "../../compiler/facts-core.nz"
+use "cli.nz"
+use "front.nz"
+use "util.nz"
+use "coreir.nz"
+use "lockcheck.nz"
+use "obligations.nz"
+use "contractfacts.nz"
+use "@std/sort"
+use "@std/text"
+
+fn pf_nl() -> Str { str_from_byte(10) }
+
+// --- the profiles and their rules, by identity -------------------------------------------------------
+
+/// The profiles, in `Profile::ALL` order.
+pub fn pf_names() -> Strs {
+    text_split("general embedded critical cyber realtime web3 accounts authority kernel robotics automotive aerospace assurance industrial medical", " ")
+}
+
+pub fn pf_known(name: Str) -> Bool {
+    for n in pf_names() { if n == name { return true } }
+    false
+}
+
+/// A rule's stable identity, by its place in `Rule::ALL`.
+pub fn pf_rule_id(i: Int) -> Str {
+    strs_get(text_split("declared-effects no-io no-spawn no-foreign locked-build bounded-allocation contents-stay-in-files no-declassification no-ambient-time no-recursion no-select no-blocking bounded-loops signed-writes explicit-authority checked-paths no-unknown-calls no-heap bounded-stack no-float-nondeterminism watchdog audit", " "), i)
+}
+
+/// The rules of a profile, as their places in `Rule::ALL`.
+fn pf_rules_of(name: Str) -> Ints {
+    let spec = if name == "embedded" { "1 2 5 9" } else if name == "critical" { "0 2 3 4 7 8 10 16" } else if name == "cyber" { "0 3 4 6 15 16" }
+            else if name == "realtime" { "1 2 5 8 9 11 12 17 18" } else if name == "web3" { "0 1 2 3 8 9 11" } else if name == "accounts" { "0 1 2 3 8 9 11 13" }
+            else if name == "authority" { "14" } else if name == "kernel" { "2 3 11 17" } else if name == "robotics" { "1 2 5 8 9 11 12 17 18 14" }
+            else if name == "automotive" { "0 2 3 4 7 8 10 16 1 5 9 11 12 17 18" } else if name == "aerospace" { "0 2 3 4 7 8 10 16 1 5 9 11 12 17 18 19" }
+            else if name == "assurance" { "0 2 3 4 7 8 10 16 9 12 18 17" } else if name == "industrial" { "0 2 3 4 7 8 10 16 1 5 9 11 12 17 18 20" }
+            else if name == "medical" { "0 2 3 4 7 8 10 16 1 5 9 11 12 17 18 21" } else { "" }
+    let out = ints_new()
+    if str_len(spec) == 0 { return out }
+    for w in text_split(spec, " ") {
+        match text_parse_int(w) {
+            Ok(v) => ints_push(out, v),
+            Err(_) => {},
+        }
+    }
+    out
+}
+
+/// What a rule refuses, said once a rule fails (`diagnostics`'s help).
+fn pf_help(rule: Int) -> Str {
+    if rule == 0 { return "write `! { … }` on each function named: a profile that forbids the ambient bridge reads every contract" }
+    if rule == 1 { return "the chain shows where the effect enters; a profile refuses, it never rewrites" }
+    if rule == 2 { return "the chain shows where the effect enters; a profile refuses, it never rewrites" }
+    if rule == 3 { return "the chain shows where the effect enters; a profile refuses, it never rewrites" }
+    if rule == 4 { return "build the package's directory with `--locked`, after `nazm lock`" }
+    if rule == 5 { return "each site allocates inside a loop, a number of times the compiler does not know; allocate before the loop, or reuse what was allocated (`nazm explain-cost` lists every site)" }
+    if rule == 6 { return "a file's contents may be written to a file, never shown; `nazm explain-flow` lists every sink and what reaches it" }
+    if rule == 7 { return "this profile admits no declassification: the value keeps its origin" }
+    if rule == 8 { return "this profile admits no clock: a deadline or a time read makes the program's behaviour depend on when it runs" }
+    if rule == 9 { return "a call cycle has no stack bound the compiler can state, and a call through a function value has a target it does not know; call each function directly, without a cycle" }
+    if rule == 10 { return "this profile admits no select: receive from one channel, so the order is the program's" }
+    if rule == 11 { return "this profile admits nothing whose latency is another task's or the scheduler's: no channel send, receive or select" }
+    if rule == 12 { return "write the loop as a counter from a literal, compared with a literal and stepped towards it once per turn by a positive literal (§7.65); `nazm check --profile-report` lists every loop's bound" }
+    if rule == 13 { return "compare `caller` with the state's owner, or another signer it names, before writing; an unguarded write lets anyone change the state" }
+    if rule == 14 { return "take the capability as a parameter and pass it from `main`: under this profile a function holds only what its scope holds (`nazm inspect` shows each function's `inherits`)" }
+    if rule == 15 { return "in every function, the path a program writes to may come from the command line or be computed in it, never from a file's contents or what the checker does not follow; `nazm explain-flow` shows the chain" }
+    if rule == 16 { return "call the function by its name: a call through a function value has a callee, and so a contract, the compiler does not know, and this profile admits no obligation of unknown status (`nazm obligations` lists them)" }
+    if rule == 17 { return "each site allocates; under this profile a program holds its statics, its stack and its devices, so make the value a static, a fixed array or a local (`nazm explain-cost` lists every site)" }
+    if rule == 18 { return "a call cycle has no stack bound, and a call through a function value has a callee the bound cannot follow; call each function directly, without a cycle (`bounds.json` states the bound)" }
+    if rule == 19 { return "compute it from `float_sqrt`, the arithmetic operators and a table or series of your own: their results are correctly rounded, the same on every host" }
+    if rule == 20 { return "call `watchdog_feed()` from the `@task` that runs the control loop, and give the board's manifest a `[watchdog] ticks = N`: the watchdog stops the machine when the loop stops" }
+    if rule == 21 { return "call `audit_transition` (`use \"@std/audit\";`) in the function that changes the state, with the state it leaves and the one it enters, so every transition has its record" }
+    ""
+}
+
+/// `profile::unknown`: a name no profile has (`N0511`), status 1; `whose` is who named it.
+pub fn pf_unknown(io: IoCap, name: Str, whose: Str) -> Int {
+    eprint("error[N0511]: " + whose + " names the profile `" + name + "`, which does not exist" + pf_nl())
+    eprint("  = help: the profiles are " + str_join(pf_names(), ", ") + pf_nl())
+    exit_with(1)
+    0
+}
+
+// --- verdicts ------------------------------------------------------------------------------------------------
+
+/// The verdicts of the rules in force, in rule order: whether each passed, whether it is unknown, and its witnesses (where, and in words).
+pub struct Pv {
+    profiles: Strs,
+    rule: Ints,
+    pass: Ints,
+    unknown: Ints,
+    first: Ints,
+    count: Ints,
+    ws: Ints,
+    we: Ints,
+    note: Strs,
+}
+
+fn pv_new(profiles: Strs) -> Pv {
+    Pv(profiles: profiles, rule: ints_new(), pass: ints_new(), unknown: ints_new(), first: ints_new(), count: ints_new(), ws: ints_new(), we: ints_new(), note: strs_new())
+}
+
+fn pv_begin(v: Pv, rule: Int) -> Int {
+    ints_push(v.rule, rule)
+    ints_push(v.first, strs_len(v.note))
+    0
+}
+
+fn pv_witness(v: Pv, s: Int, e: Int, note: Str) -> Int {
+    ints_push(v.ws, s)
+    ints_push(v.we, e)
+    strs_push(v.note, note)
+    0
+}
+
+fn pv_end(v: Pv, unknown: Bool) -> Int {
+    let n = strs_len(v.note) - ints_get(v.first, ints_len(v.first) - 1)
+    ints_push(v.count, n)
+    ints_push(v.pass, if n == 0 { 1 } else { 0 })
+    ints_push(v.unknown, if unknown && n > 0 { 1 } else { 0 })
+    0
+}
+
+pub fn pv_accepted(v: Pv) -> Bool {
+    for i in 0..ints_len(v.pass) { if ints_get(v.pass, i) == 0 { return false } }
+    true
+}
+
+// --- what the rules read ---------------------------------------------------------------------------------
+
+fn pf_effect_name(e: Int) -> Str { if e == 0 { "io" } else if e == 1 { "spawn" } else { "foreign" } }
+
+fn pf_has_bit(mask: Int, e: Int) -> Bool {
+    let mut x = mask
+    let mut i = 0
+    while i < e {
+        x = x / 2
+        i += 1
+    }
+    mask >= 0 && x % 2 == 1
+}
+
+/// The `main` of the root module: the entry, or -1.
+fn pf_main(c: Ck) -> Int {
+    for i in 0..ck_fn_count(c) {
+        if ck_fn_name(c, i) == "main" && ck_fn_module(c, i) == 0 && !ck_fn_closure(c, i) { return i }
+    }
+    0 - 1
+}
+
+/// The chain of calls from `main` to what first requires `effect`: each call, and the built-in, `spawn` or contract it ends at.
+fn pf_chain(f: Facts, main: Int, effect: Int, v: Pv) -> Int {
+    let c = fx_checker(f)
+    let mut at = main
+    let mut hops = 0
+    let limit = ck_fn_count(c) + 1
+    while hops < limit {
+        hops += 1
+        let mut found = 0 - 1
+        for k in 0..fx_reason_count(f, at) { if found < 0 && fx_reason_effect(f, at, k) == effect { found = k } }
+        if found < 0 { return 0 }
+        let src = fx_reason_source(f, at, found)
+        let s = fx_reason_start(f, at, found)
+        let e = fx_reason_end(f, at, found)
+        let eff = pf_effect_name(effect)
+        if src == "builtin" {
+            pv_witness(v, s, e, "the built-in `" + fx_reason_builtin(f, at, found) + "` exercises `" + eff + "`")
+            return 0
+        }
+        if src == "spawn" {
+            pv_witness(v, s, e, "a `spawn` starts a task")
+            return 0
+        }
+        let g = fx_reason_callee(f, at, found)
+        if src == "inferred" {
+            pv_witness(v, s, e, "`" + ck_fn_name(c, g) + "` requires `" + eff + "`")
+            at = g
+        } else if src == "declared" {
+            pv_witness(v, s, e, "`" + ck_fn_name(c, g) + "` declares `" + eff + "`")
+            return 0
+        } else if src == "undeclared" {
+            pv_witness(v, s, e, "`" + ck_fn_name(c, g) + "` declares no effect set, so `" + eff + "` is assumed of it")
+            return 0
+        } else {
+            pv_witness(v, s, e, "a call through a function value of type `" + fx_reason_type(f, at, found) + "`, which requires `" + eff + "`")
+            return 0
+        }
+    }
+    0
+}
+
+/// The call sites of every function whose built-in is one of `names` (space-separated), as witnesses with `note`.
+fn pf_builtin_sites(f: Facts, names: Str, note: Str, v: Pv) -> Int {
+    let listed = " " + names + " "
+    let c = fx_checker(f)
+    for i in 0..ck_fn_count(c) {
+        for k in 0..fx_call_count(f, i) {
+            if fx_call_kind(f, i, k) == "builtin" && text_contains(listed, " " + fx_call_builtin(f, i, k) + " ") {
+                pv_witness(v, fx_call_start(f, i, k), fx_call_end(f, i, k), note)
+            }
+        }
+    }
+    0
+}
+
+/// A module-local place `MODULE:START..END` as an absolute span: [start, end], or [-1, -1] for none.
+fn pf_abs(f: Facts, at: Str) -> Ints {
+    let out = ints_new()
+    let mut colon = 0 - 1
+    for i in 0..str_len(at) { if str_byte(at, i) == 58 { colon = i } }
+    if colon < 0 {
+        ints_push(out, 0 - 1)
+        ints_push(out, 0 - 1)
+        return out
+    }
+    let name = str_slice(at, 0, colon)
+    let rest = str_slice(at, colon + 1, str_len(at))
+    let dots = ut_find(rest, "..", 0)
+    let s = if dots < 0 { 0 } else { pf_int(str_slice(rest, 0, dots)) }
+    let e = if dots < 0 { 0 } else { pf_int(str_slice(rest, dots + 2, str_len(rest))) }
+    for m in 0..fx_modules(f) {
+        if fx_module_identity(f, m) == name {
+            ints_push(out, fx_module_base(f, m) + s)
+            ints_push(out, fx_module_base(f, m) + e)
+            return out
+        }
+    }
+    ints_push(out, 0 - 1)
+    ints_push(out, 0 - 1)
+    out
+}
+
+fn pf_int(s: Str) -> Int {
+    match text_parse_int(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+/// The lines of the pipeline's `profile-facts` of one kind, as witnesses.
+fn pf_mir_witnesses(f: Facts, mir: Str, kind: Str, v: Pv) -> Int {
+    for line in text_split(mir, pf_nl()) {
+        let parts = text_split(line, "\t")
+        if strs_len(parts) >= 3 && strs_get(parts, 0) == kind {
+            let at = pf_abs(f, strs_get(parts, 1))
+            pv_witness(v, ints_get(at, 0), ints_get(at, 1), strs_get(parts, 2))
+        }
+    }
+    0
+}
+
+fn pf_mir_count(mir: Str, kind: Str) -> Int {
+    let mut n = 0
+    for line in text_split(mir, pf_nl()) { if text_starts_with(line, kind + "\t") { n += 1 } }
+    n
+}
+
+/// Whether `Origin` `o` (an id) is one a restricted sink refuses: the file's contents and what the checker does not follow.
+fn pf_restricted(name: Str) -> Bool { name == "file" || name == "unknown" }
+
+fn pf_describe(name: Str) -> Str {
+    if name == "argument" { return "the command line" }
+    if name == "file" { return "the contents of a file" }
+    if name == "authority" { return "the runtime's root authority" }
+    "a device or foreign code the checker does not follow"
+}
+
+/// A flow rule (`flow_rule`): every sink of `class` that receives a restricted origin, with the chain that brought it there.
+fn pf_flow(f: Facts, class: Str, what: Str, v: Pv) -> Int {
+    for i in 0..fx_sink_count(f) {
+        if fx_sink_class(f, i) != class { continue }
+        let mut o = ""
+        for name in fx_sink_origins(f, i) { if o == "" && pf_restricted(name) { o = name } }
+        if o == "" { continue }
+        pv_witness(v, fx_sink_start(f, i), fx_sink_end(f, i), what + " " + pf_describe(o))
+        let mut done = false
+        for t in 0..fx_sink_traces(f, i) {
+            if !done && fx_sink_trace_origin(f, i, t) == o {
+                done = true
+                for k in 0..fx_sink_steps(f, i, t) {
+                    let s = fx_sink_step_start(f, i, t, k)
+                    if s != fx_sink_start(f, i) || fx_sink_step_end(f, i, t, k) != fx_sink_end(f, i) {
+                        pv_witness(v, s, fx_sink_step_end(f, i, t, k), fx_sink_step_note(f, i, t, k))
+                    }
+                }
+            }
+        }
+    }
+    0
+}
+
+/// Each state change of a function that records none (`unaudited`).
+fn pf_audit(f: Facts, v: Pv) -> Int {
+    let c = fx_checker(f)
+    for i in 0..ck_fn_count(c) {
+        if !fx_module_own(f, ck_fn_module(c, i)) { continue }
+        let mut records = false
+        for k in 0..fx_call_count(f, i) {
+            if fx_call_kind(f, i, k) == "function" {
+                let g = fx_call_function(f, i, k)
+                if ck_fn_name(c, g) == "audit_transition" && fx_module_key(f, ck_fn_module(c, g)) == "@std/audit" { records = true }
+            }
+        }
+        if records { continue }
+        for k in 0..fx_call_count(f, i) {
+            if fx_call_kind(f, i, k) == "builtin" {
+                let b = fx_call_builtin(f, i, k)
+                if b == "atomic_store" || b == "atomic_swap" || b == "atomic_compare_swap" {
+                    pv_witness(v, fx_call_start(f, i, k), fx_call_end(f, i, k), "`" + ck_fn_name(c, i) + "` changes a state here and records no transition")
+                }
+            }
+        }
+    }
+    0
+}
+
+/// Every verdict for a build under `profiles` (`evaluate`). `mir` is what the pipeline's `profile-facts` printed, where a rule needs it (`has_mir`).
+pub fn pf_evaluate(io: IoCap, f: Facts, profiles: Strs, locked: Bool, mir: Str, has_mir: Bool, unsigned: Strs, has_contract: Bool) -> Pv {
+    let unique = strs_new()
+    for p in profiles {
+        let mut seen = false
+        for q in unique { if q == p { seen = true } }
+        if !seen { strs_push(unique, p) }
+    }
+    let sorted = strs_sort(unique)
+    let v = pv_new(sorted)
+    // The rules of every profile, once each, in rule order.
+    let wanted = ints_new()
+    for r in 0..22 {
+        let mut in_force = false
+        for p in sorted { for q in pf_rules_of(p) { if q == r { in_force = true } } }
+        if in_force { ints_push(wanted, r) }
+    }
+    let c = fx_checker(f)
+    let main = pf_main(c)
+    let mut required = 0
+    if main >= 0 {
+        required = fx_fn_required(f, main)
+        if required < 0 { required = fx_fn_declared(f, main) }
+        if required < 0 { required = 0 }
+    }
+    let mut at_s = 0 - 1
+    let mut at_e = 0 - 1
+    if main >= 0 {
+        at_s = ck_fn_name_start(c, main)
+        at_e = ck_fn_name_end(c, main)
+    }
+    for r in wanted {
+        pv_begin(v, r)
+        let mut unknown = false
+        if r == 1 || r == 2 || r == 3 {
+            let effect = r - 1
+            if main >= 0 && pf_has_bit(required, effect) {
+                let before = strs_len(v.note)
+                pf_chain(f, main, effect, v)
+                if strs_len(v.note) == before { pv_witness(v, at_s, at_e, "`main` requires `" + pf_effect_name(effect) + "`") }
+            }
+        } else if r == 5 {
+            if has_mir { pf_mir_witnesses(f, mir, "unbounded", v) } else {
+                unknown = true
+                pv_witness(v, at_s, at_e, "the program's resource facts were not computed")
+            }
+        } else if r == 20 {
+            if !has_mir {
+                unknown = true
+                pv_witness(v, at_s, at_e, "the program's tasks were not computed")
+            } else if pf_mir_count(mir, "feeding") == 0 {
+                pv_witness(v, at_s, at_e, "no `@task` of this program calls `watchdog_feed()`")
+            }
+        } else if r == 21 {
+            pf_audit(f, v)
+        } else if r == 19 {
+            pf_builtin_sites(f, "float_sin float_cos float_tan float_exp float_ln float_log2 float_log10 float_pow float_atan2",
+                    "this answers what the host's floating-point library answers, which another host may not", v)
+        } else if r == 18 {
+            if has_mir {
+                pf_mir_witnesses(f, mir, "recursive", v)
+                pf_mir_witnesses(f, mir, "indirect", v)
+            } else {
+                unknown = true
+                pv_witness(v, at_s, at_e, "the program's calls were not computed")
+            }
+        } else if r == 17 {
+            if has_mir { pf_mir_witnesses(f, mir, "allocation", v) } else {
+                unknown = true
+                pv_witness(v, at_s, at_e, "the program's resource facts were not computed")
+            }
+        } else if r == 16 {
+            if has_mir { pf_mir_witnesses(f, mir, "indirect", v) } else {
+                unknown = true
+                pv_witness(v, at_s, at_e, "the program's calls were not computed")
+            }
+        } else if r == 9 {
+            if !has_mir {
+                unknown = true
+                pv_witness(v, at_s, at_e, "the program's call graph was not computed")
+            } else if pf_mir_count(mir, "recursive") > 0 {
+                pf_mir_witnesses(f, mir, "recursive", v)
+            } else {
+                unknown = pf_mir_count(mir, "indirect") > 0
+                pf_mir_witnesses(f, mir, "indirect", v)
+            }
+        } else if r == 10 {
+            pf_builtin_sites(f, "chan_select_of chan_select_until", "this select's result depends on which channel is ready first", v)
+        } else if r == 11 {
+            pf_builtin_sites(f, "chan_send chan_recv chan_send_of chan_recv_of chan_select_of chan_select_until", "this waits for another task or the scheduler", v)
+        } else if r == 13 {
+            if has_contract {
+                for line in unsigned {
+                    let parts = text_split(line, "\t")
+                    pv_witness(v, pf_int(strs_get(parts, 0)), pf_int(strs_get(parts, 1)), strs_get(parts, 2))
+                }
+            } else {
+                unknown = true
+                pv_witness(v, at_s, at_e, "the program's contract facts were not computed")
+            }
+        } else if r == 7 {
+            for i in 0..fx_sink_count(f) {
+                if fx_sink_class(f, i) == "vouch" {
+                    let origins = fx_sink_origins(f, i)
+                    pv_witness(v, fx_sink_start(f, i), fx_sink_end(f, i), if strs_len(origins) == 0 { "a vouch, clearing nothing" } else { "a vouch, clearing " + str_join(origins, ", ") })
+                }
+            }
+        } else if r == 6 {
+            pf_flow(f, "output", "this writes to standard output what comes from", v)
+        } else if r == 15 {
+            pf_flow(f, "path", "this path comes from", v)
+        } else if r == 8 {
+            pf_builtin_sites(f, "time_now_ms time_now_ns time_wall_ns time_sleep_ms chan_select_until sel_wait_until", "this reads a clock", v)
+        } else if r == 14 {
+            // The language's own rule since N104: nothing is left for the profile to refuse.
+        } else if r == 0 {
+            for i in 0..ck_fn_count(c) {
+                if ck_fn_declared(c, i) < 0 && ck_fn_foreign(c, i) == "" && fx_module_own(f, ck_fn_module(c, i)) {
+                    pv_witness(v, ck_fn_name_start(c, i), ck_fn_name_end(c, i), "`" + ck_fn_name(c, i) + "` declares no effect set")
+                }
+            }
+        } else if r == 4 {
+            if !locked { pv_witness(v, at_s, at_e, "this build is not a package build held to its lockfile") }
+        } else if r == 12 {
+            if !has_mir {
+                unknown = true
+                pv_witness(v, at_s, at_e, "the program's loops were not analysed")
+            } else {
+                unknown = true
+                for line in text_split(mir, pf_nl()) {
+                    let parts = text_split(line, "\t")
+                    if strs_len(parts) >= 5 && strs_get(parts, 0) == "loop" && strs_get(parts, 3) == "-" {
+                        let at = pf_abs(f, strs_get(parts, 1))
+                        pv_witness(v, ints_get(at, 0), ints_get(at, 1), "this loop of `" + strs_get(parts, 2) + "` has no bound the compiler establishes: " + strs_get(parts, 4))
+                    }
+                }
+            }
+        }
+        pv_end(v, unknown)
+    }
+    v
+}
+
+// --- the diagnostics -------------------------------------------------------------------------------------
+
+/// One diagnostic per failed rule (`diagnostics`), in `d`.
+pub fn pf_diagnostics(v: Pv, d: Diags) -> Int {
+    let quoted = strs_new()
+    for p in v.profiles { strs_push(quoted, "`" + p + "`") }
+    for i in 0..ints_len(v.rule) {
+        if ints_get(v.pass, i) == 1 { continue }
+        let first = ints_get(v.first, i)
+        let count = ints_get(v.count, i)
+        dg_error(d, "N0510", ints_get(v.ws, first), ints_get(v.we, first),
+                "the profile " + str_join(quoted, " and ") + " refuses this program: rule `" + pf_rule_id(ints_get(v.rule, i)) + "`", strs_get(v.note, first),
+                pf_help(ints_get(v.rule, i)))
+        if ints_get(v.unknown, i) == 1 {
+            dg_secondary(d, ints_get(v.ws, first), ints_get(v.we, first), "unknown: the compiler could not establish what this rule needs, so it is not met")
+        }
+        let mut k = 1
+        while k < count && k <= 16 {
+            dg_secondary(d, ints_get(v.ws, first + k), ints_get(v.we, first + k), strs_get(v.note, first + k))
+            k += 1
+        }
+    }
+    0
+}
+
+// --- the report ---------------------------------------------------------------------------------------
+
+/// `nazm.profile-report/1`: one line of canonical JSON (`report`). `names` are the modules' display names, as a diagnostic shows them.
+pub fn pf_report(f: Facts, names: Strs, v: Pv, bounds: Str) -> Str {
+    let profiles = strs_new()
+    for p in v.profiles { strs_push(profiles, ob_quote(p)) }
+    let rules = strs_new()
+    for i in 0..ints_len(v.rule) {
+        let verdict = if ints_get(v.pass, i) == 1 { "pass" } else if ints_get(v.unknown, i) == 1 { "unknown" } else { "fail" }
+        let ws = strs_new()
+        for k in 0..ints_get(v.count, i) {
+            let w = ints_get(v.first, i) + k
+            let s = ints_get(v.ws, w)
+            let m = if s < 0 { 0 - 1 } else { fx_module_at(f, s) }
+            let file = if m < 0 { "null" } else { ob_quote(strs_get(names, m)) }
+            let local = if m < 0 { 0 } else { s - fx_module_base(f, m) }
+            let end = if m < 0 { 0 } else { ints_get(v.we, w) - fx_module_base(f, m) }
+            strs_push(ws, "{\"file\":" + file + ",\"start\":" + int_to_str(local) + ",\"end\":" + int_to_str(end) + ",\"note\":" + ob_quote(strs_get(v.note, w)) + "}")
+        }
+        strs_push(rules, "{\"id\":" + ob_quote(pf_rule_id(ints_get(v.rule, i))) + ",\"verdict\":\"" + verdict + "\",\"witnesses\":[" + str_join(ws, ",") + "]}")
+    }
+    "{\"schema\":\"nazm.profile-report/1\",\"profiles\":[" + str_join(profiles, ",") + "],\"outcome\":\"" + (if pv_accepted(v) { "accepted" } else { "refused" })
+            + "\",\"rules\":[" + str_join(rules, ",") + "]" + bounds
+            + ",\"note\":\"compiler-enforced restriction profile: evidence from the checker's facts, not a certification\"}"
+}
+
+/// The static bounds the report states (`Bounds`): every loop with its trip bound, the longest chain of direct calls from `main`, and the counts of sites.
+fn pf_bounds(f: Facts, names: Strs, mir: Str) -> Str {
+    let loops = strs_new()
+    let mut alloc = 0
+    let mut tasks = 0
+    let mut depth = "null"
+    for line in text_split(mir, pf_nl()) {
+        let parts = text_split(line, "\t")
+        if strs_len(parts) >= 5 && strs_get(parts, 0) == "loop" {
+            let at = pf_abs(f, strs_get(parts, 1))
+            let m = if ints_get(at, 0) < 0 { 0 - 1 } else { fx_module_at(f, ints_get(at, 0)) }
+            let file = if m < 0 { "null" } else { ob_quote(strs_get(names, m)) }
+            let base = if m < 0 { 0 } else { fx_module_base(f, m) }
+            let bound = strs_get(parts, 3)
+            let reason = strs_get(parts, 4)
+            strs_push(loops, "{\"function\":" + ob_quote(strs_get(parts, 2)) + ",\"file\":" + file + ",\"start\":" + int_to_str(ints_get(at, 0) - base) + ",\"end\":" + int_to_str(ints_get(at, 1) - base)
+                    + ",\"bound\":" + (if bound == "-" { "null" } else { bound }) + ",\"reason\":" + (if reason == "" { "null" } else { ob_quote(reason) }) + "}")
+        }
+        if strs_len(parts) >= 4 && strs_get(parts, 0) == "stats" {
+            alloc = pf_int(strs_get(parts, 1))
+            tasks = pf_int(strs_get(parts, 2))
+            if strs_get(parts, 3) != "-" { depth = strs_get(parts, 3) }
+        }
+    }
+    let mut queues = 0
+    let c = fx_checker(f)
+    for i in 0..ck_fn_count(c) {
+        for k in 0..fx_call_count(f, i) {
+            if fx_call_kind(f, i, k) == "builtin" && (fx_call_builtin(f, i, k) == "chan_new" || fx_call_builtin(f, i, k) == "chan_new_of") { queues += 1 }
+        }
+    }
+    ",\"bounds\":{\"loops\":[" + str_join(loops, ",") + "],\"call_depth\":" + depth + ",\"allocation_sites\":" + int_to_str(alloc) + ",\"task_sites\":" + int_to_str(tasks)
+            + ",\"queue_sites\":" + int_to_str(queues) + ",\"stack_bytes\":null,\"wcet\":null,\"kinds\":{\"loops\":\"static bound per entry\",\"call_depth\":\"static bound\",\"sites\":\"static count of sites, not executions\",\"stack_bytes\":\"unknown here: a board build states it (bounds.json)\",\"wcet\":\"unknown: not computed\"}}"
+}
+
+// --- enforcing --------------------------------------------------------------------------------------------
+
+fn pf_refuse(io: IoCap, why: Str) -> Int {
+    eprint("nazm: not carried: " + why + pf_nl())
+    exit_with(6)
+    0
+}
+
+/// Whether a rule of `profiles` reads MIR (`needs_cost`).
+fn pf_needs_cost(profiles: Strs) -> Bool {
+    for p in profiles {
+        for r in pf_rules_of(p) {
+            if r == 5 || r == 9 || r == 16 || r == 17 || r == 18 || r == 12 || r == 13 || r == 20 { return true }
+        }
+    }
+    false
+}
+
+/// What the pipeline's `profile-facts` says of the program `f` carries (`file` as the command was given it).
+pub fn pf_mir(io: IoCap, proc: ProcessCap, sp: SpawnCap, f: Facts, file: Str) -> Str {
+    let raw = fx_core_document_with_sources(f)
+    if raw == "" { pf_refuse(io, "a program whose Core IR the front end does not carry") }
+    let doc = ci_unprefix_paths(io, raw, file)
+    let args = strs_new()
+    strs_push(args, "profile-facts")
+    strs_push(args, "@CORE@")
+    ci_staged(io, proc, sp, "profile", doc, args)
+}
+
+/// Whether the package the compilation is in verifies against its lockfile (`verify_locked`); what the port cannot say it refuses.
+pub fn pf_lock_ok(io: IoCap, packages: Packages) -> Bool {
+    let dir = fe_canonical(io, strs_get(packages.dirs, pk_root_package(packages)))
+    let verdict = lk_verify(io, dir)
+    if text_starts_with(verdict, "R") { pf_refuse(io, str_slice(verdict, 1, str_len(verdict))) }
+    verdict == ""
+}
+
+/// Hold the program `f` (checked as a program, rooted at `file`) to the profiles in force (`enforce`): one diagnostic per rule refused, status 1; the
+/// report, where asked for, first. A program that does not check, or that the checker warns of, is left to the command, which says why.
+pub fn pf_enforce(io: IoCap, proc: ProcessCap, sp: SpawnCap, f: Facts, file: Str, names: Strs, profiles: Strs, locked: Bool, report: Bool) -> Int {
+    let mut strict = false
+    for p in profiles { if p != "general" { strict = true } }
+    if !strict && !report { return 0 }
+    if dg_len(fx_diags(f)) > 0 { return 0 }
+    let needs = pf_needs_cost(profiles)
+    let mir = if needs { pf_mir(io, proc, sp, f, file) } else { "" }
+    // A contract's unguarded writes (`unsigned_writes`): only where the module is one.
+    let mut unsigned = strs_new()
+    let mut wants_contract = false
+    for p in profiles { for r in pf_rules_of(p) { if r == 13 { wants_contract = true } } }
+    if wants_contract {
+        let raw = fx_core_document_with_sources(f)
+        if raw == "" { pf_refuse(io, "a program whose Core IR the front end does not carry") }
+        let ct = ct_of_text(f, ci_unprefix_paths(io, raw, file))
+        if ct.why == "" { unsigned = ct_unsigned(ct) }
+    }
+    let v = pf_evaluate(io, f, profiles, locked, mir, needs, unsigned, true)
+    if report { print(pf_report(f, names, v, if needs { pf_bounds(f, names, mir) } else { "" }) + pf_nl()) }
+    if pv_accepted(v) { return 0 }
+    let d = dg_new()
+    pf_diagnostics(v, d)
+    let out = strs_new()
+    let texts = fe_texts(f)
+    let bases = fe_bases(f)
+    for i in 0..dg_len(d) { strs_push(out, dg_render(d, i, names, texts, bases)) }
+    let n = dg_len(d)
+    eprint(str_join(out, "") + "nazm: " + int_to_str(n) + " error" + ut_plural(n) + pf_nl())
+    exit_with(1)
+    0
+}

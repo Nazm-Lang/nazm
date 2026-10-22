@@ -1,0 +1,303 @@
+// Loop bounds (N63, `docs/internal/architecture.md` §7.65), read off Core IR: `crates/nazm-service/src/bounds.rs` over the document `cir.nz` reads (R8
+// slice 11, task 11.1). One form is bounded: a counter set to a literal as its last write before the loop, compared with a literal (or an immutable
+// local bound to one), and stepped once per turn by a positive literal at the top level of the body, with no `continue` to the loop. Every other loop
+// has no bound, with the reason — the compiler does not know, which is not the same as unbounded.
+
+use "cir.nz"
+use "@std/json"
+
+/// Every region directly inside an expression, at any depth of expressions, `visit`ed in order: `bk_expr_blocks(c, e, visit)` pushes them on `out`.
+fn bk_expr_blocks(c: Cir, e: Int, out: Ints) -> Int {
+    if e < 0 { return 0 }
+    let o = op(c, e)
+    if o == "const" || o == "local" || o == "closure" || o == "fn_value" { return 0 }
+    if o == "neg" || o == "~" || o == "convert" || o == "fits" {
+        bk_expr_blocks(c, kid(c, e, "operand"), out)
+    } else if o == "array-repeat" {
+        bk_expr_blocks(c, kid(c, e, "value"), out)
+    } else if o == "field" {
+        bk_expr_blocks(c, kid(c, e, "base"), out)
+    } else if o == "array" {
+        let xs = kid(c, e, "elems")
+        for i in 0..count(c, xs) { bk_expr_blocks(c, at(c, xs, i), out) }
+    } else if o == "index" {
+        bk_expr_blocks(c, kid(c, e, "base"), out)
+        bk_expr_blocks(c, kid(c, e, "index"), out)
+    } else if o == "call" || o == "builtin" || o == "call_trait" {
+        let xs = kid(c, e, "args")
+        for i in 0..count(c, xs) { bk_expr_blocks(c, at(c, xs, i), out) }
+    } else if o == "call_indirect" {
+        bk_expr_blocks(c, kid(c, e, "callee"), out)
+        let xs = kid(c, e, "args")
+        for i in 0..count(c, xs) { bk_expr_blocks(c, at(c, xs, i), out) }
+    } else if o == "record" || o == "variant" {
+        let xs = kid(c, e, "fields")
+        for i in 0..count(c, xs) { bk_expr_blocks(c, kid(c, at(c, xs, i), "value"), out) }
+    } else if o == "match" {
+        bk_expr_blocks(c, kid(c, e, "scrutinee"), out)
+        let arms = kid(c, e, "arms")
+        for i in 0..count(c, arms) { ints_push(out, kid(c, at(c, arms, i), "body")) }
+    } else if o == "if" {
+        bk_expr_blocks(c, kid(c, e, "cond"), out)
+        ints_push(out, kid(c, e, "then"))
+        ints_push(out, kid(c, e, "else"))
+    } else if o == "block" {
+        ints_push(out, kid(c, e, "body"))
+    } else {
+        // An arithmetic, bitwise or comparison operator: `lhs` and `rhs`.
+        bk_expr_blocks(c, kid(c, e, "lhs"), out)
+        bk_expr_blocks(c, kid(c, e, "rhs"), out)
+    }
+    0
+}
+
+/// Every region directly inside a statement: its own, and those in its expressions.
+fn bk_stmt_blocks(c: Cir, s: Int, out: Ints) -> Int {
+    let o = op(c, s)
+    if o == "let" || o == "assign" || o == "eval" || o == "return" {
+        bk_expr_blocks(c, kid(c, s, "value"), out)
+    } else if o == "if" {
+        bk_expr_blocks(c, kid(c, s, "cond"), out)
+        ints_push(out, kid(c, s, "then"))
+        let other = kid(c, s, "else")
+        if other >= 0 { ints_push(out, other) }
+    } else if o == "match" {
+        bk_expr_blocks(c, kid(c, s, "scrutinee"), out)
+        let arms = kid(c, s, "arms")
+        for i in 0..count(c, arms) { ints_push(out, kid(c, at(c, arms, i), "body")) }
+    } else if o == "loop" {
+        bk_expr_blocks(c, kid(c, s, "cond"), out)
+        ints_push(out, kid(c, s, "body"))
+    } else if o == "block" || o == "scope" {
+        ints_push(out, kid(c, s, "body"))
+    } else if o == "spawn" {
+        let xs = kid(c, s, "args")
+        for i in 0..count(c, xs) { bk_expr_blocks(c, at(c, xs, i), out) }
+    }
+    0
+}
+
+/// How many times `s` writes local `l`, anywhere inside it.
+fn bk_writes(c: Cir, s: Int, l: Int) -> Int {
+    let o = op(c, s)
+    let mut n = 0
+    if (o == "let" || o == "assign") && ival(c, s, "local") == l { n = 1 }
+    let blocks = ints_new()
+    bk_stmt_blocks(c, s, blocks)
+    for i in 0..ints_len(blocks) { n += bk_block_writes(c, ints_get(blocks, i), l) }
+    n
+}
+
+fn bk_block_writes(c: Cir, b: Int, l: Int) -> Int {
+    if b < 0 { return 0 }
+    let mut n = 0
+    let stmts = kid(c, b, "stmts")
+    for i in 0..count(c, stmts) { n += bk_writes(c, at(c, stmts, i), l) }
+    n + bk_expr_writes(c, kid(c, b, "tail"), l)
+}
+
+fn bk_expr_writes(c: Cir, e: Int, l: Int) -> Int {
+    if e < 0 { return 0 }
+    let blocks = ints_new()
+    bk_expr_blocks(c, e, blocks)
+    let mut n = 0
+    for i in 0..ints_len(blocks) { n += bk_block_writes(c, ints_get(blocks, i), l) }
+    n
+}
+
+/// Whether a `continue` to loop `id` is anywhere in block `b`.
+fn bk_continues(c: Cir, b: Int, id: Int) -> Bool {
+    if b < 0 { return false }
+    let stmts = kid(c, b, "stmts")
+    for i in 0..count(c, stmts) {
+        let s = at(c, stmts, i)
+        if op(c, s) == "continue" && ival(c, s, "loop") == id { return true }
+        let blocks = ints_new()
+        bk_stmt_blocks(c, s, blocks)
+        for k in 0..ints_len(blocks) { if bk_continues(c, ints_get(blocks, k), id) { return true } }
+    }
+    let blocks = ints_new()
+    bk_expr_blocks(c, kid(c, b, "tail"), blocks)
+    for k in 0..ints_len(blocks) { if bk_continues(c, ints_get(blocks, k), id) { return true } }
+    false
+}
+
+/// The value an immutable local is bound to (node), or -1: a local is bound exactly once.
+fn bk_find_let(c: Cir, b: Int, l: Int) -> Int {
+    if b < 0 { return 0 - 1 }
+    let stmts = kid(c, b, "stmts")
+    for i in 0..count(c, stmts) {
+        let s = at(c, stmts, i)
+        if op(c, s) == "let" && ival(c, s, "local") == l { return kid(c, s, "value") }
+        let blocks = ints_new()
+        bk_stmt_blocks(c, s, blocks)
+        for k in 0..ints_len(blocks) {
+            let found = bk_find_let(c, ints_get(blocks, k), l)
+            if found >= 0 { return found }
+        }
+    }
+    let blocks = ints_new()
+    bk_expr_blocks(c, kid(c, b, "tail"), blocks)
+    for k in 0..ints_len(blocks) {
+        let found = bk_find_let(c, ints_get(blocks, k), l)
+        if found >= 0 { return found }
+    }
+    0 - 1
+}
+
+/// An `Int` constant's node `k` of function `f`, as its value: [1, value], or [0, 0].
+fn bk_const(c: Cir, f: Int, k: Int) -> Ints {
+    let out = ints_new()
+    let consts = kid(c, f, "consts")
+    let node = at(c, consts, k)
+    if node < 0 || sval(c, node, "type") != "Int" {
+        ints_push(out, 0)
+        ints_push(out, 0)
+        return out
+    }
+    let v = kid(c, node, "value")
+    if v < 0 || json_kind(c.doc, v) != "number" {
+        ints_push(out, 0)
+        ints_push(out, 0)
+        return out
+    }
+    ints_push(out, 1)
+    ints_push(out, int_of(c, v))
+    out
+}
+
+/// The `Int` an expression is, where it is a literal, a negated one, or an immutable local bound to one: [1, value], or [0, 0].
+fn bk_literal(c: Cir, f: Int, e: Int) -> Ints {
+    let none = ints_new()
+    ints_push(none, 0)
+    ints_push(none, 0)
+    if e < 0 { return none }
+    let o = op(c, e)
+    if o == "neg" {
+        let x = bk_literal(c, f, kid(c, e, "operand"))
+        if ints_get(x, 0) == 1 && ints_get(x, 1) != 0 - 9223372036854775807 - 1 {
+            let out = ints_new()
+            ints_push(out, 1)
+            ints_push(out, 0 - ints_get(x, 1))
+            return out
+        }
+        return none
+    }
+    if o == "const" { return bk_const(c, f, ival(c, e, "const")) }
+    if o == "local" {
+        let locals = kid(c, f, "locals")
+        let l = ival(c, e, "local")
+        let mut origin = ""
+        for i in 0..count(c, locals) {
+            let d = at(c, locals, i)
+            if ival(c, d, "id") == l { origin = sval(c, d, "origin") }
+        }
+        if origin != "let" { return none }
+        let v = bk_find_let(c, kid(c, f, "body"), l)
+        if v >= 0 && op(c, v) == "const" { return bk_const(c, f, ival(c, v, "const")) }
+    }
+    none
+}
+
+fn bk_ok(turns: Int) -> Str { "ok " + int_to_str(turns) }
+
+/// The trip bound of one loop (`bound_of`): `ok TURNS`, or the reason there is none.
+fn bk_bound(c: Cir, f: Int, stmts: Int, k: Int) -> Str {
+    let lp = at(c, stmts, k)
+    let id = ival(c, lp, "loop")
+    let cond = kid(c, lp, "cond")
+    let body = kid(c, lp, "body")
+    let o = op(c, cond)
+    let ordering = o == "<" || o == "<=" || o == ">" || o == ">=" || o == "==" || o == "!="
+    if !ordering { return "its condition is not a comparison of a counter with a literal" }
+    let lhs = kid(c, cond, "lhs")
+    if op(c, lhs) != "local" { return "its condition is not a comparison of a counter with a literal" }
+    let i = ival(c, lhs, "local")
+    let limit = bk_literal(c, f, kid(c, cond, "rhs"))
+    if ints_get(limit, 0) == 0 { return "its condition does not compare the counter with a literal" }
+    if o == "==" || o == "!=" { return "its condition is an equality, not an ordering" }
+    let ascending = o == "<" || o == "<="
+    // The start: the last write to the counter before the loop, in this block.
+    let mut has_start = false
+    let mut start = 0
+    let mut j = k - 1
+    while j >= 0 && !has_start {
+        let s = at(c, stmts, j)
+        let so = op(c, s)
+        if (so == "let" || so == "assign") && ival(c, s, "local") == i {
+            if so == "assign" && count(c, kid(c, s, "path")) > 0 { return "the counter's start is not a literal" }
+            let v = bk_literal(c, f, kid(c, s, "value"))
+            if ints_get(v, 0) == 0 { return "the counter's start is not a literal" }
+            start = ints_get(v, 1)
+            has_start = true
+        } else if bk_writes(c, s, i) > 0 {
+            return "the counter is written before the loop where the compiler does not follow"
+        }
+        j -= 1
+    }
+    if !has_start { return "the counter's start is not set in the loop's block" }
+    // The step: the body's one write to the counter, at its top level.
+    let bs = kid(c, body, "stmts")
+    let mut total = 0
+    for q in 0..count(c, bs) { total += bk_writes(c, at(c, bs, q), i) }
+    total += bk_expr_writes(c, kid(c, body, "tail"), i)
+    if total != 1 { return "the counter is not written exactly once in the body" }
+    let mut step = 0 - 1
+    for q in 0..count(c, bs) {
+        let s = at(c, bs, q)
+        if step < 0 && op(c, s) == "assign" && ival(c, s, "local") == i && count(c, kid(c, s, "path")) == 0 { step = kid(c, s, "value") }
+    }
+    if step < 0 { return "the counter's one write is not at the top level of the body" }
+    let aop = op(c, step)
+    if aop != "+" && aop != "-" && aop != "*" && aop != "/" && aop != "%" { return "the counter is not stepped by a literal" }
+    let sl = kid(c, step, "lhs")
+    if op(c, sl) != "local" || ival(c, sl, "local") != i { return "the counter is not stepped by a literal" }
+    let cv = bk_literal(c, f, kid(c, step, "rhs"))
+    if ints_get(cv, 0) == 0 { return "the counter is not stepped by a literal" }
+    let by = ints_get(cv, 1)
+    let steps_right = if aop == "+" { ascending } else if aop == "-" { !ascending } else { false }
+    if by <= 0 || !steps_right { return "the counter does not step towards its limit" }
+    if bk_continues(c, body, id) { return "a `continue` to the loop skips the counter's step" }
+    let lim = ints_get(limit, 1)
+    // Beyond 62 bits the span does not fit one word: not computed here.
+    let big = 4611686018427387904
+    if start > big || start < 0 - big || lim > big || lim < 0 - big { return "unsupported: a bound beyond 62 bits" }
+    let span = if ascending { lim - start } else { start - lim }
+    let inclusive = o == "<=" || o == ">="
+    let turns = if span < 0 || (span == 0 && !inclusive) { 0 } else if inclusive { span / by + 1 } else { (span + by - 1) / by }
+    bk_ok(turns)
+}
+
+fn bk_block(c: Cir, f: Int, fname: Str, b: Int, out: Strs) -> Int {
+    if b < 0 { return 0 }
+    let stmts = kid(c, b, "stmts")
+    for k in 0..count(c, stmts) {
+        let s = at(c, stmts, k)
+        if op(c, s) == "loop" {
+            let r = bk_bound(c, f, stmts, k)
+            if text_starts_with(r, "ok ") {
+                strs_push(out, "loop\t" + sval(c, s, "at") + "\t" + fname + "\t" + str_slice(r, 3, str_len(r)) + "\t\n")
+            } else {
+                strs_push(out, "loop\t" + sval(c, s, "at") + "\t" + fname + "\t-\t" + r + "\n")
+            }
+        }
+        let blocks = ints_new()
+        bk_stmt_blocks(c, s, blocks)
+        for q in 0..ints_len(blocks) { bk_block(c, f, fname, ints_get(blocks, q), out) }
+    }
+    let blocks = ints_new()
+    bk_expr_blocks(c, kid(c, b, "tail"), blocks)
+    for q in 0..ints_len(blocks) { bk_block(c, f, fname, ints_get(blocks, q), out) }
+    0
+}
+
+/// Every loop of the program's functions, in function and source order, as `loop\tAT\tFUNCTION\tBOUND|-\tREASON` lines.
+pub fn loop_bounds(c: Cir) -> Strs ! {} {
+    let out = strs_new()
+    let fs = kid(c, json_root(c.doc), "functions")
+    for i in 0..count(c, fs) {
+        let f = at(c, fs, i)
+        if kid(c, f, "body") >= 0 { bk_block(c, f, sval(c, f, "name"), kid(c, f, "body"), out) }
+    }
+    out
+}
