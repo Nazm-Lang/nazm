@@ -1,0 +1,366 @@
+// A contract's facts (N69, `docs/internal/architecture.md` §7.71), in Nazm (R8 slice 11, task 11.1): `crates/nazm-service/src/contract.rs` over the Core IR document
+// (`fx_core_document_with_sources`, which `obligations.nz` reads) and the checker's function table — the state record, the entrypoints, each entrypoint's read and
+// write sets over the state, whether its own body decides on its caller, and whether the module declares `conserved`.
+//
+// A read or write set is conservative: a field the entrypoint projects from its state parameter is read; a field of a `State(…)` it builds is written unless its
+// initialiser is that same field of the parameter; and a use of the state the analysis does not see through makes the whole state *may* read or *may* write.
+// Never an omission.
+
+use "../../compiler/sema.nz"
+use "../../compiler/facts.nz"
+use "obligations.nz"
+use "@std/json"
+
+/// A contract's shape, or why a module is not one (`why`, otherwise "").
+pub struct Ct {
+    why: Str,
+    fields: Strs,
+    ftypes: Strs,
+    conserved: Bool,
+    ename: Strs,
+    eargs: Vec[Strs],
+    // Fields read and written, sorted; `rall`/`wall` 1 where the set is "all" (`None`).
+    rall: Ints,
+    reads: Vec[Strs],
+    wall: Ints,
+    writes: Vec[Strs],
+    checked: Ints,
+    es: Ints,
+    ee: Ints,
+}
+
+fn ct_none(why: Str) -> Ct {
+    Ct(why: why, fields: strs_new(), ftypes: strs_new(), conserved: false, ename: strs_new(), eargs: vec_new(), rall: ints_new(), reads: vec_new(), wall: ints_new(), writes: vec_new(),
+            checked: ints_new(), es: ints_new(), ee: ints_new())
+}
+
+// The analysis of one entrypoint: the state's local and type, the fields, and what has been seen. `flags`: 0 reads are all, 1 writes are all, 2 the caller is
+// checked.
+struct Cs {
+    d: JsonDoc,
+    fields: Strs,
+    state_ty: Str,
+    flags: Ints,
+    reads: Strs,
+    writes: Strs,
+}
+
+fn cs_add(set: Strs, name: Str) -> Int {
+    for x in set { if x == name { return 0 } }
+    strs_push(set, name)
+    0
+}
+
+fn cs_op(c: Cs, e: Int) -> Str { ob_s(c.d, e, "op") }
+
+fn cs_is_local(c: Cs, e: Int, l: Int) -> Bool { e >= 0 && cs_op(c, e) == "local" && ob_i(c.d, e, "local") == l }
+
+fn cs_arith_or_compare(o: Str) -> Bool {
+    o == "+" || o == "-" || o == "*" || o == "/" || o == "%" || o == "<" || o == "<=" || o == ">" || o == ">=" || o == "==" || o == "!="
+}
+
+/// Whether local `l` is read anywhere in `e`, its regions' values included.
+fn cs_mentions(c: Cs, e: Int, l: Int) -> Bool {
+    if e < 0 { return false }
+    let o = cs_op(c, e)
+    if o == "local" { return ob_i(c.d, e, "local") == l }
+    if o == "neg" { return cs_mentions(c, ob_kid(c.d, e, "operand"), l) }
+    if o == "field" { return cs_mentions(c, ob_kid(c.d, e, "base"), l) }
+    if cs_arith_or_compare(o) { return cs_mentions(c, ob_kid(c.d, e, "lhs"), l) || cs_mentions(c, ob_kid(c.d, e, "rhs"), l) }
+    if o == "if" {
+        return cs_mentions(c, ob_kid(c.d, e, "cond"), l) || cs_block_mentions(c, ob_kid(c.d, e, "then"), l) || cs_block_mentions(c, ob_kid(c.d, e, "else"), l)
+    }
+    if o == "block" { return cs_block_mentions(c, ob_kid(c.d, e, "body"), l) }
+    false
+}
+
+fn cs_block_mentions(c: Cs, b: Int, l: Int) -> Bool {
+    if b < 0 { return false }
+    cs_mentions(c, ob_kid(c.d, b, "tail"), l)
+}
+
+fn cs_condition(c: Cs, cond: Int) -> Int {
+    if cs_mentions(c, cond, 1) { ints_set(c.flags, 2, 1) }
+    0
+}
+
+fn cs_field_name(c: Cs, field: Int) -> Str { if field >= 0 && field < strs_len(c.fields) { strs_get(c.fields, field) } else { "" } }
+
+fn cs_read(c: Cs, field: Int) -> Int {
+    if ints_get(c.flags, 0) == 0 && field >= 0 && field < strs_len(c.fields) { cs_add(c.reads, strs_get(c.fields, field)) }
+    0
+}
+
+fn cs_write(c: Cs, field: Int) -> Int {
+    if ints_get(c.flags, 1) == 0 && field >= 0 && field < strs_len(c.fields) { cs_add(c.writes, strs_get(c.fields, field)) }
+    0
+}
+
+fn cs_block(c: Cs, b: Int, tail_is_result: Bool) -> Int {
+    if b < 0 { return 0 }
+    let stmts = ob_kid(c.d, b, "stmts")
+    for i in 0..ob_len(c.d, stmts) { cs_stmt(c, ob_at(c.d, stmts, i)) }
+    let tail = ob_kid(c.d, b, "tail")
+    if tail >= 0 { cs_expr(c, tail, tail_is_result) }
+    0
+}
+
+fn cs_stmt(c: Cs, s: Int) -> Int {
+    let o = cs_op(c, s)
+    if o == "let" || o == "eval" {
+        cs_expr(c, ob_kid(c.d, s, "value"), false)
+    } else if o == "assign" {
+        // `s` rebound inside the entrypoint: what it holds at the return is not followed.
+        if ob_i(c.d, s, "local") == 0 {
+            ints_set(c.flags, 0, 1)
+            ints_set(c.flags, 1, 1)
+        }
+        cs_expr(c, ob_kid(c.d, s, "value"), false)
+    } else if o == "return" {
+        cs_expr(c, ob_kid(c.d, s, "value"), true)
+    } else if o == "if" {
+        let cond = ob_kid(c.d, s, "cond")
+        cs_condition(c, cond)
+        cs_expr(c, cond, false)
+        cs_block(c, ob_kid(c.d, s, "then"), false)
+        let other = ob_kid(c.d, s, "else")
+        if other >= 0 { cs_block(c, other, false) }
+    } else if o == "loop" {
+        let cond = ob_kid(c.d, s, "cond")
+        cs_condition(c, cond)
+        cs_expr(c, cond, false)
+        cs_block(c, ob_kid(c.d, s, "body"), false)
+    } else if o == "block" || o == "scope" {
+        cs_block(c, ob_kid(c.d, s, "body"), false)
+    } else if o == "match" {
+        cs_expr(c, ob_kid(c.d, s, "scrutinee"), false)
+        let arms = ob_kid(c.d, s, "arms")
+        for i in 0..ob_len(c.d, arms) { cs_block(c, ob_kid(c.d, ob_at(c.d, arms, i), "body"), false) }
+    } else if o == "spawn" {
+        let args = ob_kid(c.d, s, "args")
+        for i in 0..ob_len(c.d, args) { cs_expr(c, ob_at(c.d, args, i), false) }
+    }
+    0
+}
+
+fn cs_args(c: Cs, e: Int) -> Int {
+    let args = ob_kid(c.d, e, "args")
+    for i in 0..ob_len(c.d, args) { cs_expr(c, ob_at(c.d, args, i), false) }
+    0
+}
+
+/// `result` is whether `e` is (part of) what the entrypoint returns.
+fn cs_expr(c: Cs, e: Int, result: Bool) -> Int {
+    if e < 0 { return 0 }
+    let o = cs_op(c, e)
+    // Returned as the new state, anything but the state itself, a `State(…)` literal, an `Ok(…)`/`Err(…)` around one, or a branch, block or match whose arms are
+    // those, is a value the analysis does not see into: it may write every field.
+    if result {
+        let mut seen = o == "local" || o == "variant" || o == "if" || o == "block" || o == "match"
+        if o == "record" && ob_s(c.d, e, "type") == c.state_ty { seen = true }
+        if !seen { ints_set(c.flags, 1, 1) }
+    }
+    if o == "field" && cs_is_local(c, ob_kid(c.d, e, "base"), 0) {
+        // A projection of the state parameter: one field read.
+        cs_read(c, ob_i(c.d, e, "field"))
+    } else if o == "local" && ob_i(c.d, e, "local") == 0 {
+        // The state parameter used whole, anywhere but as the base of a projection (or returned as it is): the analysis cannot see what is done with it.
+        if !result { ints_set(c.flags, 0, 1) }
+    } else if o == "local" && result {
+        ints_set(c.flags, 1, 1)
+    } else if o == "record" && ob_s(c.d, e, "type") == c.state_ty {
+        let fields = ob_kid(c.d, e, "fields")
+        for i in 0..ob_len(c.d, fields) {
+            let init = ob_at(c.d, fields, i)
+            let value = ob_kid(c.d, init, "value")
+            let field = ob_i(c.d, init, "field")
+            let passthrough = value >= 0 && cs_op(c, value) == "field" && ob_i(c.d, value, "field") == field && cs_is_local(c, ob_kid(c.d, value, "base"), 0)
+            if result {
+                if passthrough { continue }
+                cs_write(c, field)
+            }
+            cs_expr(c, value, false)
+        }
+    } else if o == "variant" {
+        let fields = ob_kid(c.d, e, "fields")
+        for i in 0..ob_len(c.d, fields) {
+            // `Ok(value: State(…))` is the new state; `Err(error: code)` is not one.
+            cs_expr(c, ob_kid(c.d, ob_at(c.d, fields, i), "value"), result && ob_i(c.d, e, "variant") == 0)
+        }
+    } else if o == "field" {
+        cs_expr(c, ob_kid(c.d, e, "base"), false)
+    } else if o == "neg" || o == "~" || o == "convert" || o == "fits" {
+        cs_expr(c, ob_kid(c.d, e, "operand"), false)
+    } else if o == "array-repeat" {
+        cs_expr(c, ob_kid(c.d, e, "value"), false)
+    } else if o == "call" || o == "builtin" || o == "call_trait" {
+        cs_args(c, e)
+    } else if o == "call_indirect" {
+        cs_expr(c, ob_kid(c.d, e, "callee"), false)
+        cs_args(c, e)
+    } else if o == "record" {
+        let fields = ob_kid(c.d, e, "fields")
+        for i in 0..ob_len(c.d, fields) { cs_expr(c, ob_kid(c.d, ob_at(c.d, fields, i), "value"), false) }
+    } else if o == "if" {
+        let cond = ob_kid(c.d, e, "cond")
+        cs_condition(c, cond)
+        cs_expr(c, cond, false)
+        cs_block(c, ob_kid(c.d, e, "then"), result)
+        cs_block(c, ob_kid(c.d, e, "else"), result)
+    } else if o == "block" {
+        cs_block(c, ob_kid(c.d, e, "body"), result)
+    } else if o == "match" {
+        cs_expr(c, ob_kid(c.d, e, "scrutinee"), false)
+        let arms = ob_kid(c.d, e, "arms")
+        for i in 0..ob_len(c.d, arms) { cs_block(c, ob_kid(c.d, ob_at(c.d, arms, i), "body"), result) }
+    } else if o == "closure" {
+        // A closure may capture the state; which fields it reads is not seen.
+        ints_set(c.flags, 0, 1)
+    } else if o == "const" || o == "local" || o == "fn_value" {
+        // Nothing to follow.
+    } else if o == "array" {
+        let xs = ob_kid(c.d, e, "elems")
+        for i in 0..ob_len(c.d, xs) { cs_expr(c, ob_at(c.d, xs, i), false) }
+    } else if o == "index" {
+        cs_expr(c, ob_kid(c.d, e, "base"), false)
+        cs_expr(c, ob_kid(c.d, e, "index"), false)
+    } else {
+        // An arithmetic, bitwise or comparison operator.
+        cs_expr(c, ob_kid(c.d, e, "lhs"), false)
+        cs_expr(c, ob_kid(c.d, e, "rhs"), false)
+    }
+    0
+}
+
+/// Strings sorted and unique (a `BTreeSet<String>`).
+fn ct_sorted(xs: Strs) -> Strs {
+    let out = strs_new()
+    for x in xs { cs_add(out, x) }
+    strs_sort(out)
+}
+
+/// The contract the root module declares, or why it is not one (`contract::of`). `d` is the Core IR document with sources of the program `f` checked.
+pub fn ct_of(f: Facts, d: JsonDoc) -> Ct {
+    let root_doc = json_root(d)
+    let mods = ob_kid(d, root_doc, "modules")
+    let mut root = ""
+    for i in 0..ob_len(d, mods) {
+        let m = ob_at(d, mods, i)
+        let k = ob_kid(d, m, "root")
+        let is_root = if k >= 0 { match json_bool(d, k) { Some(b) => b, None => false } } else { false }
+        if is_root { root = ob_s(d, m, "name") }
+    }
+    let types = ob_kid(d, root_doc, "types")
+    let records = ob_kid(d, types, "records")
+    let mut state = 0 - 1
+    for i in 0..ob_len(d, records) {
+        let r = ob_at(d, records, i)
+        if state < 0 && ob_s(d, r, "definition") == root + "::record State" && ob_len(d, ob_kid(d, r, "type_args")) == 0 { state = r }
+    }
+    if state < 0 { return ct_none("a contract declares a record `State`") }
+    let fields = ob_kid(d, state, "fields")
+    let mut plain = ob_len(d, fields) > 0
+    for i in 0..ob_len(d, fields) {
+        let t = ob_s(d, ob_at(d, fields, i), "type")
+        if t != "Int" && t != "Bool" { plain = false }
+    }
+    if !plain { return ct_none("a contract's `State` has `Int` and `Bool` fields, at least one") }
+    let names = strs_new()
+    let ftypes = strs_new()
+    for i in 0..ob_len(d, fields) {
+        strs_push(names, ob_s(d, ob_at(d, fields, i), "name"))
+        strs_push(ftypes, ob_s(d, ob_at(d, fields, i), "type"))
+    }
+    let state_ty = ob_s(d, state, "type")
+    let fns = ob_kid(d, root_doc, "functions")
+    let mut init = false
+    let mut conserved = false
+    for i in 0..ob_len(d, fns) {
+        let fn_ = ob_at(d, fns, i)
+        if ob_s(d, fn_, "module") != root || ob_kid(d, fn_, "foreign") >= 0 { continue }
+        if ob_s(d, fn_, "name") == "init" && ob_i(d, fn_, "params") == 0 && ob_s(d, fn_, "ret") == state_ty { init = true }
+        if ob_s(d, fn_, "name") == "conserved" && ob_i(d, fn_, "params") == 1 && ob_s(d, fn_, "ret") == "Int" { conserved = true }
+    }
+    if !init { return ct_none("a contract declares `fn init() -> State`") }
+    let ct = ct_none("")
+    for x in names { strs_push(ct.fields, x) }
+    for x in ftypes { strs_push(ct.ftypes, x) }
+    let result = "@core/prelude::enum Result[" + state_ty + ", Int]"
+    let c = fx_checker(f)
+    for i in 0..ob_len(d, fns) {
+        let fn_ = ob_at(d, fns, i)
+        if ob_s(d, fn_, "module") != root || ob_kid(d, fn_, "foreign") >= 0 { continue }
+        let name = ob_s(d, fn_, "name")
+        let params = ob_i(d, fn_, "params")
+        // Public: some function of the root by this name is exported.
+        let mut public = false
+        for j in 0..ob_len(d, fns) {
+            let g = ob_at(d, fns, j)
+            if ob_s(d, g, "name") == name && ob_s(d, g, "module") == root {
+                let k = ob_kid(d, g, "pub")
+                if k >= 0 && (match json_bool(d, k) { Some(b) => b, None => false }) { public = true }
+            }
+        }
+        if !public || params < 2 { continue }
+        let locals = ob_kid(d, fn_, "locals")
+        let mut shaped = ob_s(d, fn_, "ret") == result
+        let argnames = strs_new()
+        for l in 0..params {
+            let local = ob_at(d, locals, l)
+            let t = ob_s(d, local, "type")
+            if l == 0 && t != state_ty { shaped = false }
+            if l >= 1 && t != "Int" { shaped = false }
+            if l >= 2 { strs_push(argnames, ob_s(d, local, "name")) }
+        }
+        if !shaped { continue }
+        let c0 = Cs(d: d, fields: names, state_ty: state_ty, flags: ints_new(), reads: strs_new(), writes: strs_new())
+        ints_push(c0.flags, 0)
+        ints_push(c0.flags, 0)
+        ints_push(c0.flags, 0)
+        cs_block(c0, ob_kid(d, fn_, "body"), true)
+        // The entrypoint's name, where the checker has it written.
+        let mut s = 0 - 1
+        let mut e = 0 - 1
+        for q in 0..ck_fn_count(c) {
+            if s < 0 && ck_fn_name(c, q) == name && ck_fn_module(c, q) == 0 && !ck_fn_closure(c, q) {
+                s = ck_fn_name_start(c, q)
+                e = ck_fn_name_end(c, q)
+            }
+        }
+        strs_push(ct.ename, name)
+        vec_push(ct.eargs, argnames)
+        ints_push(ct.rall, ints_get(c0.flags, 0))
+        vec_push(ct.reads, ct_sorted(c0.reads))
+        ints_push(ct.wall, ints_get(c0.flags, 1))
+        vec_push(ct.writes, ct_sorted(c0.writes))
+        ints_push(ct.checked, ints_get(c0.flags, 2))
+        ints_push(ct.es, s)
+        ints_push(ct.ee, e)
+    }
+    if strs_len(ct.ename) == 0 {
+        return ct_none("a contract has an entrypoint: `pub fn name(s: State, caller: Int, …: Int) -> Result[State, Int]`")
+    }
+    Ct(why: "", fields: ct.fields, ftypes: ct.ftypes, conserved: conserved, ename: ct.ename, eargs: ct.eargs, rall: ct.rall, reads: ct.reads, wall: ct.wall, writes: ct.writes,
+            checked: ct.checked, es: ct.es, ee: ct.ee)
+}
+
+/// An entrypoint that writes the state and never decides on its caller (`unsigned_writes`): `MODULE:S..E`-less, as absolute spans and a note, one line each
+/// `START\tEND\tNOTE`.
+pub fn ct_unsigned(ct: Ct) -> Strs {
+    let out = strs_new()
+    for i in 0..strs_len(ct.ename) {
+        let writes = ints_get(ct.wall, i) == 1 || strs_len(vec_get(ct.writes, i)) > 0
+        if ints_get(ct.checked, i) == 0 && writes {
+            strs_push(out, int_to_str(ints_get(ct.es, i)) + "\t" + int_to_str(ints_get(ct.ee, i)) + "\t`" + strs_get(ct.ename, i) + "` writes the state and never decides on its caller")
+        }
+    }
+    out
+}
+
+/// The same, from the document's text: a document that does not parse is no contract's (`why` says so).
+pub fn ct_of_text(f: Facts, text: Str) -> Ct {
+    match json_parse(text) {
+        Result.Ok(value: doc) => ct_of(f, doc),
+        Result.Err(error: e) => ct_none("Core IR's document does not parse: " + e),
+    }
+}
