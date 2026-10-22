@@ -772,6 +772,15 @@ pub fn fx_sink_step_start(f: Facts, i: Int, t: Int, s: Int) -> Int { ck_sink_ste
 pub fn fx_sink_step_end(f: Facts, i: Int, t: Int, s: Int) -> Int { ck_sink_step_end(f.c, i, t, s) }
 pub fn fx_sink_step_note(f: Facts, i: Int, t: Int, s: Int) -> Str { ck_sink_step_note(f.c, i, t, s) }
 
+// --- the calls whose preconditions were proved (R8 slice 11, task 11.1; `Resolution::proved_call`, N87) ----------------------------------
+//
+// A call whose arguments are all literals, of a function of its module that states a precondition, every clause true for them: where the
+// callee is written (absolute) and the witness, each clause as evaluated and the parameters' values (`x > 0 holds, y != 0 holds with x = 3, y = 2`).
+pub fn fx_proved_calls(f: Facts) -> Int { ck_proved_call_count(f.c) }
+pub fn fx_proved_call_start(f: Facts, i: Int) -> Int { ck_proved_call_start(f.c, i) }
+pub fn fx_proved_call_end(f: Facts, i: Int) -> Int { ck_proved_call_end(f.c, i) }
+pub fn fx_proved_call_witness(f: Facts, i: Int) -> Str { ck_proved_call_witness(f.c, i) }
+
 // --- a function's effects (R8 slice 9, task 9.1; `FnDef::{declared_effects, inferred_effects, effect_reasons}`, N36) ---
 //
 // What function `i` (`ck_fn_*`'s numbering) may do, as masks (`io` 1, `spawn` 2, `foreign` 4, the effect parameter 8:
@@ -796,6 +805,7 @@ pub fn fx_reason_end(f: Facts, i: Int, k: Int) -> Int { ck_reason_end(f.c, reaso
 pub fn fx_reason_source(f: Facts, i: Int, k: Int) -> Str { ck_reason_source(f.c, reason_at(f, i, k)) }
 pub fn fx_reason_builtin(f: Facts, i: Int, k: Int) -> Str { ck_reason_builtin(f.c, reason_at(f, i, k)) }
 pub fn fx_reason_callee(f: Facts, i: Int, k: Int) -> Int { ck_reason_callee(f.c, reason_at(f, i, k)) }
+pub fn fx_reason_type(f: Facts, i: Int, k: Int) -> Str { ck_reason_type(f.c, reason_at(f, i, k)) }
 
 fn cat3(a: Str, b: Str, c: Str) -> Str { str_concat(str_concat(a, b), c) }
 

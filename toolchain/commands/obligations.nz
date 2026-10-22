@@ -114,6 +114,8 @@ struct Cx {
     info: HashMap[Str, Int],
     // Where this function's own obligations begin in `out`.
     base: Int,
+    // The calls whose preconditions the checker proved, by the callee's place (`MODULE:START..END`), with the witness.
+    proved: HashMap[Str, Str],
 }
 
 fn ob_push(c: Cx, kind: Int, status: Int, e: Int, witness: Str) -> Int {
@@ -376,14 +378,10 @@ fn ob_call(c: Cx, e: Int) -> Int {
     let info = match hashmap_get(c.info, callee) { Some(v) => v, None => 0 }
     if info % 2 == 1 { ob_push(c, 8, 2, e, "") }
     if info >= 2 {
-        // `proved_call`'s witness, when every argument is a literal, is the checker's, not R2's.
-        let args = ob_kid(c.d, e, "args")
-        let mut literal = true
-        for i in 0..ob_len(c.d, args) { if !ob_literal_only(c, ob_at(c.d, args, i)) { literal = false } }
-        if literal {
-            strs_push(c.out.stuck, ob_s(c.d, e, "at"))
-        } else {
-            ob_push(c, 2, 1, e, "")
+        // Proved where the checker recorded a witness for the call (`proved_call`, by the callee's name), else checked as the program runs.
+        match hashmap_get(c.proved, ob_s(c.d, e, "callee_at")) {
+            Some(w) => { ob_push(c, 2, 0, e, w); },
+            None => { ob_push(c, 2, 1, e, ""); },
         }
     }
     ob_args(c, e)
@@ -566,6 +564,20 @@ fn ob_print(io: IoCap, d: JsonDoc, o: Obs, as_json: Bool) -> Int {
 
 pub fn ob_quote(s: Str) -> Str { json_quote(s) }
 
+// The checker's proved calls (`fx_proved_call_*`) keyed as Core IR spells a callee's place: the module as it names it and the span local to it.
+pub fn ob_proved(f: Facts) -> HashMap[Str, Str] {
+    let out: HashMap[Str, Str] = hashmap_new()
+    for i in 0..fx_proved_calls(f) {
+        let s = fx_proved_call_start(f, i)
+        let m = fx_module_at(f, s)
+        if m >= 0 {
+            let base = fx_module_base(f, m)
+            hashmap_set(out, fx_module_identity(f, m) + ":" + int_to_str(s - base) + ".." + int_to_str(fx_proved_call_end(f, i) - base), fx_proved_call_witness(f, i))
+        }
+    }
+    out
+}
+
 pub fn obligations_command(io: IoCap, c: Cli) -> Int {
     cli_parse(io, c)
     let file = cli_value(c, 0)
@@ -578,11 +590,11 @@ pub fn obligations_command(io: IoCap, c: Cli) -> Int {
         Result.Ok(value: doc) => doc,
         Result.Err(error: e) => { ob_refuse(io, "Core IR's document does not parse: " + e); json_new() },
     }
-    ob_run(io, d, as_json)
+    ob_run(io, d, as_json, ob_proved(f))
 }
 
 // The census of the document `d` (Core IR with sources): every function's obligations, in order.
-pub fn ob_census(io: IoCap, d: JsonDoc) -> Obs {
+pub fn ob_census(io: IoCap, d: JsonDoc, proved: HashMap[Str, Str]) -> Obs {
     let root = json_root(d)
     let fns = ob_kid(d, root, "functions")
     let n = ob_len(d, fns)
@@ -601,18 +613,14 @@ pub fn ob_census(io: IoCap, d: JsonDoc) -> Obs {
         // A foreign declaration has no body; its calls are the obligation, at the caller.
         if ob_kid(d, f, "foreign") >= 0 { continue }
         let before = ints_len(o.kind)
-        let c = Cx(d: d, def: ob_s(d, f, "def"), consts: ob_kid(d, f, "consts"), name: ob_s(d, f, "name"), out: o, info: info, base: before)
+        let c = Cx(d: d, def: ob_s(d, f, "def"), consts: ob_kid(d, f, "consts"), name: ob_s(d, f, "name"), out: o, info: info, base: before, proved: proved)
         ob_block(c, ob_kid(d, f, "body"))
         ob_sort(o, before)
-    }
-    if strs_len(o.stuck) > 0 {
-        ob_refuse(io, "a call of a function that states a precondition, with literal arguments, at `" + strs_get(o.stuck, 0)
-                + "` (the checker's proved-call witness is not published: R2 hand-back)")
     }
     o
 }
 
-fn ob_run(io: IoCap, d: JsonDoc, as_json: Bool) -> Int {
-    let o = ob_census(io, d)
+fn ob_run(io: IoCap, d: JsonDoc, as_json: Bool, proved: HashMap[Str, Str]) -> Int {
+    let o = ob_census(io, d, proved)
     ob_print(io, d, o, as_json)
 }
