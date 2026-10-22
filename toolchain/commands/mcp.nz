@@ -291,7 +291,8 @@ fn run_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, s: Server, args: Strs,
 fn answer(io: IoCap, id: Str, text: Str, always_ok: Bool) -> Int {
     let j = j_parse(text)
     let at = j_get(j, 0, "status")
-    let ok = always_ok || (at >= 0 && j_str(j, at) == "available")
+    // `nazm.task_context` is an answer when the context is `complete` or `partial` (`TaskResult::Available`); the others when it is `available`.
+    let ok = always_ok || (at >= 0 && (j_str(j, at) == "available" || j_str(j, at) == "complete" || j_str(j, at) == "partial"))
     succeed(io, id, "{\"content\":[],\"structuredContent\":" + j_canonical(j) + ",\"isError\":" + (if ok { "false" } else { "true" }) + "}")
 }
 

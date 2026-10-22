@@ -34,6 +34,62 @@ def session(program, root, extra, messages, repo, env):
     return [l for l in lines if l], p.stderr.decode('utf-8', 'replace')
 
 
+def session_patient(program, root, extra, messages, repo, env):
+    """`session`, but standard input stays open until every request has been answered. The reference serves requests concurrently and,
+    on the end of its input, drops the answers still being worked on (a repository map takes seconds): a session of fast calls does not
+    see it, a session with `nazm.repository_map` and `nazm.task_context` does, differently at each run. The messages are written one at
+    a time; the answers are read as they come."""
+    import threading
+    want = {m['id'] for m in messages if 'id' in m}
+    p = subprocess.Popen([program, '--root', root] + extra, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=repo, env=env)
+    lines = []
+    seen = set()
+    done = threading.Event()
+
+    def pump():
+        for raw in p.stdout:
+            l = raw.decode('utf-8', 'replace').rstrip('\n')
+            if not l:
+                continue
+            lines.append(l)
+            try:
+                k = json.loads(l).get('id')
+            except Exception:
+                k = None
+            if k in want:
+                seen.add(k)
+            if seen >= want:
+                done.set()
+        done.set()
+
+    t = threading.Thread(target=pump)
+    t.start()
+    errs = []
+    te = threading.Thread(target=lambda: errs.append(p.stderr.read()))
+    te.start()
+    for m in messages:
+        p.stdin.write((json.dumps(m, separators=(',', ':')) + '\n').encode())
+        p.stdin.flush()
+    done.wait(1800)
+    p.stdin.close()
+    p.wait(timeout=600)
+    t.join()
+    te.join()
+    rows = []
+    for n, l in enumerate(lines):
+        try:
+            key = json.loads(l).get('id')
+        except Exception:
+            key = None
+        rows.append(((0, key, n) if isinstance(key, int) else (1, 0, n), l))
+    rows.sort(key=lambda r: r[0])
+    out = [r[1] for r in rows]
+    out.append('exit %d' % p.returncode)
+    if p.returncode != 0:
+        out.append('stderr: ' + errs[0].decode('utf-8', 'replace').strip())
+    return out, ''
+
+
 class Ids:
     def __init__(self):
         self.n = 1
@@ -235,8 +291,8 @@ def agent_gen(ref, repo, f, prefix, extra, env):
     """The messages of `agent`, and the reference's answers to them, written for a port run elsewhere (a container has no Python)."""
     msgs = agent_messages(ref, repo, f, extra, env)
     open(prefix + '.in', 'w').write(''.join(json.dumps(m, separators=(',', ':')) + '\n' for m in msgs))
-    r, _ = session(ref, f, extra, msgs, repo, env)
-    open(prefix + '.ref', 'w').write('\n'.join(r) + '\nexit 0\n')
+    r, _ = session_patient(ref, f, extra, msgs, repo, env)
+    open(prefix + '.ref', 'w').write('\n'.join(r) + '\n')
 
 
 def agent_cmp(prefix):
