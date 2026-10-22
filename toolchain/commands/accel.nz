@@ -1,0 +1,801 @@
+// `nazm accel`, in Nazm (R8 slice 10, `openspec/changes/r8-cut-over/design.md`, task 10.1, *S10.2*).
+//
+// `nazm accel FILE KERNEL --input FILE [--input FILE] [--reduce OP] [--no-check] [--print-kernel] [--provider P] [--scalar]`, run by the
+// dispatcher (`nazm.nz`). A port of `crates/nazm-cli/src/accel.rs` and `nazm_service::kernel` as far as a kernel goes:
+//
+//   carried   the command line; the root loaded, the `--input` files read, every diagnostic of the compilation (`toolfront.nz`); the kernel:
+//             the function found, held to the kernel's shape, every function it reaches held to the rules of an eligible one (refusals written
+//             as `N0394`, each at the place the reference puts it) and the OpenCL C source generated from Core IR, byte for byte (`--print-kernel`
+//             prints it; it is compared on every function of the inputs); the inputs read as the kernel's type, the element ceiling, the number
+//             of inputs the kernel takes and their lengths, each refused as the reference refuses it.
+//   refused   (status 6, counted by the comparison, never an agreement) what then runs the kernel: the provider's host program (OpenCL on
+//             the GPU, or C compiled by the platform's `clang` and run on a pool of threads), the interpreter's answer for every element, the
+//             `nazm.accel/3` report with its timings. The kernel is a Core IR function the port reads (`fx_core_function`); the providers need
+//             the C host programs (`accel_host.c`, `accel_cpu.c`) written out, compiled and run, and the interpreter called on a named
+//             function for each element; neither is part of this slice.
+//
+// A kernel is read from each function's Core IR object (`nazm.core-ir/3`, which R2 publishes and slice 8 compared byte for byte): its
+// locals, constants, effects and body, with the function numbered as the Core IR program numbers it (`nz_f<N>`: the checker's function index).
+
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/digest.nz"
+use "../../compiler/facts.nz"
+use "../../compiler/facts-core.nz"
+use "cli.nz"
+use "front.nz"
+use "util.nz"
+use "toolfront.nz"
+use "jsonin.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+// The command line, as `crates/nazm-cli/src/cli.rs` declares `nazm accel`.
+pub fn accel_cli() -> Cli {
+    let c = cli_command("accel", "Map a kernel over a sequence on an accelerator (N67): an eligible pure `(T) -> T` function of the file — `T` an `Int`, or (Gate 3) a `Float32` or `Float64` — "
+            + "over the whitespace-separated numbers of `--input`, on macOS's OpenCL GPU or the CPU provider. One `nazm.accel/3` line: the provider and why, the device, every "
+            + "transfer and the synchronisation, timings, the kernel's identity, and whether the results agree with the interpreter's", "")
+    cli_positional(c, "FILE", true, false, true, "", "")
+    cli_positional(c, "KERNEL", true, false, false, "The function to run as a kernel, in the file's own module", "")
+    cli_required_list(c, "input", "FILE", "The input: whitespace-separated numbers of the kernel's type, at most 8,000,000. Twice for a kernel of two, a zip (N88): the two inputs "
+            + "are of one length, element `i` of each its arguments", "")
+    let reduce = cli_option(c, "", "reduce", "OP", false, "", false, "Fold the kernel's results into one `Int`, in index order (N88): `add`, checked as `ints_sum` is; `min`; "
+            + "`max`. On the host, after the transfer, timed in the report", "")
+    cli_possible(c, reduce, "add,min,max")
+    cli_flag(c, "", "no-check", "Do not hold the results to the interpreter's", "")
+    cli_flag(c, "", "print-kernel", "Print the generated OpenCL C kernel and stop: no device is used, on any host", "")
+    let provider = cli_option(c, "", "provider", "PROVIDER", false, "auto", true, "Where it runs (Gate 3): `opencl`, the GPU, refused where there is none; `cpu`, the same kernel "
+            + "compiled as C and run on a pool of threads; `auto`, the GPU where one can run it and the CPU otherwise, the report saying which and why", "")
+    cli_possible(c, provider, "auto,opencl,cpu")
+    cli_flag(c, "", "scalar", "Compile the CPU provider's loop without LLVM's vectoriser (Gate 3): the scalar side of a SIMD measurement", "")
+    c
+}
+
+fn ac_refuse(io: IoCap, why: Str) -> Int {
+    eprint("nazm: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+// --- the kernel's state -----------------------------------------------------------------------------
+
+// The front end's facts and what the generator keeps: `cells` are the temporaries counted so far, the failure sites counted so far, the
+// kernel's element type (0 `Int`, 1 `Float32`, 2 `Float64`) and how many inputs it takes; `idents` are the functions' durable identities by
+// index; `out` is the OpenCL C source, a line to an entry.
+struct Kg {
+    fr: Front,
+    out: Strs,
+    cells: Ints,
+    idents: Strs,
+}
+
+fn kg_elem(g: Kg) -> Int { ints_get(g.cells, 2) }
+
+fn kg_elem_of(t: Str) -> Int {
+    if t == "Int" { 0 } else if t == "Float32" { 1 } else if t == "Float64" { 2 } else { 0 - 1 }
+}
+
+fn kg_c(elem: Int) -> Str { if elem == 0 { "long" } else if elem == 1 { "float" } else { "double" } }
+
+fn kg_ename(elem: Int) -> Str { if elem == 0 { "Int" } else if elem == 1 { "Float32" } else { "Float64" } }
+
+// Whether a value of type `t` may be one of the kernel's: its element type, or a `Bool`.
+fn kg_admits(elem: Int, t: Str) -> Bool { t == "Bool" || kg_elem_of(t) == elem }
+
+fn kg_ty(elem: Int, t: Str) -> Str { if t == "Bool" { "int" } else { kg_c(elem) } }
+
+fn kg_pad(depth: Int) -> Str {
+    let parts = strs_new()
+    for _ in 0..depth { strs_push(parts, "  ") }
+    str_join(parts, "")
+}
+
+fn kg_line(g: Kg, text: Str) -> Int {
+    strs_push(g.out, text + nl())
+    0
+}
+
+fn kg_site(g: Kg) -> Int {
+    let n = ints_get(g.cells, 1)
+    ints_set(g.cells, 1, n + 1)
+    n
+}
+
+fn kg_temp(g: Kg) -> Str {
+    let n = ints_get(g.cells, 0) + 1
+    ints_set(g.cells, 0, n)
+    "t" + int_to_str(n)
+}
+
+// A lowercase hexadecimal of `n` (not negative), at least `width` digits.
+fn kg_hex(n: Int, width: Int) -> Str {
+    let digits = "0123456789abcdef"
+    let parts = strs_new()
+    let mut v = n
+    let mut k = 0
+    while v > 0 || k < width {
+        strs_push(parts, str_slice(digits, v % 16, v % 16 + 1))
+        v = v / 16
+        k += 1
+    }
+    let out = strs_new()
+    let mut i = strs_len(parts)
+    while i > 0 {
+        i -= 1
+        strs_push(out, strs_get(parts, i))
+    }
+    str_join(out, "")
+}
+
+// --- reading a function's Core IR object --------------------------------------------------------------
+
+fn kg_text(j: J, n: Int, key: Str) -> Str {
+    let m = j_get(j, n, key)
+    if m < 0 || j_kind(j, m) == 0 { "" } else { j_str(j, m) }
+}
+
+fn kg_int(j: J, n: Int, key: Str) -> Int {
+    let m = j_get(j, n, key)
+    if m < 0 { 0 } else { j_int(j, m) }
+}
+
+fn kg_is_null(j: J, n: Int) -> Bool { n < 0 || j_kind(j, n) == 0 }
+
+fn kg_len(j: J, arr: Int) -> Int {
+    let mut n = 0
+    let mut c = ints_get(j.first, arr)
+    while c >= 0 {
+        n += 1
+        c = ints_get(j.next, c)
+    }
+    n
+}
+
+fn kg_nth(j: J, arr: Int, k: Int) -> Int {
+    let mut c = ints_get(j.first, arr)
+    let mut i = 0
+    while c >= 0 && i < k {
+        c = ints_get(j.next, c)
+        i += 1
+    }
+    c
+}
+
+// The function with index `i`, its Core IR object parsed; a function the lowering does not carry is a refusal.
+fn kg_load(io: IoCap, g: Kg, i: Int) -> J {
+    let f = g.fr.f
+    if !fx_core_carried(f, i) { ac_refuse(io, "a kernel that reaches a function Core IR stops at (" + fx_core_why(f, i) + ")") }
+    let j = j_parse(fx_core_function(f, i))
+    if !j_ok(j) { ac_refuse(io, "a function whose Core IR object does not read") }
+    j
+}
+
+fn kg_find(g: Kg, name: Str) -> Int {
+    let c = fx_checker(g.fr.f)
+    for i in 0..ck_fn_count(c) {
+        if ck_fn_module(c, i) == 0 && ck_fn_name(c, i) == name { return i }
+    }
+    0 - 1
+}
+
+fn kg_index_of(g: Kg, key: Str) -> Int {
+    for i in 0..strs_len(g.idents) {
+        if strs_get(g.idents, i) == key { return i }
+    }
+    0 - 1
+}
+
+// --- diagnostics ------------------------------------------------------------------------------------
+
+fn kg_help() -> Str {
+    "a kernel is a pure `(T) -> T` or `(T, T) -> T` function — `T` an `Int`, `Float32` or `Float64` — of `T`s and `Bool`s, calling only others like it, without recursion"
+}
+
+// `refuse(at, message)` written, as `emit` writes it, and the process ended with status 1: `N0394`, its primary label `not a kernel`.
+// `module` is where `start..end` (absolute) lies; -1 for the synthetic span.
+fn kg_diag(io: IoCap, g: Kg, module: Int, start: Int, end: Int, message: Str) -> Int {
+    let d = dg_new()
+    dg_error(d, "N0394", start, end, message, "not a kernel", kg_help())
+    if module >= 0 { dg_in_file(d, module) }
+    eprint(dg_render(d, 0, g.fr.names, g.fr.sources, g.fr.bases))
+    exit_with(1)
+    1
+}
+
+fn kg_why(function: Str, why: Str) -> Str { "`" + function + "` cannot run on an accelerator: " + why }
+
+fn kg_refuse_syn(io: IoCap, g: Kg, function: Str, why: Str) -> Int { kg_diag(io, g, 0 - 1, 0, 0, kg_why(function, why)) }
+
+fn kg_refuse_name(io: IoCap, g: Kg, i: Int, why: Str) -> Int {
+    let c = fx_checker(g.fr.f)
+    kg_diag(io, g, ck_fn_module(c, i), ck_fn_name_start(c, i), ck_fn_name_end(c, i), kg_why(ck_fn_name(c, i), why))
+}
+
+fn kg_refuse_ret(io: IoCap, g: Kg, i: Int, why: Str) -> Int {
+    let f = g.fr.f
+    let c = fx_checker(f)
+    let t = fx_tree(f)
+    let span = sx_field(t, sx_field(t, ck_fn_node(c, i), "return_type"), "span")
+    let base = fx_module_base(f, ck_fn_module(c, i))
+    kg_diag(io, g, ck_fn_module(c, i), sx_s(t, span) + base, sx_e(t, span) + base, kg_why(ck_fn_name(c, i), why))
+}
+
+// `MODULE:START..END` (a Core IR span) refused at, for the function `function`.
+fn kg_refuse_at(io: IoCap, g: Kg, function: Str, at: Str, why: Str) -> Int {
+    let f = g.fr.f
+    let mut colon = 0 - 1
+    for i in 0..str_len(at) {
+        if str_byte(at, i) == 58 { colon = i }
+    }
+    if colon < 0 { return kg_refuse_syn(io, g, function, why) }
+    let ident = str_slice(at, 0, colon)
+    let range = str_slice(at, colon + 1, str_len(at))
+    let mut dots = 0 - 1
+    for i in 0..str_len(range) {
+        if dots < 0 && str_byte(range, i) == 46 { dots = i }
+    }
+    let mut module = 0 - 1
+    for m in 0..fx_modules(f) {
+        if fx_module_identity(f, m) == ident { module = m }
+    }
+    if module < 0 || dots < 0 { return kg_refuse_syn(io, g, function, why) }
+    let s = kg_number(str_slice(range, 0, dots))
+    let e = kg_number(str_slice(range, dots + 2, str_len(range)))
+    kg_diag(io, g, module, fx_module_base(f, module) + s, fx_module_base(f, module) + e, kg_why(function, why))
+}
+
+fn kg_number(s: Str) -> Int {
+    let mut v = 0
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        if b >= 48 && b <= 57 { v = v * 10 + (b - 48) }
+    }
+    v
+}
+
+// --- the functions a kernel reaches ---------------------------------------------------------------------
+
+fn kg_is_arith(op: Str) -> Bool { op == "+" || op == "-" || op == "*" || op == "/" || op == "%" }
+
+fn kg_is_compare(op: Str) -> Bool { op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=" }
+
+fn kg_calls_expr(g: Kg, j: J, e: Int, out: Ints) -> Int {
+    if kg_is_null(j, e) { return 0 }
+    let op = kg_text(j, e, "op")
+    if op == "call" {
+        let k = kg_index_of(g, kg_text(j, e, "callee"))
+        if k >= 0 { ints_push(out, k) }
+        let args = j_get(j, e, "args")
+        for a in 0..kg_len(j, args) { kg_calls_expr(g, j, kg_nth(j, args, a), out) }
+    } else if op == "neg" {
+        kg_calls_expr(g, j, j_get(j, e, "operand"), out)
+    } else if kg_is_arith(op) || kg_is_compare(op) {
+        kg_calls_expr(g, j, j_get(j, e, "lhs"), out)
+        kg_calls_expr(g, j, j_get(j, e, "rhs"), out)
+    } else if op == "if" {
+        kg_calls_expr(g, j, j_get(j, e, "cond"), out)
+        kg_calls_block(g, j, j_get(j, e, "then"), out)
+        kg_calls_block(g, j, j_get(j, e, "else"), out)
+    } else if op == "block" {
+        kg_calls_block(g, j, j_get(j, e, "body"), out)
+    } else if op == "builtin" {
+        let args = j_get(j, e, "args")
+        for a in 0..kg_len(j, args) { kg_calls_expr(g, j, kg_nth(j, args, a), out) }
+    }
+    0
+}
+
+fn kg_calls_stmt(g: Kg, j: J, s: Int, out: Ints) -> Int {
+    let op = kg_text(j, s, "op")
+    if op == "let" || op == "assign" || op == "eval" || op == "return" {
+        kg_calls_expr(g, j, j_get(j, s, "value"), out)
+    } else if op == "if" {
+        kg_calls_expr(g, j, j_get(j, s, "cond"), out)
+        kg_calls_block(g, j, j_get(j, s, "then"), out)
+        kg_calls_block(g, j, j_get(j, s, "else"), out)
+    } else if op == "loop" {
+        kg_calls_expr(g, j, j_get(j, s, "cond"), out)
+        kg_calls_block(g, j, j_get(j, s, "body"), out)
+    } else if op == "block" {
+        kg_calls_block(g, j, j_get(j, s, "body"), out)
+    }
+    0
+}
+
+fn kg_calls_block(g: Kg, j: J, b: Int, out: Ints) -> Int {
+    if kg_is_null(j, b) { return 0 }
+    let stmts = j_get(j, b, "stmts")
+    for k in 0..kg_len(j, stmts) { kg_calls_stmt(g, j, kg_nth(j, stmts, k), out) }
+    kg_calls_expr(g, j, j_get(j, b, "tail"), out)
+    0
+}
+
+fn kg_has(xs: Ints, v: Int) -> Bool {
+    for i in 0..ints_len(xs) {
+        if ints_get(xs, i) == v { return true }
+    }
+    false
+}
+
+// `reach`: depth first over the calls function `i` makes, refusing a cycle and anything ineligible.
+fn kg_reach(io: IoCap, g: Kg, i: Int, order: Ints, visiting: Ints) -> Int {
+    if kg_has(order, i) { return 0 }
+    let elem = kg_elem(g)
+    let c = fx_checker(g.fr.f)
+    let j = kg_load(io, g, i)
+    if kg_has(visiting, i) { kg_refuse_name(io, g, i, "it is in a call cycle; a kernel has no stack to recurse on") }
+    if j_get(j, 0, "foreign") >= 0 { kg_refuse_name(io, g, i, "it is a foreign function") }
+    let pure = j_get(j, j_get(j, 0, "effects"), "pure")
+    if j_kind(j, pure) != 1 { kg_refuse_name(io, g, i, "it is not pure: a kernel cannot reach the host") }
+    if j_kind(j, j_get(j, 0, "closure")) == 1 || kg_int(j, 0, "type_params") > 0 { kg_refuse_name(io, g, i, "it is a closure or generic") }
+    let locals = j_get(j, 0, "locals")
+    for k in 0..kg_len(j, locals) {
+        let l = kg_nth(j, locals, k)
+        if !kg_admits(elem, kg_text(j, l, "type")) {
+            kg_refuse_at(io, g, ck_fn_name(c, i), kg_text(j, l, "at"), "it has a value that is not an `" + kg_ename(elem)
+                    + "` or a `Bool`, and a kernel computes in one number type")
+        }
+    }
+    if !kg_admits(elem, kg_text(j, 0, "ret")) { kg_refuse_ret(io, g, i, "its result is not an `" + kg_ename(elem) + "` or a `Bool`") }
+    ints_push(visiting, i)
+    let found = ints_new()
+    kg_calls_block(g, j, j_get(j, 0, "body"), found)
+    // A `BTreeSet`: ascending, each once.
+    let sorted = ints_new()
+    let mut next = 0
+    while next >= 0 {
+        let mut best = 0 - 1
+        for k in 0..ints_len(found) {
+            let v = ints_get(found, k)
+            if (ints_len(sorted) == 0 || v > ints_get(sorted, ints_len(sorted) - 1)) && (best < 0 || v < best) { best = v }
+        }
+        if best < 0 { next = 0 - 1 } else { ints_push(sorted, best) }
+    }
+    for k in 0..ints_len(sorted) { kg_reach(io, g, ints_get(sorted, k), order, visiting) }
+    ints_pop(visiting)
+    ints_push(order, i)
+    0
+}
+
+// --- generating the source ------------------------------------------------------------------------------
+
+// The value of expression `e` as a C expression, over the temporaries written into the source first; `fname` is the function being
+// generated, for a refusal.
+fn kg_expr(io: IoCap, g: Kg, j: J, fname: Str, e: Int, depth: Int) -> Str {
+    let pad = kg_pad(depth)
+    let elem = kg_elem(g)
+    let op = kg_text(j, e, "op")
+    let ty = kg_text(j, e, "type")
+    let at = kg_text(j, e, "at")
+    let mut other = ty != "never" && !kg_admits(elem, ty)
+    if kg_is_compare(op) && !kg_admits(elem, kg_text(j, e, "operand")) { other = true }
+    if other { kg_refuse_at(io, g, fname, at, "it uses a number other than `" + kg_ename(elem) + "`") }
+    let t = kg_c(elem)
+    if op == "array" || op == "array-repeat" || op == "index" { kg_refuse_at(io, g, fname, at, "it uses an array") }
+    if op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" || op == "~" || op == "convert" || op == "fits" {
+        kg_refuse_at(io, g, fname, at, "it uses a bit operation or a conversion")
+    }
+    if op == "const" {
+        let k = kg_nth(j, j_get(j, 0, "consts"), kg_int(j, e, "const"))
+        let ctype = kg_text(j, k, "type")
+        let value = j_get(j, k, "value")
+        if ctype == "Float32" || ctype == "Float64" {
+            let text = j_str(j, value)
+            let single = ctype == "Float32"
+            let bits = cdg_float_bits(text, single)
+            if bits < 0 || cdg_float_negative(text) { ac_refuse(io, "a float constant the port cannot write as bits (" + text + ")") }
+            if single { return "as_float(0x" + kg_hex(bits, 8) + "U)" }
+            return "as_double(0x" + kg_hex(bits, 16) + "UL)"
+        }
+        if ctype == "Int" {
+            let text = j_str(j, value)
+            if text == "-9223372036854775808" { return "(-9223372036854775807L - 1L)" }
+            return text + "L"
+        }
+        if ctype == "Bool" { return if j_kind(j, value) == 1 { "1" } else { "0" } }
+        kg_refuse_at(io, g, fname, at, "it uses a `Str`")
+    }
+    if op == "local" { return "l" + int_to_str(kg_int(j, e, "local")) }
+    if op == "neg" && elem != 0 {
+        let v = kg_expr(io, g, j, fname, j_get(j, e, "operand"), depth)
+        let tmp = kg_temp(g)
+        kg_line(g, pad + t + " " + tmp + " = -" + v + ";")
+        return tmp
+    }
+    if kg_is_arith(op) && elem != 0 {
+        let a = kg_expr(io, g, j, fname, j_get(j, e, "lhs"), depth)
+        let b = kg_expr(io, g, j, fname, j_get(j, e, "rhs"), depth)
+        let tmp = kg_temp(g)
+        let mut value = a + " % " + b
+        if op == "+" { value = a + " + " + b }
+        if op == "-" { value = a + " - " + b }
+        if op == "*" { value = a + " * " + b }
+        if op == "/" { value = a + " / " + b }
+        if op == "%" { value = "fmod(" + a + ", " + b + ")" }
+        kg_line(g, pad + t + " " + tmp + " = " + value + ";")
+        return tmp
+    }
+    let builtin = kg_text(j, e, "builtin")
+    if op == "builtin" && elem != 0 && (builtin == "float_sqrt" || builtin == "float_abs") {
+        let args = j_get(j, e, "args")
+        if kg_len(j, args) == 0 { kg_refuse_at(io, g, fname, at, "a built-in with no argument") }
+        let x = kg_expr(io, g, j, fname, kg_nth(j, args, 0), depth)
+        let tmp = kg_temp(g)
+        let name = if builtin == "float_sqrt" { "sqrt" } else { "fabs" }
+        kg_line(g, pad + t + " " + tmp + " = (" + t + ")" + name + "(" + x + ");")
+        return tmp
+    }
+    if op == "neg" {
+        let v = kg_expr(io, g, j, fname, j_get(j, e, "operand"), depth)
+        let s = kg_site(g)
+        let tmp = kg_temp(g)
+        kg_line(g, pad + "if (" + v + " == (-9223372036854775807L - 1L)) NZ_FAIL(" + int_to_str(s) + ");")
+        kg_line(g, pad + "long " + tmp + " = -" + v + ";")
+        return tmp
+    }
+    if kg_is_arith(op) {
+        let a = kg_expr(io, g, j, fname, j_get(j, e, "lhs"), depth)
+        let b = kg_expr(io, g, j, fname, j_get(j, e, "rhs"), depth)
+        let tmp = kg_temp(g)
+        if op == "+" || op == "-" {
+            let sym = if op == "+" { "+" } else { "-" }
+            let s = kg_site(g)
+            kg_line(g, pad + "long " + tmp + " = (long)((ulong)" + a + " " + sym + " (ulong)" + b + ");")
+            let cond = if op == "+" {
+                "(((" + a + ") ^ " + tmp + ") & ((" + b + ") ^ " + tmp + ")) < 0"
+            } else {
+                "(((" + a + ") ^ (" + b + ")) & ((" + a + ") ^ " + tmp + ")) < 0"
+            }
+            kg_line(g, pad + "if (" + cond + ") NZ_FAIL(" + int_to_str(s) + ");")
+        } else if op == "*" {
+            let s = kg_site(g)
+            kg_line(g, pad + "long " + tmp + " = (long)((ulong)" + a + " * (ulong)" + b + ");")
+            kg_line(g, pad + "if (mul_hi(" + a + ", " + b + ") != (" + tmp + " >> 63)) NZ_FAIL(" + int_to_str(s) + ");")
+        } else {
+            let sym = if op == "/" { "/" } else { "%" }
+            let z = kg_site(g)
+            kg_line(g, pad + "if (" + b + " == 0L) NZ_FAIL(" + int_to_str(z) + ");")
+            if op == "/" {
+                let s = kg_site(g)
+                kg_line(g, pad + "if (" + a + " == (-9223372036854775807L - 1L) && " + b + " == -1L) NZ_FAIL(" + int_to_str(s) + ");")
+                kg_line(g, pad + "long " + tmp + " = " + a + " " + sym + " " + b + ";")
+            } else {
+                kg_line(g, pad + "long " + tmp + " = (" + b + " == -1L) ? 0L : " + a + " " + sym + " " + b + ";")
+            }
+        }
+        return tmp
+    }
+    if kg_is_compare(op) {
+        let a = kg_expr(io, g, j, fname, j_get(j, e, "lhs"), depth)
+        let b = kg_expr(io, g, j, fname, j_get(j, e, "rhs"), depth)
+        return "((" + a + ") " + op + " (" + b + "))"
+    }
+    if op == "call" {
+        let args = j_get(j, e, "args")
+        let vs = strs_new()
+        for k in 0..kg_len(j, args) { strs_push(vs, kg_expr(io, g, j, fname, kg_nth(j, args, k), depth)) }
+        let tmp = kg_temp(g)
+        let callee = kg_index_of(g, kg_text(j, e, "callee"))
+        kg_line(g, pad + t + " " + tmp + " = nz_f" + int_to_str(callee) + "(" + str_join(vs, ", ") + (if strs_len(vs) == 0 { "" } else { ", " })
+                + "nz_fail, nz_index, nz_failed);")
+        kg_line(g, pad + "if (*nz_failed) return 0;")
+        return tmp
+    }
+    if op == "if" {
+        let c = kg_expr(io, g, j, fname, j_get(j, e, "cond"), depth)
+        let tmp = kg_temp(g)
+        kg_line(g, pad + t + " " + tmp + " = 0;")
+        kg_line(g, pad + "if (" + c + ") {")
+        let v = kg_block(io, g, j, fname, j_get(j, e, "then"), depth + 1)
+        if v != "" { kg_line(g, pad + "  " + tmp + " = " + v + ";") }
+        kg_line(g, pad + "} else {")
+        let w = kg_block(io, g, j, fname, j_get(j, e, "else"), depth + 1)
+        if w != "" { kg_line(g, pad + "  " + tmp + " = " + w + ";") }
+        kg_line(g, pad + "}")
+        return tmp
+    }
+    if op == "block" {
+        let tmp = kg_temp(g)
+        kg_line(g, pad + t + " " + tmp + " = 0;")
+        kg_line(g, pad + "{")
+        let v = kg_block(io, g, j, fname, j_get(j, e, "body"), depth + 1)
+        if v != "" { kg_line(g, pad + "  " + tmp + " = " + v + ";") }
+        kg_line(g, pad + "}")
+        return tmp
+    }
+    if op == "builtin" { kg_refuse_at(io, g, fname, at, "it calls the built-in `" + builtin + "`, which has no device form") }
+    if op == "record" || op == "variant" || op == "field" || op == "match" { kg_refuse_at(io, g, fname, at, "it uses a record or an enum") }
+    if op == "closure" || op == "fn_value" || op == "call_indirect" { kg_refuse_at(io, g, fname, at, "it uses a function value") }
+    kg_refuse_at(io, g, fname, at, "it calls a method through a type parameter's bound")
+    ""
+}
+
+fn kg_stmt(io: IoCap, g: Kg, j: J, fname: Str, s: Int, depth: Int) -> Int {
+    let pad = kg_pad(depth)
+    let op = kg_text(j, s, "op")
+    let at = kg_text(j, s, "at")
+    if op == "let" {
+        let v = kg_expr(io, g, j, fname, j_get(j, s, "value"), depth)
+        kg_line(g, pad + "l" + int_to_str(kg_int(j, s, "local")) + " = " + v + ";")
+    } else if op == "assign" {
+        if kg_len(j, j_get(j, s, "path")) > 0 { kg_refuse_at(io, g, fname, at, "it writes a record's field") }
+        let v = kg_expr(io, g, j, fname, j_get(j, s, "value"), depth)
+        kg_line(g, pad + "l" + int_to_str(kg_int(j, s, "local")) + " = " + v + ";")
+    } else if op == "eval" {
+        let v = kg_expr(io, g, j, fname, j_get(j, s, "value"), depth)
+        kg_line(g, pad + "(void)" + v + ";")
+    } else if op == "if" {
+        let c = kg_expr(io, g, j, fname, j_get(j, s, "cond"), depth)
+        kg_line(g, pad + "if (" + c + ") {")
+        kg_block(io, g, j, fname, j_get(j, s, "then"), depth + 1)
+        let o = j_get(j, s, "else")
+        if !kg_is_null(j, o) {
+            kg_line(g, pad + "} else {")
+            kg_block(io, g, j, fname, o, depth + 1)
+        }
+        kg_line(g, pad + "}")
+    } else if op == "loop" {
+        kg_line(g, pad + "for (;;) {")
+        let c = kg_expr(io, g, j, fname, j_get(j, s, "cond"), depth + 1)
+        kg_line(g, pad + "  if (!(" + c + ")) break;")
+        kg_block(io, g, j, fname, j_get(j, s, "body"), depth + 1)
+        kg_line(g, pad + "  nz_continue_" + int_to_str(kg_int(j, s, "loop")) + ": ;")
+        kg_line(g, pad + "}")
+    } else if op == "break" {
+        kg_line(g, pad + "break;")
+    } else if op == "continue" {
+        kg_line(g, pad + "goto nz_continue_" + int_to_str(kg_int(j, s, "loop")) + ";")
+    } else if op == "return" {
+        let v = kg_expr(io, g, j, fname, j_get(j, s, "value"), depth)
+        kg_line(g, pad + "return " + v + ";")
+    } else if op == "block" {
+        kg_block(io, g, j, fname, j_get(j, s, "body"), depth)
+    } else if op == "match" {
+        kg_refuse_at(io, g, fname, at, "it matches on an enum")
+    } else {
+        kg_refuse_at(io, g, fname, at, "it starts tasks")
+    }
+    0
+}
+
+// The statements of block `b`; its tail's value, "" if it has none.
+fn kg_block(io: IoCap, g: Kg, j: J, fname: Str, b: Int, depth: Int) -> Str {
+    let stmts = j_get(j, b, "stmts")
+    for k in 0..kg_len(j, stmts) { kg_stmt(io, g, j, fname, kg_nth(j, stmts, k), depth) }
+    let tail = j_get(j, b, "tail")
+    if kg_is_null(j, tail) { return "" }
+    kg_expr(io, g, j, fname, tail, depth)
+}
+
+fn kg_function(io: IoCap, g: Kg, i: Int) -> Int {
+    let elem = kg_elem(g)
+    let c = fx_checker(g.fr.f)
+    let j = kg_load(io, g, i)
+    let fname = ck_fn_name(c, i)
+    let params = kg_int(j, 0, "params")
+    let locals = j_get(j, 0, "locals")
+    let ps = strs_new()
+    for k in 0..params { strs_push(ps, kg_ty(elem, kg_text(j, kg_nth(j, locals, k), "type")) + " l" + int_to_str(k)) }
+    kg_line(g, "static " + kg_ty(elem, kg_text(j, 0, "ret")) + " nz_f" + int_to_str(i) + "(" + str_join(ps, ", ") + (if params == 0 { "" } else { ", " })
+            + "__global int *nz_fail, size_t nz_index, __private int *nz_failed) {")
+    let n = kg_len(j, locals)
+    for k in params..n { kg_line(g, "  " + kg_ty(elem, kg_text(j, kg_nth(j, locals, k), "type")) + " l" + int_to_str(k) + " = 0;") }
+    let tail = kg_block(io, g, j, fname, j_get(j, 0, "body"), 1)
+    if tail != "" { kg_line(g, "  return " + tail + ";") } else { kg_line(g, "  return 0;") }
+    kg_line(g, "}")
+    0
+}
+
+// `kernel`: the OpenCL C source for `name` in the root module in `g.out`, its element type and arity in `g.cells`; a refusal ends the process.
+fn kg_kernel(io: IoCap, g: Kg, name: Str) -> Int {
+    let entry = kg_find(g, name)
+    if entry < 0 { kg_refuse_syn(io, g, name, "there is no function `" + name + "` in this module") }
+    let je = kg_load(io, g, entry)
+    let ret = kg_text(je, 0, "ret")
+    let elem = kg_elem_of(ret)
+    let params = kg_int(je, 0, "params")
+    let locals = j_get(je, 0, "locals")
+    let mut same = true
+    for k in 0..params {
+        if kg_elem_of(kg_text(je, kg_nth(je, locals, k), "type")) != elem { same = false }
+    }
+    if elem < 0 || params < 1 || params > 2 || !same {
+        kg_refuse_name(io, g, entry, "a kernel maps one or two values of one type to that type: `(T) -> T` or `(T, T) -> T`, `T` being `Int`, `Float32` or `Float64`")
+    }
+    ints_set(g.cells, 2, elem)
+    ints_set(g.cells, 3, params)
+    let order = ints_new()
+    let visiting = ints_new()
+    kg_reach(io, g, entry, order, visiting)
+    kg_line(g, "// Generated by nazm accel (N67). One work item per element.")
+    if elem != 0 { kg_line(g, "#pragma OPENCL FP_CONTRACT OFF") }
+    if elem == 2 { kg_line(g, "#pragma OPENCL EXTENSION cl_khr_fp64 : enable") }
+    kg_line(g, "#define NZ_FAIL(site) { atomic_min(nz_fail, (int)(nz_index * 256 + (site))); *nz_failed = 1; return 0; }")
+    for k in 0..ints_len(order) { kg_function(io, g, ints_get(order, k)) }
+    let t = kg_c(elem)
+    let mut ps = t + " a"
+    let mut args = "a"
+    let mut inputs = "__global const " + t + " *nz_in"
+    let mut loads = "nz_in[nz_index]"
+    if params == 2 {
+        ps = t + " a, " + t + " b"
+        args = "a, b"
+        inputs = "__global const " + t + " *nz_in, __global const " + t + " *nz_in2"
+        loads = "nz_in[nz_index], nz_in2[nz_index]"
+    }
+    kg_line(g, "static " + t + " nz_item(" + ps + ", __global int *nz_fail, size_t nz_index) {")
+    kg_line(g, "  int nz_flag = 0;")
+    kg_line(g, "  return nz_f" + int_to_str(entry) + "(" + args + ", nz_fail, nz_index, &nz_flag);")
+    kg_line(g, "}")
+    kg_line(g, "__kernel void nz_kernel(" + inputs + ", __global " + t + " *nz_out, __global int *nz_fail) {")
+    kg_line(g, "  size_t nz_index = get_global_id(0);")
+    kg_line(g, "  nz_out[nz_index] = nz_item(" + loads + ", nz_fail, nz_index);")
+    kg_line(g, "}")
+    0
+}
+
+// --- the inputs ---------------------------------------------------------------------------------------
+
+fn kg_space(b: Int) -> Bool { b == 32 || (b >= 9 && b <= 13) }
+
+// The whitespace-separated words of an input.
+fn kg_words(text: Str) -> Strs {
+    let out = strs_new()
+    let n = str_len(text)
+    let mut i = 0
+    while i < n {
+        while i < n && kg_space(str_byte(text, i)) { i += 1 }
+        let from = i
+        while i < n && !kg_space(str_byte(text, i)) { i += 1 }
+        if i > from { strs_push(out, str_slice(text, from, i)) }
+    }
+    out
+}
+
+fn kg_digits(s: Str, from: Int) -> Bool {
+    if from >= str_len(s) { return false }
+    for i in from..str_len(s) {
+        let b = str_byte(s, i)
+        if b < 48 || b > 57 { return false }
+    }
+    true
+}
+
+// `i64::from_str`: an optional sign, then digits, within the type.
+fn kg_valid_int(s: Str) -> Bool {
+    let mut from = 0
+    let mut neg = false
+    if str_len(s) > 0 && (str_byte(s, 0) == 43 || str_byte(s, 0) == 45) {
+        neg = str_byte(s, 0) == 45
+        from = 1
+    }
+    if !kg_digits(s, from) { return false }
+    let mut z = from
+    while z < str_len(s) - 1 && str_byte(s, z) == 48 { z += 1 }
+    let digits = str_slice(s, z, str_len(s))
+    if str_len(digits) < 19 { return true }
+    if str_len(digits) > 19 { return false }
+    let top = if neg { "9223372036854775808" } else { "9223372036854775807" }
+    digits <= top
+}
+
+fn kg_lower(s: Str) -> Str {
+    let parts = strs_new()
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        strs_push(parts, str_from_byte(if b >= 65 && b <= 90 { b + 32 } else { b }))
+    }
+    str_join(parts, "")
+}
+
+// `f64::from_str` (and `f32`'s, which reads the same text): `[+-]` then `inf`, `infinity`, `nan` (any case) or digits with an optional point and an
+// optional exponent.
+fn kg_valid_float(s: Str) -> Bool {
+    let mut from = 0
+    if str_len(s) > 0 && (str_byte(s, 0) == 43 || str_byte(s, 0) == 45) { from = 1 }
+    let rest = kg_lower(str_slice(s, from, str_len(s)))
+    if rest == "inf" || rest == "infinity" || rest == "nan" { return true }
+    let n = str_len(rest)
+    let mut i = 0
+    let mut digits = 0
+    while i < n && str_byte(rest, i) >= 48 && str_byte(rest, i) <= 57 {
+        i += 1
+        digits += 1
+    }
+    if i < n && str_byte(rest, i) == 46 {
+        i += 1
+        while i < n && str_byte(rest, i) >= 48 && str_byte(rest, i) <= 57 {
+            i += 1
+            digits += 1
+        }
+    }
+    if digits == 0 { return false }
+    if i < n && str_byte(rest, i) == 101 {
+        i += 1
+        if i < n && (str_byte(rest, i) == 43 || str_byte(rest, i) == 45) { i += 1 }
+        let start = i
+        while i < n && str_byte(rest, i) >= 48 && str_byte(rest, i) <= 57 { i += 1 }
+        if i == start { return false }
+    }
+    i == n
+}
+
+fn kg_ascii(text: Str) -> Bool {
+    for i in 0..str_len(text) {
+        if str_byte(text, i) >= 128 { return false }
+    }
+    true
+}
+
+pub fn accel_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let file = cli_value(c, 0)
+    let name = cli_value(c, 1)
+    let inputs = cli_values(c, 2)
+    let print_kernel = cli_present(c, 5)
+    let st = ints_new()
+    ints_push(st, 0)
+    ints_push(st, 0)
+    let texts = strs_new()
+    let fr = tf_front(io, file, inputs, texts, st, true)
+    if ints_get(st, 0) != 0 {
+        exit_with(ints_get(st, 0))
+        return ints_get(st, 0)
+    }
+    let f = fr.f
+    let c2 = fx_checker(f)
+    let idents = strs_new()
+    for i in 0..ck_fn_count(c2) { strs_push(idents, fx_fn_identity(f, i)) }
+    let cells = ints_new()
+    for _ in 0..4 { ints_push(cells, 0) }
+    let g = Kg(fr: fr, out: strs_new(), cells: cells, idents: idents)
+    kg_kernel(io, g, name)
+    if print_kernel {
+        print(str_join(g.out, ""))
+        return 0
+    }
+    // The inputs, read as the kernel's type.
+    let elem = kg_elem(g)
+    let arity = ints_get(g.cells, 3)
+    let lens = ints_new()
+    for k in 0..strs_len(texts) {
+        if !kg_ascii(strs_get(texts, k)) { ac_refuse(io, "an input holding text that is not ASCII (Unicode white space separates its numbers)") }
+        let words = kg_words(strs_get(texts, k))
+        for w in 0..strs_len(words) {
+            let tok = strs_get(words, w)
+            let ok = if elem == 0 { kg_valid_int(tok) } else { kg_valid_float(tok) }
+            if !ok {
+                eprint("nazm: `" + strs_get(inputs, k) + "` is not whitespace-separated `" + kg_ename(elem) + "`s" + nl())
+                exit_with(1)
+                return 1
+            }
+        }
+        ints_push(lens, strs_len(words))
+    }
+    let elements = if ints_len(lens) > 0 { ints_get(lens, 0) } else { 0 }
+    if elements > 8000000 {
+        eprint("nazm: `nazm accel` maps at most 8000000 elements in one launch" + nl())
+        exit_with(1)
+        return 1
+    }
+    let entry = kg_find(g, name)
+    let n = ints_len(lens)
+    if n != arity {
+        let t = kg_ename(elem)
+        kg_diag(io, g, ck_fn_module(c2, entry), ck_fn_name_start(c2, entry), ck_fn_name_end(c2, entry),
+                "`" + name + "` takes " + int_to_str(arity) + " `" + t + "`" + (if arity == 1 { "" } else { "s" }) + ", so it runs over " + int_to_str(arity)
+                + " input" + (if arity == 1 { "" } else { "s" }) + ", and " + int_to_str(n) + " " + (if n == 1 { "was" } else { "were" }) + " given")
+    }
+    let mut equal = true
+    for k in 0..n {
+        if ints_get(lens, k) != elements { equal = false }
+    }
+    if !equal {
+        let shown = strs_new()
+        for k in 0..n { strs_push(shown, int_to_str(ints_get(lens, k))) }
+        kg_diag(io, g, ck_fn_module(c2, entry), ck_fn_name_start(c2, entry), ck_fn_name_end(c2, entry),
+                "a zip runs over inputs of one length, and these have " + str_join(shown, " and "))
+    }
+    ac_refuse(io, "`accel` run (the provider's host program, the interpreter's answer for each element and the `nazm.accel/3` report: only the kernel itself, `--print-kernel`, is carried)")
+}

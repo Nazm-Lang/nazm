@@ -1,0 +1,85 @@
+// `nazm contract`, in Nazm (R8 slice 10, `openspec/changes/r8-cut-over/design.md`, task 10.1, *S10.1*).
+//
+// `nazm contract FILE [--interface] [--txs FILE] [--evm DIR] [--upgrade-check OLD] [--wasm DIR] [--accounts DIR]`, run by the dispatcher
+// (`nazm.nz`). The command line is `cli.rs`'s, byte for byte; what the command does is carried as far as what it reads is published:
+//
+//   carried   the arguments and the usage errors; `FILE` (and `OLD`) loaded and checked as `opened` and `on_lowered` do, every diagnostic
+//             written as the Rust command writes it (`toolfront.nz`), for `--upgrade-check` — which holds no profile — both programs, in the
+//             reference's order and with its status; and a root that cannot be read or loaded, which `profile::enforce` leaves to `opened`.
+//   refused   (status 6, counted by the comparison, never an agreement)
+//             `--evm` and `--wasm`: the EVM back end and the WebAssembly target are deferred targets (design, open question 1: the released
+//             `nazm` cuts over without them, each returning with its domain track before 1.0, `docs/user/support.md`);
+//             everything else once the program loads: `contract` first holds the module to the `web3` profile (`accounts` for
+//             `--accounts`), whose rules (`declared-effects`, `no-recursion`, `no-blocking`, `no-ambient-time`, `signed-writes`) read the
+//             call graph and the call sites of the whole compilation and write witnesses the port has no table for — profiles other than
+//             `general` are slice 11's (task 11.1, as `check --profile`) — and then reads the contract's facts (`nazm_service::contract`: the
+//             state record, the entrypoints with what each reads and writes, `conserved`, whether a caller is checked), which R2 does not
+//             publish.
+
+use "cli.nz"
+use "toolfront.nz"
+use "util.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+// The command line, as `crates/nazm-cli/src/cli.rs` declares `nazm contract`.
+pub fn contract_cli() -> Cli {
+    let c = cli_command("contract", "A contract (N69): its facts as `nazm.contract/1` (`--interface`, the default), or a deterministic run of the transactions in `--txs` — "
+            + "`CALLER ENTRY ARG…` per line — as `nazm.contract-run/1`. The module is held to the `web3` profile first", "")
+    cli_positional(c, "FILE", true, false, true, "", "")
+    cli_flag(c, "", "interface", "Print the contract's facts (the default when `--txs` is not given)", "")
+    cli_option(c, "", "txs", "FILE", true, "", false, "Run these transactions, one per line, against a fresh `init()` state", "")
+    cli_option(c, "", "evm", "DIR", true, "", false, "Compile to EVM bytecode (N70): write `deploy.hex`, `runtime.hex`, `abi.json`, `storage.json` and the py-evm harness `evm_run.py` into DIR", "")
+    cli_option(c, "", "upgrade-check", "OLD", true, "", false, "Whether this contract's storage can take over OLD's (N70): `nazm.evm-upgrade/1`", "")
+    cli_option(c, "", "wasm", "DIR", true, "", false, "Build for WebAssembly with the contract adapter (N71): the objects, `link.txt`, `contract.json` and the reference host `contract_host.mjs` into DIR", "")
+    cli_option(c, "", "accounts", "DIR", true, "", false, "The account-oriented metadata (N72): each instruction's discriminator, arguments and accounts with their signer and writable constraints, as `DIR/accounts.json`. The module is held to the `accounts` profile", "")
+    c
+}
+
+fn ct_refuse(io: IoCap, why: Str) -> Int {
+    eprint("nazm: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+pub fn contract_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let file = cli_value(c, 0)
+    let evm = cli_present(c, 3)
+    let wasm = cli_present(c, 5)
+    if evm { ct_refuse(io, "`contract --evm` (the EVM back end is a deferred target: removed from the 0.11.0 cut-over, back with the smart-contract track before 1.0)") }
+    if wasm { ct_refuse(io, "`contract --wasm` (the WebAssembly target is a deferred target: removed from the 0.11.0 cut-over, back with the WebAssembly track before 1.0)") }
+    let none = strs_new()
+    let texts = strs_new()
+    if cli_present(c, 4) {
+        // `upgrade_check`: the old program's layout, then the new one's; both are reported, the old one's status wins.
+        let st_old = ints_new()
+        ints_push(st_old, 0)
+        ints_push(st_old, 0)
+        tf_front(io, cli_value(c, 4), none, texts, st_old, true)
+        let st_new = ints_new()
+        ints_push(st_new, 0)
+        ints_push(st_new, 0)
+        tf_front(io, file, none, texts, st_new, true)
+        // Both are reported, the old one's status wins; but a program that does load is then asked what contract it is (`nazm_service::contract`),
+        // which the port cannot answer, and the reference reports that too: only two that do not load are compared.
+        if ints_get(st_old, 0) != 0 && ints_get(st_new, 0) != 0 {
+            exit_with(ints_get(st_old, 0))
+            return ints_get(st_old, 0)
+        }
+        ct_refuse(io, "`contract --upgrade-check` (the contract's state record and its fields, `nazm_service::contract`: R2 does not publish them)")
+    }
+    // `profile::enforce` first: a root that cannot be loaded passes it and `opened` says why; a root that loads is held to the profile, whose
+    // rules the port has not got.
+    let st = ints_new()
+    ints_push(st, 0)
+    ints_push(st, 0)
+    tf_front(io, file, none, texts, st, false)
+    // A load that failed has said why; a program that checks, or does not, is the profile's to judge first.
+    if ints_get(st, 1) == 1 {
+        exit_with(ints_get(st, 0))
+        return ints_get(st, 0)
+    }
+    let profile = if cli_present(c, 6) { "accounts" } else { "web3" }
+    ct_refuse(io, "`contract` (the `" + profile + "` profile it holds the module to first, and the contract's facts: profiles other than `general` are slice 11's, and R2 does not publish a contract's entrypoints)")
+}

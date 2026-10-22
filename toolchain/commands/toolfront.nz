@@ -1,0 +1,89 @@
+// The front end of `nazm accel` and `nazm contract` (R8 slice 10, `openspec/changes/r8-cut-over/design.md`, task 10.1): what
+// `crate::opened::opened` and `on_lowered` do before either command looks at the program — the root loaded, the inputs the command reads
+// (`accel`'s `--input` files) read between the load and the check, as `accel.rs` reads them, and every diagnostic of the compilation written
+// as the Rust commands write them (`emit`: the diagnostics, and no count of them) — returning a status instead of ending the process, because `contract --upgrade-check` loads two programs
+// and reports both. `coreir.nz`'s `ci_checked_as` is the same without the inputs and without returning.
+
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/facts.nz"
+use "cli.nz"
+use "front.nz"
+use "util.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+// What a command needs of the compilation to write a diagnostic of its own: the facts, and the modules' names (as the reference names
+// them), texts and places.
+pub struct Front {
+    f: Facts,
+    names: Strs,
+    sources: Strs,
+    bases: Ints,
+}
+
+// `file` loaded and checked as a module; `inputs` read into `texts` after the load and before the check's diagnostics. `st[0]` is 0 where
+// the program is carried and checks, else the exit status of what was written; `st[1]` is 1 where it failed to load (or an input could not be
+// read), 0 where it was the check's diagnostics, which are written only with `diagnose`. A program the front end does not carry ends the
+// process (6). `st` holds two entries.
+pub fn tf_front(io: IoCap, file: Str, inputs: Strs, texts: Strs, st: Ints, diagnose: Bool) -> Front {
+    let library = os_env_get("NAZM_LIBRARY")
+    if library == "" {
+        eprint("nazm: not carried: the standard library's directory (set NAZM_LIBRARY)" + nl())
+        exit_with(6)
+    }
+    ints_set(st, 0, 0)
+    ints_set(st, 1, 0)
+    let prefix = fe_prefix(io, file)
+    let f = fx_check_module_in(prefix + file, "", library, fe_host_os(), fe_host_arch(), io)
+    if fx_refusal(f) != "" {
+        let why = fe_unprefix(fx_refusal(f), "")
+        eprint("nazm: " + why + nl())
+        let unreadable = fe_starts(why, "could not read") || ut_ends(why, "is not a directory")
+        ints_set(st, 0, if unreadable { 3 } else { 1 })
+        ints_set(st, 1, 1)
+        return Front(f: f, names: strs_new(), sources: strs_new(), bases: ints_new())
+    }
+    if !fx_carried(f) {
+        eprint("nazm: not carried: " + fx_why(f) + nl())
+        exit_with(6)
+    }
+    let d = fx_diags(f)
+    fe_unprefix_diags(io, d, prefix, prefix + file)
+    let names = fe_names(f, prefix)
+    let bases = fe_bases(f)
+    let sources = fe_texts(f)
+    let out = strs_new()
+    if fe_load_failed(f) {
+        let mut missing = true
+        for i in 0..dg_len(d) {
+            if strs_get(d.code, i) != "N0205" { missing = false }
+            strs_push(out, dg_render(d, i, names, sources, bases))
+        }
+        eprint(str_join(out, ""))
+        ints_set(st, 0, if missing { 3 } else { 1 })
+        ints_set(st, 1, 1)
+        return Front(f: f, names: names, sources: sources, bases: bases)
+    }
+    for i in 0..strs_len(inputs) {
+        let p = strs_get(inputs, i)
+        let why = ut_read_error(io, p, true)
+        if why != "" {
+            eprint("nazm: cannot read `" + p + "`: " + why + nl())
+            ints_set(st, 0, 3)
+            ints_set(st, 1, 1)
+            return Front(f: f, names: names, sources: sources, bases: bases)
+        }
+        strs_push(texts, read_file(p))
+    }
+    let n = dg_len(d)
+    if n > 0 {
+        if diagnose {
+            for i in 0..n { strs_push(out, dg_render(d, i, names, sources, bases)) }
+            // `emit` writes the diagnostics and no count: these commands do not add one.
+            eprint(str_join(out, ""))
+        }
+        ints_set(st, 0, 1)
+    }
+    Front(f: f, names: names, sources: sources, bases: bases)
+}

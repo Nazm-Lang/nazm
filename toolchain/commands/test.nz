@@ -72,7 +72,7 @@ struct Plan {
 
 // Every top-level function the file marks `@test`, `@fuzz` or `@bench`, in source order, among the
 // declarations the host builds (`harness::marked`): name, attribute, whether `@test(fails)`.
-fn marked(io: IoCap, text: Str, names: Strs, attrs: Strs, fails: Ints) -> Int {
+pub fn tc_marked(io: IoCap, text: Str, names: Strs, attrs: Strs, fails: Ints) -> Int {
     let t = sx_tree()
     let d = dg_new()
     let program = sx_parse_source(text, t, d)
@@ -154,7 +154,7 @@ fn gather(io: IoCap, path: Str, fuzz: Int, p: Plan) -> Bool {
         let names = strs_new()
         let attrs = strs_new()
         let fails = ints_new()
-        marked(io, text, names, attrs, fails)
+        tc_marked(io, text, names, attrs, fails)
         for i in 0..strs_len(names) {
             let a = strs_get(attrs, i)
             if a == "bench" { continue }
@@ -174,7 +174,7 @@ fn gather(io: IoCap, path: Str, fuzz: Int, p: Plan) -> Bool {
 
 // A program run to its end: whether it started, its status (the code, or 256 and the signal),
 // what it wrote to its output and its errors, and why it did not start.
-struct Ran {
+pub struct TcRan {
     started: Bool,
     status: Int,
     out: Str,
@@ -193,7 +193,7 @@ fn collect(from: OsHandle, into: Chan[Str]) -> Int ! { io } {
 
 // `Command::output`: standard input empty, output and errors collected, the environment the
 // parent's with `NAZM_RESULT_REPORT=1` added.
-fn run_program(io: IoCap, proc: ProcessCap, sp: SpawnCap, program: Str, args: Strs, report: Bool) -> Ran ! { io, spawn } {
+pub fn tc_run_program(io: IoCap, proc: ProcessCap, sp: SpawnCap, program: Str, args: Strs, report: Bool) -> TcRan ! { io, spawn } {
     let env = strs_new()
     for i in 0..os_env_count() {
         let e = os_env_at(i)
@@ -201,7 +201,7 @@ fn run_program(io: IoCap, proc: ProcessCap, sp: SpawnCap, program: Str, args: St
     }
     if report { strs_push(env, "NAZM_RESULT_REPORT=1") }
     let h = os_spawn_with(program, args, "", env, 2)
-    if os_status(h) < 0 { return Ran(started: false, status: 0, out: "", err: "", why: ut_os_error(os_status(h))) }
+    if os_status(h) < 0 { return TcRan(started: false, status: 0, out: "", err: "", why: ut_os_error(os_status(h))) }
     let errors = chan_new_of[Str](1)
     let out = os_child_pipe(h, 1)
     let err = os_child_pipe(h, 2)
@@ -219,11 +219,11 @@ fn run_program(io: IoCap, proc: ProcessCap, sp: SpawnCap, program: Str, args: St
     os_close(err)
     let status = os_wait(h)
     os_close(h)
-    Ran(started: true, status: status, out: stdout, err: if vec_len(got) > 0 { vec_get(got, 0) } else { "" }, why: "")
+    TcRan(started: true, status: status, out: stdout, err: if vec_len(got) > 0 { vec_get(got, 0) } else { "" }, why: "")
 }
 
 // `output_of`: both streams, lossy, trimmed; or `could not run: …`.
-fn output_of(r: Ran) -> Str {
+pub fn tc_output_of(r: TcRan) -> Str {
     if !r.started { return "could not run: " + r.why }
     ut_trim(ut_lossy(r.out) + ut_lossy(r.err))
 }
@@ -273,8 +273,8 @@ fn run_case(proc: ProcessCap, sp: SpawnCap, io: IoCap, driver: Str, dir: Str, in
     strs_push(a, "--interpret")
     for k in 0..strs_len(harness) { strs_push(a, strs_get(harness, k)) }
     strs_push(a, file)
-    let ran = run_program(io, proc, sp, driver, a, true)
-    let got = output_of(ran)
+    let ran = tc_run_program(io, proc, sp, driver, a, true)
+    let got = tc_output_of(ran)
     let matched = met(expect, want, got, ran.status, ran.started)
     strs_push(r.interp_out, got)
     ints_push(r.interp_ok, if matched { 1 } else { 0 })
@@ -293,7 +293,7 @@ fn run_case(proc: ProcessCap, sp: SpawnCap, io: IoCap, driver: Str, dir: Str, in
         strs_push(b, file)
         strs_push(b, "-o")
         strs_push(b, exe)
-        let built = run_program(io, proc, sp, driver, b, false)
+        let built = tc_run_program(io, proc, sp, driver, b, false)
         ints_push(r.native_run, 1)
         if !built.started {
             strs_push(r.native_out, "could not build: " + built.why)
@@ -306,8 +306,8 @@ fn run_case(proc: ProcessCap, sp: SpawnCap, io: IoCap, driver: Str, dir: Str, in
             ints_push(r.leg_n, 3)
             native_ok = false
         } else {
-            let ran2 = run_program(io, proc, sp, exe, strs_new(), true)
-            let got2 = output_of(ran2)
+            let ran2 = tc_run_program(io, proc, sp, exe, strs_new(), true)
+            let got2 = tc_output_of(ran2)
             let m2 = met(expect, want, got2, ran2.status, ran2.started)
             strs_push(r.native_out, got2)
             ints_push(r.native_ok, if m2 { 1 } else { 0 })
@@ -402,7 +402,7 @@ fn report(io: IoCap, p: Plan, r: Results, failed: Int, json: Bool) -> Int {
     0
 }
 
-fn env_has(io: IoCap, name: Str) -> Bool {
+pub fn tc_env_has(io: IoCap, name: Str) -> Bool {
     for i in 0..os_env_count() {
         if ut_starts(os_env_at(i), name + "=") { return true }
     }
@@ -411,7 +411,7 @@ fn env_has(io: IoCap, name: Str) -> Bool {
 
 // This executable's own path, the reference's `current_exe()`. `arg(0)` is the first argument, not the program's name, so the
 // system is asked: `/proc/self/exe` where there is one, else the path `ps` reports for this process id; "" when it cannot be found.
-fn own_path(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Str ! { io, spawn } {
+pub fn tc_own_path(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Str ! { io, spawn } {
     let mut found = ""
     let linked = fe_canonical(io, "/proc/self/exe")
     if linked != "" { found = linked }
@@ -421,7 +421,7 @@ fn own_path(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Str ! { io, spawn } {
         strs_push(a, int_to_str(os_pid()))
         strs_push(a, "-o")
         strs_push(a, "comm=")
-        let r = run_program(io, proc, sp, "ps", a, false)
+        let r = tc_run_program(io, proc, sp, "ps", a, false)
         if r.started && r.status == 0 {
             let said = ut_trim(r.out)
             if said != "" { found = fe_canonical(io, said) }
@@ -442,8 +442,8 @@ pub fn test_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, c: C
     let fuzz = to_int(cli_value(c, 5))
     // The driver is `NAZM_TEST_DRIVER` when it is set (the seam), else this executable.
     let mut driver = os_env_get("NAZM_TEST_DRIVER")
-    if driver == "" && !env_has(io, "NAZM_TEST_DRIVER") {
-        driver = str_vouch(own_path(io, proc, sp))
+    if driver == "" && !tc_env_has(io, "NAZM_TEST_DRIVER") {
+        driver = str_vouch(tc_own_path(io, proc, sp))
         if driver == "" {
             if summary {
                 let none = Plan(name: strs_new(), file: strs_new(), expect: ints_new(), want: strs_new(), harness: strs_new(), kind: ints_new(),
@@ -495,7 +495,7 @@ fn run_cases(io: IoCap, proc: ProcessCap, sp: SpawnCap, driver: Str, p: Plan, js
         exit_with(3)
         return 3
     }
-    let dir = os_mkdtemp(ut_temp_dir(io))
+    let dir = os_mkdtemp(tc_temp_dir(io))
     if str_len(dir) == 0 {
         if summary { return summarized(io, "toolchain_failed", 4, !interpret_only, p, r, strs_len(p.without)) }
         eprint("nazm: a scratch directory: could not be made" + nl())
@@ -503,7 +503,7 @@ fn run_cases(io: IoCap, proc: ProcessCap, sp: SpawnCap, driver: Str, p: Plan, js
         return 4
     }
     for i in 0..strs_len(p.name) { run_case(proc, sp, io, driver, dir, i, p, i, interpret_only, r) }
-    remove_tree(io, dir)
+    tc_remove_tree(io, dir)
     let mut failed = 0
     for i in 0..ints_len(r.passed) { if ints_get(r.passed, i) == 0 { failed += 1 } }
     if summary {
@@ -518,13 +518,13 @@ fn run_cases(io: IoCap, proc: ProcessCap, sp: SpawnCap, driver: Str, p: Plan, js
 }
 
 // `std::env::temp_dir()`: `TMPDIR`, else `/tmp`.
-fn ut_temp_dir(io: IoCap) -> Str {
+pub fn tc_temp_dir(io: IoCap) -> Str {
     let t = os_env_get("TMPDIR")
     if t == "" { "/tmp" } else { t }
 }
 
 // `remove_dir_all` of the executables' directory, each failure ignored.
-fn remove_tree(io: IoCap, dir: Str) -> Int {
+pub fn tc_remove_tree(io: IoCap, dir: Str) -> Int {
     let h = os_dir_open(dir)
     if os_status(h) < 0 { return 0 }
     let names = strs_new()
