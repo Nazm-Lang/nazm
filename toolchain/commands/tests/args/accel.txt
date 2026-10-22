@@ -1,0 +1,57 @@
+# `nazm accel`'s command lines, run from the repository's root by `tests/tools.sh args`. `@FX@` is the directory of fixtures the script writes (ints.txt, floats.txt, shortints.txt, empty.txt, bad.txt, ...).
+--help
+-h
+(none)
+--bogus
+toolchain/commands/tests/accel/int_map.nz
+toolchain/commands/tests/accel/int_map.nz k
+toolchain/commands/tests/accel/int_map.nz k --input
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/ints.txt --print-kernel
+toolchain/commands/tests/accel/int_map.nz k --print-kernel --input @FX@/ints.txt
+toolchain/commands/tests/accel/int_map.nz --input @FX@/ints.txt k --print-kernel
+--input @FX@/ints.txt toolchain/commands/tests/accel/int_map.nz k --print-kernel
+toolchain/commands/tests/accel/int_map.nz k --input=@FX@/ints.txt --print-kernel
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/ints.txt --reduce add --print-kernel
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/ints.txt --reduce sum --print-kernel
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/ints.txt --reduce
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/ints.txt --provider gpu --print-kernel
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/ints.txt --provider cpu --scalar --print-kernel
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/ints.txt --provider opencl --no-check --print-kernel
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/ints.txt --provider
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/ints.txt --provider=cpu
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/ints.txt --scalar
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/ints.txt --no-check
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/ints.txt
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/nowhere.txt
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/ints.txt --input @FX@/nowhere.txt
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/nowhere.txt --print-kernel
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/emptydir
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/binary.txt
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/bad.txt
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/floats.txt
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/empty.txt
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/huge.txt
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/ints.txt --input @FX@/ints.txt
+toolchain/commands/tests/accel/int_map.nz k --input @FX@/ints.txt --input @FX@/ints.txt --input @FX@/ints.txt
+toolchain/commands/tests/accel/int_map.nz nosuch --input @FX@/ints.txt
+toolchain/commands/tests/accel/int_map.nz nosuch --input @FX@/ints.txt --print-kernel
+toolchain/commands/tests/accel/int_map.nz main --input @FX@/ints.txt --print-kernel
+toolchain/commands/tests/accel/int_zip.nz k --input @FX@/ints.txt --input @FX@/ints.txt --print-kernel
+toolchain/commands/tests/accel/int_zip.nz k --input @FX@/ints.txt --input @FX@/ints.txt
+toolchain/commands/tests/accel/int_zip.nz k --input @FX@/ints.txt
+toolchain/commands/tests/accel/int_zip.nz k --input @FX@/ints.txt --input @FX@/shortints.txt
+toolchain/commands/tests/accel/int_zip.nz k --input @FX@/shortints.txt --input @FX@/ints.txt --input @FX@/ints.txt
+toolchain/commands/tests/accel/f64_map.nz k --input @FX@/floats.txt --print-kernel
+toolchain/commands/tests/accel/f64_map.nz k --input @FX@/floats.txt
+toolchain/commands/tests/accel/f64_map.nz k --input @FX@/ints.txt
+toolchain/commands/tests/accel/f64_map.nz k --input @FX@/bad.txt
+toolchain/commands/tests/accel/f32_map.nz k --input @FX@/floats.txt --provider cpu --scalar
+toolchain/commands/tests/accel/f64_zip.nz k --input @FX@/floats.txt --input @FX@/floats.txt
+toolchain/commands/tests/accel/f64_zip.nz k --input @FX@/floats.txt --input @FX@/shortfloats.txt
+toolchain/commands/tests/accel/f64_zip.nz k --input @FX@/floats.txt --input @FX@/ints.txt
+toolchain/commands/tests/accel/nowhere.nz k --input @FX@/ints.txt
+toolchain/commands/tests/accel/nowhere.nz k --input @FX@/nowhere.txt
+@FX@/syntax.nz k --input @FX@/ints.txt
+@FX@/syntax.nz k --input @FX@/nowhere.txt
+@FX@/typeerror.nz k --input @FX@/ints.txt
+@FX@/typeerror.nz k --input @FX@/nowhere.txt --print-kernel

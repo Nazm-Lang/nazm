@@ -1,0 +1,6 @@
+fn k(x: Int) -> Int {
+    x + 1;
+    x
+}
+
+fn main() -> Int { 0 }

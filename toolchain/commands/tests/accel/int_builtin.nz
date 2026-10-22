@@ -1,0 +1,3 @@
+fn k(x: Int) -> Int { x + str_len("abc") }
+
+fn main() -> Int { 0 }

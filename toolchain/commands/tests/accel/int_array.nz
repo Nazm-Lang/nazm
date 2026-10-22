@@ -1,0 +1,6 @@
+fn k(x: Int) -> Int {
+    let a = [1, 2, 3]
+    a[0] + x
+}
+
+fn main() -> Int { 0 }

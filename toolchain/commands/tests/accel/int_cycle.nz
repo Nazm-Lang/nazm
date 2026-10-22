@@ -1,0 +1,7 @@
+fn a(x: Int) -> Int { if x > 0 { b(x - 1) } else { 0 } }
+
+fn b(x: Int) -> Int { a(x) }
+
+fn k(x: Int) -> Int { a(x) }
+
+fn main() -> Int { 0 }

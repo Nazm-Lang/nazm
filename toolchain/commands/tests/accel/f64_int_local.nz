@@ -1,0 +1,6 @@
+fn k(x: Float64) -> Float64 {
+    let n = 3
+    x
+}
+
+fn main() -> Int { 0 }

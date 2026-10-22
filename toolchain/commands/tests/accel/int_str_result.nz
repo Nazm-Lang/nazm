@@ -1,0 +1,3 @@
+fn k(x: Int) -> Str { "a" }
+
+fn main() -> Int { 0 }

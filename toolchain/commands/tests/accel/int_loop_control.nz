@@ -1,0 +1,13 @@
+fn k(x: Int) -> Int {
+    let mut s = 0
+    let mut i = 0
+    while i < 10 {
+        i += 1
+        if i == 3 { continue }
+        if i > 7 { break }
+        s = s + i
+    }
+    s + x
+}
+
+fn main() -> Int { 0 }

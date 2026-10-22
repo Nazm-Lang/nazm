@@ -1,0 +1,6 @@
+fn k(x: Int) -> Int {
+    let f = fn(y: Int) -> Int { y + x }
+    f(1)
+}
+
+fn main() -> Int { 0 }

@@ -1,0 +1,37 @@
+// What `nazm bench` prints for a measurement, and how it reads the harness's `nazm-bench: NS SINK` line, checked without taking one
+// (`tests/tools.sh shape`, `bench-shape.expected`): the row's layout (`{:<40} {:>12} ns/iteration  ({} iterations)`) and the parse of the line.
+
+use "../bench.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+fn show(out: Str) -> Int {
+    print(int_to_str(bn_measurement(out)) + nl())
+    0
+}
+
+fn main(io: IoCap) -> Int {
+    let n = nl()
+    print(bn_row("a::b", 123, 5) + n)
+    print(bn_row("", 0, 1) + n)
+    print(bn_row("é::ünïcode", 7, 1000) + n)
+    print(bn_row("a_very_long_name_that_is_longer_than_forty_characters::function", 123456789012, 4294967295) + n)
+    print(bn_row("exactly_forty_characters_long_name_ab::", 99999999999, 2) + n)
+    show("nazm-bench: 4567 99")
+    show("x" + n + "nazm-bench: 4567 99" + n + "y")
+    show("nazm-bench: 4567")
+    show("nazm-bench:  4567   99")
+    show("nazm-bench: abc 1")
+    show("nazm-bench: -5 1")
+    show("nazm-bench: +12" + str_from_byte(13) + n + "nazm-bench: 5")
+    show("nazm-bench: 12" + str_from_byte(13))
+    show("nazm-bench: ")
+    show("nazm-bench:")
+    show("nazm-bench: " + n + "nazm-bench: 5")
+    show("  nazm-bench: 5")
+    show("nope")
+    show("")
+    show("nazm-bench: 007 1")
+    show("nazm-bench: 1" + n + "nazm-bench: 2")
+    0
+}

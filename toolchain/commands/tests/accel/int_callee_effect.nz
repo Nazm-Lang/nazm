@@ -1,0 +1,7 @@
+fn noisy(x: Int) -> Int ! { io } { x }
+
+fn k(x: Int) -> Int { x }
+
+fn j(x: Int) -> Int ! { io } { noisy(x) }
+
+fn main() -> Int { 0 }

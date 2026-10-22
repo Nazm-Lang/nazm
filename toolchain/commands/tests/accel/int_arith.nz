@@ -1,0 +1,9 @@
+fn k(x: Int) -> Int {
+    let a = x - 3
+    let b = a * a
+    let c = b / 2
+    let d = c % 7
+    0 - d
+}
+
+fn main() -> Int { 0 }

@@ -1,0 +1,11 @@
+enum E { A, B }
+
+fn k(x: Int) -> Int {
+    let e = E.A
+    match e {
+        E.A => x,
+        E.B => 0,
+    }
+}
+
+fn main() -> Int { 0 }

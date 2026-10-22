@@ -1,0 +1,5 @@
+fn id[T](x: T) -> T { x }
+
+fn k(x: Int) -> Int { id[Int](x) }
+
+fn main() -> Int { 0 }

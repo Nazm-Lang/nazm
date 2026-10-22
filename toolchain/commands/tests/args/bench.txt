@@ -1,0 +1,32 @@
+# `nazm bench`'s command lines, run from the repository's root by `tests/tools.sh args`. None names a program with a `@bench` function that builds: that would take a timing.
+--help
+-h
+(none)
+--bogus toolchain/commands/tests/bench/none.nz
+--iterations
+--iterations x toolchain/commands/tests/bench/none.nz
+--iterations -1 toolchain/commands/tests/bench/none.nz
+--iterations 99999999999 toolchain/commands/tests/bench/none.nz
+--iterations=5 toolchain/commands/tests/bench/none.nz
+--iterations 0 toolchain/commands/tests/bench/none.nz
+--iterations 1000 toolchain/commands/tests/bench/none.nz
+--json
+--json --iterations 3 toolchain/commands/tests/bench/none.nz
+--iterations 3 --json toolchain/commands/tests/bench/refused.nz
+--json -- toolchain/commands/tests/bench/none.nz
+-- toolchain/commands/tests/bench/refused.nz
+-- --json
+toolchain/commands/tests/bench/none.nz --json
+toolchain/commands/tests/bench/none.nz toolchain/commands/tests/bench/none.nz
+toolchain/commands/tests/bench/refused.nz toolchain/commands/tests/bench/refused.nz
+toolchain/commands/tests/bench/two.nz --iterations 2
+toolchain/commands/tests/bench/nowhere.nz
+toolchain/commands/tests/bench/none.nz toolchain/commands/tests/bench/nowhere.nz
+toolchain/commands/tests/bench/dir
+toolchain/commands/tests/bench/dir/
+toolchain/commands/tests/bench/empty
+toolchain/commands/tests/bench/cfg.nz
+@FX@/binary.nz
+@FX@/syntax.nz
+@FX@/emptydir
+@FX@/empty.nz

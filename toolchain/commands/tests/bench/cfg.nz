@@ -1,0 +1,4 @@
+@cfg(feature = "x")
+@bench
+fn b() -> Int { 1 }
+fn main() -> Int { 0 }

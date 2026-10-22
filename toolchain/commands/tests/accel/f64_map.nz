@@ -1,0 +1,3 @@
+fn k(x: Float64) -> Float64 { x * 2.5 + 1.0 }
+
+fn main() -> Int { 0 }
