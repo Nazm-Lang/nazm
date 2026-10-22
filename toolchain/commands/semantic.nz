@@ -857,3 +857,26 @@ pub fn references_command(io: IoCap, c: Cli) -> Int {
             + str_join(uses, ",") + "]}" + nl())
     0
 }
+
+// --- the diagnostic index, for the commands that read it (`nazm repo`, R8 slice 9) ---------------------------------------------------------
+
+// How many diagnostics the root's index holds (`counts.total`): none where the service has no index (the compilation does not carry, a
+// root without a durable key).
+pub fn sd_total(f: Facts) -> Int {
+    if !fx_diag_available(f) { return 0 }
+    ints_len(fx_diag_order(f))
+}
+
+// The identity of the durable definition diagnostic `k` is inside, "" for none (`owner_of_diag`).
+pub fn sd_owner(f: Facts, k: Int) -> Str {
+    let o = owner_of_diag(f, k, early_errors(f) == 0)
+    if o == "null" { return "" }
+    let j = j_parse(o)
+    j_str(j, j_get(j, 0, "identity"))
+}
+
+// Where diagnostic `k` is, as `{"file":…,"start":…,"end":…}`, "null" for no place.
+pub fn sd_primary(f: Facts, k: Int) -> Str { place_json(sm_primary(f, k)) }
+
+// The diagnostic as `nazm.diagnostic/1` publishes it, without its `schema`.
+pub fn sd_published(f: Facts, k: Int) -> Str { published_json(f, k) }

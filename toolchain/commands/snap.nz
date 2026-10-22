@@ -510,7 +510,7 @@ fn dig_names(out: Strs, names: Strs) -> Int {
 
 // The members of a record or the variants of an enum as the reference lists them (`members`): in the order the
 // checker lays them out, which is by name — except a record C sees, which keeps its declaration.
-fn by_name_order(names: Strs, sorted: Bool) -> Ints {
+pub fn by_name_order(names: Strs, sorted: Bool) -> Ints {
     let order = ints_new()
     for i in 0..strs_len(names) {
         let mut at = ints_len(order)

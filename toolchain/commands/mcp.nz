@@ -13,14 +13,17 @@
 // The commands are asked, not called: each tool runs `nazm` (the program `NAZM_EXE` names) with the
 // arguments that command takes, so a call reads the root from disk as it is at that moment and keeps
 // nothing, as the reference does. `nazm.semantic_delta` is asked in this process (`delta_compute`), its baseline
-// being data. Refused (status 6), counted and named, because the commands behind them are not
-// carried: `nazm.semantic_context`, `nazm.repository_map`, `nazm.task_context`; and what the reference
+// being data. Refused (status 6), counted and named: a `nazm.semantic_context` whose `file` is joined to a source root the
+// reference cannot decide; and what the reference
 // answers with a transport error rather than a result (a root that does not open), a message the
 // reference reads in a way this port does not (a line that is not JSON, an `id` that is not an integer or a
 // string), and a first message that is not `initialize`. The service's check summary and the command's differ in
 // two places (`service_summary`, `unreadable_of`), which this port makes the service's.
 
 use "../../compiler/diag.nz"
+use "../../compiler/package.nz"
+use "../../compiler/load.nz"
+use "front.nz"
 use "jsonin.nz"
 use "proc.nz"
 use "util.nz"
@@ -305,6 +308,18 @@ fn root_args(s: Server, command: Str, out: Strs) -> Int {
     0
 }
 
+// The directory durable keys are measured from (`root::decide`), absolute; "" where the reference cannot decide it.
+fn source_base(io: IoCap, s: Server) -> Str {
+    let abs = fe_prefix(io, s.root) + s.root
+    let mut r = pk_decide(abs, io)
+    if s.has_source_root {
+        let given = fe_prefix(io, s.source_root) + s.source_root
+        r = pk_given(abs, given, ld_is_directory(given, io))
+    }
+    if pk_root_how(r) < 0 { return "" }
+    pk_root_path(r)
+}
+
 // The root module's name as the compilation's files are named, which is what a patch's `file` is
 // matched with: the diagnostics' index says it. "" where there is none.
 fn root_module(io: IoCap, proc: ProcessCap, sp: SpawnCap, s: Server) -> Str {
@@ -386,8 +401,63 @@ fn call_tool(io: IoCap, proc: ProcessCap, sp: SpawnCap, s: Server, id: Str, j: J
     if !known { return fail(io, id, 0 - 32602, "tool not found") }
     let keys = sorted_keys(j, argn)
     let args = strs_new()
-    if name == "nazm.semantic_context" { refuse(io, "`nazm context` (the packet's effects and tests are not published)") }
-    if name == "nazm.repository_map" || name == "nazm.task_context" { refuse(io, "`nazm repo`") }
+    if name == "nazm.semantic_context" {
+        // `file` is relative to the source root, as packets name files, or absolute (`Server::packet`): joined as `Path::join` does.
+        let file = j_get(j, argn, "file")
+        if j_kind(j, file) != 4 { return fail(io, id, 0 - 32602, "`file` must be a string") }
+        let offset = j_get(j, argn, "byte_offset")
+        if !j_int_in(j, offset, 0, 4294967295) { return fail(io, id, 0 - 32602, "`byte_offset` must be an integer from 0 to 2^32-1") }
+        for i in 0..strs_len(keys) {
+            if strs_get(keys, i) != "file" && strs_get(keys, i) != "byte_offset" { return fail(io, id, 0 - 32602, "unexpected argument `" + strs_get(keys, i) + "`") }
+        }
+        let base = source_base(io, s)
+        if base == "" { refuse(io, "a root whose source root the reference reports as an error rather than a result") }
+        let named = j_str(j, file)
+        strs_push(args, "context")
+        strs_push(args, "--json")
+        strs_push(args, "--root=" + s.root)
+        strs_push(args, "--file=" + (if str_len(named) > 0 && str_byte(named, 0) == 47 { named } else { base + "/" + named }))
+        strs_push(args, "--byte=" + j_str(j, offset))
+        source_args(s, args)
+        return answer(io, id, run_command(io, proc, sp, s, args, false, "", name), false)
+    }
+    if name == "nazm.repository_map" {
+        let why = check_fields(j, argn, strs_new(), strs_new(), ints_new(), "")
+        if why == "?" { refuse(io, "an argument error `serde` words in a way this port does not") }
+        if why != "" { return fail(io, id, 0 - 32602, why) }
+        if !s.has_docs { refuse(io, "the repository this binary was built from (name one with `--docs`)") }
+        strs_push(args, "repo")
+        strs_push(args, "--map")
+        strs_push(args, "--json")
+        strs_push(args, "--root=" + s.docs)
+        return answer(io, id, run_command(io, proc, sp, s, args, false, "", name), false)
+    }
+    if name == "nazm.task_context" {
+        let why = check_task(j, argn)
+        if why == "?" { refuse(io, "an argument error `serde` words in a way this port does not") }
+        if why != "" { return fail(io, id, 0 - 32602, why) }
+        if !s.has_docs { refuse(io, "the repository this binary was built from (name one with `--docs`)") }
+        strs_push(args, "repo")
+        strs_push(args, "--task")
+        strs_push(args, "--json")
+        strs_push(args, "--root=" + s.docs)
+        strs_push(args, "--state=" + j_str(j, j_get(j, argn, "state")))
+        let intent = j_get(j, argn, "intent")
+        if intent >= 0 && j_kind(j, intent) == 4 { strs_push(args, "--intent=" + j_str(j, intent)) }
+        let limits = words2("max_entities", "max_source_bytes")
+        for i in 0..2 {
+            let n = j_get(j, argn, strs_get(limits, i))
+            if n >= 0 && j_kind(j, n) == 3 { strs_push(args, "--" + str_dashes(strs_get(limits, i)) + "=" + j_str(j, n)) }
+        }
+        let doc = j_get(j, argn, "max_doc_bytes")
+        if doc >= 0 && j_kind(j, doc) == 3 { strs_push(args, "--max-doc-bytes=" + j_str(j, doc)) }
+        let mut e = ints_get(j.first, j_get(j, argn, "seeds"))
+        while e >= 0 {
+            strs_push(args, "--seed=" + j_str(j, e))
+            e = ints_get(j.next, e)
+        }
+        return answer(io, id, run_command(io, proc, sp, s, args, false, "", name), false)
+    }
     if name == "nazm.semantic_snapshot" || name == "nazm.diagnostics" {
         if strs_len(keys) > 0 { return fail(io, id, 0 - 32602, "unexpected argument `" + strs_get(keys, 0) + "`") }
         root_args(s, if name == "nazm.semantic_snapshot" { "snapshot" } else { "diagnostics" }, args)
@@ -509,6 +579,85 @@ fn call_tool(io: IoCap, proc: ProcessCap, sp: SpawnCap, s: Server, id: Str, j: J
         strs_push(args, "--state=" + j_str(j, j_get(j, argn, "state")))
     }
     answer(io, id, run_command(io, proc, sp, s, args, false, "", name), false)
+}
+
+// `max_entities` as the option `--max-entities` spells it.
+fn str_dashes(s: Str) -> Str {
+    let out = strs_new()
+    for i in 0..str_len(s) { strs_push(out, if str_byte(s, i) == 95 { "-" } else { str_slice(s, i, i + 1) }) }
+    str_join(out, "")
+}
+
+// What `nazm.task_context` is asked, as `serde` reads it (`TaskRequest`, `deny_unknown_fields`): the members in key order, each by its type, then
+// the members it requires, in declaration order. "" where it is all as asked, else `serde`'s error; "?" where the error is one this port cannot word.
+fn check_task(j: J, obj: Int) -> Str {
+    let names = strs_new()
+    for w in 0..6 { strs_push(names, strs_get(task_fields(), w)) }
+    let keys = sorted_keys(j, obj)
+    for i in 0..strs_len(keys) {
+        let key = strs_get(keys, i)
+        let mut known = false
+        for t in 0..6 {
+            if strs_get(names, t) == key { known = true }
+        }
+        if !known { return "unknown field `" + key + "`, expected " + quoted(names) }
+        let v = j_get(j, obj, key)
+        if key == "seeds" {
+            if j_kind(j, v) != 5 {
+                let u = unexpected(j, v)
+                if u == "" { return "?" }
+                return "invalid type: " + u + ", expected a sequence"
+            }
+            let mut e = ints_get(j.first, v)
+            while e >= 0 {
+                if j_kind(j, e) != 4 {
+                    let u = unexpected(j, e)
+                    if u == "" { return "?" }
+                    return "invalid type: " + u + ", expected a string"
+                }
+                e = ints_get(j.next, e)
+            }
+        } else if key == "state" {
+            if j_kind(j, v) != 4 {
+                let u = unexpected(j, v)
+                if u == "" { return "?" }
+                return "invalid type: " + u + ", expected a string"
+            }
+        } else if key == "intent" {
+            if j_kind(j, v) == 0 { continue }
+            if j_kind(j, v) != 4 {
+                let u = unexpected(j, v)
+                if u == "" { return "?" }
+                return "invalid type: " + u + ", expected string or map"
+            }
+            let w = j_str(j, v)
+            if w != "understand" && w != "edit" && w != "diagnose" && w != "test" {
+                return "unknown variant `" + w + "`, expected one of `understand`, `edit`, `diagnose`, `test`"
+            }
+        } else {
+            if j_kind(j, v) == 0 { continue }
+            let t = j_str(j, v)
+            if j_kind(j, v) == 3 && is_integer(t) && str_byte(t, 0) != 45 && str_len(t) <= 19 { continue }
+            let u = unexpected(j, v)
+            if u == "" { return "?" }
+            if j_kind(j, v) == 3 && is_integer(t) { return "invalid value: " + u + ", expected usize" }
+            return "invalid type: " + u + ", expected usize"
+        }
+    }
+    if j_get(j, obj, "seeds") < 0 { return "missing field `seeds`" }
+    if j_get(j, obj, "state") < 0 { return "missing field `state`" }
+    ""
+}
+
+fn task_fields() -> Strs {
+    let out = strs_new()
+    strs_push(out, "seeds")
+    strs_push(out, "state")
+    strs_push(out, "intent")
+    strs_push(out, "max_entities")
+    strs_push(out, "max_source_bytes")
+    strs_push(out, "max_doc_bytes")
+    out
 }
 
 fn words2(a: Str, b: Str) -> Strs {
