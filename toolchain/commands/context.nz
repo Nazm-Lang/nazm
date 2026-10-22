@@ -447,7 +447,7 @@ fn calls_json(f: Facts, d: Decls, others: Ints, from: Ints, to: Ints) -> Str {
 // --- the packet ------------------------------------------------------------------------------------------------------------
 
 fn unreliable_code(code: Str) -> Bool {
-    code == "N0203" || code == "N0386" || code == "N0305" || code == "N0101" || code == "N0334" || code == "N0610"
+    code == "N0386"
 }
 
 // The packet of the definition declared or used at byte `byte` of `file` (as given), in the compilation `f` of the root at

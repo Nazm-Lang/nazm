@@ -605,7 +605,9 @@ fn s_settling() -> Int { 21 }
 fn s_created() -> Int { 22 }
 // Whether the next block checked is the rest of a block after a pattern `let` (`join_block`).
 fn s_join() -> Int { 23 }
-fn s_slots() -> Int { 24 }
+// Whether a type name is being resolved quietly (`quiet_type`): which definition it is is not recorded as a mention.
+fn s_quiet() -> Int { 24 }
+fn s_slots() -> Int { 25 }
 
 fn prelude(c: Ck) -> Int { gs(c, s_prelude()) }
 
@@ -2956,13 +2958,13 @@ fn resolve_name(c: Ck, name: Str, span: Int, d: Diags) -> Int {
     if is_builtin_name(name) { return builtin_ty(c, name); }
     let t = type_named(c, name);
     if t >= 0 {
-        if is_record(c, t) || is_enum(c, t) { sm_put(c.mtyn, sps(c, span), spe(c, span), t); }
+        if (is_record(c, t) || is_enum(c, t)) && gs(c, s_quiet()) == 0 { sm_put(c.mtyn, sps(c, span), spe(c, span), t); }
         return t;
     }
     // `Map[K, V]` (R1.5, D5): the standard hash map under a shorter name, where it is in scope.
     if name == "Map" && type_named(c, "HashMap") >= 0 {
         let hm = type_named(c, "HashMap");
-        if is_record(c, hm) || is_enum(c, hm) { sm_put(c.mtyn, sps(c, span), spe(c, span), hm); }
+        if (is_record(c, hm) || is_enum(c, hm)) && gs(c, s_quiet()) == 0 { sm_put(c.mtyn, sps(c, span), spe(c, span), hm); }
         return hm;
     }
     if name == "Map" {
@@ -7515,6 +7517,12 @@ fn check_spawn(c: Ck, s: Int) -> Int {
         } else {
             err(c, "N0101", cs, cat3("`spawn ", callee, "` runs a generic function, which is not supported yet"),
                     "a task runs a function that is not generic. Spawn a non-generic wrapper that calls the generic one");
+            // The callee was resolved, and the call recorded, before the refusal.
+            if target >= 0 {
+                ints_push(c.rix.eus, sps(c, cs));
+                ints_push(c.rix.eue, spe(c, cs));
+                ints_push(c.rix.eui, target);
+            }
         }
         let mut i = 0;
         while i < ints_len(args) {
@@ -8372,7 +8380,10 @@ fn check_values(c: Ck, inits: Inits) -> Int {
 // The type `name` means here, asked without reporting anything.
 fn quiet_type(c: Ck, name: Str, span: Int) -> Int {
     if strs_find(c.tsn, name) >= 0 { return param_named(c, name); }
-    resolve_name(c, name, span, dg_new())
+    ss(c, s_quiet(), 1);
+    let t = resolve_name(c, name, span, dg_new());
+    ss(c, s_quiet(), 0);
+    t
 }
 
 // A type parameter named where an expression or a pattern names a type: the reference refuses it
@@ -10267,11 +10278,22 @@ fn note_const_ref(c: Ck, m: Int, name: Str, span: Int) -> Int {
     let mut found = 0 - 1;
     let mut i = 0;
     while i < ints_len(decls) {
-        if fname_of(c, ints_get(decls, i), "name") == name { found = ints_get(decls, i); }
+        // The first of a name declared twice: the later one is no declaration (`N0203`), and a use is of the first.
+        if found < 0 && fname_of(c, ints_get(decls, i), "name") == name { found = ints_get(decls, i); }
         i = i + 1;
     }
     if found >= 0 { sm_put(c.mcref, sps(c, span), spe(c, span), sps(c, fld(c, found, "name_span"))); }
     0
+}
+
+// The first declaration of `name`: the one a use of it is of, a later one being a duplicate (`N0203`) the reference index does not hold.
+fn const_decl_first(c: Ck, ev: Cev, name: Str) -> Int {
+    let mut i = 0;
+    while i < ints_len(ev.decls) {
+        if fname_of(c, ints_get(ev.decls, i), "name") == name { return ints_get(ev.decls, i); }
+        i = i + 1;
+    }
+    0 - 1
 }
 
 // The declaration of `name` a map collected from the module's would hold: its last.
@@ -10501,7 +10523,7 @@ fn ev_agg(c: Ck, ev: Cev, e: Int, t: Int) -> Bool {
         let name = fname_of(c, e, "name");
         let span = fld(c, e, "span");
         let own = const_decl(c, ev, name) >= 0;
-        if own { sm_put(c.mcref, sps(c, span), spe(c, span), sps(c, fld(c, const_decl(c, ev, name), "name_span"))); }
+        if own { sm_put(c.mcref, sps(c, span), spe(c, span), sps(c, fld(c, const_decl_first(c, ev, name), "name_span"))); }
         // Its own constant, or one an import exports (L8).
         if own == false && strs_find(ev.names, name) < 0 {
             ev_refuse(c, ev, span, cat3("name `", name, "`, which is not a constant"));
@@ -10796,7 +10818,8 @@ fn ev_value(c: Ck, ev: Cev, e: Int, want: Int) -> Int {
         let name = fname_of(c, e, "name");
         // A static atomic's cell changes as the program runs: no constant is made of it.
         let decl = const_decl(c, ev, name);
-        if decl >= 0 { sm_put(c.mcref, sps(c, fld(c, e, "span")), spe(c, fld(c, e, "span")), sps(c, fld(c, decl, "name_span"))); }
+        let first = const_decl_first(c, ev, name);
+        if first >= 0 { sm_put(c.mcref, sps(c, fld(c, e, "span")), spe(c, fld(c, e, "span")), sps(c, fld(c, first, "name_span"))); }
         if decl >= 0 && static_atomic(c, decl) { return ev_refuse(c, ev, fld(c, e, "span"), cat3("read the atomic `", name, "`")); }
         let i = ev_constant(c, ev, name);
         if i >= 0 { return ev_val(ev, ints_get(ev.kinds, i), ints_get(ev.ints, i), strs_get(ev.strs, i)); }
@@ -15976,6 +15999,11 @@ pub struct Rix {
     pcs: Ints,
     pce: Ints,
     pcw: Strs,
+    // Names of functions a call mentioned where it was then refused (`record_call` before the error): the span and the function, which the reference index
+    // holds as uses though no call site was recorded.
+    eus: Ints,
+    eue: Ints,
+    eui: Ints,
     skb: Ints,
     skw: Ints,
     skf: Ints,
@@ -15997,7 +16025,7 @@ fn rix_new() -> Rix {
     Rix(ok: ints_new(), k: ints_new(), ds: ints_new(), de: ints_new(), uf: ints_new(), uc: ints_new(), us: ints_new(), ue: ints_new(),
             cgn: ints_new(), cgf: ints_new(), cgc: ints_new(), cgl: ints_new(),
             pvn: ints_new(), pvh: ints_new(), pvo: ints_new(), pvp: ints_new(), pvr: ints_new(), pvf: ints_new(), pvv: ints_new(),
-            pcs: ints_new(), pce: ints_new(), pcw: strs_new(), skb: ints_new(), skw: ints_new(), skf: ints_new(), skc: ints_new(), sks: ints_new(), ske: ints_new(), sko: ints_new(), skt: ints_new(), skn: ints_new(), tro: ints_new(), trf: ints_new(),
+            pcs: ints_new(), pce: ints_new(), pcw: strs_new(), eus: ints_new(), eue: ints_new(), eui: ints_new(), skb: ints_new(), skw: ints_new(), skf: ints_new(), skc: ints_new(), sks: ints_new(), ske: ints_new(), sko: ints_new(), skt: ints_new(), skn: ints_new(), tro: ints_new(), trf: ints_new(),
             trn: ints_new(), tss: ints_new(), tse: ints_new(), tnote: strs_new())
 }
 
@@ -16127,9 +16155,11 @@ fn ix_build(c: Ck) -> Int {
         if ints_get(c.fnclos, i) < 0 { ix_declare(at, ds, de, live, i, ints_get(c.fnns, i), ints_get(c.fnne, i)); }
         i = i + 1;
     }
+    // A binding of no function — the body of one the checker did not register (a built-in's name, a method of an impl it refused) — is no entity: the
+    // reference index holds the locals of the functions it has.
     i = 0;
     while i < nb {
-        ix_declare(at, ds, de, live, bloc + i, ints_get(c.bds, i), ints_get(c.bde, i));
+        if ints_get(c.bfn, i) >= 0 { ix_declare(at, ds, de, live, bloc + i, ints_get(c.bds, i), ints_get(c.bde, i)); }
         i = i + 1;
     }
     i = 0;
@@ -16181,7 +16211,14 @@ fn ix_build(c: Ck) -> Int {
         while k < ints_len(decls) {
             let ns = fld(c, ints_get(decls, k), "name_span");
             let at_s = sx_s(c.t, ns) + ints_get(c.mbase, m);
-            ix_declare(at, ds, de, live, bcon + n, at_s, sx_e(c.t, ns) + ints_get(c.mbase, m));
+            // A constant declared again is no declaration (`N0203`): the index holds the first.
+            let mut duplicate = false;
+            let mut j = 0;
+            while j < k {
+                if fname_of(c, ints_get(decls, j), "name") == fname_of(c, ints_get(decls, k), "name") { duplicate = true; }
+                j = j + 1;
+            }
+            if duplicate == false { ix_declare(at, ds, de, live, bcon + n, at_s, sx_e(c.t, ns) + ints_get(c.mbase, m)); }
             sm_put(cst, at_s, 0, bcon + n);
             n = n + 1;
             k = k + 1;
@@ -16223,10 +16260,15 @@ fn ix_build(c: Ck) -> Int {
         ix_use(at, live, ints_get(c.vfn, i), ints_get(c.vstart, i), ints_get(c.vend, i));
         i = i + 1;
     }
+    i = 0;
+    while i < ints_len(c.rix.eui) {
+        ix_use(at, live, ints_get(c.rix.eui, i), ints_get(c.rix.eus, i), ints_get(c.rix.eue, i));
+        i = i + 1;
+    }
     let vars = c.mvar;
     i = 0;
     while i < ints_len(vars.ks) {
-        ix_use(at, live, bloc + ints_get(vars.kv, i), ints_get(vars.ks, i), ints_get(vars.ke, i));
+        if ints_get(c.bfn, ints_get(vars.kv, i)) >= 0 { ix_use(at, live, bloc + ints_get(vars.kv, i), ints_get(vars.ks, i), ints_get(vars.ke, i)); }
         i = i + 1;
     }
     let cons = c.mcons;

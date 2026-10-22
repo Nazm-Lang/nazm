@@ -69,11 +69,13 @@ mkdir -p "$OUT/bin" "$OUT/res" "$OUT/w"
 jobs=8
 cmds="check snapshot diagnostics resolve obligations explain-cost explain-flow mir fix contract"
 files=()
+case_files=()
 all_profiles="profile-embedded profile-critical profile-cyber profile-realtime profile-web3 profile-accounts profile-authority profile-kernel profile-robotics profile-automotive profile-aerospace profile-assurance profile-industrial profile-medical"
 while [ $# -gt 0 ]; do
     case $1 in
         -j) jobs=$2; shift 2 ;;
         --cmds) cmds=$2; shift 2 ;;
+        --cases) case_files+=("$2"); shift 2 ;;
         --) shift; files=("$@"); break ;;
         *) echo "refusals: unknown argument $1"; exit 2 ;;
     esac
@@ -113,8 +115,8 @@ for f in "${files[@]}"; do
     for c in $cmds; do
         case $c in
             check) add "check $f" "" "check --no-cache $f"; add "check-json $f" "" "check --no-cache --json $f" ;;
-            snapshot) add "snapshot $f" "" "snapshot --root $f --json" ;;
-            diagnostics) add "diagnostics $f" "" "diagnostics --root $f --json" ;;
+            snapshot) add "snapshot $f" "" "snapshot --root $f --json"; add "snapshot-indented $f" "" "snapshot --root $f" ;;
+            diagnostics) add "diagnostics $f" "" "diagnostics --root $f --json"; add "diagnostics-indented $f" "" "diagnostics --root $f" ;;
             resolve) add "resolve $f" "" "resolve $f" ;;
             obligations) add "obligations $f" "" "obligations $f"; add "obligations-json $f" "" "obligations --json $f" ;;
             explain-cost) add "explain-cost $f" "" "explain-cost $f"; add "explain-cost-json $f" "" "explain-cost --json $f" ;;
@@ -134,6 +136,8 @@ for f in "${files[@]}"; do
         esac
     done
 done
+# Cases written beforehand (a host step with Python), one `LABEL|STDIN|ARGS` line each.
+for cf in "${case_files[@]+"${case_files[@]}"}"; do cat "$cf" >> "$OUT/cases"; done
 total=$(wc -l < "$OUT/cases" | tr -d ' ')
 export RF_OUT=$OUT RF_ROOT=$ROOT RF_PORT=$PORT RF_REF=$REF RF_KEEP=${KEEP:-}
 export NAZM_LIBRARY="${NAZM_LIBRARY:-$ROOT/library}"

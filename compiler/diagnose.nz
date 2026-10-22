@@ -65,6 +65,8 @@ fn main(io: IoCap) -> Int {
         sx_parse_source(ld_with_newline(read_file(path)), t, d);
     } else {
         let f = checked(path, library, os, arch, mode == "--facts" || mode == "--core" || mode == "--units" || mode == "--refs" || mode == "--calls" || mode == "--provenance" || mode == "--effects" || mode == "--coredigests" || mode == "--coredoc" || mode == "--coredoc-sources" || mode == "--diagids" || mode == "--fieldtypes", io);
+        // `R2_WITH_ERRORS`: the dumps of a compilation that fails too (R8 slice 11).
+        if os_env_get("R2_WITH_ERRORS") != "" { fx_dump_errors(f, true); }
         // Where the front end stopped, standard error says at what (design D13).
         if fx_why(f) != "" { eprint(str_concat(str_concat("diagnose: ", fx_why(f)), nl())); }
         if mode == "--text" {
