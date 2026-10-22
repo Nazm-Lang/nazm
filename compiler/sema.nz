@@ -6539,6 +6539,48 @@ fn literal(c: Ck, e: Int, names: Strs, kinds: Ints, vals: Ints) -> Ints {
     lit(0, 0)
 }
 
+// A clause as a reader writes it, for a witness: its shape, not its source text (`describe_clause`).
+fn describe_clause(c: Ck, e: Int) -> Str {
+    if sx_kind(c.t, e) == tk_tuple() { return "…"; }
+    let k = kind_of(c, e);
+    if k == "Int" {
+        let w = w_parse(sx_text(c.t, fld(c, e, "value")));
+        if kind_fits(k_int(), w) { return int_to_str(w_to_int(w)); }
+        return "…";
+    }
+    if k == "Bool" {
+        if sx_text(c.t, fld(c, e, "value")) == "true" { return "true"; }
+        return "false";
+    }
+    if k == "Var" { return fname_of(c, e, "name"); }
+    if k == "Neg" { return str_concat("-", describe_clause(c, fld(c, e, "operand"))); }
+    if k == "Not" { return str_concat("!", describe_clause(c, fld(c, e, "operand"))); }
+    if k == "Binary" {
+        let op = sx_text(c.t, fld(c, e, "op"));
+        let mut o = "";
+        if op == "Add" { o = "+"; }
+        if op == "Sub" { o = "-"; }
+        if op == "Mul" { o = "*"; }
+        if op == "Div" { o = "/"; }
+        if op == "Rem" { o = "%"; }
+        if op == "Eq" { o = "=="; }
+        if op == "NotEq" { o = "!="; }
+        if op == "Lt" { o = "<"; }
+        if op == "LtEq" { o = "<="; }
+        if op == "Gt" { o = ">"; }
+        if op == "GtEq" { o = ">="; }
+        if op == "And" { o = "&&"; }
+        if op == "Or" { o = "||"; }
+        if op == "BitAnd" { o = "&"; }
+        if op == "BitOr" { o = "|"; }
+        if op == "BitXor" { o = "^"; }
+        if op == "Shl" { o = "<<"; }
+        if op == "Shr" { o = ">>"; }
+        return cat5(describe_clause(c, fld(c, e, "lhs")), " ", o, " ", describe_clause(c, fld(c, e, "rhs")));
+    }
+    "…"
+}
+
 // A call whose arguments are all literals, of a function of this module stating a precondition
 // (`prove_preconditions`): each clause evaluated with them; a false one is `N0615`.
 fn prove_preconditions(c: Ck, at: Int, target: Int, args: Ints) -> Int {
@@ -6578,8 +6620,34 @@ fn prove_preconditions(c: Ck, at: Int, target: Int, args: Ints) -> Int {
         }
         i = i + 1;
     }
+    // Every clause holds: the call's obligation is proved, with each clause as evaluated.
+    let held = strs_new();
+    i = 0;
+    while i < ints_len(clauses) {
+        strs_push(held, str_concat(describe_clause(c, ints_get(clauses, i)), " holds"));
+        i = i + 1;
+    }
+    let shown = strs_new();
+    i = 0;
+    while i < strs_len(names) {
+        let mut v = int_to_str(ints_get(vals, i));
+        if ints_get(kinds, i) == 2 {
+            v = "false";
+            if ints_get(vals, i) == 1 { v = "true"; }
+        }
+        strs_push(shown, cat3(strs_get(names, i), " = ", v));
+        i = i + 1;
+    }
+    ints_push(c.rix.pcs, sps(c, at));
+    ints_push(c.rix.pce, spe(c, at));
+    strs_push(c.rix.pcw, cat3(str_join(held, ", "), " with ", str_join(shown, ", ")));
     0
 }
+
+pub fn ck_proved_call_count(c: Ck) -> Int { ints_len(c.rix.pcs) }
+pub fn ck_proved_call_start(c: Ck, i: Int) -> Int { ints_get(c.rix.pcs, i) }
+pub fn ck_proved_call_end(c: Ck, i: Int) -> Int { ints_get(c.rix.pce, i) }
+pub fn ck_proved_call_witness(c: Ck, i: Int) -> Str { strs_get(c.rix.pcw, i) }
 
 // --- arrays and indexing (Gate 2; `check/operators.rs`) -----------------------------------------
 
@@ -14515,6 +14583,11 @@ pub fn ck_reason_builtin(c: Ck, r: Int) -> Str {
     if ints_get(c.fnrs.source, r) != 1 { return ""; }
     strs_get(c.bname, ints_get(c.fnrs.which, r))
 }
+// The function type a call through a value has, as `Types::show` writes it, for an `indirect` reason; "" for any other.
+pub fn ck_reason_type(c: Ck, r: Int) -> Str {
+    if ints_get(c.fnrs.source, r) != 5 { return ""; }
+    show(c, ints_get(c.fnrs.which, r))
+}
 pub fn ck_reason_callee(c: Ck, r: Int) -> Int {
     let s = ints_get(c.fnrs.source, r);
     if s == 2 || s == 3 || s == 4 { return ints_get(c.fnrs.which, r); }
@@ -15898,6 +15971,11 @@ pub struct Rix {
     pvv: Ints,
     // The solved sinks, once asked for (`ck_sink_count`; R8 slice 11, task 11.1: `explain-flow`): per sink its function, class, place, origins
     // (a mask) and its traces, a run of the trace pools (`skt`, `skn`); a trace is an origin and its steps, a run of the step pools.
+    // The calls whose preconditions were proved for literal arguments (`prove_preconditions`; R8 slice 11): where the callee is written
+    // (absolute) and the witness, each clause as evaluated.
+    pcs: Ints,
+    pce: Ints,
+    pcw: Strs,
     skb: Ints,
     skw: Ints,
     skf: Ints,
@@ -15919,7 +15997,7 @@ fn rix_new() -> Rix {
     Rix(ok: ints_new(), k: ints_new(), ds: ints_new(), de: ints_new(), uf: ints_new(), uc: ints_new(), us: ints_new(), ue: ints_new(),
             cgn: ints_new(), cgf: ints_new(), cgc: ints_new(), cgl: ints_new(),
             pvn: ints_new(), pvh: ints_new(), pvo: ints_new(), pvp: ints_new(), pvr: ints_new(), pvf: ints_new(), pvv: ints_new(),
-            skb: ints_new(), skw: ints_new(), skf: ints_new(), skc: ints_new(), sks: ints_new(), ske: ints_new(), sko: ints_new(), skt: ints_new(), skn: ints_new(), tro: ints_new(), trf: ints_new(),
+            pcs: ints_new(), pce: ints_new(), pcw: strs_new(), skb: ints_new(), skw: ints_new(), skf: ints_new(), skc: ints_new(), sks: ints_new(), ske: ints_new(), sko: ints_new(), skt: ints_new(), skn: ints_new(), tro: ints_new(), trf: ints_new(),
             trn: ints_new(), tss: ints_new(), tse: ints_new(), tnote: strs_new())
 }
 
