@@ -817,7 +817,7 @@ fn unreliable(f: Facts) -> Bool {
     for i in 0..dg_len(d) {
         if ints_get(d.file, i) >= 0 { return true }
         let c = dg_code(d, i)
-        if c == "N0203" || c == "N0386" || c == "N0305" || c == "N0101" || c == "N0334" || c == "N0610" { return true }
+        if c == "N0386" { return true }
     }
     false
 }
