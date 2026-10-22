@@ -47,6 +47,7 @@ use "archive.nz"
 use "buildrt.nz"
 use "buildprov.nz"
 use "harness.nz"
+use "profile.nz"
 use "runexe.nz"
 use "@std/file"
 use "@std/blake3"
@@ -361,8 +362,20 @@ fn bd_verify_locked(io: IoCap, o: Opts, packages: Packages) -> Int {
     0
 }
 
+// The profiles in force (`enforce`): `--profile`'s and each package manifest's.
+pub fn bd_in_force(o: Opts, packages: Packages) -> Strs {
+    let out = strs_new()
+    if o.has_profile { strs_push(out, o.profile) }
+    if pk_packages_state(packages) == 1 {
+        for i in 0..pk_count(packages) {
+            if pk_profile(packages, i) != "" { strs_push(out, pk_profile(packages, i)) }
+        }
+    }
+    out
+}
+
 // A package's directory stands for its `main`; `--locked` holds the package to its lockfile; the profiles in
-// force are held (`prepare`). `o.file` becomes the entry. What this port does not carry — a manifest
+// force are named (an unknown one is refused) and held once the program has checked (`prepare`). `o.file` becomes the entry. What this port does not carry — a manifest
 // it does not read, a restriction profile — is refused by name.
 pub fn bd_prepare(io: IoCap, o: Opts, entry_out: Strs) -> Packages {
     let mut file = o.file
@@ -417,14 +430,13 @@ pub fn bd_prepare(io: IoCap, o: Opts, entry_out: Strs) -> Packages {
     // profile other than `general` is not carried.
     if o.has_profile {
         if !bd_known_profile(o.profile) { bd_unknown_profile(io, o.profile, "`--profile`") }
-        if o.profile != "general" { bd_refuse(io, o, "the profile `" + o.profile + "`") }
     }
     if packaged {
         for i in 0..pk_count(packages) {
             let p = pk_profile(packages, i)
             if p != "" {
                 if !bd_known_profile(p) { bd_unknown_profile(io, p, "the package `" + pk_name(packages, i) + "`'s manifest") }
-                if p != "general" { bd_refuse(io, o, "the profile `" + p + "` of the package `" + pk_name(packages, i) + "`") }
+
             }
         }
     }
@@ -698,7 +710,7 @@ fn bd_how(root: Root) -> Str {
     "derived"
 }
 
-fn bd_front(io: IoCap, o: Opts, packages: Packages, target: Str, output: Str) -> Front {
+fn bd_front(io: IoCap, proc: ProcessCap, sp: SpawnCap, o: Opts, packages: Packages, target: Str, output: Str) -> Front {
     let library = os_env_get("NAZM_LIBRARY")
     if library == "" { bd_refuse(io, o, "the standard library's directory (set NAZM_LIBRARY)") }
     let file = o.file
@@ -762,6 +774,11 @@ fn bd_front(io: IoCap, o: Opts, packages: Packages, target: Str, output: Str) ->
             if ut_contains(fx_module_text(f, m), "@cfg") { bd_refuse(io, o, "`--profile` where a module asks `@cfg`") }
         }
     }
+    // The rules of the profiles in force (`profile::enforce`), before the command says anything of its own.
+    let in_force = bd_in_force(o, packages)
+    if strs_len(in_force) > 0 && !o.lib {
+        pf_enforce(io, proc, sp, f, abs, names, in_force, o.locked || (packaged && pf_lock_ok(io, packages)), false)
+    }
     // The output may not be written over the program's own source or any module it loads.
     let files = strs_new()
     for m in 0..fx_modules(f) { strs_push(files, fx_module_name(f, m)) }
@@ -812,8 +829,8 @@ fn bd_front(io: IoCap, o: Opts, packages: Packages, target: Str, output: Str) ->
 // The front end run and its document written into a new working directory: the directory, the
 // authority line, the object store, the number of modules and how the source root was chosen. The facts and the
 // document are this function's, and go when it returns.
-fn bd_started(io: IoCap, o: Opts, packages: Packages, target: Str, output: Str) -> Strs {
-    let fr = bd_front(io, o, packages, target, output)
+fn bd_started(io: IoCap, proc: ProcessCap, sp: SpawnCap, o: Opts, packages: Packages, target: Str, output: Str) -> Strs {
+    let fr = bd_front(io, proc, sp, o, packages, target, output)
     let work = bd_workdir(io, o, output)
     if write_file(work + "/core.json", fr.doc) < 0 {
         bd_remove(io, work)
@@ -1454,7 +1471,7 @@ pub fn bd_build(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, v: Vouch
     bd_mark(tm, clock, "load")
 
     // The front end, in process; its facts gone before any stage starts.
-    let started = bd_started(io, o, packages, target, output)
+    let started = bd_started(io, proc, sp, o, packages, target, output)
     let work = strs_get(started, 0)
     let authority = strs_get(started, 1)
     let store = strs_get(started, 2)
