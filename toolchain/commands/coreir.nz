@@ -13,8 +13,8 @@
 //                   `build` finds it (`NAZM_PIPELINE`, or `NAZM_LIBEXEC`);
 //   capabilities    the Rust compiler's inventory, `capdata.nz`, generated from the reference.
 //
-// What is not carried is said on standard error and exits 6 (R5's convention): `mir --spans`, `lir
-// --soa` and `lir --run` (the pipeline prints no statement positions, no field-by-field layout and
+// What is not carried is said on standard error and exits 6 (R5's convention): `lir
+// --soa` and `lir --run` (the pipeline lays out no field-by-field layout and
 // has no LIR interpreter), and a package's directory.
 
 use "../../compiler/syntax.nz"
@@ -398,12 +398,11 @@ pub fn mir_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int {
     let file = cli_value(c, 0)
     let json = cli_present(c, 1)
     let f = ci_checked(io, file, cli_present(c, 3), cli_value(c, 3))
-    if cli_present(c, 2) { ci_refuse(io, "`mir --spans` (the pipeline's MIR printer names no statement's position: R3, a hand-back)") }
     let raw = fx_core_document_with_sources(f)
     if raw == "" { ci_refuse(io, "a program whose Core IR the front end does not carry") }
     let doc = ci_unprefix_paths(io, raw, file)
     let args = strs_new()
-    strs_push(args, "mir")
+    strs_push(args, if cli_present(c, 2) { "mir-spans" } else { "mir" })
     strs_push(args, "@CORE@")
     let text = ci_staged(io, proc, sp, "mir", doc, args)
     if json { print(ci_mir_compact(text)) } else { print(text) }

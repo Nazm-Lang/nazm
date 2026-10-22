@@ -2,7 +2,7 @@
 # R8 slice 11: what the Nazm `nazm` still refuses (`openspec/changes/r8-cut-over/design.md`, *Slice 11*, task 11.1).
 #
 #     toolchain/commands/tests/refusals.sh [-j N] [--cmds "CMD ..."] [-- FILE.nz ...]
-#     CMD: check snapshot diagnostics resolve obligations explain-cost explain-flow mir fix contract profile-NAME lsp-MODE
+#     CMD: check snapshot diagnostics resolve obligations explain-cost explain-flow mir lir fix contract profile-NAME lsp-MODE
 #
 # For every input of the corpus (the tracked programs of the example, compatibility, conformance, code-generator, refusal, transfer and
 # front-end corpora, found with `find`, so that it runs where there is no Git) and every command asked, both sides run the same command line from the
@@ -110,7 +110,8 @@ for f in "${files[@]}"; do
             obligations) add "obligations $f" "" "obligations $f" ;;
             explain-cost) add "explain-cost $f" "" "explain-cost $f" ;;
             explain-flow) add "explain-flow $f" "" "explain-flow $f" ;;
-            mir) add "mir-spans $f" "" "mir --spans $f" ;;
+            mir) add "mir-spans $f" "" "mir --spans $f"; add "mir-spans-json $f" "" "mir --json --spans $f" ;;
+            lir) add "lir $f" "" "lir --target aarch64-apple-darwin $f"; add "lir-ops $f" "" "lir --ops $f"; add "lir-debug $f" "" "lir --ops --debug $f" ;;
             fix) add "fix $f" "" "fix $f" ;;
             contract) add "contract $f" "" "contract $f" ;;
             profile-*) add "$c $f" "" "check --no-cache --profile ${c#profile-} $f" ;;

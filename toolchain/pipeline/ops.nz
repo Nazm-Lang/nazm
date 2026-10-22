@@ -836,17 +836,19 @@ fn argument(fx: Fx, o: Operand) -> Int {
 // --- failure ------------------------------------------------------------------------------------
 
 /// The function's name span, for a stack check: the name after `fn` in its span.
-fn name_at(fx: Fx) -> Str {
-    let f = fx.f
+fn name_at(fx: Fx) -> Str { name_at_of(fx.lo.c, fx.lo.sources, fx.f) }
+
+/// The same for a function of Core IR `c` whose modules' sources are `sources` (`nazm mir --spans` names it too).
+pub fn name_at_of(c: Cir, sources: HashMap[Str, Str], f: MirFn) -> Str ! {} {
     // A thunk (`NAME#value@HOME`) has its target's spans (`thunk_of`): the target's name.
     let mut node = f.node
     let mut fname = f.name
     let hash = match text_find(f.name, "#value@") { Some(i) => i, None => 0 - 1 }
     if node < 0 && hash >= 0 {
         let target = str_slice(f.name, hash + 7, str_len(f.name)) + "::fn " + str_slice(f.name, 0, hash)
-        match hashmap_get(fx.lo.c.by_def, target) {
+        match hashmap_get(c.by_def, target) {
             Some(i) => {
-                let g = vec_get(fx.lo.c.fns, i)
+                let g = vec_get(c.fns, i)
                 node = g.node
                 fname = g.name
             },
@@ -854,14 +856,14 @@ fn name_at(fx: Fx) -> Str {
         }
     }
     if node < 0 { return "" }
-    let span = sval(fx.lo.c, node, "at")
+    let span = sval(c, node, "at")
     let mut colon = 0 - 1
     for i in 0..str_len(span) { if str_byte(span, i) == 58 { colon = i } }
     let file = str_slice(span, 0, colon)
     let rest = str_slice(span, colon + 1, str_len(span))
     let dots = match text_find(rest, "..") { Some(i) => i, None => str_len(rest) }
     let start = match text_parse_int(str_slice(rest, 0, dots)) { Ok(v) => v, Err(e) => 0 }
-    let text = match hashmap_get(fx.lo.sources, file) { Some(t) => t, None => "" }
+    let text = match hashmap_get(sources, file) { Some(t) => t, None => "" }
     let mut name = fname
     match text_find(name, "/") {
         Some(_) => {
@@ -891,18 +893,20 @@ fn find_from(s: Str, needle: Str, from: Int) -> Int {
 }
 
 /// The function's own span (a thunk's is its target's).
-fn fn_span(fx: Fx) -> Str {
-    let f = fx.f
+fn fn_span(fx: Fx) -> Str { fn_span_of(fx.lo.c, fx.f) }
+
+/// The same for a function of Core IR `c`.
+pub fn fn_span_of(c: Cir, f: MirFn) -> Str ! {} {
     let mut node = f.node
     let hash = match text_find(f.name, "#value@") { Some(i) => i, None => 0 - 1 }
     if node < 0 && hash >= 0 {
         let target = str_slice(f.name, hash + 7, str_len(f.name)) + "::fn " + str_slice(f.name, 0, hash)
-        match hashmap_get(fx.lo.c.by_def, target) {
-            Some(i) => { node = vec_get(fx.lo.c.fns, i).node },
+        match hashmap_get(c.by_def, target) {
+            Some(i) => { node = vec_get(c.fns, i).node },
             None => {},
         }
     }
-    if node < 0 { "" } else { sval(fx.lo.c, node, "at") }
+    if node < 0 { "" } else { sval(c, node, "at") }
 }
 
 /// Where the statement being lowered comes from, for a debugger (`Fx::locate`).
