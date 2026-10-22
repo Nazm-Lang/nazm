@@ -405,7 +405,7 @@ fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, tm: TimeCap, out
     if s == "obligations" { return obligations_command(io, c) }
     if s == "trace" { return trace_command(io, proc, sp, c) }
     if s == "inspect" { return inspect_command(io, proc, sp, c) }
-    if s == "explain-cost" { return explain_cost_command(io, c) }
+    if s == "explain-cost" { return explain_cost_command(io, proc, sp, c) }
     if s == "explain-flow" { return explain_flow_command(io, c) }
     if s == "profile" { return profile_command(io, c) }
     if s == "run" { return run_command(io, out, tm, net, proc, sp, v, rnd, c) }

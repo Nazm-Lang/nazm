@@ -92,6 +92,39 @@ pub fn capabilities_cli() -> Cli {
 // them: a root that cannot be decided or loaded ends the process with the loader's own words; any
 // diagnostic of the check ends it as `nazm: N error(s)`; what the front end does not carry is
 // refused. `rooted` and `given` are `--source-root`.
+// `package::entry` (`prepare`): a package's directory stands for its `main`. A directory that is no package ends 3 (`nazm: ... is a
+// directory with no `nazm.toml`, so it is not a package`), a manifest that is not one ends with `resolve`'s diagnostic, a package with no
+// `main` with N0509; what the port does not resolve is refused by name. A file is itself.
+pub fn ci_entry(io: IoCap, file: Str) -> Str {
+    if ut_kind(io, file) != 1 { return file }
+    let prefix = fe_prefix(io, file)
+    if fe_stat_kind(io, file + "/nazm.toml") != 0 {
+        if ut_kind(io, file + "/nazm.toml") >= 0 { ci_refuse(io, "a manifest that is not a file") }
+        eprint("nazm: `" + file + "` is a directory with no `nazm.toml`, so it is not a package" + nl())
+        exit_with(3)
+    }
+    let dir = pk_normalise(prefix + file)
+    let m = pk_parse(read_file(pk_join(dir, "nazm.toml")))
+    if pk_state(m) == 0 {
+        let shown = if str_byte(file, str_len(file) - 1) == 47 { file + "nazm.toml" } else { file + "/nazm.toml" }
+        eprint("error[N0500]: `" + shown + "`: " + pk_why(m) + nl() + "nazm: 1 error" + nl())
+        exit_with(1)
+    }
+    if pk_state(m) != 1 { ci_refuse(io, "a manifest that does not resolve here: " + pk_why(m)) }
+    let declared = pk_normalise(pk_join(dir, strs_get(m.root, 0)))
+    let source_root = fe_canonical(io, declared)
+    if source_root == "" { ci_refuse(io, "a package without its source root") }
+    let packages = pk_context(declared, io)
+    if pk_packages_state(packages) != 1 { ci_refuse(io, "a package that does not resolve here: " + pk_packages_why(packages)) }
+    if ints_get(m.has_main, 0) == 0 {
+        eprint("error[N0509]: the package `" + strs_get(m.name, 0) + "` has no `main` to build or run" + nl()
+                + "  = help: `main = \"main.nz\"` under `[package]` names the entry module, relative to the root" + nl() + "nazm: 1 error" + nl())
+        exit_with(1)
+    }
+    let main = strs_get(m.main, 0)
+    if fe_starts(main, "/") { main } else { pk_join(source_root, main) }
+}
+
 pub fn ci_checked(io: IoCap, file: Str, rooted: Bool, given: Str) -> Facts { ci_checked_as(io, file, rooted, given, false) }
 
 // `program`: the root checked as a program (one with a `main`), as `nazm check` checks it.

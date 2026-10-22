@@ -472,12 +472,11 @@ pub fn has(xs: Ints, x: Int) -> Bool ! {} {
     false
 }
 
-/// One unit: `fns` (MIR positions), the module whose source names it, whether it owns that
-/// module's definitions.
-/// `lir` is the unit's `lir` member (its digest and text), or `""` for the tables alone.
-fn unit_json(lx: Lx, artefact: Str, fns: Ints, module: Str, owns_module: Bool, lir: Str) -> Str {
+/// The types a unit mentions, closed over what they contain (by spelling), and the externals it declares (`externals`, filled).
+/// With `vecs_of`, a primitive's element also names the `Vec` of that element where `gv` (the `Vec` spellings the whole program mentions) has
+/// one (`explain-cost`'s layouts: `types.vec_of`).
+fn unit_seen(lx: Lx, fns: Ints, module: Str, owns_module: Bool, externals: Strs, vecs_of: Bool, gv: HashMap[Str, Bool]) -> HashMap[Str, Bool] {
     let used = strs_new()
-    let externals = strs_new()
     for i in 0..ints_len(fns) {
         let f = vec_get(lx.p.fns, ints_get(fns, i))
         strs_push(used, f.ret)
@@ -485,7 +484,17 @@ fn unit_json(lx: Lx, artefact: Str, fns: Ints, module: Str, owns_module: Bool, l
         for b in f.blocks {
             for s in b.stmts {
                 match s {
-                    Stmt.Assign(dst: _, value: v, unwind: _) => { note_rvalue(v, used, lx); },
+                    Stmt.Assign(dst: _, value: v, unwind: _) => {
+                        note_rvalue(v, used, lx);
+                        if vecs_of {
+                            match v {
+                                Rvalue.Primitive(op: _, elem: e, args: _) => {
+                                    if e != "" && hashmap_has(gv, "Vec[" + e + "]") { strs_push(used, "Vec[" + e + "]") }
+                                },
+                                _ => {},
+                            }
+                        }
+                    },
                     _ => {},
                 }
             }
@@ -514,24 +523,33 @@ fn unit_json(lx: Lx, artefact: Str, fns: Ints, module: Str, owns_module: Bool, l
         }
     }
     // The types the unit mentions, closed over what they contain.
-    let recs: HashMap[Str, Bool] = hashmap_new()
-    let enums: HashMap[Str, Bool] = hashmap_new()
     let seen: HashMap[Str, Bool] = hashmap_new()
     while strs_len(used) > 0 {
         let t = strs_pop(used)
         if !hashmap_has(seen, t) {
             hashmap_set(seen, t, true)
             let s = spell(t)
-            if s.kind == "record" {
-                hashmap_set(recs, t, true)
-                for x in fields_of(lx.tt, t) { strs_push(used, x) }
-            } else if s.kind == "enum" {
-                hashmap_set(enums, t, true)
+            if s.kind == "record" || s.kind == "enum" {
                 for x in fields_of(lx.tt, t) { strs_push(used, x) }
             } else if s.kind == "vec" || s.kind == "array" || (s.head == "Chan" && strs_len(s.args) > 0) {
                 strs_push(used, strs_get(s.args, 0))
             }
         }
+    }
+    seen
+}
+
+/// One unit: `fns` (MIR positions), the module whose source names it, whether it owns that
+/// module's definitions.
+/// `lir` is the unit's `lir` member (its digest and text), or `""` for the tables alone.
+fn unit_json(lx: Lx, artefact: Str, fns: Ints, module: Str, owns_module: Bool, lir: Str) -> Str {
+    let externals = strs_new()
+    let seen = unit_seen(lx, fns, module, owns_module, externals, false, hashmap_new())
+    let recs: HashMap[Str, Bool] = hashmap_new()
+    let enums: HashMap[Str, Bool] = hashmap_new()
+    for t in hashmap_keys(seen) {
+        let k = spell(t).kind
+        if k == "record" { hashmap_set(recs, t, true) } else if k == "enum" { hashmap_set(enums, t, true) }
     }
     let functions = strs_new()
     for i in 0..ints_len(fns) {
@@ -638,4 +656,74 @@ pub fn lir_document(c: Cir, tt: TypeTable, p: MirProgram, target: Str, texts: St
     }
     let layout = "{\"bool\":1,\"int\":8,\"pointer\":8,\"str\":{\"align\":8,\"length\":8,\"owner\":16,\"pointer\":0,\"size\":24}}"
     Ok("{\"data_layout\":" + layout + ",\"entry\":" + js(symbol_of(vec_get(p.fns, p.entry))) + ",\"schema\":\"nazm.lir/2\",\"target\":" + js(target) + ",\"units\":[" + str_join(units, ",") + "]}")
+}
+
+
+fn is_word_byte(b: Int) -> Bool {
+    (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 95
+}
+
+/// How `--layout soa` would lay out each `Vec` type a unit mentions, and why not (`nazm_lir::layouts`): `SOURCE\tWHY` lines by
+/// source, the reason empty for the layout one array per field.
+pub fn vec_layouts(c: Cir, tt: TypeTable, p: MirProgram) -> Strs ! {} {
+    let lx = lx_new(c, tt, p)
+    let plans = unit_plans(c, p)
+    // The `Vec` types the checker knows (`find_vec`): `Ints` and `Strs` always (the prelude names them), and those a function of the
+    // compilation mentions.
+    let gv: HashMap[Str, Bool] = hashmap_new()
+    hashmap_set(gv, "Vec[Int]", true)
+    hashmap_set(gv, "Vec[Str]", true)
+    // Every `Vec[T]`, `Box[T]`, `Chain[T]` and `Cell[T]` a type spelling of the document names (not a module's source text: a string with a line
+    // break).
+    for n in 0..vec_len(c.doc.nodes) {
+        let node = vec_get(c.doc.nodes, n)
+        if json_kind(c.doc, n) != "string" || str_len(node.text) < 5 { continue }
+        let t = node.text
+        let len = str_len(t)
+        let mut line_break = false
+        for i in 0..len { if str_byte(t, i) == 10 { line_break = true } }
+        if line_break { continue }
+        let mut i = 0
+        while i + 4 < len {
+            let b0 = str_byte(t, i)
+            let head = if b0 == 86 && str_slice(t, i, i + 4) == "Vec[" { 4 } else if b0 == 66 && str_slice(t, i, i + 4) == "Box[" { 4 } else if b0 == 67 && i + 5 < len && (str_slice(t, i, i + 5) == "Cell[" || (i + 6 < len && str_slice(t, i, i + 6) == "Chain[")) { if str_slice(t, i, i + 5) == "Cell[" { 5 } else { 6 } } else { 0 }
+            if head > 0 && (i == 0 || !is_word_byte(str_byte(t, i - 1))) {
+                let mut depth = 1
+                let mut j = i + head
+                while j < len && depth > 0 {
+                    let x = str_byte(t, j)
+                    if x == 91 { depth += 1 }
+                    if x == 93 { depth -= 1 }
+                    j += 1
+                }
+                if depth == 0 { hashmap_set(gv, "Vec[" + str_slice(t, i + head, j - 1) + "]", true) }
+            }
+            i += 1
+        }
+    }
+    let rows = strs_new()
+    for u in plans {
+        let seen = unit_seen(lx, u.fns, u.module, u.owns, strs_new(), true, gv)
+        for t in hashmap_keys(seen) {
+            let s = spell(t)
+            if s.kind == "vec" && s.head != "Chan" && strs_len(s.args) > 0 {
+                let elem = strs_get(s.args, 0)
+                let es = spell(elem)
+                let mut why = "its element is not a record"
+                if es.kind == "record" {
+                    let fields = fields_of(tt, elem)
+                    let mut plain = true
+                    for f in fields { if f != "Int" && f != "Bool" { plain = false } }
+                    why = if strs_len(fields) == 0 { "its record has no fields" } else if plain { "" } else { "a field is not an `Int` or a `Bool`: the element owns storage or holds a value of its own layout" }
+                }
+                strs_push(rows, show(lx, "Vec[" + elem + "]") + "\t" + why)
+            }
+        }
+    }
+    let sorted = strs_sort(rows)
+    let out = strs_new()
+    for r in sorted {
+        if strs_len(out) == 0 || strs_get(out, strs_len(out) - 1) != r { strs_push(out, r) }
+    }
+    out
 }

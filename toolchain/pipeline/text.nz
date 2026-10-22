@@ -222,13 +222,13 @@ pub fn text_line_starts(text: Str) -> Ints ! {} {
     out
 }
 
-/// A span's start as `PATH:LINE:COLUMN` (lines and columns from 1, columns by character), or `at` itself where it
-/// names no place (`SourceMap::line_col`).
-fn span_name(ms: MirSpans, f: Int, at0: Str) -> Str ! {} {
-    let at = if at0 == "@name" { strs_get(ms.fn_names, f) } else { at0 }
+/// A span's start as [file, line, column] (lines and columns from 1, columns by character), or nothing where it names no place
+/// (`SourceMap::line_col`); the file is the module's name as the span writes it.
+pub fn span_pos(ms: MirSpans, at: Str) -> Ints ! {} {
+    let out = ints_new()
     let mut colon = 0 - 1
     for i in 0..str_len(at) { if str_byte(at, i) == 58 { colon = i } }
-    if colon < 0 { return at }
+    if colon < 0 { return out }
     let file = str_slice(at, 0, colon)
     let rest = str_slice(at, colon + 1, str_len(at))
     let dots = match text_find(rest, "..") { Some(i) => i, None => str_len(rest) }
@@ -250,8 +250,26 @@ fn span_name(ms: MirSpans, f: Int, at0: Str) -> Str ! {} {
         if b < 128 || b >= 192 { col += 1 }
         i += 1
     }
+    ints_push(out, line + 1)
+    ints_push(out, col)
+    out
+}
+
+/// The file of a span (its text before the last `:`), "" for none.
+pub fn span_file_of(at: Str) -> Str ! {} {
+    let mut colon = 0 - 1
+    for i in 0..str_len(at) { if str_byte(at, i) == 58 { colon = i } }
+    if colon < 0 { "" } else { str_slice(at, 0, colon) }
+}
+
+/// A span's start as `PATH:LINE:COLUMN`, or `at` itself where it names no place.
+fn span_name(ms: MirSpans, f: Int, at0: Str) -> Str ! {} {
+    let at = if at0 == "@name" { strs_get(ms.fn_names, f) } else { at0 }
+    let lc = span_pos(ms, at)
+    if ints_len(lc) == 0 { return at }
+    let file = span_file_of(at)
     let name = match hashmap_get(ms.paths, file) { Some(p) => p, None => file }
-    name + ":" + int_to_str(line + 1) + ":" + int_to_str(col)
+    name + ":" + int_to_str(ints_get(lc, 0)) + ":" + int_to_str(ints_get(lc, 1))
 }
 
 /// The whole program, as `nazm mir` prints it (indented, without spans).

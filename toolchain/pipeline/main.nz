@@ -4,6 +4,7 @@
 //                                  accepted it
 //     pipeline mir-spans CORE.json print it with each function's and statement's position
 //                                  (`nazm mir --spans`, R8 slice 11): CORE.json carries the sources
+//     pipeline cost CORE.json      print what `nazm explain-cost` prints (`cost-json`: its `nazm.cost/2` line), R8 slice 11
 //     pipeline verify CORE.json    lower and validate, and say so
 //     pipeline mutants CORE.json   break one invariant at a time and check the validator says so
 //     pipeline ops-debug CORE.json print `nazm lir --ops --debug`: positions, the variables a
@@ -73,6 +74,7 @@ use "rtgen.nz"
 use "objcache.nz"
 use "rtext.nz"
 use "mir.nz"
+use "cost.nz"
 use "vectorize.nz"
 use "llvm.nz"
 use "llpost.nz"
@@ -170,8 +172,8 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
     }
     let first = if strs_len(args) > 0 { strs_get(args, 0) } else { "" }
     let mode = if strs_len(args) == 2 || (first == "runtime" && strs_len(args) == 4) || (first == "build" && (strs_len(args) == 5 || strs_len(args) == 7)) { first } else { "" }
-    if mode != "mir" && mode != "mir-spans" && mode != "verify" && mode != "mutants" && mode != "lir" && mode != "ops" && mode != "tables" && mode != "runtime" && mode != "ops-debug" && mode != "build" {
-        eprint("usage: pipeline [--target TRIPLE] mir|mir-spans|lir|tables|ops|ops-debug|verify|mutants CORE.json | pipeline runtime CORE.json [STACK HEAP] | pipeline build CORE.json OUTDIR STACK HEAP\n")
+    if mode != "mir" && mode != "mir-spans" && mode != "cost" && mode != "cost-json" && mode != "verify" && mode != "mutants" && mode != "lir" && mode != "ops" && mode != "tables" && mode != "runtime" && mode != "ops-debug" && mode != "build" {
+        eprint("usage: pipeline [--target TRIPLE] mir|mir-spans|cost|cost-json|lir|tables|ops|ops-debug|verify|mutants CORE.json | pipeline runtime CORE.json [STACK HEAP] | pipeline build CORE.json OUTDIR STACK HEAP\n")
         return 2
     }
     let text = match fs_read(io, strs_get(args, 1)) {
@@ -257,30 +259,37 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
     }
     if mode == "verify" {
         print(int_to_str(vec_len(p.fns)) + " functions, valid\n")
+    } else if mode == "cost" || mode == "cost-json" {
+        print(cost_report(c, tt, p, spans_of(c, p), mode == "cost-json"))
     } else if mode == "mir-spans" {
-        let sources: HashMap[Str, Str] = hashmap_new()
-        let starts: HashMap[Str, Ints] = hashmap_new()
-        let paths: HashMap[Str, Str] = hashmap_new()
-        let mods = kid(c, json_root(c.doc), "modules")
-        for i in 0..count(c, mods) {
-            let m = at(c, mods, i)
-            hashmap_set(sources, sval(c, m, "name"), sval(c, m, "source"))
-            hashmap_set(starts, sval(c, m, "name"), text_line_starts(sval(c, m, "source")))
-            hashmap_set(paths, sval(c, m, "name"), sval(c, m, "path"))
-        }
-        let fn_ats = strs_new()
-        let fn_names = strs_new()
-        for f in p.fns {
-            strs_push(fn_ats, fn_span_of(c, f))
-            strs_push(fn_names, name_at_of(c, sources, f))
-        }
         let spans: Vec[MirSpans] = vec_new()
-        vec_push(spans, MirSpans(fn_ats: fn_ats, fn_names: fn_names, sources: sources, starts: starts, paths: paths))
+        vec_push(spans, spans_of(c, p))
         print(print_mir_at(p, spans))
     } else {
         print(print_mir(p))
     }
     0
+}
+
+/// What a position needs naming: each module's source and path, each function's span and name span (`mir-spans`, `cost`).
+fn spans_of(c: Cir, p: MirProgram) -> MirSpans {
+    let sources: HashMap[Str, Str] = hashmap_new()
+    let starts: HashMap[Str, Ints] = hashmap_new()
+    let paths: HashMap[Str, Str] = hashmap_new()
+    let mods = kid(c, json_root(c.doc), "modules")
+    for i in 0..count(c, mods) {
+        let m = at(c, mods, i)
+        hashmap_set(sources, sval(c, m, "name"), sval(c, m, "source"))
+        hashmap_set(starts, sval(c, m, "name"), text_line_starts(sval(c, m, "source")))
+        hashmap_set(paths, sval(c, m, "name"), sval(c, m, "path"))
+    }
+    let fn_ats = strs_new()
+    let fn_names = strs_new()
+    for f in p.fns {
+        strs_push(fn_ats, fn_span_of(c, f))
+        strs_push(fn_names, name_at_of(c, sources, f))
+    }
+    MirSpans(fn_ats: fn_ats, fn_names: fn_names, sources: sources, starts: starts, paths: paths)
 }
 
 /// What the LLVM backend asks of `build`: its text rather than the code generator's, debug

@@ -83,50 +83,55 @@ fn vz_assign(c: Cir, l: Int, value: Int, at_: Str) -> Int {
     json_add_object(c.doc, keys, vals)
 }
 
+fn vz_no(why: Strs, reason: Str) -> Int {
+    strs_push(why, reason)
+    0 - 1
+}
+
 // The replacement of the loop statement `stmts[k]` of a block, or -1 where it is not the idiom.
-fn vz_idiom(c: Cir, consts: Int, stmts: Int, k: Int) -> Int {
+// `why` gets the reason when it is not (the idiom's refusals, `vectorize::idiom`'s words).
+fn vz_idiom(c: Cir, consts: Int, stmts: Int, k: Int, why: Strs) -> Int {
     let lp = at(c, stmts, k)
     let cond = kid(c, lp, "cond")
-    if cond < 0 || op(c, cond) != "<" { return 0 - 1 }
+    if cond < 0 || op(c, cond) != "<" { return vz_no(why, "its condition is not `i < ints_len(v)` over a counter") }
     let i = vz_local(c, kid(c, cond, "lhs"))
     let rhs = kid(c, cond, "rhs")
-    if i < 0 || rhs < 0 || op(c, rhs) != "builtin" || sval(c, rhs, "builtin") != "ints_len" { return 0 - 1 }
+    if i < 0 || rhs < 0 || op(c, rhs) != "builtin" || sval(c, rhs, "builtin") != "ints_len" { return vz_no(why, "its condition is not `i < ints_len(v)` over a counter") }
     let vexpr = at(c, kid(c, rhs, "args"), 0)
     let v = vz_local(c, vexpr)
-    if v < 0 { return 0 - 1 }
+    if v < 0 { return vz_no(why, "its condition is not `i < ints_len(v)` over a counter") }
     // The counter's last write before the loop, in this block, sets it to 0; nothing after it but
     // plain bindings of other locals to a constant or a local.
     let mut w = 0 - 1
     for j in 0..k {
         if vz_writes(c, at(c, stmts, j), i) { w = j }
     }
-    if w < 0 || !vz_int_is(c, consts, kid(c, at(c, stmts, w), "value"), 0) { return 0 - 1 }
+    if w < 0 || !vz_int_is(c, consts, kid(c, at(c, stmts, w), "value"), 0) { return vz_no(why, "its counter does not start at 0 in the loop's block") }
     for j in w + 1..k {
         let s = at(c, stmts, j)
-        if op(c, s) != "let" && op(c, s) != "assign" { return 0 - 1 }
-        if ival(c, s, "local") == i { return 0 - 1 }
-        let val = op(c, kid(c, s, "value"))
-        if val != "const" && val != "local" { return 0 - 1 }
+        let plain = (op(c, s) == "let" || op(c, s) == "assign") && ival(c, s, "local") != i
+                && (op(c, kid(c, s, "value")) == "const" || op(c, kid(c, s, "value")) == "local")
+        if !plain { return vz_no(why, "something between its counter's `= 0` and the loop may write the counter") }
     }
     let body = kid(c, lp, "body")
     let bs = kid(c, body, "stmts")
-    if count(c, bs) != 2 || kid(c, body, "tail") >= 0 { return 0 - 1 }
+    if count(c, bs) != 2 || kid(c, body, "tail") >= 0 { return vz_no(why, "its body is not exactly `s = s + ints_get(v, i); i = i + 1;`") }
     let a1 = at(c, bs, 0)
     let a2 = at(c, bs, 1)
-    if op(c, a1) != "assign" || op(c, a2) != "assign" { return 0 - 1 }
-    if count(c, kid(c, a1, "path")) != 0 || count(c, kid(c, a2, "path")) != 0 { return 0 - 1 }
+    if op(c, a1) != "assign" || op(c, a2) != "assign" { return vz_no(why, "its body is not exactly `s = s + ints_get(v, i); i = i + 1;`") }
+    if count(c, kid(c, a1, "path")) != 0 || count(c, kid(c, a2, "path")) != 0 { return vz_no(why, "its body is not exactly `s = s + ints_get(v, i); i = i + 1;`") }
     let s = ival(c, a1, "local")
-    if ival(c, a2, "local") != i || s == i || s == v { return 0 - 1 }
+    if ival(c, a2, "local") != i || s == i || s == v { return vz_no(why, "its body is not exactly `s = s + ints_get(v, i); i = i + 1;`") }
     let add = kid(c, a1, "value")
-    if add < 0 || op(c, add) != "+" { return 0 - 1 }
+    if add < 0 || op(c, add) != "+" { return vz_no(why, "its body does not add an element to an accumulator") }
     let acc = kid(c, add, "lhs")
     let get = kid(c, add, "rhs")
-    if get < 0 || op(c, get) != "builtin" || sval(c, get, "builtin") != "ints_get" { return 0 - 1 }
+    if get < 0 || op(c, get) != "builtin" || sval(c, get, "builtin") != "ints_get" { return vz_no(why, "its body does not add an element to an accumulator") }
     let gargs = kid(c, get, "args")
-    if vz_local(c, acc) != s || vz_local(c, at(c, gargs, 0)) != v || vz_local(c, at(c, gargs, 1)) != i { return 0 - 1 }
+    if vz_local(c, acc) != s || vz_local(c, at(c, gargs, 0)) != v || vz_local(c, at(c, gargs, 1)) != i { return vz_no(why, "its body does not add `ints_get(v, i)` to an accumulator") }
     let step = kid(c, a2, "value")
     if step < 0 || op(c, step) != "+" || vz_local(c, kid(c, step, "lhs")) != i || !vz_int_is(c, consts, kid(c, step, "rhs"), 1) {
-        return 0 - 1
+        return vz_no(why, "its counter does not step by 1")
     }
     let vty = sval(c, vexpr, "type")
     let sum_args = ints_new()
@@ -163,28 +168,32 @@ fn vz_idiom(c: Cir, consts: Int, stmts: Int, k: Int) -> Int {
     json_add_object(c.doc, skeys, svals)
 }
 
-fn vz_block(c: Cir, consts: Int, b: Int) -> Int {
+// `apply` false only reads: each loop's fate goes to `facts` as `FUNCTION\tAT\tsummation|\tREASON`.
+fn vz_block(c: Cir, consts: Int, b: Int, apply: Bool, fname: Str, facts: Strs) -> Int {
     if b < 0 { return 0 }
     let stmts = kid(c, b, "stmts")
     for k in 0..count(c, stmts) {
         let s = at(c, stmts, k)
         let o = op(c, s)
         if o == "loop" {
-            let r = vz_idiom(c, consts, stmts, k)
+            let why = strs_new()
+            let r = vz_idiom(c, consts, stmts, k, why)
             if r >= 0 {
                 // The statement replaced in place: the array's element `k` names the new node.
-                ints_set(c.doc.kids, vec_get(c.doc.nodes, stmts).first + k, r)
+                if apply { ints_set(c.doc.kids, vec_get(c.doc.nodes, stmts).first + k, r) }
+                strs_push(facts, fname + "\t" + sval(c, s, "at") + "\tsummation\t")
             } else {
-                vz_block(c, consts, kid(c, s, "body"))
+                strs_push(facts, fname + "\t" + sval(c, s, "at") + "\t\t" + (if strs_len(why) > 0 { strs_get(why, 0) } else { "" }))
+                vz_block(c, consts, kid(c, s, "body"), apply, fname, facts)
             }
         } else if o == "if" {
-            vz_block(c, consts, kid(c, s, "then"))
-            vz_block(c, consts, kid(c, s, "else"))
+            vz_block(c, consts, kid(c, s, "then"), apply, fname, facts)
+            vz_block(c, consts, kid(c, s, "else"), apply, fname, facts)
         } else if o == "match" {
             let arms = kid(c, s, "arms")
-            for a in 0..count(c, arms) { vz_block(c, consts, kid(c, at(c, arms, a), "body")) }
+            for a in 0..count(c, arms) { vz_block(c, consts, kid(c, at(c, arms, a), "body"), apply, fname, facts) }
         } else if o == "block" || o == "scope" {
-            vz_block(c, consts, kid(c, s, "body"))
+            vz_block(c, consts, kid(c, s, "body"), apply, fname, facts)
         }
     }
     0
@@ -195,7 +204,19 @@ pub fn vectorize(c: Cir) -> Int ! {} {
     let fs = kid(c, json_root(c.doc), "functions")
     for i in 0..count(c, fs) {
         let f = at(c, fs, i)
-        if kid(c, f, "body") >= 0 { vz_block(c, kid(c, f, "consts"), kid(c, f, "body")) }
+        if kid(c, f, "body") >= 0 { vz_block(c, kid(c, f, "consts"), kid(c, f, "body"), true, "", strs_new()) }
     }
     0
+}
+
+/// What `vectorize` would do with every loop, and why not (`vectorize::explain`), as `FUNCTION\tAT\tsummation|\tREASON`
+/// lines in the order the Rust function lists them; nothing is rewritten.
+pub fn vectorize_facts(c: Cir) -> Strs ! {} {
+    let facts = strs_new()
+    let fs = kid(c, json_root(c.doc), "functions")
+    for i in 0..count(c, fs) {
+        let f = at(c, fs, i)
+        if kid(c, f, "body") >= 0 { vz_block(c, kid(c, f, "consts"), kid(c, f, "body"), false, sval(c, f, "name"), facts) }
+    }
+    facts
 }
