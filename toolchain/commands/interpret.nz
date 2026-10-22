@@ -18,6 +18,7 @@ use "util.nz"
 use "harness.nz"
 use "build.nz"
 use "buildcli.nz"
+use "profile.nz"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -69,7 +70,7 @@ fn ip_emit(f: Facts, names: Strs, which: Ints, json: Bool) -> Int {
 // error ended as `run --interpret` ends it (status 3 for a root that cannot be read, else 1; `nazm: N error(s)`),
 // else the document. `spec` is `--harness`'s, `[]` for none; `over` the root's text when it is read through one.
 // The facts are this function's alone, and go when it returns.
-fn ip_document(io: IoCap, o: Opts, packages: Packages, json: Bool, harness: Strs, root_over: Strs) -> Str {
+fn ip_document(io: IoCap, proc: ProcessCap, sp: SpawnCap, o: Opts, packages: Packages, json: Bool, harness: Strs, root_over: Strs) -> Str {
     let file = o.file
     let library = ip_library(io)
     let prefix = fe_prefix(io, file)
@@ -124,6 +125,12 @@ fn ip_document(io: IoCap, o: Opts, packages: Packages, json: Bool, harness: Strs
         }
     }
     if !fx_carried(f) { ip_refuse(io, fx_why(f)) }
+    // The rules of the profiles in force (`profile::enforce`), before the program is run.
+    let in_force = bd_in_force(o, packages)
+    if strs_len(in_force) > 0 {
+        let abs = fe_prefix(io, o.file) + o.file
+        pf_enforce(io, proc, sp, f, abs, names, in_force, o.locked || (pk_packages_state(packages) == 1 && pf_lock_ok(io, packages)), false)
+    }
     let errors = ip_errors(f)
     let n = ints_len(errors)
     if n > 0 {
@@ -137,10 +144,10 @@ fn ip_document(io: IoCap, o: Opts, packages: Packages, json: Bool, harness: Strs
 }
 
 // `nazm run --interpret FILE [-- ARGS]`: the status it ends with.
-pub fn ip_run(io: IoCap, out: OutCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap, o: Opts, packages: Packages, json: Bool,
+pub fn ip_run(io: IoCap, out: OutCap, time: TimeCap, net: NetCap, proc: ProcessCap, sp: SpawnCap, rnd: RandomCap, o: Opts, packages: Packages, json: Bool,
         program_args: Strs, max_iterations: Int, max_depth: Int, harness: Strs) -> Int {
     let over = strs_new()
-    let doc = ip_document(io, o, packages, json, harness, over)
+    let doc = ip_document(io, proc, sp, o, packages, json, harness, over)
     ip_run_with(doc, o.file, over, max_iterations, max_depth, program_args, json, out, io, time, net, proc, rnd)
 }
 
