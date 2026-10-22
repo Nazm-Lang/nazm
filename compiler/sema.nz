@@ -15896,12 +15896,31 @@ pub struct Rix {
     pvr: Ints,
     pvf: Ints,
     pvv: Ints,
+    // The solved sinks, once asked for (`ck_sink_count`; R8 slice 11, task 11.1: `explain-flow`): per sink its function, class, place, origins
+    // (a mask) and its traces, a run of the trace pools (`skt`, `skn`); a trace is an origin and its steps, a run of the step pools.
+    skb: Ints,
+    skw: Ints,
+    skf: Ints,
+    skc: Ints,
+    sks: Ints,
+    ske: Ints,
+    sko: Ints,
+    skt: Ints,
+    skn: Ints,
+    tro: Ints,
+    trf: Ints,
+    trn: Ints,
+    tss: Ints,
+    tse: Ints,
+    tnote: Strs,
 }
 
 fn rix_new() -> Rix {
     Rix(ok: ints_new(), k: ints_new(), ds: ints_new(), de: ints_new(), uf: ints_new(), uc: ints_new(), us: ints_new(), ue: ints_new(),
             cgn: ints_new(), cgf: ints_new(), cgc: ints_new(), cgl: ints_new(),
-            pvn: ints_new(), pvh: ints_new(), pvo: ints_new(), pvp: ints_new(), pvr: ints_new(), pvf: ints_new(), pvv: ints_new())
+            pvn: ints_new(), pvh: ints_new(), pvo: ints_new(), pvp: ints_new(), pvr: ints_new(), pvf: ints_new(), pvv: ints_new(),
+            skb: ints_new(), skw: ints_new(), skf: ints_new(), skc: ints_new(), sks: ints_new(), ske: ints_new(), sko: ints_new(), skt: ints_new(), skn: ints_new(), tro: ints_new(), trf: ints_new(),
+            trn: ints_new(), tss: ints_new(), tse: ints_new(), tnote: strs_new())
 }
 
 // A declaration: where the entity is declared, unless that is no width or no place; the span is
@@ -16442,6 +16461,114 @@ fn pv_build(c: Ck) -> Int {
     ss(c, s_module(), pr.saved);
     0
 }
+
+// What a sink of a class is, in a trace's first step (`sink_words`).
+fn sink_words(class: Int) -> Str {
+    if class == 0 { return "the path `write_file` writes to"; }
+    if class == 1 { return "standard output or error"; }
+    if class == 2 { return "what `write_file` writes"; }
+    "a vouch"
+}
+
+// Every sink of every body as solved, with what reaches it and how (`solve`'s reports): its own flow's origins and what every caller hands the
+// parameters it depends on, and for each origin one chain from where it entered to the sink.
+fn sk_build(c: Ck, ps: Ps, pf: Pf) -> Int {
+    let r = c.rix;
+    let mut k = 0;
+    while k < ints_len(pf.ffn) {
+        let fg = ints_get(pf.ffn, k);
+        let mut x = 0;
+        while x < ints_get(pf.fsc, k) {
+            let si = ints_get(pf.fsf, k) + x;
+            let flow = vec_get(pf.kfl, si);
+            let class = ints_get(pf.kcl, si);
+            let mask = ps_reaching(ps, fg, flow);
+            ints_push(r.skf, fg);
+            ints_push(r.skc, class);
+            ints_push(r.sks, ints_get(pf.kss, si));
+            ints_push(r.ske, ints_get(pf.kse, si));
+            ints_push(r.sko, mask);
+            ints_push(r.skt, ints_len(r.tro));
+            let origins = bits_of(mask);
+            ints_push(r.skn, ints_len(origins));
+            let mut j = 0;
+            while j < ints_len(origins) {
+                let o = ints_get(origins, j);
+                let t = tr_new();
+                tr_step(t, ints_get(pf.kss, si), ints_get(pf.kse, si), cat3("it reaches ", sink_words(class), " here"));
+                tr_flow(c, ps, pf, t, k, flow, o, 0);
+                ints_push(r.tro, o);
+                ints_push(r.trf, ints_len(r.tss));
+                ints_push(r.trn, ints_len(t.ss));
+                let mut q = ints_len(t.ss) - 1;
+                while q >= 0 {
+                    ints_push(r.tss, ints_get(t.ss, q));
+                    ints_push(r.tse, ints_get(t.se, q));
+                    strs_push(r.tnote, strs_get(t.notes, q));
+                    q = q - 1;
+                }
+                j = j + 1;
+            }
+            x = x + 1;
+        }
+        k = k + 1;
+    }
+    0
+}
+
+// The program solved again for its sinks, when first asked for: the summaries (`pv_build`) are not kept, and a tool that wants only those does
+// not pay for the traces.
+fn sk_solve(c: Ck) -> Int {
+    let n = strs_len(c.fnname);
+    let mut g = 0;
+    while g < n {
+        if ints_get(c.fnpc, g) + captures_of(c, g) > 60 {
+            ints_push(c.rix.skw, 1);
+            return 0;
+        }
+        g = g + 1;
+    }
+    if strs_len(c.stop) > 0 {
+        ints_push(c.rix.skw, 1);
+        return 0;
+    }
+    let pr = prov_solve(c);
+    sk_build(c, pr.ps, pr.pf);
+    ss(c, s_module(), pr.saved);
+    0
+}
+
+pub fn ck_sink_count(c: Ck) -> Int {
+    if ints_len(c.rix.skb) == 0 {
+        ints_push(c.rix.skb, 1);
+        sk_solve(c);
+    }
+    ints_len(c.rix.skf)
+}
+// Whether the program could not be solved for its sinks (a function too wide for a mask, a checker that stopped): none is then published.
+pub fn ck_sink_declined(c: Ck) -> Bool { ints_len(c.rix.skw) > 0 }
+pub fn ck_sink_function(c: Ck, i: Int) -> Str { strs_get(c.fnname, ints_get(c.rix.skf, i)) }
+pub fn ck_sink_class(c: Ck, i: Int) -> Str {
+    let k = ints_get(c.rix.skc, i);
+    if k == 0 { return "path"; }
+    if k == 1 { return "output"; }
+    if k == 2 { return "file-data"; }
+    "vouch"
+}
+pub fn ck_sink_start(c: Ck, i: Int) -> Int { ints_get(c.rix.sks, i) }
+pub fn ck_sink_end(c: Ck, i: Int) -> Int { ints_get(c.rix.ske, i) }
+pub fn ck_sink_origins(c: Ck, i: Int) -> Strs { pv_origin_names(ints_get(c.rix.sko, i)) }
+pub fn ck_sink_traces(c: Ck, i: Int) -> Int { ints_get(c.rix.skn, i) }
+pub fn ck_sink_trace_origin(c: Ck, i: Int, t: Int) -> Str {
+    let o = ints_get(c.rix.tro, ints_get(c.rix.skt, i) + t);
+    let names = pv_origin_names(pow2(o));
+    strs_get(names, 0)
+}
+pub fn ck_sink_steps(c: Ck, i: Int, t: Int) -> Int { ints_get(c.rix.trn, ints_get(c.rix.skt, i) + t) }
+fn sk_step(c: Ck, i: Int, t: Int, s: Int) -> Int { ints_get(c.rix.trf, ints_get(c.rix.skt, i) + t) + s }
+pub fn ck_sink_step_start(c: Ck, i: Int, t: Int, s: Int) -> Int { ints_get(c.rix.tss, sk_step(c, i, t, s)) }
+pub fn ck_sink_step_end(c: Ck, i: Int, t: Int, s: Int) -> Int { ints_get(c.rix.tse, sk_step(c, i, t, s)) }
+pub fn ck_sink_step_note(c: Ck, i: Int, t: Int, s: Int) -> Str { strs_get(c.rix.tnote, sk_step(c, i, t, s)) }
 
 pub fn ck_prov_has(c: Ck, g: Int) -> Bool {
     pv_build(c);
