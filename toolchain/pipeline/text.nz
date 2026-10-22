@@ -6,6 +6,8 @@
 use "mir.nz"
 use "types.nz"
 use "@std/blake3"
+use "@std/hashmap"
+use "@std/text"
 
 fn hex2(b: Int) -> Str {
     let digits = "0123456789abcdef"
@@ -201,8 +203,66 @@ fn origin_text(o: Int) -> Str {
     if o == 0 { "source" } else if o == 1 { "failure-cleanup" } else { "unwind" }
 }
 
+/// What `nazm mir --spans` names positions with: each function's span (`FILE:START..END`, "" for a thunk this stage
+/// writes), and per module name its source, its line starts and the path the loader named it by.
+pub struct MirSpans {
+    fn_ats: Strs,
+    /// Each function's name span (`@name`, which a stack check and a thunk's statements are at).
+    fn_names: Strs,
+    sources: HashMap[Str, Str],
+    starts: HashMap[Str, Ints],
+    paths: HashMap[Str, Str],
+}
+
+/// Each line's first byte in `text`: 0, then the byte after every line feed.
+pub fn text_line_starts(text: Str) -> Ints ! {} {
+    let out = ints_new()
+    ints_push(out, 0)
+    for i in 0..str_len(text) { if str_byte(text, i) == 10 { ints_push(out, i + 1) } }
+    out
+}
+
+/// A span's start as `PATH:LINE:COLUMN` (lines and columns from 1, columns by character), or `at` itself where it
+/// names no place (`SourceMap::line_col`).
+fn span_name(ms: MirSpans, f: Int, at0: Str) -> Str ! {} {
+    let at = if at0 == "@name" { strs_get(ms.fn_names, f) } else { at0 }
+    let mut colon = 0 - 1
+    for i in 0..str_len(at) { if str_byte(at, i) == 58 { colon = i } }
+    if colon < 0 { return at }
+    let file = str_slice(at, 0, colon)
+    let rest = str_slice(at, colon + 1, str_len(at))
+    let dots = match text_find(rest, "..") { Some(i) => i, None => str_len(rest) }
+    let start = match text_parse_int(str_slice(rest, 0, dots)) { Ok(v) => v, Err(_) => 0 }
+    let text = match hashmap_get(ms.sources, file) { Some(t) => t, None => "" }
+    let mut stop = if start < str_len(text) { start } else { str_len(text) }
+    if stop < 0 { stop = 0 }
+    let starts = match hashmap_get(ms.starts, file) { Some(t) => t, None => text_line_starts("") }
+    let mut line = 0
+    let mut top = ints_len(starts) - 1
+    while line < top {
+        let mid = (line + top + 1) / 2
+        if ints_get(starts, mid) <= stop { line = mid } else { top = mid - 1 }
+    }
+    let mut col = 1
+    let mut i = ints_get(starts, line)
+    while i < stop {
+        let b = str_byte(text, i)
+        if b < 128 || b >= 192 { col += 1 }
+        i += 1
+    }
+    let name = match hashmap_get(ms.paths, file) { Some(p) => p, None => file }
+    name + ":" + int_to_str(line + 1) + ":" + int_to_str(col)
+}
+
 /// The whole program, as `nazm mir` prints it (indented, without spans).
 pub fn print_mir(p: MirProgram) -> Str ! {} {
+    let none: Vec[MirSpans] = vec_new()
+    print_mir_at(p, none)
+}
+
+/// The same, with the spans of `nazm mir --spans` when `spans` holds them.
+pub fn print_mir_at(p: MirProgram, spans: Vec[MirSpans]) -> Str ! {} {
+    let named = vec_len(spans) > 0
     let out = strs_new()
     strs_push(out, "{\n  \"schema\": \"nazm.mir/1\",\n")
     let entry = if p.entry < 0 { "null" } else { quote(vec_get(p.fns, p.entry).identity) }
@@ -222,6 +282,7 @@ pub fn print_mir(p: MirProgram) -> Str ! {} {
         strs_push(out, "\"params\": " + int_to_str(f.params) + ", ")
         strs_push(out, "\"ret\": " + quote(key(f.ret)) + ", ")
         strs_push(out, "\"digest\": " + quote(digest(p, f)) + ", ")
+        if named { strs_push(out, "\"at\": " + quote(span_name(vec_get(spans, 0), i, strs_get(vec_get(spans, 0).fn_ats, i))) + ", ") }
         strs_push(out, "\"locals\": [")
         for j in 0..vec_len(f.locals) {
             if j > 0 { strs_push(out, ", ") }
@@ -236,7 +297,8 @@ pub fn print_mir(p: MirProgram) -> Str ! {} {
             let mut k = 0
             for s in b.stmts {
                 if k > 0 { strs_push(out, ", ") }
-                strs_push(out, quote(stmt_text(p, s)))
+                let at = if named && k < strs_len(b.ats) { strs_get(b.ats, k) } else { "" }
+                strs_push(out, quote(if at == "" { stmt_text(p, s) } else { stmt_text(p, s) + " @ " + span_name(vec_get(spans, 0), i, at) }))
                 k += 1
             }
             strs_push(out, "], \"term\": " + quote(term_text(term_of(b))) + "}")

@@ -11,6 +11,7 @@
 # Exits 1, writing nothing, for a file that is not UTF-8: no editor can send it.
 
 import json
+import os
 import re
 import sys
 
@@ -44,9 +45,15 @@ def main():
             text = f.read().decode("utf-8")
     except (OSError, UnicodeDecodeError):
         sys.exit(1)
+    # LSP_AS=FROM=TO names the file as the machine that will run the session sees it (a container mounts the checkout elsewhere).
+    named = path
+    if os.environ.get("LSP_AS"):
+        old, new = os.environ["LSP_AS"].split("=", 1)
+        if path.startswith(old):
+            named = new + path[len(old):]
     uri = "file://" + "".join(
         c if (c.isascii() and (c.isalnum() or c in "-._~/")) else "".join("%%%02X" % b for b in c.encode("utf-8"))
-        for c in path
+        for c in named
     )
     doc = {"uri": uri}
     caps = {}
