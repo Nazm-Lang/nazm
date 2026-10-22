@@ -95,6 +95,8 @@ if [ ${#files[@]} -eq 0 ]; then
     while IFS= read -r f; do files+=("$f"); done < <(
         find examples tests/compat/v1 compiler/conformance toolchain/codegen/tests/programs crates/nazm-cli/tests/refusals \
             crates/nazm-cli/tests/transfers toolchain/frontend-tests/inputs/check toolchain/frontend-tests/inputs/modules -name '*.nz' | LC_ALL=C sort -u
+        # The directories of packages too: a package's directory stands for its `main` in several commands.
+        [ -n "${REFUSALS_NO_PACKAGES:-}" ] || find examples tests/compat/v1 crates/nazm-cli/templates toolchain/frontend-tests/inputs -name nazm.toml | sed 's|/nazm.toml$||' | LC_ALL=C sort -u
     )
 fi
 
@@ -108,8 +110,8 @@ for f in "${files[@]}"; do
             diagnostics) add "diagnostics $f" "" "diagnostics --root $f --json" ;;
             resolve) add "resolve $f" "" "resolve $f" ;;
             obligations) add "obligations $f" "" "obligations $f" ;;
-            explain-cost) add "explain-cost $f" "" "explain-cost $f" ;;
-            explain-flow) add "explain-flow $f" "" "explain-flow $f" ;;
+            explain-cost) add "explain-cost $f" "" "explain-cost $f"; add "explain-cost-json $f" "" "explain-cost --json $f" ;;
+            explain-flow) add "explain-flow $f" "" "explain-flow $f"; add "explain-flow-json $f" "" "explain-flow --json $f" ;;
             mir) add "mir-spans $f" "" "mir --spans $f"; add "mir-spans-json $f" "" "mir --json --spans $f" ;;
             lir) add "lir $f" "" "lir --target aarch64-apple-darwin $f"; add "lir-ops $f" "" "lir --ops $f"; add "lir-debug $f" "" "lir --ops --debug $f" ;;
             fix) add "fix $f" "" "fix $f" ;;
