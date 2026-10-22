@@ -204,8 +204,6 @@ fn unreliable(f: Facts) -> Bool {
     let d = fx_diags(f)
     for i in 0..dg_len(d) {
         if ints_get(d.file, i) >= 0 { return true }
-        let c = dg_code(d, i)
-        if c == "N0386" { return true }
     }
     false
 }

@@ -403,6 +403,10 @@ pub struct Ck {
     // hold them) — and of a conversion (`NumericFact::Convert`), by the callee's span: an index
     // into `cvto`, `cvmode`, `cvres` (the type converted to, how, and what the call produces).
     mconst: Smap,
+    // The mentions of refused captures (N0386), by span: the group of the closure and binding they belong to (`rzb`, `rzf`).
+    mrefu: Smap,
+    rzb: Ints,
+    rzf: Ints,
     uk: Ints,
     ui: Ints,
     us: Strs,
@@ -607,7 +611,10 @@ fn s_created() -> Int { 22 }
 fn s_join() -> Int { 23 }
 // Whether a type name is being resolved quietly (`quiet_type`): which definition it is is not recorded as a mention.
 fn s_quiet() -> Int { 24 }
-fn s_slots() -> Int { 25 }
+// Whether the binding the last `lookup_var` reached was a capture the checker refused (N0386): the reference attributes its mentions to a slot of the
+// closure that nothing declares.
+fn s_refused() -> Int { 25 }
+fn s_slots() -> Int { 26 }
 
 fn prelude(c: Ck) -> Int { gs(c, s_prelude()) }
 
@@ -1504,7 +1511,7 @@ fn new_ck(t: Tree) -> Ck {
             stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new(), epown: ints_new(), epnm: strs_new(),
             sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new(), fnreq: ints_new(), fnrs: Reasons(fnid: ints_new(), effect: ints_new(), start: ints_new(), end: ints_new(), source: ints_new(), which: ints_new()), bds: ints_new(), bde: ints_new(),
             bmut: ints_new(), mlit: sm_new(), mfld: sm_new(), mfldty: sm_new(), ipend: ints_new(), rlog: ints_new(), elog: ints_new(), mvty: sm_new(), mvix: sm_new(),
-            minit: sm_new(), mfini: sm_new(), mcref: sm_new(), mtrm: sm_new(), rix: rix_new(), mconst: sm_new(), uk: ints_new(), ui: ints_new(), us: strs_new(), mconv: sm_new(), cvto: ints_new(),
+            minit: sm_new(), mfini: sm_new(), mcref: sm_new(), mtrm: sm_new(), rix: rix_new(), mconst: sm_new(), mrefu: sm_new(), rzb: ints_new(), rzf: ints_new(), uk: ints_new(), ui: ints_new(), us: strs_new(), mconv: sm_new(), cvto: ints_new(),
             cvmode: strs_new(), cvres: ints_new(), sargf: ints_new(), sargc: ints_new(), sargs: ints_new(), sret: ints_new());
     let mut i = 0;
     while i < s_slots() {
@@ -5376,7 +5383,27 @@ fn declared_at(c: Ck, span: Int) -> Int {
 fn last_binding(c: Ck) -> Int { ints_len(c.bfn) - 1 }
 
 // The binding scope entry `b` is, recorded as what the name written at `s..e` refers to.
-fn note_var(c: Ck, s: Int, e: Int, b: Int) -> Int { sm_put(c.mvar, s, e, ints_get(c.sbid, b)) }
+fn note_var(c: Ck, s: Int, e: Int, b: Int) -> Int {
+    sm_put(c.mvar, s, e, ints_get(c.sbid, b));
+    if gs(c, s_refused()) == 1 {
+        // A refused capture: one slot for the closure and binding, however often it is named.
+        let bid = ints_get(c.sbid, b);
+        let f = gs(c, s_fn());
+        let mut g = 0 - 1;
+        let mut i = 0;
+        while i < ints_len(c.rzb) {
+            if ints_get(c.rzb, i) == bid && ints_get(c.rzf, i) == f { g = i; }
+            i = i + 1;
+        }
+        if g < 0 {
+            g = ints_len(c.rzb);
+            ints_push(c.rzb, bid);
+            ints_push(c.rzf, f);
+        }
+        sm_put(c.mrefu, s, e, g);
+    }
+    0
+}
 
 fn lookup(c: Ck, name: Str) -> Int {
     let mut i = strs_len(c.sname) - 1;
@@ -5394,6 +5421,7 @@ fn lookup(c: Ck, name: Str) -> Int {
 // neither mutable nor declared anywhere (`s_captured`).
 fn lookup_var(c: Ck, name: Str, at: Int) -> Int {
     ss(c, s_captured(), 0);
+    ss(c, s_refused(), 0);
     let b = lookup(c, name);
     if b < 0 { return b; }
     let mut first = 0 - 1;
@@ -5408,6 +5436,7 @@ fn lookup_var(c: Ck, name: Str, at: Int) -> Int {
         err(c, "N0386", at, cat5("a closure cannot capture `", name, "`, a `let mut` binding of `", show(c, ty), "`, which can hold a function value"),
                 "a captured `let mut` binding is shared with the closure, so the closure could be stored into it and own itself, which reference counting never reclaims; bind a copy with `let`, or pass the value as an argument");
         ss(c, s_captured(), 1);
+        ss(c, s_refused(), 1);
         return b;
     }
     if captured_by(c, first, b) == false {
@@ -9423,6 +9452,7 @@ fn check_match(c: Ck, m: Int, expected: Int) -> Int {
             }
             // An or-pattern's later alternatives bind the same names: the same bindings.
             k = 0;
+            ss(c, s_refused(), 0);
             while k < strs_len(c.pan) {
                 let b = lookup(c, strs_get(c.pan, k));
                 if b >= ints_get(c.frames, ints_len(c.frames) - 1) { note_var(c, ints_get(c.pas, k), ints_get(c.pae, k), b); }
@@ -16019,6 +16049,8 @@ pub struct Rix {
     tss: Ints,
     tse: Ints,
     tnote: Strs,
+    // Each entity's number before the order was made (its place among the checker's functions, bindings, records, …).
+    og: Ints,
 }
 
 fn rix_new() -> Rix {
@@ -16026,7 +16058,7 @@ fn rix_new() -> Rix {
             cgn: ints_new(), cgf: ints_new(), cgc: ints_new(), cgl: ints_new(),
             pvn: ints_new(), pvh: ints_new(), pvo: ints_new(), pvp: ints_new(), pvr: ints_new(), pvf: ints_new(), pvv: ints_new(),
             pcs: ints_new(), pce: ints_new(), pcw: strs_new(), eus: ints_new(), eue: ints_new(), eui: ints_new(), skb: ints_new(), skw: ints_new(), skf: ints_new(), skc: ints_new(), sks: ints_new(), ske: ints_new(), sko: ints_new(), skt: ints_new(), skn: ints_new(), tro: ints_new(), trf: ints_new(),
-            trn: ints_new(), tss: ints_new(), tse: ints_new(), tnote: strs_new())
+            trn: ints_new(), tss: ints_new(), tse: ints_new(), tnote: strs_new(), og: ints_new())
 }
 
 // A declaration: where the entity is declared, unless that is no width or no place; the span is
@@ -16111,7 +16143,8 @@ fn ix_build(c: Ck) -> Int {
     let btr = bfld + nf;
     let btm = btr + ntr;
     let bcon = btm + ntm;
-    let total = bcon + nconst;
+    let bref = bcon + nconst;
+    let total = bref + ints_len(c.rzb);
     let kind = ints_new();
     let ds = ints_new();
     let de = ints_new();
@@ -16127,6 +16160,7 @@ fn ix_build(c: Ck) -> Int {
                             if i >= btr { k = 8; }
                             if i >= btm { k = 9; }
                             if i >= bcon { k = 10; }
+                            if i >= bref { k = 2; }
                         }
                     }
                 }
@@ -16268,7 +16302,11 @@ fn ix_build(c: Ck) -> Int {
     let vars = c.mvar;
     i = 0;
     while i < ints_len(vars.ks) {
-        if ints_get(c.bfn, ints_get(vars.kv, i)) >= 0 { ix_use(at, live, bloc + ints_get(vars.kv, i), ints_get(vars.ks, i), ints_get(vars.ke, i)); }
+        let rz = sm_get(c.mrefu, ints_get(vars.ks, i), ints_get(vars.ke, i));
+        if rz >= 0 {
+            // A refused capture is mentioned through a slot of the closure that nothing declares.
+            ix_use(at, live, bref + rz, ints_get(vars.ks, i), ints_get(vars.ke, i));
+        } else if ints_get(c.bfn, ints_get(vars.kv, i)) >= 0 { ix_use(at, live, bloc + ints_get(vars.kv, i), ints_get(vars.ks, i), ints_get(vars.ke, i)); }
         i = i + 1;
     }
     let cons = c.mcons;
@@ -16443,6 +16481,7 @@ fn ix_build(c: Ck) -> Int {
     while i < ints_len(order) {
         let ent = ints_get(order, i);
         ints_push(r.k, ints_get(kind, ent));
+        ints_push(r.og, ent);
         ints_push(r.ds, ints_get(ds, ent));
         ints_push(r.de, ints_get(de, ent));
         i = i + 1;
@@ -16469,6 +16508,66 @@ pub fn ck_ref_kind_name(c: Ck, i: Int) -> Str {
     if k == 8 { return "trait"; }
     if k == 9 { return "trait method"; }
     "constant"
+}
+// The owner the checker gives entity `i` where the index has no declaration of it (a tuple's record and fields, which are written nowhere): the record
+// of a record or field entity, the enum of an enum, variant or payload field entity, else -1.
+pub fn ck_ref_record(c: Ck, i: Int) -> Int {
+    ix_build(c);
+    let k = ints_get(c.rix.k, i);
+    let ent = ints_get(c.rix.og, i);
+    let brec = strs_len(c.fnname) + ints_len(c.bfn);
+    if k == 3 { return ent - brec; }
+    if k != 6 { return 0 - 1; }
+    let bfld = brec + strs_len(c.rname) + strs_len(c.ename) + strs_len(c.vname);
+    let f = ent - bfld;
+    let mut r = 0;
+    while r < strs_len(c.rname) {
+        if f >= ints_get(c.rff, r) && f < ints_get(c.rff, r) + ints_get(c.rfc, r) { return r; }
+        r = r + 1;
+    }
+    0 - 1
+}
+// The variant (a global index) entity `i` is or belongs to, else -1.
+fn ck_ref_variant(c: Ck, i: Int) -> Int {
+    let k = ints_get(c.rix.k, i);
+    let ent = ints_get(c.rix.og, i);
+    let benum = strs_len(c.fnname) + ints_len(c.bfn) + strs_len(c.rname);
+    let bvar = benum + strs_len(c.ename);
+    if k == 5 { return ent - bvar; }
+    if k != 7 { return 0 - 1; }
+    let f = ent - (bvar + strs_len(c.vname));
+    let mut v = 0;
+    while v < strs_len(c.vname) {
+        if f >= ints_get(c.vff, v) && f < ints_get(c.vff, v) + ints_get(c.vfc, v) { return v; }
+        v = v + 1;
+    }
+    0 - 1
+}
+pub fn ck_ref_enum(c: Ck, i: Int) -> Int {
+    ix_build(c);
+    let k = ints_get(c.rix.k, i);
+    let ent = ints_get(c.rix.og, i);
+    let benum = strs_len(c.fnname) + ints_len(c.bfn) + strs_len(c.rname);
+    if k == 4 { return ent - benum; }
+    let v = ck_ref_variant(c, i);
+    if v < 0 { return 0 - 1; }
+    let mut e = 0;
+    while e < strs_len(c.ename) {
+        if v >= ints_get(c.evf, e) && v < ints_get(c.evf, e) + ints_get(c.evc, e) { return e; }
+        e = e + 1;
+    }
+    0 - 1
+}
+// The written name of a variant entity, or the `Variant.field` of a payload field entity; the name of a field entity.
+pub fn ck_ref_member(c: Ck, i: Int) -> Str {
+    let k = ints_get(c.rix.k, i);
+    let ent = ints_get(c.rix.og, i);
+    let bfld = strs_len(c.fnname) + ints_len(c.bfn) + strs_len(c.rname) + strs_len(c.ename) + strs_len(c.vname);
+    if k == 6 { return strs_get(c.fname, ent - bfld); }
+    let v = ck_ref_variant(c, i);
+    if v < 0 { return ""; }
+    if k == 5 { return strs_get(c.vname, v); }
+    strs_get(c.vname, v) + "." + strs_get(c.fname, ent - bfld)
 }
 pub fn ck_ref_decl_start(c: Ck, i: Int) -> Int { ints_get(c.rix.ds, i) }
 pub fn ck_ref_decl_end(c: Ck, i: Int) -> Int { ints_get(c.rix.de, i) }

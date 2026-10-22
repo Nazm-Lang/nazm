@@ -16,6 +16,7 @@ use "../../compiler/package.nz"
 use "../../compiler/facts.nz"
 use "front.nz"
 use "snap.nz"
+use "util.nz"
 
 fn pad12(n: Int) -> Str {
     let t = int_to_str(n)
@@ -34,8 +35,9 @@ fn target_json(f: Facts, ents: Ents, e: Int) -> Str {
             + ",\"kind\":" + json_str(kind) + "}"
 }
 
-// Module `m`'s imports, from the `use`s of its text and the graph's edges in the order they were made. "" and a reason in `why` where
-// the facts cannot say.
+// Module `m`'s imports, from the `use`s of its text and the graph's edges in the order they were made: one edge per module imported, however many
+// `use`s name it (`ModuleGraph::import_as`: a second `use` adds to the edge), written as its first `use` wrote it and under the first alias any gave; a
+// module importing itself makes no edge. "" and a reason in `why` where the facts cannot say.
 fn imports_json(f: Facts, m: Int, hashes: Strs, why: Strs) -> Str {
     let c = fx_checker(f)
     let t = fx_tree(f)
@@ -43,10 +45,9 @@ fn imports_json(f: Facts, m: Int, hashes: Strs, why: Strs) -> Str {
     let imps = sx_items(t, sx_field(t, prog, "imports"))
     let out = strs_new()
     let seen = strs_new()
-    if ints_len(imps) > ck_module_deps(c, m) {
-        strs_push(why, "a module that imports itself")
-        return ""
-    }
+    let aliases = strs_new()
+    let own = pk_normalise(fx_module_name(f, m))
+    let dir = ut_parent(own)
     for k in 0..ints_len(imps) {
         let node = ints_get(imps, k)
         let ps = sx_field(t, node, "path_span")
@@ -56,17 +57,26 @@ fn imports_json(f: Facts, m: Int, hashes: Strs, why: Strs) -> Str {
         while a < b && str_byte(written, a) == 34 { a += 1 }
         while b > a && str_byte(written, b - 1) == 34 { b -= 1 }
         let lit = str_slice(written, a, b)
-        for q in 0..strs_len(seen) {
-            if strs_get(seen, q) == lit {
-                strs_push(why, "a module imported by two `use`s")
-                return ""
-            }
-        }
-        strs_push(seen, lit)
-        let target = ck_module_dep(c, m, k)
+        // A module importing itself makes no edge.
+        if pk_normalise(ut_join(dir, lit)) == own { continue }
         let alias = sx_field(t, node, "alias")
         let named = if sx_is_some(t, alias) { json_str(sx_name(t, sx_unwrap(t, alias), "name")) } else { "null" }
-        strs_push(out, "{\"written\":" + json_str(lit) + ",\"alias\":" + named + ",\"module\":" + json_str(fx_module_key(f, target)) + ",\"interface\":"
+        let mut at = 0 - 1
+        for q in 0..strs_len(seen) { if strs_get(seen, q) == lit { at = q } }
+        if at >= 0 {
+            if strs_get(aliases, at) == "null" { strs_set(aliases, at, named) }
+            continue
+        }
+        strs_push(seen, lit)
+        strs_push(aliases, named)
+    }
+    if strs_len(seen) > ck_module_deps(c, m) {
+        strs_push(why, "a module imported under two spellings, or one the graph holds more edges of than it has `use`s")
+        return ""
+    }
+    for k in 0..strs_len(seen) {
+        let target = ck_module_dep(c, m, k)
+        strs_push(out, "{\"written\":" + json_str(strs_get(seen, k)) + ",\"alias\":" + strs_get(aliases, k) + ",\"module\":" + json_str(fx_module_key(f, target)) + ",\"interface\":"
                 + (if strs_get(hashes, target) == "" { "null" } else { json_str(strs_get(hashes, target)) }) + "}")
     }
     "[" + str_join(out, ",") + "]"
