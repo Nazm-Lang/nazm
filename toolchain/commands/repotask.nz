@@ -1,0 +1,1717 @@
+// `nazm.task-context/1` (R8 slice 9, task 9.2; `crates/nazm-repo/src/task.rs`): for structured seeds and an intent, the smallest context the
+// repository can justify, each item with why it is there.
+//
+// One step from each seed, never more: what the seed directly uses, what directly uses it when the intent is an edit, the tests the catalogue
+// relates to it, and the sections its owner declares or its text links. Nothing is followed from an item that is not a seed — a dependency's
+// dependencies are its own task — so a cycle is one visit, and a relationship with more than `FAN_OUT` members is cut there and counted. Every
+// item has a class, and the classes have one fixed order; a budget counts entities, the bytes of included definition source and the bytes of
+// included section text; the seeds are mandatory, and after them items are taken in order until one does not fit — it and every later one are
+// omitted and listed, and the result is `partial`.
+//
+// `rt_task` answers, compact JSON in the order the reference's structs declare their fields; the `content` of an item and every object inside it
+// is a `serde_json::Value`, whose members are in key order (`jo`).
+
+use "../../compiler/diag.nz"
+use "../../compiler/facts.nz"
+use "cli.nz"
+use "docs.nz"
+use "front.nz"
+use "jsonin.nz"
+use "repocomp.nz"
+use "repoload.nz"
+use "repomap.nz"
+use "semantic.nz"
+use "snap.nz"
+use "util.nz"
+
+fn nul() -> Str { str_from_byte(0) }
+
+fn fan_out() -> Int { 16 }
+fn max_seeds() -> Int { 8 }
+
+// What the context is for: 0 understand, 1 edit, 2 diagnose, 3 test.
+fn intent_word(i: Int) -> Str { if i == 0 { "understand" } else if i == 1 { "edit" } else if i == 2 { "diagnose" } else { "test" } }
+
+// --- classes ---------------------------------------------------------------------------------------------------------------------
+
+fn class_rank(class: Str) -> Int {
+    if class == "seed" { return 0 }
+    if class == "correctness" { return 1 }
+    if class == "authority" { return 2 }
+    if class == "edit_safety" { return 3 }
+    if class == "test" { return 4 }
+    if class == "supporting" { return 5 }
+    6
+}
+
+// The documentation authorities, in priority order.
+fn doc_rank(authority: Str) -> Int {
+    if authority == "normative" { return 0 }
+    if authority == "grammar" { return 1 }
+    if authority == "law" { return 2 }
+    if authority == "interface" { return 3 }
+    if authority == "architecture" { return 4 }
+    if authority == "evidence" { return 5 }
+    if authority == "guide" { return 6 }
+    if authority == "operational" { return 7 }
+    if authority == "planning" { return 8 }
+    if authority == "research" { return 9 }
+    if authority == "goal" { return 10 }
+    11
+}
+
+fn doc_class(authority: Str) -> Str {
+    let r = doc_rank(authority)
+    if r <= 5 { return "authority" }
+    if r <= 7 { return "supporting" }
+    "context"
+}
+
+// --- JSON of the shapes the answers share ------------------------------------------------------------------------------------------------
+
+// A `serde_json::Value` object: its members in key order.
+pub fn jo(keys: Strs, values: Strs) -> Str {
+    let rows = strs_new()
+    for i in 0..strs_len(keys) { strs_push(rows, strs_get(keys, i) + str_from_byte(1) + strs_get(values, i)) }
+    let sorted = sn_sort(rows)
+    let out = strs_new()
+    for i in 0..strs_len(sorted) {
+        let row = strs_get(sorted, i)
+        let mut cut = 0
+        while str_byte(row, cut) != 1 { cut += 1 }
+        strs_push(out, json_str(str_slice(row, 0, cut)) + ":" + str_slice(row, cut + 1, str_len(row)))
+    }
+    "{" + str_join(out, ",") + "}"
+}
+
+fn jo1(k1: Str, v1: Str) -> Str {
+    let k = strs_new()
+    let v = strs_new()
+    strs_push(k, k1)
+    strs_push(v, v1)
+    jo(k, v)
+}
+
+fn jo2(k1: Str, v1: Str, k2: Str, v2: Str) -> Str {
+    let k = strs_new()
+    let v = strs_new()
+    strs_push(k, k1)
+    strs_push(v, v1)
+    strs_push(k, k2)
+    strs_push(v, v2)
+    jo(k, v)
+}
+
+fn jo3(k1: Str, v1: Str, k2: Str, v2: Str, k3: Str, v3: Str) -> Str {
+    let k = strs_new()
+    let v = strs_new()
+    strs_push(k, k1)
+    strs_push(v, v1)
+    strs_push(k, k2)
+    strs_push(v, v2)
+    strs_push(k, k3)
+    strs_push(v, v3)
+    jo(k, v)
+}
+
+fn jarray(items: Strs) -> Str { "[" + str_join(items, ",") + "]" }
+
+fn jstrings(items: Strs) -> Str {
+    let out = strs_new()
+    for i in 0..strs_len(items) { strs_push(out, json_str(strs_get(items, i))) }
+    jarray(out)
+}
+
+fn jopt(has: Bool, s: Str) -> Str { if has { json_str(s) } else { "null" } }
+
+// A place as a `Value` writes it: `{"end":…,"file":…,"start":…}`.
+fn span_value(file: Str, start: Str, end: Str) -> Str {
+    let k = strs_new()
+    let v = strs_new()
+    strs_push(k, "file")
+    strs_push(v, json_str(file))
+    strs_push(k, "start")
+    strs_push(v, start)
+    strs_push(k, "end")
+    strs_push(v, end)
+    jo(k, v)
+}
+
+// --- an item ----------------------------------------------------------------------------------------------------------------------------------------
+
+pub struct Item {
+    id: Str,
+    kind: Str,
+    reason: Str,
+    via: Str,
+    hasvia: Bool,
+    class: Str,
+    authority: Str,
+    compilation: Str,
+    hascompilation: Bool,
+    retrieval: Str,
+    hasretrieval: Bool,
+    content: Str,
+    hascontent: Bool,
+    source_bytes: Int,
+    doc_bytes: Int,
+}
+
+fn item(id: Str, kind: Str, reason: Str, via: Str, hasvia: Bool, class: Str, authority: Str) -> Item {
+    Item(id: id, kind: kind, reason: reason, via: via, hasvia: hasvia, class: class, authority: authority, compilation: "", hascompilation: false, retrieval: "", hasretrieval: false,
+            content: "", hascontent: false, source_bytes: 0, doc_bytes: 0)
+}
+
+fn item_json(i: Item) -> Str {
+    let out = strs_new()
+    strs_push(out, "\"id\":" + json_str(i.id))
+    strs_push(out, "\"kind\":" + json_str(i.kind))
+    strs_push(out, "\"reason\":" + json_str(i.reason))
+    if i.hasvia { strs_push(out, "\"via\":" + json_str(i.via)) }
+    strs_push(out, "\"class\":" + json_str(i.class))
+    strs_push(out, "\"authority\":" + json_str(i.authority))
+    if i.hascompilation { strs_push(out, "\"compilation\":" + json_str(i.compilation)) }
+    if i.hasretrieval { strs_push(out, "\"retrieval\":" + i.retrieval) }
+    if i.hascontent { strs_push(out, "\"content\":" + i.content) }
+    if i.source_bytes != 0 { strs_push(out, "\"source_bytes\":" + int_to_str(i.source_bytes)) }
+    if i.doc_bytes != 0 { strs_push(out, "\"doc_bytes\":" + int_to_str(i.doc_bytes)) }
+    "{" + str_join(out, ",") + "}"
+}
+
+// One candidate item, before the budget.
+pub struct Cand {
+    item: Item,
+    class_rank: Int,
+    doc_rank: Int,
+    // The compilation a diagnostic seed was read from and its owner (`def:SOURCE:KEY`), "" for none.
+    owner: Str,
+}
+
+// --- the request, and what a seed names --------------------------------------------------------------------------------------------------------
+
+pub struct Seed {
+    // 0 package, 1 target, 2 test, 3 sources, 4 root, 5 module, 6 def, 7 doc, 8 schema, 9 profile, 10 mutation, 11 diagnostic.
+    kind: Int,
+    a: Str,
+    b: Str,
+    c: Str,
+}
+
+// A part of an id that names a file: a plain name, never a path out of its root.
+fn plain(part: Str) -> Bool {
+    if str_len(part) == 0 || str_byte(part, 0) == 47 { return false }
+    for i in 0..str_len(part) {
+        if str_byte(part, i) == 47 || str_byte(part, i) == 92 { return false }
+    }
+    part != "." && part != ".."
+}
+
+fn colon_at(s: Str) -> Int {
+    for i in 0..str_len(s) {
+        if str_byte(s, i) == 58 { return i }
+    }
+    0 - 1
+}
+
+// `char::is_control`: C0, DEL and C1.
+fn has_control(s: Str) -> Bool {
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        if b < 32 || b == 127 { return true }
+        if b == 194 && i + 1 < str_len(s) && str_byte(s, i + 1) >= 128 && str_byte(s, i + 1) <= 159 { return true }
+    }
+    false
+}
+
+// The seed, or in `bad` why it is none: a row `KIND\0VALUE`.
+fn parse_seed(seed: Str, bad: Strs) -> Seed {
+    let none = Seed(kind: 0 - 1, a: "", b: "", c: "")
+    let not_id = "not_an_entity_id" + nul() + seed
+    if str_len(seed) > 1024 || has_control(seed) {
+        strs_push(bad, not_id)
+        return none
+    }
+    let at = colon_at(seed)
+    if at < 0 {
+        strs_push(bad, not_id)
+        return none
+    }
+    let kind = str_slice(seed, 0, at)
+    let rest = str_slice(seed, at + 1, str_len(seed))
+    if rest == "" {
+        strs_push(bad, not_id)
+        return none
+    }
+    // The two parts of `A:B`, each non-empty.
+    let c1 = colon_at(rest)
+    let a = if c1 >= 0 { str_slice(rest, 0, c1) } else { "" }
+    let b = if c1 >= 0 { str_slice(rest, c1 + 1, str_len(rest)) } else { "" }
+    let two = c1 >= 0 && a != "" && b != ""
+    if kind == "package" { return Seed(kind: 0, a: rest, b: "", c: "") }
+    if kind == "target" { return Seed(kind: 1, a: seed, b: "", c: "") }
+    if kind == "test" { return Seed(kind: 2, a: seed, b: "", c: "") }
+    if kind == "sources" { return Seed(kind: 3, a: rest, b: "", c: "") }
+    if kind == "root" {
+        if !two || !plain(b) {
+            strs_push(bad, not_id)
+            return none
+        }
+        return Seed(kind: 4, a: a, b: b, c: "")
+    }
+    if kind == "module" {
+        if !two || !plain(b) {
+            strs_push(bad, not_id)
+            return none
+        }
+        return Seed(kind: 5, a: a, b: b, c: "")
+    }
+    if kind == "def" {
+        if !two {
+            strs_push(bad, not_id)
+            return none
+        }
+        let mut module = ""
+        for i in 0..str_len(b) {
+            if module == "" && i + 1 < str_len(b) && str_byte(b, i) == 58 && str_byte(b, i + 1) == 58 { module = str_slice(b, 0, i) }
+        }
+        if !plain(module) {
+            strs_push(bad, not_id)
+            return none
+        }
+        return Seed(kind: 6, a: a, b: b, c: "")
+    }
+    if kind == "doc" { return Seed(kind: 7, a: rest, b: "", c: "") }
+    if kind == "schema" { return Seed(kind: 8, a: rest, b: "", c: "") }
+    if kind == "profile" { return Seed(kind: 9, a: rest, b: "", c: "") }
+    if kind == "mutation" { return Seed(kind: 10, a: rest, b: "", c: "") }
+    if kind == "diagnostic" {
+        if !two {
+            strs_push(bad, not_id)
+            return none
+        }
+        let c2 = colon_at(b)
+        let root = if c2 >= 0 { str_slice(b, 0, c2) } else { "" }
+        let id = if c2 >= 0 { str_slice(b, c2 + 1, str_len(b)) } else { "" }
+        if c2 < 0 || !plain(root) || id == "" {
+            strs_push(bad, not_id)
+            return none
+        }
+        return Seed(kind: 11, a: a, b: root, c: id)
+    }
+    strs_push(bad, "unsupported_kind" + nul() + seed)
+    none
+}
+
+pub struct Request {
+    // 0..3, or -1 for none given (`edit`).
+    intent: Int,
+    seeds: Strs,
+    state: Str,
+    hasstate: Bool,
+    // The budget; -1 where unbounded (saturated, to compare), and each as the digits it was written in, "" where unbounded (to print).
+    max_entities: Int,
+    max_source_bytes: Int,
+    max_doc_bytes: Int,
+    entities_text: Str,
+    source_bytes_text: Str,
+    doc_bytes_text: Str,
+}
+
+fn budget_json(r: Request) -> Str {
+    "{\"max_entities\":" + (if r.max_entities >= 0 { r.entities_text } else { "null" }) + ",\"max_source_bytes\":" + (if r.max_source_bytes >= 0 { r.source_bytes_text } else { "null" })
+            + ",\"max_doc_bytes\":" + (if r.max_doc_bytes >= 0 { r.doc_bytes_text } else { "null" }) + "}"
+}
+
+pub struct TaskOut {
+    json: Str,
+    available: Bool,
+}
+
+// A refusal: the status, the current state where the repository could be read, the seeds, the problems (rows `KIND\0VALUE`, in the order given).
+fn refusal(status: Str, state: Str, hasstate: Bool, seeds: Strs, problems: Strs, required: Str) -> TaskOut {
+    let out = strs_new()
+    strs_push(out, "\"schema\":\"nazm.task-context/1\"")
+    strs_push(out, "\"status\":" + json_str(status))
+    strs_push(out, "\"state\":" + jopt(hasstate, state))
+    if strs_len(seeds) > 0 { strs_push(out, "\"seeds\":" + jstrings(seeds)) }
+    if strs_len(problems) > 0 { strs_push(out, "\"problems\":" + rl_problems_json(problems)) }
+    if required != "" { strs_push(out, "\"required\":" + required) }
+    TaskOut(json: "{" + str_join(out, ",") + "}", available: false)
+}
+
+// --- the planner's working set ----------------------------------------------------------------------------------------------------------------------
+
+pub struct Plan {
+    repo: Repo,
+    intent: Int,
+    // The compilations opened for the request.
+    opened: Vec[Comp],
+    cands: Vec[Cand],
+    // Relationships cut at `FAN_OUT`: rows `VIA\0REASON\0KNOWN\0INCLUDED`, in the order they were cut.
+    bounded: Strs,
+    // What is known and deliberately not selected: rows `VIA\0RELATION\0COUNT(padded)\0REASON`, once each.
+    excluded: Strs,
+    problems: Strs,
+}
+
+fn pad12(n: Int) -> Str {
+    let t = int_to_str(n)
+    let mut z = ""
+    for i in 0..12 - str_len(t) { z = z + "0" }
+    z + t
+}
+
+fn push(p: Plan, i: Item, doc_authority: Str, has_doc: Bool) -> Int {
+    vec_push(p.cands, Cand(item: i, class_rank: class_rank(i.class), doc_rank: if has_doc { doc_rank(doc_authority) } else { 0 }, owner: ""))
+    0
+}
+
+fn push_plain(p: Plan, i: Item) -> Int { push(p, i, "", false) }
+
+fn problem(p: Plan, kind: Str, value: Str) -> Int { rl_problem(p.problems, kind, value) }
+
+// Cut `ids` at `FAN_OUT`, recording the cut.
+fn bound(p: Plan, via: Str, reason: Str, ids: Strs) -> Strs {
+    let known = strs_len(ids)
+    if known > fan_out() { strs_push(p.bounded, via + nul() + reason + nul() + int_to_str(known) + nul() + int_to_str(fan_out())) }
+    let out = strs_new()
+    for i in 0..known {
+        if i < fan_out() { strs_push(out, strs_get(ids, i)) }
+    }
+    out
+}
+
+fn exclude(p: Plan, via: Str, relation: Str, count: Int, reason: Str) -> Int {
+    if count > 0 {
+        let row = via + nul() + relation + nul() + pad12(count) + nul() + reason
+        let mut have = false
+        for i in 0..strs_len(p.excluded) {
+            if strs_get(p.excluded, i) == row { have = true }
+        }
+        if !have { strs_push(p.excluded, row) }
+    }
+    0
+}
+
+// Open root `r` of source root `s` once per request: its position in `opened`, or -1 with the problem recorded.
+fn open(io: IoCap, p: Plan, s: Int, root: Str) -> Int {
+    for i in 0..vec_len(p.opened) {
+        let c = vec_get(p.opened, i)
+        if c.source == s && c.root == root { return i }
+    }
+    let c = rc_open(io, p.repo, s, root)
+    if !c.ok {
+        strs_push(p.problems, c.bad)
+        return 0 - 1
+    }
+    vec_push(p.opened, c)
+    vec_len(p.opened) - 1
+}
+
+// The module part of a definition key, `MODULE::KIND NAME`.
+fn module_of_key(k: Str) -> Str {
+    for i in 0..str_len(k) {
+        if i + 1 < str_len(k) && str_byte(k, i) == 58 && str_byte(k, i + 1) == 58 { return str_slice(k, 0, i) }
+    }
+    ""
+}
+
+// Where a durable definition was found: the compilation (a position in `opened`) and the definition in it. `status`: 1 found, 0 none,
+// 2 only compilations that needed syntax recovery load its module, 3 a problem was recorded.
+pub struct Loc {
+    status: Int,
+    comp: Int,
+    def: Int,
+}
+
+fn loc_none(status: Int) -> Loc { Loc(status: status, comp: 0 - 1, def: 0 - 1) }
+
+// The first complete compilation, in manifest order, that loads `module` and has `identity`.
+fn locate(io: IoCap, p: Plan, s: Int, module: Str, identity: Str) -> Loc {
+    let mut recovered = false
+    let roots = rl_source_roots(s)
+    for r in 0..strs_len(roots) {
+        let i = open(io, p, s, strs_get(roots, r))
+        if i < 0 { return loc_none(3) }
+        let c = vec_get(p.opened, i)
+        if !rc_includes(c, module) { continue }
+        if !c.complete {
+            recovered = true
+            continue
+        }
+        let d = rc_definition(c, identity)
+        if d >= 0 { return Loc(status: 1, comp: i, def: d) }
+    }
+    if recovered { return loc_none(2) }
+    loc_none(0)
+}
+
+// Like `locate`, preferring the compilation the seed was read from.
+fn locate_in(io: IoCap, p: Plan, comp: Str, s: Int, module: Str, identity: Str) -> Loc {
+    for i in 0..vec_len(p.opened) {
+        let c = vec_get(p.opened, i)
+        if rc_id(c) == comp {
+            let d = rc_definition(c, identity)
+            if d >= 0 { return Loc(status: 1, comp: i, def: d) }
+        }
+    }
+    locate(io, p, s, module, identity)
+}
+
+fn retrieval_context(c: Comp, d: Int) -> Str {
+    let k = strs_new()
+    let v = strs_new()
+    strs_push(k, "root")
+    strs_push(v, json_str(rc_location(c)))
+    strs_push(k, "file")
+    strs_push(v, json_str(strs_get(c.d_file, d)))
+    strs_push(k, "byte")
+    strs_push(v, int_to_str(ints_get(c.d_ns, d)))
+    rm_retrieval("nazm.context/3", k, v)
+}
+
+// The packet of definition `l`, parsed; `ok[0]` 0 where there is none.
+fn packet(io: IoCap, p: Plan, l: Loc, ok: Ints) -> J {
+    let c = vec_get(p.opened, l.comp)
+    let text = rc_context(io, c, l.def)
+    ints_set(ok, 0, if text == "" { 0 } else { 1 })
+    j_parse(if text == "" { "{}" } else { text })
+}
+
+// The strings at `key` of object `n`; the first child of an array.
+fn first_of(j: J, n: Int) -> Int { if n < 0 { 0 - 1 } else { ints_get(j.first, n) } }
+
+fn text_at(j: J, n: Int, key: Str) -> Str {
+    let m = j_get(j, n, key)
+    if m < 0 { "" } else { j_str(j, m) }
+}
+
+// A subtree written back compact, its members in key order (a `Value`).
+fn value_of(j: J, n: Int) -> Str { j_canonical(sub(j, n)) }
+
+fn sub(j: J, n: Int) -> J {
+    let out = J(kind: ints_new(), text: strs_new(), key: strs_new(), first: ints_new(), next: ints_new(), src: strs_new(), at: ints_new(), bad: ints_new())
+    strs_push(out.src, "")
+    ints_push(out.at, 0)
+    ints_push(out.bad, 0)
+    copy_node(j, n, out)
+    out
+}
+
+fn copy_node(j: J, n: Int, out: J) -> Int {
+    let me = j_node(out, j_kind(j, n), j_str(j, n))
+    let mut last = 0 - 1
+    let mut c = ints_get(j.first, n)
+    while c >= 0 {
+        let k = copy_node(j, c, out)
+        strs_set(out.key, k, strs_get(j.key, c))
+        if last < 0 { ints_set(out.first, me, k) } else { ints_set(out.next, last, k) }
+        last = k
+        c = ints_get(j.next, c)
+    }
+    me
+}
+
+// The packet's `definition` of each link of array `n`, those with one.
+fn link_definitions(j: J, n: Int) -> Strs {
+    let out = strs_new()
+    let mut e = first_of(j, n)
+    while e >= 0 {
+        let d = j_get(j, j_get(j, e, "identity"), "definition")
+        if d >= 0 && j_kind(j, d) == 4 { strs_push(out, j_str(j, d)) }
+        e = ints_get(j.next, e)
+    }
+    out
+}
+
+fn contains(xs: Strs, s: Str) -> Bool {
+    for i in 0..strs_len(xs) {
+        if strs_get(xs, i) == s { return true }
+    }
+    false
+}
+
+fn sorted_once(xs: Strs) -> Strs { rl_problems_sorted(xs) }
+
+// A definition's item: its shape always, its exact source when `source` is asked. `ok[0]` 0 where its context packet is unavailable.
+fn definition(io: IoCap, p: Plan, l: Loc, id: Str, reason: Str, via: Str, hasvia: Bool, class: Str, source: Bool, ok: Ints) -> Item {
+    let c = vec_get(p.opened, l.comp)
+    let j = packet(io, p, l, ok)
+    let mut i = item(id, "definition", reason, via, hasvia, class, "compiler")
+    if ints_get(ok, 0) == 0 { return i }
+    i.compilation = rc_id(c)
+    i.hascompilation = true
+    i.retrieval = retrieval_context(c, l.def)
+    i.hasretrieval = true
+    let t = j_get(j, 0, "target")
+    let src = j_get(j, t, "source")
+    let k = strs_new()
+    let v = strs_new()
+    strs_push(k, "kind")
+    strs_push(v, json_str(text_at(j, t, "kind")))
+    strs_push(k, "name")
+    strs_push(v, json_str(text_at(j, t, "name")))
+    strs_push(k, "declaration")
+    strs_push(v, span_value(text_at(j, src, "file"), text_at(j, src, "start"), text_at(j, src, "end")))
+    let sig = j_get(j, t, "signature")
+    if sig >= 0 && j_kind(j, sig) == 4 {
+        strs_push(k, "signature")
+        strs_push(v, json_str(j_str(j, sig)))
+    }
+    let fields = j_get(j, t, "fields")
+    if fields >= 0 && j_kind(j, fields) == 5 {
+        strs_push(k, "fields")
+        strs_push(v, value_of(j, fields))
+    }
+    let variants = j_get(j, t, "variants")
+    if variants >= 0 && j_kind(j, variants) == 5 {
+        strs_push(k, "variants")
+        strs_push(v, value_of(j, variants))
+    }
+    if source {
+        let text = text_at(j, src, "text")
+        strs_push(k, "source")
+        strs_push(v, json_str(text))
+        i.source_bytes = str_len(text)
+    }
+    i.content = jo(k, v)
+    i.hascontent = true
+    i
+}
+
+// An N32 section's item, with its text when `body` is asked, and its authority; `ok[0]` 0 where the corpus has none.
+fn section(p: Plan, id: Str, reason: Str, via: Str, hasvia: Bool, body: Bool, ok: Ints, authority: Strs) -> Item {
+    let c = p.repo.corp
+    let mut s = 0 - 1
+    for q in 0..strs_len(c.s_id) {
+        if s < 0 && strs_get(c.s_id, q) == id { s = q }
+    }
+    if s < 0 {
+        ints_set(ok, 0, 0)
+        return item("", "", "", "", false, "", "")
+    }
+    ints_set(ok, 0, 1)
+    let d = ints_get(c.s_doc, s)
+    let auth = strs_get(c.d_auth, d)
+    strs_push(authority, auth)
+    let kind = if ints_get(c.s_has_parent, s) == 0 { "document" } else { "section" }
+    let mut i = item("doc:" + id, kind, reason, via, hasvia, doc_class(auth), auth)
+    let rk = strs_new()
+    let rv = strs_new()
+    strs_push(rk, "id")
+    strs_push(rv, json_str(id))
+    strs_push(rk, "state")
+    strs_push(rv, json_str(strs_get(c.state, 0)))
+    i.retrieval = rm_retrieval("nazm.docs-section/1", rk, rv)
+    i.hasretrieval = true
+    let k = strs_new()
+    let v = strs_new()
+    strs_push(k, "title")
+    strs_push(v, jopt(ints_get(c.s_has_title, s) == 1, strs_get(c.s_title, s)))
+    let lines = strs_new()
+    strs_push(lines, int_to_str(ints_get(c.s_l0, s)))
+    strs_push(lines, int_to_str(ints_get(c.s_l1, s)))
+    strs_push(k, "source")
+    strs_push(v, jo2("path", json_str(strs_get(c.d_path, d)), "lines", jarray(lines)))
+    if body {
+        let text = str_slice(strs_get(c.d_text, d), ints_get(c.s_rs, s), ints_get(c.s_re, s))
+        strs_push(k, "body")
+        strs_push(v, json_str(text))
+        i.doc_bytes = str_len(text)
+    }
+    i.content = jo(k, v)
+    i.hascontent = true
+    i
+}
+
+fn docs(p: Plan, via: Str, ids: Strs, reason: Str) -> Int {
+    for k in 0..strs_len(ids) {
+        let ok = ints_new()
+        ints_push(ok, 0)
+        let auth = strs_new()
+        let i = section(p, strs_get(ids, k), reason, via, true, true, ok, auth)
+        if ints_get(ok, 0) == 1 { push(p, i, strs_get(auth, 0), true) }
+    }
+    0
+}
+
+// A place as a `Value` holds it: the members in key order.
+fn value_primary(p: Str) -> Str {
+    if p == "null" { return p }
+    let j = j_parse(p)
+    span_value(text_at(j, 0, "file"), text_at(j, 0, "start"), text_at(j, 0, "end"))
+}
+
+// A diagnostic seed's item, read from compilation `c` (a position in `opened`): `ok[0]` 0 where it has none.
+fn diagnostic_item(p: Plan, ci: Int, wanted: Str, id: Str, ok: Ints, owner: Strs) -> Item {
+    let c = vec_get(p.opened, ci)
+    let f = c.facts
+    ints_set(ok, 0, 0)
+    let mut i = item(id, "diagnostic", "seed", "", false, "seed", "compiler")
+    if !fx_diag_available(f) { return i }
+    let ids = fx_diag_ids(f)
+    let order = fx_diag_order(f)
+    let mut at = 0 - 1
+    for r in 0..ints_len(order) {
+        if at < 0 && strs_get(ids, ints_get(order, r)) == wanted { at = ints_get(order, r) }
+    }
+    if at < 0 { return i }
+    ints_set(ok, 0, 1)
+    i.compilation = rc_id(c)
+    i.hascompilation = true
+    let k = strs_new()
+    let v = strs_new()
+    strs_push(k, "root")
+    strs_push(v, json_str(rc_location(c)))
+    strs_push(k, "id")
+    strs_push(v, json_str(wanted))
+    strs_push(k, "state")
+    strs_push(v, json_str(fx_state_source(f)))
+    i.retrieval = rm_retrieval("nazm.diagnostic-detail/1", k, v)
+    i.hasretrieval = true
+    let j = j_parse(sd_published(f, at))
+    let ck = strs_new()
+    let cv = strs_new()
+    let names = words("code severity message help")
+    for q in 0..4 {
+        let n = j_get(j, 0, strs_get(names, q))
+        strs_push(ck, strs_get(names, q))
+        strs_push(cv, if n < 0 { "null" } else if j_kind(j, n) == 4 { json_str(j_str(j, n)) } else { value_of(j, n) })
+    }
+    let who = sd_owner(f, at)
+    strs_push(ck, "primary")
+    strs_push(cv, value_primary(sd_primary(f, at)))
+    strs_push(ck, "owner")
+    strs_push(cv, if who == "" { "null" } else { json_str("def:" + rl_source_id(c.source) + ":" + who) })
+    strs_push(ck, "fixes")
+    strs_push(cv, int_to_str(dg_fix_total(fx_diags(f), at)))
+    i.content = jo(ck, cv)
+    i.hascontent = true
+    strs_push(owner, if who == "" { "" } else { "def:" + rl_source_id(c.source) + ":" + who })
+    i
+}
+
+fn words(a: Str) -> Strs {
+    let out = strs_new()
+    let mut from = 0
+    for i in 0..str_len(a) + 1 {
+        if i == str_len(a) || str_byte(a, i) == 32 {
+            if i > from { strs_push(out, str_slice(a, from, i)) }
+            from = i + 1
+        }
+    }
+    out
+}
+
+// --- the seeds ------------------------------------------------------------------------------------------------------------------------------------------
+
+pub struct SeedRes {
+    // 1 an item, 0 the repository has no such entity, 2 only compilations that needed syntax recovery load its module, 3 a problem was recorded.
+    status: Int,
+    cand: Cand,
+}
+
+fn dummy() -> Cand { Cand(item: item("", "", "", "", false, "", ""), class_rank: 0, doc_rank: 0, owner: "") }
+
+fn found(i: Item) -> SeedRes { SeedRes(status: 1, cand: Cand(item: i, class_rank: 0, doc_rank: 0, owner: "")) }
+
+fn found_owned(i: Item, owner: Str) -> SeedRes { SeedRes(status: 1, cand: Cand(item: i, class_rank: 0, doc_rank: 0, owner: owner)) }
+
+fn missing() -> SeedRes { SeedRes(status: 0, cand: dummy()) }
+
+fn seed_item(id: Str, kind: Str, authority: Str) -> Item { item(id, kind, "seed", "", false, "seed", authority) }
+
+fn with_content(i: Item, content: Str) -> Item {
+    let mut x = i
+    x.content = content
+    x.hascontent = true
+    x
+}
+
+fn target_ids(ps: Pkgs, i: Int) -> Strs {
+    let out = strs_new()
+    let ts = vec_get(ps.targets, i)
+    for k in 0..strs_len(ts) { strs_push(out, rl_target_id(strs_get(ps.name, i), strs_get(ts, k))) }
+    out
+}
+
+// The package that owns the target with id `tid`, or -1.
+fn owner_of_target(ps: Pkgs, tid: Str) -> Int {
+    for i in 0..strs_len(ps.name) {
+        if contains(target_ids(ps, i), tid) { return i }
+    }
+    0 - 1
+}
+
+fn seed(io: IoCap, p: Plan, id: Str, sd: Seed) -> SeedRes {
+    let repo = p.repo
+    let ps = repo.ps
+    let cat = repo.cat
+    let k = sd.kind
+    if k == 0 {
+        let i = rl_package_named(repo, sd.a)
+        if i < 0 { return missing() }
+        return found(with_content(seed_item(id, "package", "cargo"), jo2("manifest", json_str(strs_get(ps.manifest, i)), "targets", jstrings(target_ids(ps, i)))))
+    }
+    if k == 1 {
+        let i = owner_of_target(ps, sd.a)
+        if i < 0 { return missing() }
+        let ts = vec_get(ps.targets, i)
+        for q in 0..strs_len(ts) {
+            if rl_target_id(strs_get(ps.name, i), strs_get(ts, q)) == sd.a {
+                return found(with_content(seed_item(id, "target", "cargo"), jo2("kind", json_str(rl_row(strs_get(ts, q), 0)), "path", json_str(rl_row(strs_get(ts, q), 2)))))
+            }
+        }
+        return missing()
+    }
+    if k == 2 {
+        let t = rl_test_named(cat, sd.a)
+        if t < 0 { return missing() }
+        let row = strs_get(cat.tests, t)
+        return found(with_content(seed_item(id, "test", "mutation_catalogue"), jo2("target", json_str(rl_row(row, 1)), "name", json_str(rl_row(row, 2)))))
+    }
+    if k == 3 {
+        let s = rl_source_named(sd.a)
+        if s < 0 { return missing() }
+        return found(with_content(seed_item(id, "sources", "repository_manifest"), jo2("dir", json_str(rl_source_dir(s)), "roots", jstrings(rl_source_roots(s)))))
+    }
+    if k == 4 {
+        let s = rl_source_named(sd.a)
+        if s < 0 || !contains(rl_source_roots(s), sd.b) { return missing() }
+        let ci = open(io, p, s, sd.b)
+        if ci < 0 { return SeedRes(status: 3, cand: dummy()) }
+        let c = vec_get(p.opened, ci)
+        let mut i = seed_item(id, "root", "compiler")
+        i.content = jo2("complete", if c.complete { "true" } else { "false" }, "modules", int_to_str(strs_len(c.modules)))
+        i.hascontent = true
+        i.retrieval = rm_retrieval1("nazm.snapshot/3", "root", json_str(rc_location(c)))
+        i.hasretrieval = true
+        return found(i)
+    }
+    if k == 5 {
+        let s = rl_source_named(sd.a)
+        if s < 0 { return missing() }
+        let has = ints_new()
+        ints_push(has, 0)
+        let text = rl_source_text(repo, s, sd.b, has)
+        if ints_get(has, 0) == 0 { return missing() }
+        let roots = rl_source_roots(s)
+        let mut ci = 0 - 1
+        for r in 0..strs_len(roots) {
+            if ci < 0 {
+                let o = open(io, p, s, strs_get(roots, r))
+                if o < 0 { return SeedRes(status: 3, cand: dummy()) }
+                if rc_includes(vec_get(p.opened, o), sd.b) { ci = o }
+            }
+        }
+        if ci < 0 { return missing() }
+        let c = vec_get(p.opened, ci)
+        let mut i = seed_item(id, "module", "compiler")
+        i.compilation = rc_id(c)
+        i.hascompilation = true
+        i.content = jo2("path", json_str(rl_source_dir(s) + "/" + sd.b), "bytes", int_to_str(str_len(text)))
+        i.hascontent = true
+        return found(i)
+    }
+    if k == 6 {
+        let s = rl_source_named(sd.a)
+        if s < 0 { return missing() }
+        let module = module_of_key(sd.b)
+        if !rl_has_source(repo, s, module) { return missing() }
+        let l = locate(io, p, s, module, sd.b)
+        if l.status == 3 { return SeedRes(status: 3, cand: dummy()) }
+        if l.status == 2 { return SeedRes(status: 2, cand: dummy()) }
+        if l.status == 0 { return missing() }
+        let ok = ints_new()
+        ints_push(ok, 0)
+        let i = definition(io, p, l, id, "seed", "", false, "seed", true, ok)
+        if ints_get(ok, 0) == 0 {
+            problem(p, "context_unavailable", id)
+            return SeedRes(status: 3, cand: dummy())
+        }
+        return found(i)
+    }
+    if k == 7 {
+        let ok = ints_new()
+        ints_push(ok, 0)
+        let auth = strs_new()
+        let i = section(p, sd.a, "seed", "", false, true, ok, auth)
+        if ints_get(ok, 0) == 0 { return missing() }
+        let mut x = i
+        x.class = "seed"
+        return found(x)
+    }
+    if k == 8 {
+        for q in 0..strs_len(repo.schema_name) {
+            if strs_get(repo.schema_name, q) == sd.a { return found(with_content(seed_item(id, "schema", "interface"), jo1("file", json_str(strs_get(repo.schema_file, q))))) }
+        }
+        return missing()
+    }
+    if k == 9 {
+        let q = rl_profile_named(cat, sd.a)
+        if q < 0 { return missing() }
+        return found(with_content(seed_item(id, "profile", "mutation_catalogue"), jo1("owns", jstrings(vec_get(cat.powns, q)))))
+    }
+    if k == 10 {
+        for q in 0..strs_len(cat.mname) {
+            if strs_get(cat.mname, q) == sd.a {
+                let kk = strs_new()
+                let vv = strs_new()
+                strs_push(kk, "file")
+                strs_push(vv, json_str(strs_get(cat.mfile, q)))
+                strs_push(kk, "killers")
+                strs_push(vv, jstrings(vec_get(cat.mkillers, q)))
+                strs_push(kk, "profile")
+                strs_push(vv, jopt(ints_get(cat.mhasprofile, q) == 1, strs_get(cat.mprofile, q)))
+                return found(with_content(seed_item(id, "mutation", "mutation_catalogue"), jo(kk, vv)))
+            }
+        }
+        return missing()
+    }
+    // A diagnostic: of root `sd.b` of source root `sd.a`.
+    let s = rl_source_named(sd.a)
+    if s < 0 || !contains(rl_source_roots(s), sd.b) { return missing() }
+    let ci = open(io, p, s, sd.b)
+    if ci < 0 { return SeedRes(status: 3, cand: dummy()) }
+    let ok = ints_new()
+    ints_push(ok, 0)
+    let owner = strs_new()
+    let i = diagnostic_item(p, ci, sd.c, id, ok, owner)
+    if ints_get(ok, 0) == 0 { return missing() }
+    found_owned(i, strs_get(owner, 0))
+}
+
+// --- what a seed leads to -------------------------------------------------------------------------------------------------------------------------
+
+// Where `find` is in `text`, when it is there exactly once (`located`): its start in `at[0]` and end in `at[1]`; false where it is not.
+fn located(text: Str, find: Str, at: Ints) -> Bool {
+    let n = str_len(find)
+    let mut first = 0 - 1
+    let mut i = 0
+    while i + n <= str_len(text) {
+        if str_slice(text, i, i + n) == find {
+            if first >= 0 { return false }
+            first = i
+            i += if n == 0 { 1 } else { n }
+        } else {
+            i += 1
+        }
+    }
+    if first < 0 { return false }
+    ints_set(at, 0, first)
+    ints_set(at, 1, first + n)
+    true
+}
+
+// The tests the catalogue relates to `path` — to the definition spanning `span` of it, when there is one (`has_span`): killers of each mutation
+// located there, and the targets of the profile that owns the path. `src` is the text of the file the definition is in, `has_src`.
+fn tests_of(p: Plan, via: Str, path: Str, has_span: Bool, span_start: Int, span_end: Int, has_src: Bool, src: Str) -> Int {
+    let cat = p.repo.cat
+    let kids = strs_new()
+    let names = strs_new()
+    let at = ints_new()
+    ints_push(at, 0)
+    ints_push(at, 0)
+    for m in 0..strs_len(cat.mname) {
+        let mut inside = false
+        if !has_span {
+            inside = ut_starts(strs_get(cat.mfile, m), path)
+        } else if strs_get(cat.mfile, m) == path && has_src {
+            if located(src, strs_get(cat.mfind, m), at) { inside = ints_get(at, 0) >= span_start && ints_get(at, 1) <= span_end }
+        }
+        if inside {
+            let ks = vec_get(cat.mkillers, m)
+            for q in 0..strs_len(ks) {
+                strs_push(kids, strs_get(ks, q))
+                strs_push(names, strs_get(cat.mname, m))
+            }
+        }
+    }
+    let ids = sorted_once(kids)
+    let keep = bound(p, via, "killer_test", ids)
+    for r in 0..strs_len(ids) {
+        let k = strs_get(ids, r)
+        if !contains(keep, k) { continue }
+        let mut ms = strs_new()
+        for q in 0..strs_len(kids) {
+            if strs_get(kids, q) == k { strs_push(ms, strs_get(names, q)) }
+        }
+        let t = rl_test_named(cat, k)
+        let mut i = item(k, "test", "killer_test", via, true, "test", "mutation_catalogue")
+        i.content = jo2("target", jopt(t >= 0, if t >= 0 { rl_row(strs_get(cat.tests, t), 1) } else { "" }), "mutations", jstrings(ms))
+        i.hascontent = true
+        push_plain(p, i)
+    }
+    let pr = rl_profile_for(cat, path)
+    if pr >= 0 {
+        let name = strs_get(cat.pname, pr)
+        let ts = bound(p, via, "profile_target", vec_get(cat.ptargets, pr))
+        for q in 0..strs_len(ts) {
+            let mut i = item(strs_get(ts, q), "target", "profile_target", via, true, "test", "mutation_catalogue")
+            i.content = jo1("profile", json_str(name))
+            i.hascontent = true
+            push_plain(p, i)
+        }
+    }
+    0
+}
+
+// The durable definition a mutation's `find` is inside, where its file is a module.
+fn mutated_definition(io: IoCap, p: Plan, via: Str, file: Str, find: Str) -> Int {
+    let repo = p.repo
+    let mut source = 0 - 1
+    for s in 0..rl_sources() {
+        let dir = rl_source_dir(s)
+        if source < 0 && ut_starts(file, dir + "/") && plain(str_slice(file, str_len(dir) + 1, str_len(file))) { source = s }
+    }
+    if source < 0 { return 0 }
+    let module = str_slice(file, str_len(rl_source_dir(source)) + 1, str_len(file))
+    let has = ints_new()
+    ints_push(has, 0)
+    let text = rl_source_text(repo, source, module, has)
+    if ints_get(has, 0) == 0 { return 0 }
+    let at = ints_new()
+    ints_push(at, 0)
+    ints_push(at, 0)
+    if !located(text, find, at) { return 0 }
+    let roots = rl_source_roots(source)
+    for r in 0..strs_len(roots) {
+        let ci = open(io, p, source, strs_get(roots, r))
+        if ci < 0 { continue }
+        let c = vec_get(p.opened, ci)
+        if !c.complete { continue }
+        for d in 0..strs_len(c.d_identity) {
+            if strs_get(c.d_file, d) == module && ints_get(c.d_start, d) <= ints_get(at, 0) && ints_get(at, 1) <= ints_get(c.d_end, d) {
+                let did = "def:" + rl_source_id(source) + ":" + strs_get(c.d_identity, d)
+                let ok = ints_new()
+                ints_push(ok, 0)
+                let i = definition(io, p, Loc(status: 1, comp: ci, def: d), did, "mutated_definition", via, true, "correctness", true, ok)
+                if ints_get(ok, 0) == 1 { push_plain(p, i) } else { problem(p, "context_unavailable", did) }
+                return 0
+            }
+        }
+    }
+    0
+}
+
+// A linked definition, by shape, from the compilation the link was read in.
+fn linked(io: IoCap, p: Plan, via: Str, comp: Int, key: Str, reason: Str, class: Str) -> Int {
+    let c = vec_get(p.opened, comp)
+    let d = rc_definition(c, key)
+    if d < 0 {
+        exclude(p, via, reason, 1, "no_durable_identity")
+        return 0
+    }
+    let did = "def:" + rl_source_id(c.source) + ":" + key
+    let ok = ints_new()
+    ints_push(ok, 0)
+    let i = definition(io, p, Loc(status: 1, comp: comp, def: d), did, reason, via, true, class, false, ok)
+    if ints_get(ok, 0) == 1 { push_plain(p, i) } else { problem(p, "context_unavailable", did) }
+    0
+}
+
+// The records and enums `l`'s declaration names, by shape.
+fn types_of(io: IoCap, p: Plan, via: Str, l: Loc) -> Int {
+    let ok = ints_new()
+    ints_push(ok, 0)
+    let j = packet(io, p, l, ok)
+    if ints_get(ok, 0) == 0 { return 0 }
+    let c = vec_get(p.opened, l.comp)
+    let this = strs_get(c.d_identity, l.def)
+    let all = link_definitions(j, j_get(j, 0, "related_types"))
+    let types = strs_new()
+    for q in 0..strs_len(all) {
+        if strs_get(all, q) != this { strs_push(types, strs_get(all, q)) }
+    }
+    let ids = sorted_once(types)
+    let keep = bound(p, via, "signature_type", ids)
+    for q in 0..strs_len(keep) { linked(io, p, via, l.comp, strs_get(keep, q), "signature_type", "correctness") }
+    0
+}
+
+// The diagnostics inside `l`'s declaration, by N30 id.
+fn diagnostics_in(p: Plan, via: Str, l: Loc) -> Int {
+    let c = vec_get(p.opened, l.comp)
+    let f = c.facts
+    if !fx_diag_available(f) { return 0 }
+    let ids = fx_diag_ids(f)
+    let order = fx_diag_order(f)
+    let items = vec_new[Item]()
+    let found_ids = strs_new()
+    for r in 0..ints_len(order) {
+        let k = ints_get(order, r)
+        if sd_owner(f, k) != strs_get(c.d_identity, l.def) { continue }
+        let mut i = item("diagnostic:" + rl_source_id(c.source) + ":" + c.root + ":" + strs_get(ids, k), "diagnostic", "diagnostic_in_seed", via, true, "correctness", "compiler")
+        i.compilation = rc_id(c)
+        i.hascompilation = true
+        let rk = strs_new()
+        let rv = strs_new()
+        strs_push(rk, "root")
+        strs_push(rv, json_str(rc_location(c)))
+        strs_push(rk, "id")
+        strs_push(rv, json_str(strs_get(ids, k)))
+        strs_push(rk, "state")
+        strs_push(rv, json_str(fx_state_source(f)))
+        i.retrieval = rm_retrieval("nazm.diagnostic-detail/1", rk, rv)
+        i.hasretrieval = true
+        let ck = strs_new()
+        let cv = strs_new()
+        strs_push(ck, "code")
+        strs_push(cv, json_str(dg_code(fx_diags(f), k)))
+        strs_push(ck, "severity")
+        strs_push(cv, "\"error\"")
+        strs_push(ck, "primary")
+        strs_push(cv, value_primary(sd_primary(f, k)))
+        i.content = jo(ck, cv)
+        i.hascontent = true
+        vec_push(items, i)
+        strs_push(found_ids, i.id)
+    }
+    let keep = bound(p, via, "diagnostic_in_seed", found_ids)
+    for q in 0..vec_len(items) {
+        if contains(keep, vec_get(items, q).id) { push_plain(p, vec_get(items, q)) }
+    }
+    0
+}
+
+// What uses the seed, in every compilation of its source root that loads its module: a function's direct callers (N25), a type's using
+// definitions (N17).
+fn users(io: IoCap, p: Plan, id: Str, s: Int, l: Loc) -> Int {
+    let lc = vec_get(p.opened, l.comp)
+    let module = strs_get(lc.d_file, l.def)
+    let identity = strs_get(lc.d_identity, l.def)
+    let function = strs_get(lc.d_kind, l.def) == "function"
+    // The users, by key: the compilation each was first found in, and the places (rows `FILE\0START\0END` as JSON objects, in order).
+    let keys = strs_new()
+    let comps = ints_new()
+    let spans = vec_new[Strs]()
+    let roots = rl_source_roots(s)
+    for r in 0..strs_len(roots) {
+        let i = open(io, p, s, strs_get(roots, r))
+        if i < 0 { continue }
+        let c = vec_get(p.opened, i)
+        if !rc_includes(c, module) { continue }
+        let d = rc_definition(c, identity)
+        if d < 0 { continue }
+        let text = rc_context(io, c, d)
+        if text == "" { continue }
+        let j = j_parse(text)
+        if function {
+            let mut e = first_of(j, j_get(j, j_get(j, 0, "callers"), "items"))
+            while e >= 0 {
+                let dd = j_get(j, j_get(j, e, "identity"), "definition")
+                if dd >= 0 && j_kind(j, dd) == 4 && j_str(j, dd) != identity {
+                    let at = user_slot(keys, comps, spans, j_str(j, dd), i)
+                    let mut q = first_of(j, j_get(j, e, "calls"))
+                    while q >= 0 {
+                        strs_push(vec_get(spans, at), text_at(j, q, "file") + nul() + pad12(str_to_int(text_at(j, q, "start"))) + nul() + pad12(str_to_int(text_at(j, q, "end"))))
+                        q = ints_get(j.next, q)
+                    }
+                }
+                e = ints_get(j.next, e)
+            }
+        } else if c.complete {
+            let mut u = first_of(j, j_get(j, 0, "references"))
+            while u >= 0 {
+                let file = text_at(j, u, "file")
+                let start = str_to_int(text_at(j, u, "start"))
+                let end = str_to_int(text_at(j, u, "end"))
+                // The definition whose declaration holds the use, other than the seed.
+                let mut owner = 0 - 1
+                for x in 0..strs_len(c.d_identity) {
+                    if owner < 0 && strs_get(c.d_file, x) == file && ints_get(c.d_start, x) <= start && end <= ints_get(c.d_end, x) && strs_get(c.d_identity, x) != identity { owner = x }
+                }
+                if owner >= 0 {
+                    let at = user_slot(keys, comps, spans, strs_get(c.d_identity, owner), i)
+                    strs_push(vec_get(spans, at), file + nul() + pad12(start) + nul() + pad12(end))
+                }
+                u = ints_get(j.next, u)
+            }
+        }
+    }
+    let reason = if function { "direct_caller" } else { "direct_reference" }
+    let sorted_keys = sorted_once(keys)
+    let keep = bound(p, id, reason, sorted_keys)
+    for r in 0..strs_len(sorted_keys) {
+        let k = strs_get(sorted_keys, r)
+        if !contains(keep, k) { continue }
+        let at = key_at(keys, k)
+        let c = vec_get(p.opened, ints_get(comps, at))
+        let d = rc_definition(c, k)
+        if d < 0 { continue }
+        // The places by file and start (stable), each once.
+        let rows = vec_get(spans, at)
+        let order = sn_sort(rows)
+        let uses = strs_new()
+        let mut prev = ""
+        for q in 0..strs_len(order) {
+            let row = strs_get(order, q)
+            if q > 0 && row == prev { continue }
+            prev = row
+            strs_push(uses, span_value(rl_row(row, 0), int_to_str(str_to_int(rl_row(row, 1))), int_to_str(str_to_int(rl_row(row, 2)))))
+        }
+        let mut i = item("def:" + rl_source_id(s) + ":" + k, "definition", reason, id, true, "edit_safety", "compiler")
+        i.compilation = rc_id(c)
+        i.hascompilation = true
+        i.retrieval = retrieval_context(c, d)
+        i.hasretrieval = true
+        i.content = jo2("kind", json_str(strs_get(c.d_kind, d)), "uses", jarray(uses))
+        i.hascontent = true
+        push_plain(p, i)
+    }
+    0
+}
+
+fn str_to_int(s: Str) -> Int {
+    let mut n = 0
+    for i in 0..str_len(s) { n = n * 10 + str_byte(s, i) - 48 }
+    n
+}
+
+fn key_at(keys: Strs, k: Str) -> Int {
+    for i in 0..strs_len(keys) {
+        if strs_get(keys, i) == k { return i }
+    }
+    0 - 1
+}
+
+// The slot of user `k`, made with the compilation `comp` it was first found in.
+fn user_slot(keys: Strs, comps: Ints, spans: Vec[Strs], k: Str, comp: Int) -> Int {
+    let at = key_at(keys, k)
+    if at >= 0 { return at }
+    strs_push(keys, k)
+    ints_push(comps, comp)
+    vec_push(spans, strs_new())
+    strs_len(keys) - 1
+}
+
+// The seed definition's direct links: what its signature names and what it uses, and — for an edit — what uses it, in every compilation of
+// the manifest that loads it.
+fn around_definition(io: IoCap, p: Plan, id: Str, s: Int, l: Loc) -> Int {
+    let ok = ints_new()
+    ints_push(ok, 0)
+    let j = packet(io, p, l, ok)
+    if ints_get(ok, 0) == 0 {
+        problem(p, "context_unavailable", id)
+        return 0
+    }
+    let intent = p.intent
+    if intent == 3 { return 0 }
+    types_of(io, p, id, l)
+    if intent == 2 {
+        diagnostics_in(p, id, l)
+        return 0
+    }
+    let c = vec_get(p.opened, l.comp)
+    let this = strs_get(c.d_identity, l.def)
+    // What its signature names is already selected, by the more specific reason.
+    let typed = link_definitions(j, j_get(j, 0, "related_types"))
+    let mut untracked = 0
+    let deps = strs_new()
+    let mut e = first_of(j, j_get(j, 0, "dependencies"))
+    while e >= 0 {
+        let d = j_get(j, j_get(j, e, "identity"), "definition")
+        if d >= 0 && j_kind(j, d) == 4 {
+            if j_str(j, d) != this && !contains(typed, j_str(j, d)) { strs_push(deps, j_str(j, d)) }
+        } else {
+            untracked += 1
+        }
+        e = ints_get(j.next, e)
+    }
+    exclude(p, id, "dependency", untracked, "no_durable_identity")
+    let keep = bound(p, id, "direct_dependency", sorted_once(deps))
+    for q in 0..strs_len(keep) { linked(io, p, id, l.comp, strs_get(keep, q), "direct_dependency", "correctness") }
+    let mut calls = 0
+    let items = j_get(j, j_get(j, 0, "callers"), "items")
+    if items >= 0 && j_kind(j, items) == 5 {
+        let mut x = first_of(j, items)
+        while x >= 0 {
+            calls += 1
+            x = ints_get(j.next, x)
+        }
+    }
+    if intent == 1 {
+        users(io, p, id, s, l)
+    } else {
+        exclude(p, id, "direct_caller", calls, "not_selected_for_intent")
+        let mut refs = 0
+        let mut u = first_of(j, j_get(j, 0, "references"))
+        while u >= 0 {
+            refs += 1
+            u = ints_get(j.next, u)
+        }
+        exclude(p, id, "reference", refs, "not_selected_for_intent")
+    }
+    0
+}
+
+// The seed section's direct links, and for an edit the sections that link to it.
+fn around_section(p: Plan, id: Str, d: Str) -> Int {
+    let c = p.repo.corp
+    let mut s = 0 - 1
+    for q in 0..strs_len(c.s_id) {
+        if s < 0 && strs_get(c.s_id, q) == d { s = q }
+    }
+    if s < 0 { return 0 }
+    // `REASON\0TARGET`, each once, sorted.
+    let linked_rows = strs_new()
+    for k in 0..ints_len(c.k_sec) {
+        if ints_get(c.k_sec, k) != s || ints_get(c.k_has_target, k) == 0 { continue }
+        let rel = strs_get(c.k_rel, k)
+        let reason = if rel == "generated_from" { "generated_from" } else if rel == "references" { "grammar_reference" } else { "linked_section" }
+        if strs_get(c.k_target, k) != d { strs_push(linked_rows, reason + nul() + strs_get(c.k_target, k)) }
+    }
+    let sorted = sorted_once(linked_rows)
+    let reasons = words("generated_from grammar_reference linked_section")
+    for rx in 0..3 {
+        let reason = strs_get(reasons, rx)
+        let ids = strs_new()
+        for q in 0..strs_len(sorted) {
+            if rl_row(strs_get(sorted, q), 0) == reason { strs_push(ids, rl_row(strs_get(sorted, q), 1)) }
+        }
+        let keep = bound(p, id, reason, ids)
+        for q in 0..strs_len(keep) {
+            let ok = ints_new()
+            ints_push(ok, 0)
+            let auth = strs_new()
+            let i = section(p, strs_get(keep, q), reason, id, true, true, ok, auth)
+            if ints_get(ok, 0) == 1 { push(p, i, strs_get(auth, 0), true) }
+        }
+    }
+    if p.intent == 0 {
+        let children = strs_new()
+        for k in 0..ints_len(c.c_sec) {
+            if ints_get(c.c_sec, k) == s { strs_push(children, strs_get(c.c_id, k)) }
+        }
+        let keep = bound(p, id, "child_section", children)
+        for q in 0..strs_len(keep) {
+            let ok = ints_new()
+            ints_push(ok, 0)
+            let auth = strs_new()
+            let mut i = section(p, strs_get(keep, q), "child_section", id, true, false, ok, auth)
+            if ints_get(ok, 0) == 1 {
+                i.class = "supporting"
+                push(p, i, strs_get(auth, 0), true)
+            }
+        }
+    }
+    if p.intent == 1 {
+        // The sections whose links name this one, in the corpus's order.
+        let incoming = strs_new()
+        for x in 0..strs_len(c.s_id) {
+            if strs_get(c.s_id, x) == d { continue }
+            let mut hit = false
+            for k in 0..ints_len(c.k_sec) {
+                if ints_get(c.k_sec, k) == x && ints_get(c.k_has_target, k) == 1 && strs_get(c.k_target, k) == d { hit = true }
+            }
+            if hit { strs_push(incoming, strs_get(c.s_id, x)) }
+        }
+        let keep = bound(p, id, "linking_section", incoming)
+        for q in 0..strs_len(keep) {
+            let ok = ints_new()
+            ints_push(ok, 0)
+            let auth = strs_new()
+            let mut i = section(p, strs_get(keep, q), "linking_section", id, true, false, ok, auth)
+            if ints_get(ok, 0) == 1 {
+                i.class = "edit_safety"
+                push(p, i, strs_get(auth, 0), true)
+            }
+        }
+    }
+    0
+}
+
+fn package_item(p: Plan, id: Str, reason: Str, via: Str, class: Str) -> Int {
+    push_plain(p, item(id, "package", reason, via, true, class, "cargo"))
+    0
+}
+
+// Everything one step from a seed that the intent follows. `owner` and `comp` are a diagnostic seed's.
+fn expand(io: IoCap, p: Plan, id: Str, sd: Seed, c: Cand) -> Int {
+    let repo = p.repo
+    let ps = repo.ps
+    let cat = repo.cat
+    let intent = p.intent
+    let edits = intent == 1
+    let tests = intent == 1 || intent == 3
+    let k = sd.kind
+    if k == 6 {
+        let s = rl_source_named(sd.a)
+        if s < 0 { return 0 }
+        let module = module_of_key(sd.b)
+        let l = locate(io, p, s, module, sd.b)
+        if l.status != 1 { return 0 }
+        around_definition(io, p, id, s, l)
+        let docs_ids = rl_source_docs(s)
+        if intent == 0 || intent == 1 { docs(p, id, docs_ids, "authoritative_doc") }
+        if tests {
+            let cc = vec_get(p.opened, l.comp)
+            let file = strs_get(cc.d_file, l.def)
+            let has = ints_new()
+            ints_push(has, 0)
+            let text = rl_source_text(repo, s, file, has)
+            tests_of(p, id, rl_source_dir(s) + "/" + file, true, ints_get(cc.d_start, l.def), ints_get(cc.d_end, l.def), ints_get(has, 0) == 1, text)
+        }
+        return 0
+    }
+    if k == 11 {
+        let owner = c.owner
+        if owner == "" {
+            exclude(p, id, "owner", 1, "no_durable_owner")
+            return 0
+        }
+        let s = rl_source_named(sd.a)
+        if s < 0 { return 0 }
+        // `def:SOURCE:KEY` → KEY.
+        let c1 = colon_at(owner)
+        let rest = str_slice(owner, c1 + 1, str_len(owner))
+        let c2 = colon_at(rest)
+        if c1 < 0 || c2 < 0 { return 0 }
+        let key = str_slice(rest, c2 + 1, str_len(rest))
+        let module = module_of_key(key)
+        let l = locate_in(io, p, c.item.compilation, s, module, key)
+        if l.status == 1 {
+            let ok = ints_new()
+            ints_push(ok, 0)
+            let i = definition(io, p, l, owner, "diagnostic_owner", id, true, "correctness", true, ok)
+            if ints_get(ok, 0) == 1 { push_plain(p, i) } else { problem(p, "context_unavailable", owner) }
+            if intent != 3 { types_of(io, p, owner, l) }
+            if tests {
+                let cc = vec_get(p.opened, l.comp)
+                let file = strs_get(cc.d_file, l.def)
+                let has = ints_new()
+                ints_push(has, 0)
+                let text = rl_source_text(repo, s, file, has)
+                tests_of(p, owner, rl_source_dir(s) + "/" + file, true, ints_get(cc.d_start, l.def), ints_get(cc.d_end, l.def), ints_get(has, 0) == 1, text)
+            }
+        }
+        return 0
+    }
+    if k == 7 {
+        around_section(p, id, sd.a)
+        return 0
+    }
+    if k == 0 {
+        let pi = rl_package_named(repo, sd.a)
+        if pi < 0 { return 0 }
+        if intent != 3 {
+            docs(p, id, vec_get(ps.docs, pi), "authoritative_doc")
+            let deps = strs_new()
+            let rows = vec_get(ps.deps, pi)
+            for q in 0..strs_len(rows) {
+                if rl_row(strs_get(rows, q), 0) == "depends_on" { strs_push(deps, "package:" + rl_row(strs_get(rows, q), 1)) }
+            }
+            let keep = bound(p, id, "direct_dependency", deps)
+            for q in 0..strs_len(keep) { package_item(p, strs_get(keep, q), "direct_dependency", id, "correctness") }
+        }
+        if edits {
+            let dependents = strs_new()
+            for q in 0..strs_len(ps.name) {
+                let rows = vec_get(ps.deps, q)
+                let mut hit = false
+                for x in 0..strs_len(rows) {
+                    if rl_row(strs_get(rows, x), 1) == strs_get(ps.name, pi) { hit = true }
+                }
+                if hit { strs_push(dependents, rl_pkg_id(ps, q)) }
+            }
+            let keep = bound(p, id, "direct_dependent", dependents)
+            for q in 0..strs_len(keep) { package_item(p, strs_get(keep, q), "direct_dependent", id, "edit_safety") }
+        }
+        if tests {
+            let owned = strs_new()
+            let ts = vec_get(ps.targets, pi)
+            for q in 0..strs_len(ts) {
+                let kind = rl_row(strs_get(ts, q), 0)
+                if kind == "test" || kind == "lib" || kind == "bin" { strs_push(owned, rl_target_id(strs_get(ps.name, pi), strs_get(ts, q))) }
+            }
+            let keep = bound(p, id, "owned_target", owned)
+            for q in 0..strs_len(keep) { push_plain(p, item(strs_get(keep, q), "target", "owned_target", id, true, "test", "cargo")) }
+            tests_of(p, id, rl_pkg_prefix(ps, pi), false, 0, 0, false, "")
+        }
+        return 0
+    }
+    if k == 1 {
+        let pi = owner_of_target(ps, sd.a)
+        if pi >= 0 { package_item(p, rl_pkg_id(ps, pi), "owner_package", id, "correctness") }
+        if tests || intent == 0 {
+            let inside = strs_new()
+            for q in 0..strs_len(cat.tests) {
+                if rl_row(strs_get(cat.tests, q), 1) == sd.a { strs_push(inside, rl_row(strs_get(cat.tests, q), 0)) }
+            }
+            let keep = bound(p, id, "contained_test", inside)
+            for q in 0..strs_len(keep) { push_plain(p, item(strs_get(keep, q), "test", "contained_test", id, true, "test", "mutation_catalogue")) }
+        }
+        return 0
+    }
+    if k == 2 {
+        let t = rl_test_named(cat, sd.a)
+        if t >= 0 { push_plain(p, item(rl_row(strs_get(cat.tests, t), 1), "target", "owner_target", id, true, "correctness", "cargo")) }
+        let killed = strs_new()
+        for q in 0..strs_len(cat.mname) {
+            if contains(vec_get(cat.mkillers, q), sd.a) { strs_push(killed, "mutation:" + strs_get(cat.mname, q)) }
+        }
+        let keep = bound(p, id, "killed_mutation", killed)
+        for q in 0..strs_len(keep) { push_plain(p, item(strs_get(keep, q), "mutation", "killed_mutation", id, true, "test", "mutation_catalogue")) }
+        return 0
+    }
+    if k == 10 {
+        let mut m = 0 - 1
+        for q in 0..strs_len(cat.mname) {
+            if m < 0 && strs_get(cat.mname, q) == sd.a { m = q }
+        }
+        if m < 0 { return 0 }
+        let keep = bound(p, id, "killer_test", vec_get(cat.mkillers, m))
+        for q in 0..strs_len(keep) {
+            let mut i = item(strs_get(keep, q), "test", "killer_test", id, true, "test", "mutation_catalogue")
+            i.content = jo1("mutations", jstrings(single(strs_get(cat.mname, m))))
+            i.hascontent = true
+            push_plain(p, i)
+        }
+        let owner = rl_owner(repo, strs_get(cat.mfile, m))
+        if owner >= 0 { package_item(p, rl_pkg_id(ps, owner), "owner_package", id, "correctness") }
+        mutated_definition(io, p, id, strs_get(cat.mfile, m), strs_get(cat.mfind, m))
+        return 0
+    }
+    if k == 9 {
+        let pr = rl_profile_named(cat, sd.a)
+        if pr < 0 { return 0 }
+        let keep = bound(p, id, "observed_target", vec_get(cat.ptargets, pr))
+        for q in 0..strs_len(keep) { push_plain(p, item(strs_get(keep, q), "target", "observed_target", id, true, "test", "cargo")) }
+        return 0
+    }
+    if k == 5 {
+        let s = rl_source_named(sd.a)
+        if s < 0 { return 0 }
+        let mut ci = 0 - 1
+        for q in 0..vec_len(p.opened) {
+            let cc = vec_get(p.opened, q)
+            if ci < 0 && cc.source == s && rc_includes(cc, sd.b) && cc.complete { ci = q }
+        }
+        if ci >= 0 {
+            let cc = vec_get(p.opened, ci)
+            let ids = strs_new()
+            let at = strs_new()
+            for q in 0..strs_len(cc.d_identity) {
+                if strs_get(cc.d_file, q) == sd.b {
+                    strs_push(ids, "def:" + rl_source_id(s) + ":" + strs_get(cc.d_identity, q))
+                    strs_push(at, int_to_str(q))
+                }
+            }
+            let kept = bound(p, id, "contained_definition", ids)
+            for q in 0..strs_len(ids) {
+                if !contains(kept, strs_get(ids, q)) { continue }
+                let ok = ints_new()
+                ints_push(ok, 0)
+                let i = definition(io, p, Loc(status: 1, comp: ci, def: str_to_int(strs_get(at, q))), strs_get(ids, q), "contained_definition", id, true, "correctness", false, ok)
+                if ints_get(ok, 0) == 1 { push_plain(p, i) } else { problem(p, "context_unavailable", strs_get(ids, q)) }
+            }
+        }
+        if intent != 3 { docs(p, id, rl_source_docs(s), "authoritative_doc") }
+        if tests { tests_of(p, id, rl_source_dir(s) + "/" + sd.b, false, 0, 0, false, "") }
+        return 0
+    }
+    if k == 4 {
+        let s = rl_source_named(sd.a)
+        if s < 0 { return 0 }
+        let mut ci = 0 - 1
+        for q in 0..vec_len(p.opened) {
+            let cc = vec_get(p.opened, q)
+            if ci < 0 && cc.source == s && cc.root == sd.b { ci = q }
+        }
+        if ci >= 0 {
+            let cc = vec_get(p.opened, ci)
+            let modules = strs_new()
+            for q in 0..strs_len(cc.modules) { strs_push(modules, "module:" + rl_source_id(s) + ":" + strs_get(cc.modules, q)) }
+            let keep = bound(p, id, "included_module", modules)
+            for q in 0..strs_len(keep) { push_plain(p, item(strs_get(keep, q), "module", "included_module", id, true, "correctness", "compiler")) }
+        }
+        if intent != 3 { docs(p, id, rl_source_docs(s), "authoritative_doc") }
+        if tests { tests_of(p, id, rl_source_dir(s) + "/" + sd.b, false, 0, 0, false, "") }
+        return 0
+    }
+    if k == 3 {
+        let s = rl_source_named(sd.a)
+        if s < 0 { return 0 }
+        let roots = strs_new()
+        let rs = rl_source_roots(s)
+        for q in 0..strs_len(rs) { strs_push(roots, "root:" + rl_source_id(s) + ":" + strs_get(rs, q)) }
+        let keep = bound(p, id, "contained_root", roots)
+        for q in 0..strs_len(keep) { push_plain(p, item(strs_get(keep, q), "root", "contained_root", id, true, "correctness", "compiler")) }
+        docs(p, id, rl_source_docs(s), "authoritative_doc")
+        if tests { tests_of(p, id, rl_source_dir(s) + "/", false, 0, 0, false, "") }
+        return 0
+    }
+    0
+}
+
+fn single(s: Str) -> Strs {
+    let out = strs_new()
+    strs_push(out, s)
+    out
+}
+
+// --- the plan ---------------------------------------------------------------------------------------------------------------------------------------
+
+// The first dimension `(entities, source bytes, doc bytes)` does not fit in `r`'s budget: "entities", "source_bytes", "doc_bytes", or "".
+fn exceeds(r: Request, entities: Int, source_bytes: Int, doc_bytes: Int) -> Str {
+    if r.max_entities >= 0 && entities > r.max_entities { return "entities" }
+    if r.max_source_bytes >= 0 && source_bytes > r.max_source_bytes { return "source_bytes" }
+    if r.max_doc_bytes >= 0 && doc_bytes > r.max_doc_bytes { return "doc_bytes" }
+    ""
+}
+
+fn used_json(entities: Int, source_bytes: Int, doc_bytes: Int) -> Str {
+    "{\"entities\":" + int_to_str(entities) + ",\"source_bytes\":" + int_to_str(source_bytes) + ",\"doc_bytes\":" + int_to_str(doc_bytes) + "}"
+}
+
+fn omission_json(i: Item, dimension: Str) -> Str {
+    "{\"id\":" + json_str(i.id) + ",\"reason\":\"budget_exhausted\",\"via\":" + jopt(i.hasvia, i.via) + ",\"class\":" + json_str(i.class) + ",\"dimension\":" + json_str(dimension) + "}"
+}
+
+// The task context `r` asks of the repository under `root`.
+pub fn rt_task(io: IoCap, root: Str, r: Request) -> TaskOut {
+    let mut problems = strs_new()
+    if strs_len(r.seeds) == 0 { rl_problem(problems, "no_seed", "") }
+    if strs_len(r.seeds) > max_seeds() { rl_problem(problems, "too_many_seeds", int_to_str(strs_len(r.seeds))) }
+    let parsed = vec_new[Seed]()
+    let seen = strs_new()
+    for q in 0..strs_len(r.seeds) {
+        let s = strs_get(r.seeds, q)
+        if contains(seen, s) { rl_problem(problems, "duplicate_seed", s) } else { strs_push(seen, s) }
+        let bad = strs_new()
+        let sd = parse_seed(s, bad)
+        if strs_len(bad) > 0 { strs_push(problems, strs_get(bad, 0)) } else { vec_push(parsed, sd) }
+    }
+    if strs_len(problems) > 0 { return refusal("invalid_request", "", false, strs_new(), problems, "") }
+    let load_problems = strs_new()
+    let repo = rl_load(io, root, load_problems)
+    if strs_len(load_problems) > 0 { return refusal("unavailable", "", false, strs_new(), load_problems, "") }
+    if r.hasstate && r.state != repo.state { return refusal("stale_state", repo.state, true, strs_new(), strs_new(), "") }
+    let intent = if r.intent < 0 { 1 } else { r.intent }
+    let p = Plan(repo: repo, intent: intent, opened: vec_new[Comp](), cands: vec_new[Cand](), bounded: strs_new(), excluded: strs_new(), problems: strs_new())
+    let missing_ids = strs_new()
+    let incomplete_ids = strs_new()
+    let seed_ids = strs_new()
+    let seeds = vec_new[Seed]()
+    let found_cands = vec_new[Cand]()
+    for q in 0..strs_len(r.seeds) {
+        let id = strs_get(r.seeds, q)
+        let res = seed(io, p, id, vec_get(parsed, q))
+        if res.status == 1 {
+            strs_push(seed_ids, id)
+            vec_push(seeds, vec_get(parsed, q))
+            vec_push(found_cands, res.cand)
+        } else if res.status == 0 {
+            strs_push(missing_ids, id)
+        } else if res.status == 2 {
+            strs_push(incomplete_ids, id)
+        }
+    }
+    if strs_len(p.problems) > 0 { return refusal("unavailable", repo.state, true, strs_new(), rl_problems_sorted(p.problems), "") }
+    if strs_len(missing_ids) > 0 { return refusal("not_found", repo.state, true, missing_ids, strs_new(), "") }
+    if strs_len(incomplete_ids) > 0 { return refusal("incomplete_compilation", repo.state, true, incomplete_ids, strs_new(), "") }
+    let mut need_e = 0
+    let mut need_s = 0
+    let mut need_d = 0
+    for q in 0..vec_len(found_cands) {
+        let i = vec_get(found_cands, q).item
+        need_e += 1
+        need_s += i.source_bytes
+        need_d += i.doc_bytes
+    }
+    for q in 0..strs_len(seed_ids) { expand(io, p, strs_get(seed_ids, q), vec_get(seeds, q), vec_get(found_cands, q)) }
+    if strs_len(p.problems) > 0 { return refusal("unavailable", repo.state, true, strs_new(), rl_problems_sorted(p.problems), "") }
+    // The seeds first, whole, or not at all.
+    if exceeds(r, need_e, need_s, need_d) != "" { return refusal("insufficient_budget", repo.state, true, strs_new(), strs_new(), used_json(need_e, need_s, need_d)) }
+    // Then every other candidate once — by its best class — in priority order.
+    let keys = strs_new()
+    let kept = vec_new[Cand]()
+    for q in 0..vec_len(p.cands) {
+        let cd = vec_get(p.cands, q)
+        if contains(seed_ids, cd.item.id) { continue }
+        strs_push(keys, pad12(cd.class_rank) + pad12(cd.doc_rank) + cd.item.id + str_from_byte(1) + pad12(vec_len(kept)))
+        vec_push(kept, cd)
+    }
+    let order = sn_sort(keys)
+    let items = strs_new()
+    let omitted = strs_new()
+    let mut used_e = need_e
+    let mut used_s = need_s
+    let mut used_d = need_d
+    for q in 0..vec_len(found_cands) { strs_push(items, item_json(vec_get(found_cands, q).item)) }
+    let mut stopped = false
+    let once = strs_new()
+    for q in 0..strs_len(order) {
+        let row = strs_get(order, q)
+        let cd = vec_get(kept, str_to_int(str_slice(row, str_len(row) - 12, str_len(row))))
+        if contains(once, cd.item.id) { continue }
+        strs_push(once, cd.item.id)
+        if stopped {
+            strs_push(omitted, omission_json(cd.item, "priority"))
+            continue
+        }
+        let dim = exceeds(r, used_e + 1, used_s + cd.item.source_bytes, used_d + cd.item.doc_bytes)
+        if dim != "" {
+            stopped = true
+            strs_push(omitted, omission_json(cd.item, dim))
+            continue
+        }
+        used_e += 1
+        used_s += cd.item.source_bytes
+        used_d += cd.item.doc_bytes
+        strs_push(items, item_json(cd.item))
+    }
+    let partial = strs_len(omitted) > 0 || strs_len(p.bounded) > 0
+    let bounded = strs_new()
+    for q in 0..strs_len(p.bounded) {
+        let row = strs_get(p.bounded, q)
+        strs_push(bounded, "{\"via\":" + json_str(rl_row(row, 0)) + ",\"reason\":" + json_str(rl_row(row, 1)) + ",\"known\":" + rl_row(row, 2) + ",\"included\":" + rl_row(row, 3) + "}")
+    }
+    let excluded = strs_new()
+    let rows = sn_sort(p.excluded)
+    for q in 0..strs_len(rows) {
+        let row = strs_get(rows, q)
+        strs_push(excluded, "{\"via\":" + json_str(rl_row(row, 0)) + ",\"relation\":" + json_str(rl_row(row, 1)) + ",\"count\":" + int_to_str(str_to_int(rl_row(row, 2))) + ",\"reason\":"
+                + json_str(rl_row(row, 3)) + "}")
+    }
+    TaskOut(json: "{\"schema\":\"nazm.task-context/1\",\"status\":" + (if partial { "\"partial\"" } else { "\"complete\"" }) + ",\"state\":" + json_str(repo.state) + ",\"intent\":" + json_str(intent_word(intent))
+            + ",\"seeds\":" + jstrings(r.seeds) + ",\"budget\":" + budget_json(r) + ",\"used\":" + used_json(used_e, used_s, used_d) + ",\"items\":[" + str_join(items, ",") + "],\"omitted\":["
+            + str_join(omitted, ",") + "],\"bounded\":[" + str_join(bounded, ",") + "],\"excluded\":[" + str_join(excluded, ",") + "]}", available: true)
+}
+
+// The request the command line makes (`repo --task ...`), answered.
+pub fn rt_command(io: IoCap, c: Cli, root: Str) -> TaskOut {
+    let mut intent = 0 - 1
+    if cli_present(c, 2) {
+        let w = cli_value(c, 2)
+        intent = if w == "understand" { 0 } else if w == "edit" { 1 } else if w == "diagnose" { 2 } else { 3 }
+    }
+    let r = Request(intent: intent, seeds: cli_values(c, 3), state: cli_value(c, 4), hasstate: cli_present(c, 4), max_entities: size_of(c, 5), max_source_bytes: size_of(c, 6),
+            max_doc_bytes: size_of(c, 7), entities_text: size_text(c, 5), source_bytes_text: size_text(c, 6), doc_bytes_text: size_text(c, 7))
+    rt_task(io, root, r)
+}
+
+// A `usize` option as the digits it prints back as (`+` and leading zeros dropped), "" where it was not given.
+fn size_text(c: Cli, a: Int) -> Str {
+    if !cli_present(c, a) { return "" }
+    let s = cli_value(c, a)
+    let mut from = 0
+    if str_len(s) > 0 && str_byte(s, 0) == 43 { from = 1 }
+    while from + 1 < str_len(s) && str_byte(s, from) == 48 { from += 1 }
+    str_slice(s, from, str_len(s))
+}
+
+// A `usize` option, -1 where it was not given; saturated where it is beyond what an integer here holds.
+fn size_of(c: Cli, a: Int) -> Int {
+    if !cli_present(c, a) { return 0 - 1 }
+    let s = cli_value(c, a)
+    let mut n = 0
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        if b >= 48 && b <= 57 {
+            if n > 100000000000000000 { return 1000000000000000000 }
+            n = n * 10 + b - 48
+        }
+    }
+    n
+}

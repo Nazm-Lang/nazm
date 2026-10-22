@@ -34,6 +34,8 @@ use "bindgen.nz"
 use "reload.nz"
 use "doctor.nz"
 use "semantic.nz"
+use "context.nz"
+use "repo.nz"
 use "build.nz"
 use "buildcli.nz"
 use "coreir.nz"
@@ -261,6 +263,8 @@ fn command_cli(name: Str) -> Cli {
     if name == "update" { return update_cli() }
     if name == "publish" { return publish_cli() }
     if name == "yank" { return yank_cli() }
+    if name == "context" { return context_cli() }
+    if name == "repo" { return repo_cli() }
     if name == "snapshot" { return snapshot_cli() }
     if name == "delta" { return delta_cli() }
     if name == "diagnostics" { return diagnostics_cli() }
@@ -378,6 +382,8 @@ fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, tm: TimeCap, out
     if s == "update" { return update_command(io, c) }
     if s == "publish" { return publish_command(io, c) }
     if s == "yank" { return yank_command(io, c) }
+    if s == "context" { return context_command(io, c) }
+    if s == "repo" { return repo_command(io, c) }
     if s == "snapshot" { return snapshot_command(io, c) }
     if s == "delta" { return delta_command(io, c) }
     if s == "diagnostics" { return diagnostics_command(io, c) }
