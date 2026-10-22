@@ -83,7 +83,7 @@ pub fn run_command(io: IoCap, out: OutCap, time: TimeCap, net: NetCap, proc: Pro
     if cli_present(c, 3) {
         let max_iterations = ru_int(cli_value(c, 4))
         let max_depth = ru_int(cli_value(c, 5))
-        exit_with(ip_run(io, out, time, net, proc, rnd, o, packages, o.json, cli_values(c, 1), max_iterations, max_depth, harness))
+        exit_with(ip_run(io, out, time, net, proc, sp, rnd, o, packages, o.json, cli_values(c, 1), max_iterations, max_depth, harness))
         return 0
     }
     // The build: for the host, with Nazm's own code generator (the fast-to-compile backend; Cranelift is not carried), no heap limit,
