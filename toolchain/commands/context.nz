@@ -446,10 +446,6 @@ fn calls_json(f: Facts, d: Decls, others: Ints, from: Ints, to: Ints) -> Str {
 
 // --- the packet ------------------------------------------------------------------------------------------------------------
 
-fn unreliable_code(code: Str) -> Bool {
-    code == "N0386"
-}
-
 // The packet of the definition declared or used at byte `byte` of `file` (as given), in the compilation `f` of the root at
 // `root_path` (absolute), checked as a module (`fx_check_module_in`).
 pub fn ctx_packet(io: IoCap, f: Facts, root_path: Str, file: Str, byte: Int) -> CtxResult {
@@ -481,9 +477,6 @@ pub fn ctx_module_packet(io: IoCap, f: Facts, m: Int, byte: Int) -> CtxResult {
     if fe_load_failed(f) { return refused("a compilation that does not load") }
     let text = fx_module_text(f, m)
     if byte > str_len(text) { return unavailable("out_of_range") }
-    for i in 0..dg_len(d) {
-        if unreliable_code(dg_code(d, i)) { return refused("a compilation whose errors leave the facts' index unlike the reference's") }
-    }
     let at = name_at(text, byte)
     if ints_get(at, 0) == 0 - 2 { return refused("a position in a document that does not lex") }
     if ints_get(at, 0) < 0 { return unavailable("not_a_name") }
@@ -522,8 +515,18 @@ pub fn ctx_module_packet(io: IoCap, f: Facts, m: Int, byte: Int) -> CtxResult {
         signature = json_str(shown)
     }
     if kind == "record" {
+        // The fields the checker has, the hidden pointer of an opaque C handle included, not the fields written.
         let rt = fx_record_type(f, def)
-        fields = fields_json(y, sy_kids(y, sym), ck_cross_in(c, rt) == "")
+        let n = if rt >= 0 { ck_record_arity(c, rt) } else { 0 }
+        let names = strs_new()
+        for k in 0..n { strs_push(names, ck_record_field_name(c, rt, k)) }
+        let order = by_name_order(names, ck_cross_in(c, rt) == "")
+        let listed = strs_new()
+        for k in 0..ints_len(order) {
+            let q = ints_get(order, k)
+            strs_push(listed, "{\"name\":" + json_str(strs_get(names, q)) + ",\"type\":" + json_str(fx_show(f, fx_record_field_ty(f, rt, q))) + "}")
+        }
+        fields = "[" + str_join(listed, ",") + "]"
     }
     if kind == "enum" { variants = variants_json(y, sy_kids(y, sym)) }
     let source = str_slice(fx_module_text(f, md), sy_start(y, sym), sy_end(y, sym))

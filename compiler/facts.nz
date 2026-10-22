@@ -308,6 +308,7 @@ fn definition(f: Facts, m: Int, kind: Str, name: Str) -> Str {
 
 pub fn fx_fn_identity(f: Facts, i: Int) -> Str { definition(f, ck_fn_module(f.c, i), "fn", ck_fn_name(f.c, i)) }
 pub fn fx_record_identity(f: Facts, r: Int) -> Str { definition(f, ck_record_module(f.c, r), "record", ck_record_name(f.c, r)) }
+pub fn fx_record_identity_in(f: Facts, m: Int, r: Int) -> Str { definition(f, m, "record", ck_record_name(f.c, r)) }
 pub fn fx_enum_identity(f: Facts, e: Int) -> Str { definition(f, ck_enum_module(f.c, e), "enum", ck_enum_name(f.c, e)) }
 pub fn fx_trait_identity(f: Facts, t: Int) -> Str { definition(f, ck_trait_module(f.c, t), "trait", ck_trait_name(f.c, t)) }
 
@@ -684,6 +685,9 @@ pub fn fx_ref_count(f: Facts) -> Int { ck_ref_count(f.c) }
 // or `constant`.
 pub fn fx_ref_kind(f: Facts, i: Int) -> Str { ck_ref_kind_name(f.c, i) }
 // Where it is declared, or -1 for an entity declared nowhere the index holds.
+pub fn fx_ref_record(f: Facts, i: Int) -> Int { ck_ref_record(f.c, i) }
+pub fn fx_ref_enum(f: Facts, i: Int) -> Int { ck_ref_enum(f.c, i) }
+pub fn fx_ref_member(f: Facts, i: Int) -> Str { ck_ref_member(f.c, i) }
 pub fn fx_ref_decl_start(f: Facts, i: Int) -> Int { ck_ref_decl_start(f.c, i) }
 pub fn fx_ref_decl_end(f: Facts, i: Int) -> Int { ck_ref_decl_end(f.c, i) }
 pub fn fx_ref_use_count(f: Facts, i: Int) -> Int { ck_ref_use_count(f.c, i) }

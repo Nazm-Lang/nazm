@@ -164,11 +164,14 @@ pub fn symbols_of(f: Facts, m: Int, details: Bool) -> Sy {
         let at = sy_add(y, 2, ck_record_name(c, r), fx_start(f, span), fx_end(f, span), ck_record_name_start(c, r) - base, ck_record_name_end(c, r) - base, "", false, 0 - 1, r)
         let rt = fx_record_type(f, r)
         let fields = sx_items(t, sx_field(t, node, "fields"))
-        if rt < 0 || ck_record_arity(c, rt) != ints_len(fields) {
+        // An opaque C handle (`extern "C" struct Handle;`) writes no field and has the one hidden pointer the facts name: the reference lists the fields that
+        // were written, so it has no child.
+        let hidden = ints_len(fields) == 0 && rt >= 0 && ck_record_arity(c, rt) == 1
+        if rt < 0 || (ck_record_arity(c, rt) != ints_len(fields) && !hidden) {
             sy_fail(y, "a record whose fields the facts do not publish")
             continue
         }
-        for k in 0..ints_len(fields) {
+        for k in 0..(if hidden { 0 } else { ints_len(fields) }) {
             let fd = ints_get(fields, k)
             let fs = sx_field(t, fd, "span")
             let ns = sx_field(t, fd, "name_span")

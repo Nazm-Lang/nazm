@@ -367,6 +367,32 @@ pub fn ents_new(f: Facts) -> Ents {
                 }
             }
         }
+        // Where the index has no declaration (a tuple's record and fields are written nowhere), the checker's owner names it.
+        if ds < 0 && (kind == "record" || kind == "field") {
+            let r = fx_ref_record(f, i)
+            // A tuple's record has no module: the module its uses are in.
+            let mut rm = 0 - 1
+            if r >= 0 { rm = ck_record_module(c, r) }
+            if r >= 0 && rm < 0 && fx_ref_use_count(f, i) > 0 { rm = fx_module_at(f, fx_ref_use_start(f, i, 0)) }
+            if r >= 0 && rm >= 0 && fx_module_key(f, rm) != "" {
+                hasdef = true
+                def = fx_record_identity_in(f, rm, r)
+                if kind == "field" {
+                    hasmem = true
+                    mem = fx_ref_member(f, i)
+                }
+            }
+        } else if ds < 0 && (kind == "enum" || kind == "variant" || kind == "payload field") {
+            let e = fx_ref_enum(f, i)
+            if e >= 0 && fx_module_key(f, ck_enum_module(c, e)) != "" {
+                hasdef = true
+                def = fx_enum_identity(f, e)
+                if kind != "enum" {
+                    hasmem = true
+                    mem = fx_ref_member(f, i)
+                }
+            }
+        }
         let mut file = ""
         let mut hasfile = false
         if !hasdef && ds >= 0 && m >= 0 && fx_file_known(f, m) {
@@ -540,17 +566,18 @@ fn shape_digest(f: Facts, y: Sy, i: Int, exp: Bool, record: Int) -> Str {
         dig_field(out, sy_detail(y, i))
     }
     if kind == 2 {
-        let kids = sy_kids(y, i)
-        let names = strs_new()
-        for k in 0..ints_len(kids) { strs_push(names, sy_name(y, ints_get(kids, k))) }
+        // The fields the checker has, the hidden pointer of an opaque C handle included (`shape`): not the fields written, which an outline lists.
         let rt = fx_record_type(f, record)
+        let n = if rt >= 0 { ck_record_arity(c, rt) } else { 0 }
+        let names = strs_new()
+        for k in 0..n { strs_push(names, ck_record_field_name(c, rt, k)) }
         let order = by_name_order(names, ck_cross_in(c, rt) == "")
         dig_field(out, "fields")
-        dig_number(out, ints_len(kids))
+        dig_number(out, n)
         for k in 0..ints_len(order) {
-            let q = ints_get(kids, ints_get(order, k))
-            dig_field(out, sy_name(y, q))
-            dig_field(out, sy_detail(y, q))
+            let q = ints_get(order, k)
+            dig_field(out, strs_get(names, q))
+            dig_field(out, fx_show(f, fx_record_field_ty(f, rt, q)))
         }
     }
     if kind == 3 {
@@ -717,11 +744,7 @@ pub fn snap_build(f: Facts) -> Snap {
     // After these errors the checker leaves out what the reference's index still records (design D23).
     for i in 0..dg_len(d) {
         let code = dg_code(d, i)
-        // A refused capture is attributed by the reference to a slot of the closure that nothing declares (the checker's recovery); a function
-        // defined twice has the reference's provenance, which settles its result from the body it kept (`N0203`).
-        if code == "N0386" {
-            return snap_fail(s, "a compilation whose errors leave the facts' index unlike the reference's")
-        }
+        // A function defined twice has the reference's provenance, which settles its result from the body it kept (`N0203`).
         if code == "N0203" && ut_contains(strs_get(d.message, i), "is defined more than once in this module") {
             return snap_fail(s, "a function defined twice, whose provenance the reference settles from the definition it kept")
         }
