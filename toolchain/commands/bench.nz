@@ -1,0 +1,240 @@
+// `nazm bench`, written in Nazm (R8 slice 10, `openspec/changes/r8-cut-over/design.md`, task 10.1).
+//
+// `nazm bench [--iterations N] [--json] PATH...`, run by the dispatcher (`nazm.nz`).
+//
+// A port of `crates/nazm-cli/src/bench.rs`: the files named (or the `.nz` files directly inside a directory named, sorted) are read, every
+// `@bench` function is found as `nazm test` finds the functions it runs (`test.nz`, `tc_marked`), each is built by another `nazm`
+// (`nazm build --opt-level 2 --harness bench:NAME:N FILE -o EXE`, this executable) and the executable run once, and one row is printed
+// per function: `STEM::FUNCTION`, its file, the iterations, the nanoseconds they took together and per iteration. A row's numbers are
+// the clock's: they are the one thing no two runs print alike, and the comparison (`tests/bench.sh`) never takes them. What it compares
+// is every word the command says before and instead of a measurement: the arguments, the files that cannot be gathered, the functions
+// that cannot be built, the exit statuses, and for a measurement only the shape of its line.
+//
+// Not carried (status 6): an `@cfg` of a feature, a package or a profile in a file (the manifest is not read), as `test` refuses it.
+
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/configure.nz"
+use "cli.nz"
+use "util.nz"
+use "front.nz"
+use "test.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+// The command line, as `crates/nazm-cli/src/cli.rs` declares `nazm bench`.
+pub fn bench_cli() -> Cli {
+    let c = cli_command("bench", "Measure every `@bench` function of the files named (Gate 2, §19): each built natively at `-O2` and called `--iterations` times "
+            + "between two readings of the monotonic clock", "")
+    cli_positional(c, "PATHS", true, true, true, "Files or directories; a directory is scanned for `.nz` files", "")
+    let n = cli_option(c, "", "iterations", "N", false, "1000", true, "How many calls each measurement times together", "")
+    cli_numeric(c, n)
+    cli_flag(c, "", "json", "One `nazm.bench/1` object per function, on stdout", "")
+    c
+}
+
+fn bn_refuse(io: IoCap, why: Str) -> Int {
+    eprint("bench: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+// `gather`: the file named, or the `.nz` files directly inside the directory named, sorted. Returns the reason where it stops.
+fn bn_gather(io: IoCap, path: Str, files: Strs) -> Str {
+    let kind = ut_kind(io, path)
+    if kind == 1 {
+        let h = os_dir_open(path)
+        if os_status(h) < 0 { return path + ": " + ut_os_error(os_status(h)) }
+        let found = strs_new()
+        let buf = bytes_new(1024)
+        let mut n = os_dir_next(h, buf)
+        while n > 0 {
+            let name = bytes_to_str(bytes_slice(buf, 0, n))
+            if name != "." && name != ".." && ut_extension(name) == "nz" { strs_push(found, name) }
+            n = os_dir_next(h, buf)
+        }
+        os_close(h)
+        if n < 0 { return path + ": " + ut_os_error(n) }
+        let sorted = fe_sort_paths(found)
+        for i in 0..strs_len(sorted) { strs_push(files, ut_join(path, strs_get(sorted, i))) }
+        return ""
+    }
+    if kind != 0 { return path + " is not a file or a directory" }
+    strs_push(files, path)
+    ""
+}
+
+// A decimal the measurement line holds: the digits of a `u64` (a leading `+` is allowed, as `str::parse` allows it); -1 where it is none.
+fn bn_u64(s: Str) -> Int {
+    let n = str_len(s)
+    let mut i = 0
+    if n > 0 && str_byte(s, 0) == 43 { i = 1 }
+    if i >= n || n - i > 18 { return 0 - 1 }
+    let mut v = 0
+    while i < n {
+        let b = str_byte(s, i)
+        if b < 48 || b > 57 { return 0 - 1 }
+        v = v * 10 + (b - 48)
+        i += 1
+    }
+    v
+}
+
+// The first whitespace-separated word of `s` (Rust's `split_whitespace`: Unicode white space is not told apart here, only ASCII's).
+fn bn_first_word(s: Str) -> Str {
+    let n = str_len(s)
+    let mut i = 0
+    while i < n && bn_is_space(str_byte(s, i)) { i += 1 }
+    let from = i
+    while i < n && !bn_is_space(str_byte(s, i)) { i += 1 }
+    str_slice(s, from, i)
+}
+
+fn bn_is_space(b: Int) -> Bool { b == 32 || (b >= 9 && b <= 13) }
+
+// The nanoseconds in the harness's output: the first line that begins `nazm-bench: `, its first word read as a `u64`; -1 where there is none.
+pub fn bn_measurement(out: Str) -> Int {
+    let prefix = "nazm-bench: "
+    let n = str_len(out)
+    let mut i = 0
+    while i <= n {
+        let mut j = i
+        while j < n && str_byte(out, j) != 10 { j += 1 }
+        let mut line = str_slice(out, i, j)
+        if str_len(line) > 0 && str_byte(line, str_len(line) - 1) == 13 { line = str_slice(line, 0, str_len(line) - 1) }
+        if i < n && ut_starts(line, prefix) {
+            let word = bn_first_word(str_slice(line, str_len(prefix), str_len(line)))
+            return if word == "" { 0 - 1 } else { bn_u64(word) }
+        }
+        i = j + 1
+    }
+    0 - 1
+}
+
+// `one`: build the function's harness and run it once. Its nanoseconds in `ns[0]`, or the reason it could not be measured.
+fn bn_one(io: IoCap, proc: ProcessCap, sp: SpawnCap, driver: Str, dir: Str, file: Str, function: Str, iterations: Int, number: Int, ns: Ints) -> Str ! { io, spawn } {
+    // The executable's name is not the function's (a function's name is data of a file, and no path of a write is): it is not observable.
+    let exe = dir + "/b" + int_to_str(number)
+    let a = strs_new()
+    strs_push(a, "build")
+    strs_push(a, "--opt-level")
+    strs_push(a, "2")
+    strs_push(a, "--harness")
+    strs_push(a, "bench:" + function + ":" + int_to_str(iterations))
+    strs_push(a, file)
+    strs_push(a, "-o")
+    strs_push(a, exe)
+    let built = tc_run_program(io, proc, sp, driver, a, false)
+    if !built.started { return "could not build: " + built.why }
+    if built.status != 0 { return "`nazm build` refused it: " + ut_trim(ut_lossy(built.err)) }
+    let ran = tc_run_program(io, proc, sp, exe, strs_new(), false)
+    if !ran.started { return "could not run: " + ran.why }
+    let out = ut_lossy(ran.out)
+    if ran.status != 0 { return "it stopped: " + ut_trim(out) + ut_trim(ut_lossy(ran.err)) }
+    let t = bn_measurement(out)
+    if t < 0 { return "no measurement in its output: " + ut_trim(out) }
+    ints_set(ns, 0, t)
+    ""
+}
+
+// `{:<40}`: padded on the right to 40 characters; `{:>12}`: on the left to 12.
+fn bn_chars(s: Str) -> Int {
+    let mut n = 0
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        if b < 128 || b >= 192 { n += 1 }
+    }
+    n
+}
+
+pub fn bn_row(name: Str, per: Int, iterations: Int) -> Str {
+    let num = int_to_str(per)
+    let pad_name = if bn_chars(name) < 40 { cli_spaces(40 - bn_chars(name)) } else { "" }
+    let pad_num = if str_len(num) < 12 { cli_spaces(12 - str_len(num)) } else { "" }
+    name + pad_name + " " + pad_num + num + " ns/iteration  (" + int_to_str(iterations) + " iterations)"
+}
+
+// `nazm bench`, its arguments read into `c` (`bench_cli`) from where `cli_from` says.
+pub fn bench_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, c: Cli) -> Int ! { io, spawn } {
+    cli_parse(io, c)
+    let paths = cli_values(c, 0)
+    let mut iterations = 0
+    let given = cli_value(c, 1)
+    for i in 0..str_len(given) {
+        let b = str_byte(given, i)
+        if b >= 48 && b <= 57 { iterations = iterations * 10 + (b - 48) }
+    }
+    if iterations < 1 { iterations = 1 }
+    let json = cli_present(c, 2)
+    let driver = str_vouch(tc_own_path(io, proc, sp))
+    if driver == "" {
+        eprint("nazm: cannot find this executable: no such file or directory (os error 2)" + nl())
+        exit_with(4)
+        return 4
+    }
+    let dir = os_mkdtemp(tc_temp_dir(io))
+    if str_len(dir) == 0 {
+        eprint("nazm: a scratch directory: could not be made" + nl())
+        exit_with(4)
+        return 4
+    }
+    let files = strs_new()
+    for i in 0..strs_len(paths) {
+        let why = bn_gather(io, strs_get(paths, i), files)
+        if why != "" {
+            eprint("nazm: " + why + nl())
+            tc_remove_tree(io, dir)
+            exit_with(3)
+            return 3
+        }
+    }
+    let mut measured = 0
+    let mut failed = 0
+    let ns = ints_new()
+    ints_push(ns, 0)
+    for k in 0..strs_len(files) {
+        let file = strs_get(files, k)
+        let ok = ints_new()
+        ints_push(ok, 1)
+        let text = ut_read_text(io, file, ok)
+        if ints_get(ok, 0) == 0 { continue }
+        // `@cfg` on a feature, a package or a profile asks the manifest, which the port does not read.
+        if ut_contains(text, "@cfg") && (ut_contains(text, "feature") || ut_contains(text, "package") || ut_contains(text, "profile")) {
+            tc_remove_tree(io, dir)
+            bn_refuse(io, "an `@cfg` of a feature, package or profile in " + file)
+        }
+        let stem = if ut_file_name(file) == "" { "?" } else { ut_stem(file) }
+        let names = strs_new()
+        let attrs = strs_new()
+        let fails = ints_new()
+        tc_marked(io, text, names, attrs, fails)
+        for m in 0..strs_len(names) {
+            if strs_get(attrs, m) != "bench" { continue }
+            let name = stem + "::" + strs_get(names, m)
+            let why = bn_one(io, proc, sp, driver, dir, file, strs_get(names, m), iterations, measured + failed, ns)
+            if why == "" {
+                measured += 1
+                let total = ints_get(ns, 0)
+                let per = total / iterations
+                if json {
+                    print("{\"schema\":\"nazm.bench/1\",\"name\":" + json_str(name) + ",\"file\":" + json_str(file) + ",\"iterations\":"
+                            + int_to_str(iterations) + ",\"total_ns\":" + int_to_str(total) + ",\"ns_per_iteration\":" + int_to_str(per) + "}" + nl())
+                } else {
+                    print(bn_row(name, per, iterations) + nl())
+                }
+            } else {
+                failed += 1
+                eprint("nazm: " + name + ": " + why + nl())
+            }
+        }
+    }
+    tc_remove_tree(io, dir)
+    if measured == 0 && failed == 0 {
+        eprint("nazm: no `@bench` functions to measure" + nl())
+        exit_with(3)
+        return 3
+    }
+    if failed == 0 { return 0 }
+    exit_with(1)
+    1
+}

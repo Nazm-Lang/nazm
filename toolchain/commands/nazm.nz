@@ -12,7 +12,9 @@
 // (R8 slice 8): `core-ir`, `mir`, `lir`, `capabilities` (`coreir.nz`), `obligations`, `trace`, `inspect`, and `explain-cost`, `explain-flow`
 // and `profile`, which parse their command line and refuse what R2 and R3 do not yet publish (`explain.nz`); and the interactive tier
 // (R8 slice 7): `run`, in this process with `--interpret` and built and run otherwise (`run.nz`), `comptime` and `repl` (`live.nz`), over the
-// interpreter as a module (`interpret.nz`). Every other says it is not carried and exits 6. A command that ends the process does so with
+// interpreter as a module (`interpret.nz`); and (R8 slice 10) `bench` (`bench.nz`: carried whole, its measurements compared by shape), `accel` (`accel.nz`: the kernel,
+// `--print-kernel` byte for byte; the run is refused) and `contract` (`contract.nz`: the command line, what does not load; the profile and the contract's facts are
+// refused). Every other says it is not carried and exits 6. A command that ends the process does so with
 // `exit_with`, never by returning from `main`: this program's own runtime answers `NAZM_RESULT_REPORT`, `NAZM_MEMORY_REPORT` and
 // `NAZM_SCHED_REPORT` about itself when `main` returns, and those variables are the interpreted program's.
 
@@ -45,6 +47,9 @@ use "inspect.nz"
 use "explain.nz"
 use "run.nz"
 use "live.nz"
+use "bench.nz"
+use "accel.nz"
+use "contract.nz"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -284,6 +289,9 @@ fn command_cli(name: Str) -> Cli {
     if name == "run" { return run_cli() }
     if name == "comptime" { return comptime_cli() }
     if name == "repl" { return repl_cli() }
+    if name == "bench" { return bench_cli() }
+    if name == "accel" { return accel_cli() }
+    if name == "contract" { return contract_cli() }
     cli_command("", "", "")
 }
 
@@ -403,6 +411,9 @@ fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, tm: TimeCap, out
     if s == "run" { return run_command(io, out, tm, net, proc, sp, v, rnd, c) }
     if s == "comptime" { return comptime_command(io, out, tm, net, proc, rnd, c) }
     if s == "repl" { return repl_command(io, out, tm, net, proc, rnd, c) }
+    if s == "bench" { return bench_command(io, proc, sp, v, c) }
+    if s == "accel" { return accel_command(io, c) }
+    if s == "contract" { return contract_command(io, c) }
     check_command(io, c)
 }
 
