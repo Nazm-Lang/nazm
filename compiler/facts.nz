@@ -752,6 +752,26 @@ pub fn fx_prov_passes_on(f: Facts, i: Int) -> Ints { ck_prov_passes_on(f.c, i) }
 pub fn fx_prov_reaches(f: Facts, i: Int) -> Ints { ck_prov_reaches(f.c, i) }
 pub fn fx_prov_receives(f: Facts, i: Int, k: Int) -> Strs { ck_prov_receives(f.c, i, k) }
 
+// --- the sinks, solved (R8 slice 11, task 11.1; `SinkReport`, N52, N80) ---------------------------------------------------------------
+//
+// Every sink of every checked body — a path written to (`path`), what `print` and `eprint` write (`output`), what is written (`file-data`)
+// and where `str_vouch` clears origins (`vouch`) — in function order, with the function it is in, where it is (absolute, the built-in's
+// name), the origins that reach it by name in id order, and for each of those one chain from where it entered to the sink: steps, each a place
+// and what happened there, nearest the origin first. Solved when first asked for (the program once more; nothing else pays).
+pub fn fx_sink_count(f: Facts) -> Int { ck_sink_count(f.c) }
+pub fn fx_sink_declined(f: Facts) -> Bool { ck_sink_declined(f.c) }
+pub fn fx_sink_function(f: Facts, i: Int) -> Str { ck_sink_function(f.c, i) }
+pub fn fx_sink_class(f: Facts, i: Int) -> Str { ck_sink_class(f.c, i) }
+pub fn fx_sink_start(f: Facts, i: Int) -> Int { ck_sink_start(f.c, i) }
+pub fn fx_sink_end(f: Facts, i: Int) -> Int { ck_sink_end(f.c, i) }
+pub fn fx_sink_origins(f: Facts, i: Int) -> Strs { ck_sink_origins(f.c, i) }
+pub fn fx_sink_traces(f: Facts, i: Int) -> Int { ck_sink_traces(f.c, i) }
+pub fn fx_sink_trace_origin(f: Facts, i: Int, t: Int) -> Str { ck_sink_trace_origin(f.c, i, t) }
+pub fn fx_sink_steps(f: Facts, i: Int, t: Int) -> Int { ck_sink_steps(f.c, i, t) }
+pub fn fx_sink_step_start(f: Facts, i: Int, t: Int, s: Int) -> Int { ck_sink_step_start(f.c, i, t, s) }
+pub fn fx_sink_step_end(f: Facts, i: Int, t: Int, s: Int) -> Int { ck_sink_step_end(f.c, i, t, s) }
+pub fn fx_sink_step_note(f: Facts, i: Int, t: Int, s: Int) -> Str { ck_sink_step_note(f.c, i, t, s) }
+
 // --- a function's effects (R8 slice 9, task 9.1; `FnDef::{declared_effects, inferred_effects, effect_reasons}`, N36) ---
 //
 // What function `i` (`ck_fn_*`'s numbering) may do, as masks (`io` 1, `spawn` 2, `foreign` 4, the effect parameter 8:
