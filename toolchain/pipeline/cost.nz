@@ -1,0 +1,331 @@
+// `nazm explain-cost` (N52, `docs/internal/architecture.md` §7.54) over MIR, written in Nazm (R8 slice 11, task 11.1): where each
+// function allocates, retains, blocks, talks to a channel, calls C or starts a task, with its count per call (`crates/nazm-mir/src/cost.rs`);
+// what a native build's vectorisation does with every loop and why not (`vectorize::explain`); how `--layout soa` would lay out each `Vec`
+// type (`nazm_lir::layouts`); and which scheduler a native build runs the program's tasks on (`crates/nazm-cli/src/explain.rs`).
+// `pipeline cost CORE.json` prints the text `nazm explain-cost` prints, `pipeline cost-json CORE.json` the `nazm.cost/2` line.
+
+use "cir.nz"
+use "types.nz"
+use "mir.nz"
+use "text.nz"
+use "lir.nz"
+use "vectorize.nz"
+use "@std/hashmap"
+use "@std/text"
+use "@std/sort"
+
+/// One site of a function: what it does with resources, what the operation is, where, and whether it runs at most once per call.
+struct CsSite {
+    kind: Str,
+    op: Str,
+    at: Str,
+    unknown: Bool,
+    failure: Bool,
+}
+
+fn cs_allocates(op: Str) -> Bool {
+    text_contains(" ints_new strs_new vec_new box_new chain_from_vec chain_empty box_fresh box_fill chain_push cell_new chan_new chan_new_of atomic_new str_concat str_append str_concat_num int_to_str str_from_byte str_join read_file arg chan_recv_of chan_select_of chan_select_until sel_new sel_recv sel_send sel_wait sel_wait_until cstr_copy num_to_str float_to_str_fixed str_pad_start str_pad_end bytes_new bytes_from_str bytes_to_str text_concat scalar_text os_error_text os_local_addr os_peer_addr os_env_get os_env_at os_mkdtemp ints_push strs_push vec_push ", " " + op + " ")
+}
+
+fn cs_retains(op: Str) -> Bool {
+    text_contains(" str_slice bytes_slice text_slice text_from_str text_assume text_as_str ", " " + op + " ")
+}
+
+fn cs_channel(op: Str) -> Bool {
+    text_contains(" chan_new chan_send chan_recv chan_close chan_new_of chan_send_of chan_recv_of chan_close_of chan_select_of chan_select_until sel_new sel_recv sel_send sel_wait sel_wait_until ", " " + op + " ")
+}
+
+fn cs_blocks(op: Str) -> Bool {
+    text_contains(" chan_send chan_recv chan_send_of chan_recv_of chan_select_of chan_select_until sel_wait sel_wait_until ", " " + op + " ")
+}
+
+/// The blocks a block may transfer to: its statements' failure edges, then its terminator's.
+fn cs_successors(b: Block) -> Ints {
+    let out = ints_new()
+    for s in b.stmts {
+        let u = stmt_unwind(s)
+        if u >= 0 { ints_push(out, u) }
+    }
+    if vec_len(b.term) > 0 {
+        let t = successors(vec_get(b.term, 0))
+        for i in 0..ints_len(t) { ints_push(out, ints_get(t, i)) }
+    }
+    out
+}
+
+/// Which blocks lie on a cycle of the control-flow graph, failure edges included (`on_cycles`): Tarjan's algorithm with explicit stacks.
+fn cs_on_cycles(f: MirFn) -> Ints {
+    let n = vec_len(f.blocks)
+    let edges: Vec[Ints] = vec_new()
+    for i in 0..n {
+        let es = cs_successors(vec_get(f.blocks, i))
+        let kept = ints_new()
+        for j in 0..ints_len(es) { if ints_get(es, j) >= 0 && ints_get(es, j) < n { ints_push(kept, ints_get(es, j)) } }
+        vec_push(edges, kept)
+    }
+    let index = ints_new()
+    let low = ints_new()
+    let on_stack = ints_new()
+    let out = ints_new()
+    for i in 0..n {
+        ints_push(index, 0 - 1)
+        ints_push(low, 0)
+        ints_push(on_stack, 0)
+        ints_push(out, 0)
+    }
+    let stack = ints_new()
+    let mut next = 0
+    for root in 0..n {
+        if ints_get(index, root) != 0 - 1 { continue }
+        let wv = ints_new()
+        let wi = ints_new()
+        ints_push(wv, root)
+        ints_push(wi, 0)
+        while ints_len(wv) > 0 {
+            let top = ints_len(wv) - 1
+            let v = ints_get(wv, top)
+            let i = ints_get(wi, top)
+            if i == 0 {
+                ints_set(index, v, next)
+                ints_set(low, v, next)
+                next += 1
+                ints_push(stack, v)
+                ints_set(on_stack, v, 1)
+            }
+            let es = vec_get(edges, v)
+            if i < ints_len(es) {
+                let w = ints_get(es, i)
+                ints_set(wi, top, i + 1)
+                if ints_get(index, w) == 0 - 1 {
+                    ints_push(wv, w)
+                    ints_push(wi, 0)
+                } else if ints_get(on_stack, w) == 1 {
+                    if ints_get(index, w) < ints_get(low, v) { ints_set(low, v, ints_get(index, w)) }
+                }
+                continue
+            }
+            ints_pop(wv)
+            ints_pop(wi)
+            let lv = ints_get(low, v)
+            if ints_len(wv) > 0 {
+                let parent = ints_get(wv, ints_len(wv) - 1)
+                if lv < ints_get(low, parent) { ints_set(low, parent, lv) }
+            }
+            if lv == ints_get(index, v) {
+                let members = ints_new()
+                let mut more = true
+                while more && ints_len(stack) > 0 {
+                    let w = ints_pop(stack)
+                    ints_set(on_stack, w, 0)
+                    ints_push(members, w)
+                    if w == v { more = false }
+                }
+                let mut selfloop = false
+                for k in 0..ints_len(es) { if ints_get(es, k) == v { selfloop = true } }
+                if ints_len(members) > 1 || selfloop {
+                    for k in 0..ints_len(members) { ints_set(out, ints_get(members, k), 1) }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn cs_managed(tt: TypeTable, f: MirFn, l: Int) -> Bool {
+    if l < 0 || l >= vec_len(f.locals) { return false }
+    let t = vec_get(f.locals, l).ty
+    if t == "Tasks" { return false }
+    managed(tt, t)
+}
+
+fn cs_push(out: Vec[CsSite], kind: Str, op: Str, at: Str, unknown: Bool, failure: Bool) -> Int {
+    vec_push(out, CsSite(kind: kind, op: op, at: at, unknown: unknown, failure: failure))
+    0
+}
+
+/// The sites of one statement (`cost::statement`).
+fn cs_statement(p: MirProgram, tt: TypeTable, f: MirFn, s: Stmt, at: Str, unknown: Bool, failure: Bool, out: Vec[CsSite]) {
+    match s {
+        Stmt.Assign(dst: dst, value: v, unwind: _) => {
+            match v {
+                Rvalue.Primitive(op: op, elem: _, args: _) => {
+                    if cs_allocates(op) { cs_push(out, "allocation", op, at, unknown, failure) }
+                    if cs_retains(op) { cs_push(out, "retain", op, at, unknown, failure) }
+                    if cs_channel(op) { cs_push(out, "channel", op, at, unknown, failure) }
+                    if cs_blocks(op) { cs_push(out, "block", op, at, unknown, failure) }
+                },
+                Rvalue.Closure(func: _, captures: _) => cs_push(out, "allocation", "closure", at, unknown, failure),
+                Rvalue.Copy(l: l) => { if cs_managed(tt, f, l) { cs_push(out, "retain", "copy", at, unknown, failure) } },
+                Rvalue.Field(base: _, f: _) => { if cs_managed(tt, f, dst) { cs_push(out, "retain", "copy", at, unknown, failure) } },
+                Rvalue.Payload(base: _, ty: _, variant: _, vname: _, field: _, fname: _) => { if cs_managed(tt, f, dst) { cs_push(out, "retain", "copy", at, unknown, failure) } },
+                Rvalue.Capture(env: _, index: _) => { if cs_managed(tt, f, dst) { cs_push(out, "retain", "copy", at, unknown, failure) } },
+                Rvalue.Call(callee: g, args: _) => {
+                    let callee = vec_get(p.fns, g)
+                    if callee.foreign != "" { cs_push(out, "foreign", callee.name, at, unknown, failure) }
+                },
+                _ => {},
+            }
+        },
+        Stmt.Spawn(list: _, callee: _, args: _, unwind: _) => cs_push(out, "task", "spawn", at, unknown, failure),
+        Stmt.ScopeJoin(list: _) => cs_push(out, "block", "join", at, unknown, failure),
+        _ => {},
+    }
+}
+
+/// One function's sites, in block and statement order (`cost::sites`); `@name` is resolved to the function's name span.
+fn cs_sites(p: MirProgram, tt: TypeTable, ms: MirSpans, fi: Int) -> Vec[CsSite] {
+    let f = vec_get(p.fns, fi)
+    let cyclic = cs_on_cycles(f)
+    let out: Vec[CsSite] = vec_new()
+    for i in 0..vec_len(f.blocks) {
+        let b = vec_get(f.blocks, i)
+        let unknown = ints_get(cyclic, i) == 1
+        let failure = b.origin != 0
+        let mut k = 0
+        for s in b.stmts {
+            let raw = if k < strs_len(b.ats) { strs_get(b.ats, k) } else { "" }
+            let at = if raw == "@name" { strs_get(ms.fn_names, fi) } else { raw }
+            cs_statement(p, tt, f, s, at, unknown, failure, out)
+            k += 1
+        }
+    }
+    out
+}
+
+/// The module a span names, as `SourceNames::name` shows it: the durable name, or for a module outside the source root the loader's.
+fn cs_module(ms: MirSpans, at: Str) -> Str {
+    let file = span_file_of(at)
+    if str_len(file) > 0 && str_byte(file, 0) == 35 {
+        match hashmap_get(ms.paths, file) { Some(p) => { return p }, None => {} }
+    }
+    file
+}
+
+/// A place as JSON: `null` for none, else `{"column":..,"line":..,"module":".."}`.
+fn cs_place_json(ms: MirSpans, at: Str) -> Str {
+    if at == "" { return "null" }
+    let lc = span_pos(ms, at)
+    if ints_len(lc) == 0 { return "null" }
+    "{\"column\":" + int_to_str(ints_get(lc, 1)) + ",\"line\":" + int_to_str(ints_get(lc, 0)) + ",\"module\":" + quote(cs_module(ms, at)) + "}"
+}
+
+fn cs_shown(ms: MirSpans, at: Str) -> Str {
+    if at == "" { return "(compiler-made)" }
+    let lc = span_pos(ms, at)
+    if ints_len(lc) == 0 { return "(compiler-made)" }
+    cs_module(ms, at) + ":" + int_to_str(ints_get(lc, 0)) + ":" + int_to_str(ints_get(lc, 1))
+}
+
+fn cs_split(line: Str) -> Strs {
+    text_split(line, "\t")
+}
+
+/// The report: `json` the `nazm.cost/2` line, else the text.
+pub fn cost_report(c: Cir, tt: TypeTable, p: MirProgram, ms: MirSpans, json: Bool) -> Str ! {} {
+    let n = vec_len(p.fns)
+    let all: Vec[Vec[CsSite]] = vec_new()
+    for i in 0..n { vec_push(all, cs_sites(p, tt, ms, i)) }
+    // The functions by identity.
+    let keyed = strs_new()
+    for i in 0..n { strs_push(keyed, vec_get(p.fns, i).identity + "\t" + int_to_str(i)) }
+    let order = ints_new()
+    for k in strs_sort(keyed) {
+        let tab = match text_find(k, "\t") { Some(i) => i, None => 0 }
+        match text_parse_int(str_slice(k, tab + 1, str_len(k))) { Ok(v) => ints_push(order, v), Err(_) => {} }
+    }
+    // Totals by kind, in the order the kinds sort.
+    let kinds = text_split("allocation block channel foreign retain task", " ")
+    let once = ints_new()
+    let unknown = ints_new()
+    for k in kinds {
+        ints_push(once, 0)
+        ints_push(unknown, 0)
+    }
+    for fi in 0..n {
+        for s in vec_get(all, fi) {
+            for k in 0..strs_len(kinds) {
+                if strs_get(kinds, k) == s.kind {
+                    if s.unknown { ints_set(unknown, k, ints_get(unknown, k) + 1) } else { ints_set(once, k, ints_get(once, k) + 1) }
+                }
+            }
+        }
+    }
+    let totals = strs_new()
+    let mut has_task = false
+    let mut has_foreign = false
+    for k in 0..strs_len(kinds) {
+        if ints_get(once, k) + ints_get(unknown, k) > 0 {
+            strs_push(totals, quote(strs_get(kinds, k)) + ":{\"at-most-once\":" + int_to_str(ints_get(once, k)) + ",\"unknown\":" + int_to_str(ints_get(unknown, k)) + "}")
+            if strs_get(kinds, k) == "task" { has_task = true }
+            if strs_get(kinds, k) == "foreign" { has_foreign = true }
+        }
+    }
+    // The scheduler a native build runs the tasks on when the environment does not say.
+    let sched_default = if has_foreign { "threads" } else { "pool" }
+    let sched_why = if has_foreign { "it calls C, and a task blocked in C would hold a pool worker and every task on it" } else { "M:N: tasks on a bounded set of worker threads" }
+    let environment = "NAZM_SCHEDULER=pool|threads, NAZM_WORKERS, NAZM_TASK_STACK"
+    let layouts = vec_layouts(c, tt, p)
+    let loops = vectorize_facts(c)
+    let out = strs_new()
+    if json {
+        let fs = strs_new()
+        for oi in 0..ints_len(order) {
+            let fi = ints_get(order, oi)
+            let sites = strs_new()
+            for s in vec_get(all, fi) {
+                strs_push(sites, "{\"at\":" + cs_place_json(ms, s.at) + ",\"count\":" + quote(if s.unknown { "unknown" } else { "at-most-once" }) + ",\"kind\":" + quote(s.kind)
+                        + ",\"on_failure\":" + (if s.failure { "true" } else { "false" }) + ",\"op\":" + quote(s.op) + "}")
+            }
+            strs_push(fs, "{\"identity\":" + quote(vec_get(p.fns, fi).identity) + ",\"sites\":[" + str_join(sites, ",") + "]}")
+        }
+        let ls = strs_new()
+        for row in layouts {
+            let parts = cs_split(row)
+            let why = strs_get(parts, 1)
+            strs_push(ls, "{\"soa\":" + quote(if why == "" { "eligible" } else { why }) + ",\"type\":" + quote(strs_get(parts, 0)) + "}")
+        }
+        let lp = strs_new()
+        for row in loops {
+            let parts = cs_split(row)
+            let how = strs_get(parts, 2)
+            let reason = strs_get(parts, 3)
+            strs_push(lp, "{\"at\":" + cs_place_json(ms, strs_get(parts, 1)) + ",\"function\":" + quote(strs_get(parts, 0)) + ",\"reason\":" + (if reason == "" { "null" } else { quote(reason) })
+                    + ",\"vectorised\":" + (if how == "" { "null" } else { quote(how) }) + "}")
+        }
+        let sched = if has_task {
+            "{\"default\":" + quote(sched_default) + ",\"environment\":" + quote(environment) + ",\"task_stack_bytes\":262144,\"why\":" + quote(sched_why) + ",\"workers\":4}"
+        } else { "null" }
+        return "{\"functions\":[" + str_join(fs, ",") + "],\"layouts\":[" + str_join(ls, ",") + "],\"loops\":[" + str_join(lp, ",") + "],\"scheduler\":" + sched
+                + ",\"schema\":\"nazm.cost/2\",\"totals\":{" + str_join(totals, ",") + "}}\n"
+    }
+    for oi in 0..ints_len(order) {
+        let fi = ints_get(order, oi)
+        strs_push(out, vec_get(p.fns, fi).identity + "\n")
+        let sites = vec_get(all, fi)
+        if vec_len(sites) == 0 { strs_push(out, "  (no resource site)\n") }
+        for s in sites {
+            strs_push(out, "  " + cs_shown(ms, s.at) + "  " + s.kind + " `" + s.op + "`, " + (if s.unknown { "unknown" } else { "at-most-once" }) + " per call"
+                    + (if s.failure { ", on a failure path" } else { "" }) + "\n")
+        }
+    }
+    if has_task { strs_push(out, "scheduler " + sched_default + ": " + sched_why + " (" + environment + ")\n") }
+    for row in layouts {
+        let parts = cs_split(row)
+        let why = strs_get(parts, 1)
+        if why == "" {
+            strs_push(out, "layout " + strs_get(parts, 0) + "  `--layout soa` lays it out one array per field\n")
+        } else {
+            strs_push(out, "layout " + strs_get(parts, 0) + "  element by element: " + why + "\n")
+        }
+    }
+    for row in loops {
+        let parts = cs_split(row)
+        let how = strs_get(parts, 2)
+        if how != "" {
+            strs_push(out, "loop " + cs_shown(ms, strs_get(parts, 1)) + "  vectorised (" + how + ")\n")
+        } else {
+            strs_push(out, "loop " + cs_shown(ms, strs_get(parts, 1)) + "  not vectorised: " + strs_get(parts, 3) + "\n")
+        }
+    }
+    str_join(out, "")
+}

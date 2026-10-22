@@ -4,8 +4,8 @@
 //
 //   explain-cost   `nazm_mir::cost` over MIR (every allocation, retain, block, channel, C call and task
 //                  of each function, its count per call), `vectorize::explain`, `--layout soa`'s
-//                  eligibility and the scheduler's policy: the R3 pipeline has no mode that prints them
-//                  (a hand-back to R3: `pipeline cost`).
+//                  eligibility and the scheduler's policy: the pipeline's `cost` and `cost-json` modes
+//                  (`toolchain/pipeline/cost.nz`, R8 slice 11) print them from the Core IR document.
 //   explain-flow   every sink of the compilation with the origins that reach it and how each got there
 //                  (`Resolution::sinks`): R2's provenance facts summarise a function's, not the sinks
 //                  nor their traces (a hand-back to R2: `fx_sink_*`).
@@ -15,6 +15,7 @@
 //                  slice 5/6: `profile --backend nazm`, its counters compared by structure).
 
 use "../../compiler/facts.nz"
+use "../../compiler/facts-core.nz"
 use "cli.nz"
 use "front.nz"
 use "util.nz"
@@ -58,10 +59,18 @@ pub fn profile_cli() -> Cli {
     c
 }
 
-pub fn explain_cost_command(io: IoCap, c: Cli) -> Int {
+pub fn explain_cost_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int {
     cli_parse(io, c)
-    ci_checked(io, cli_value(c, 0), false, "")
-    ex_refuse(io, "`explain-cost` (MIR's cost sites, the vectorizer's reasons, the layouts and the scheduler's policy: the pipeline prints none of them, an R3 hand-back)")
+    let file = ci_entry(io, cli_value(c, 0))
+    let f = ci_checked(io, file, false, "")
+    let raw = fx_core_document_with_sources(f)
+    if raw == "" { ex_refuse(io, "a program whose Core IR the front end does not carry") }
+    let doc = ci_unprefix_paths(io, raw, file)
+    let args = strs_new()
+    strs_push(args, if cli_present(c, 1) { "cost-json" } else { "cost" })
+    strs_push(args, "@CORE@")
+    print(ci_staged(io, proc, sp, "explain-cost", doc, args))
+    0
 }
 
 pub fn explain_flow_command(io: IoCap, c: Cli) -> Int {
