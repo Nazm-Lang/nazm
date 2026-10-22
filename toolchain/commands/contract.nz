@@ -1,24 +1,32 @@
-// `nazm contract`, in Nazm (R8 slice 10, `openspec/changes/r8-cut-over/design.md`, task 10.1, *S10.1*).
+// `nazm contract`, in Nazm (R8 slice 10, then slice 11, `openspec/changes/r8-cut-over/design.md`, task 10.1 and 11.1).
 //
 // `nazm contract FILE [--interface] [--txs FILE] [--evm DIR] [--upgrade-check OLD] [--wasm DIR] [--accounts DIR]`, run by the dispatcher
-// (`nazm.nz`). The command line is `cli.rs`'s, byte for byte; what the command does is carried as far as what it reads is published:
+// (`nazm.nz`). The command line is `cli.rs`'s, byte for byte; what the command does is `contract.rs`'s:
 //
-//   carried   the arguments and the usage errors; `FILE` (and `OLD`) loaded and checked as `opened` and `on_lowered` do, every diagnostic
-//             written as the Rust command writes it (`toolfront.nz`), for `--upgrade-check` — which holds no profile — both programs, in the
-//             reference's order and with its status; and a root that cannot be read or loaded, which `profile::enforce` leaves to `opened`.
-//   refused   (status 6, counted by the comparison, never an agreement)
-//             `--evm` and `--wasm`: the EVM back end and the WebAssembly target are deferred targets (design, open question 1: the released
-//             `nazm` cuts over without them, each returning with its domain track before 1.0, `docs/user/support.md`);
-//             everything else once the program loads: `contract` first holds the module to the `web3` profile (`accounts` for
-//             `--accounts`), whose rules (`declared-effects`, `no-recursion`, `no-blocking`, `no-ambient-time`, `signed-writes`) read the
-//             call graph and the call sites of the whole compilation and write witnesses the port has no table for — profiles other than
-//             `general` are slice 11's (task 11.1, as `check --profile`) — and then reads the contract's facts (`nazm_service::contract`: the
-//             state record, the entrypoints with what each reads and writes, `conserved`, whether a caller is checked), which R2 does not
-//             publish.
+//   the profile first   the program held to `web3` (`accounts` for `--accounts`) as `profile::enforce` holds it (`profile.nz`), before anything is loaded for
+//                       the command: a contract that is not deterministic is not read at all;
+//   then                the module loaded and checked as `opened` and `on_lowered` do (`toolfront.nz`), the transactions' file read between the two,
+//                       and the contract's facts read off Core IR (`contractfacts.nz`, `nazm_service::contract`): `--interface` (the default) its
+//                       `nazm.contract/1`, `--accounts DIR` the account metadata (keccak256, `keccak.nz`) written as `DIR/accounts.json`, `--txs FILE`
+//                       the transactions run on the interpreter; `--upgrade-check OLD` (which holds no profile) its storage against OLD's;
+//   refused             (status 6, counted by the comparison, never an agreement) `--evm` and `--wasm`: the EVM back end and the WebAssembly target are
+//                       **deferred targets** (design, open question 1: the released `nazm` cuts over without them, each returning with its domain track
+//                       before 1.0, `docs/user/support.md`).
 
+use "../../compiler/diag.nz"
+use "../../compiler/package.nz"
+use "../../compiler/facts.nz"
+use "../../compiler/facts-core.nz"
 use "cli.nz"
 use "toolfront.nz"
 use "util.nz"
+use "front.nz"
+use "coreir.nz"
+use "profile.nz"
+use "contractfacts.nz"
+use "keccak.nz"
+use "obligations.nz"
+use "../interp/entry.nz"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -42,44 +50,344 @@ fn ct_refuse(io: IoCap, why: Str) -> Int {
     0
 }
 
-pub fn contract_command(io: IoCap, c: Cli) -> Int {
+// `profile::enforce(file, file, Some(profile), false, false)`: the program held to `profile` (and to each profile a package manifest above it names) as a
+// program with a `main`; a program that does not load, does not check or is warned of is left to the command, which says why.
+fn ct_enforce(io: IoCap, proc: ProcessCap, sp: SpawnCap, file: Str, profile: Str) -> Int {
+    let library = os_env_get("NAZM_LIBRARY")
+    if library == "" { return 0 }
+    let prefix = fe_prefix(io, file)
+    let abs = prefix + file
+    let f = fx_check_in(abs, "", library, fe_host_os(), fe_host_arch(), io)
+    if fx_refusal(f) != "" || !fx_carried(f) || fe_load_failed(f) { return 0 }
+    let in_force = strs_new()
+    strs_push(in_force, profile)
+    let mut locked = false
+    let root = pk_decide(abs, io)
+    if pk_root_how(root) == 1 {
+        let packages = pk_context(pk_root_path(root), io)
+        if pk_packages_state(packages) != 1 { ct_refuse(io, "a package that does not resolve here") }
+        for i in 0..pk_count(packages) {
+            let p = pk_profile(packages, i)
+            if p != "" {
+                if !pf_known(p) { pf_unknown(io, p, "the package `" + pk_name(packages, i) + "`'s manifest") }
+                strs_push(in_force, p)
+            }
+        }
+        locked = pf_lock_ok(io, packages)
+    }
+    pf_enforce(io, proc, sp, f, abs, fe_names(f, prefix), in_force, locked, false)
+}
+
+// A program loaded and checked as a module and read as a contract: its front end (`st`: the status of what was written, and whether it failed to load),
+// and the contract or why it is none — the reason written as `N0395` where it is (`contract::of`'s refusal, which `emit` shows as a diagnostic).
+struct Cl {
+    st: Ints,
+    ct: Ct,
+    front: Front,
+}
+
+fn ct_load(io: IoCap, file: Str, inputs: Strs, texts: Strs, help: Bool) -> Cl {
+    let st = ints_new()
+    ints_push(st, 0)
+    ints_push(st, 0)
+    let front = tf_front(io, file, inputs, texts, st, true)
+    if ints_get(st, 0) != 0 { return Cl(st: st, ct: ct_none(""), front: front) }
+    let raw = fx_core_document_with_sources(front.f)
+    if raw == "" { ct_refuse(io, "a program whose Core IR the front end does not carry") }
+    let ct = ct_of_text(front.f, ci_unprefix_paths(io, raw, file))
+    if ct.why != "" {
+        let d = dg_new()
+        dg_error(d, "N0395", 0, 0, "this module is not a contract: " + ct.why, "",
+                if help { "a contract is a `State` record, `fn init() -> State`, and `pub fn name(s: State, caller: Int, …: Int) -> Result[State, Int] ! {}` entrypoints" } else { "" })
+        eprint(dg_render(d, 0, front.names, front.sources, front.bases))
+        ints_set(st, 0, 1)
+    }
+    Cl(st: st, ct: ct, front: front)
+}
+
+fn ct_str_array(xs: Strs) -> Str {
+    let out = strs_new()
+    for x in xs { strs_push(out, ob_quote(x)) }
+    "[" + str_join(out, ",") + "]"
+}
+
+// `nazm.contract/1` (`--interface`).
+fn ct_facts(ct: Ct) -> Str {
+    let fields = strs_new()
+    for i in 0..strs_len(ct.fields) { strs_push(fields, "{\"name\":" + ob_quote(strs_get(ct.fields, i)) + ",\"type\":" + ob_quote(strs_get(ct.ftypes, i)) + "}") }
+    let entries = strs_new()
+    for i in 0..strs_len(ct.ename) {
+        let reads = if ints_get(ct.rall, i) == 1 { "\"all\"" } else { ct_str_array(vec_get(ct.reads, i)) }
+        let writes = if ints_get(ct.wall, i) == 1 { "\"all\"" } else { ct_str_array(vec_get(ct.writes, i)) }
+        strs_push(entries, "{\"args\":" + ct_str_array(vec_get(ct.eargs, i)) + ",\"name\":" + ob_quote(strs_get(ct.ename, i)) + ",\"reads\":" + reads + ",\"writes\":" + writes + "}")
+    }
+    "{\"conserved\":" + ut_bool(ct.conserved) + ",\"entrypoints\":[" + str_join(entries, ",") + "],\"external_calls\":\"none: an entrypoint calls only Nazm functions, so nothing can re-enter it\","
+            + "\"profile\":\"web3\",\"schema\":\"nazm.contract/1\",\"state\":{\"fields\":[" + str_join(fields, ",") + "]}}"
+}
+
+// `nazm.sbpf-accounts/1` (`--accounts DIR`).
+fn ct_accounts_doc(ct: Ct) -> Str {
+    let n = strs_len(ct.fields)
+    let meta = strs_new()
+    for k in 0..n {
+        let kind = if strs_get(ct.ftypes, k) == "Bool" { "bool as u64" } else { "i64 little-endian" }
+        strs_push(meta, "{\"name\":" + ob_quote(strs_get(ct.fields, k)) + ",\"offset\":" + int_to_str(1 + 8 * k) + ",\"size\":8,\"type\":\"" + kind + "\"}")
+    }
+    let instructions = strs_new()
+    for i in 0..strs_len(ct.ename) {
+        let name = strs_get(ct.ename, i)
+        let discriminator = str_slice(keccak256_hex("nazm.instruction." + name), 0, 16)
+        let writable = ints_get(ct.wall, i) == 1 || strs_len(vec_get(ct.writes, i)) > 0
+        let args = strs_new()
+        let names = vec_get(ct.eargs, i)
+        for k in 0..strs_len(names) {
+            strs_push(args, "{\"name\":" + ob_quote(strs_get(names, k)) + ",\"offset\":" + int_to_str(8 + 8 * k) + ",\"type\":\"i64 little-endian\"}")
+        }
+        strs_push(instructions, "{\"accounts\":[{\"name\":\"state\",\"owner\":\"this program\",\"signer\":false,\"writable\":" + ut_bool(writable)
+                + "},{\"name\":\"caller\",\"signer\":" + ut_bool(ints_get(ct.checked, i) == 1) + ",\"writable\":false}],\"args\":[" + str_join(args, ",")
+                + "],\"discriminator\":\"" + discriminator + "\",\"name\":" + ob_quote(name) + "}")
+    }
+    "{\"cross_program_calls\":\"none: an entrypoint calls only Nazm functions\",\"execution\":\"BLOCKED: no sBPF toolchain, validator or emulator on this host; this metadata is the target-neutral part\","
+            + "\"instructions\":[" + str_join(instructions, ",") + "],\"profile\":\"accounts\",\"schema\":\"nazm.sbpf-accounts/1\",\"state_account\":{\"data\":{\"fields\":["
+            + str_join(meta, ",") + "],\"layout\":\"byte 0 the layout version, then each field's 8 bytes by declaration index\",\"size\":" + int_to_str(1 + 8 * n)
+            + ",\"version\":1},\"owner\":\"this program\"}}"
+}
+
+// `contract NEW --upgrade-check OLD` (`upgrade_check`): whether NEW's storage can take over OLD's live storage. Slots are by field name, so order is free and an
+// added field moves nothing; a removed field strands its value and a changed type misreads it.
+fn ct_upgrade(io: IoCap, new_file: Str, old_file: Str) -> Int {
+    let none = strs_new()
+    let texts = strs_new()
+    let old = ct_load(io, old_file, none, texts, false)
+    let new = ct_load(io, new_file, none, texts, false)
+    if ints_get(old.st, 0) != 0 { exit_with(ints_get(old.st, 0)) }
+    if ints_get(new.st, 0) != 0 { exit_with(ints_get(new.st, 0)) }
+    let changes = strs_new()
+    let wrongs = strs_new()
+    for i in 0..strs_len(old.ct.fields) {
+        let name = strs_get(old.ct.fields, i)
+        let ty = strs_get(old.ct.ftypes, i)
+        let mut at = 0 - 1
+        for j in 0..strs_len(new.ct.fields) { if strs_get(new.ct.fields, j) == name { at = j } }
+        if at < 0 {
+            let why = "removed: the value stored for `" + name + "` would be stranded"
+            strs_push(changes, "{\"field\":" + ob_quote(name) + ",\"verdict\":\"incompatible\",\"why\":" + ob_quote(why) + "}")
+            strs_push(wrongs, "error[N0399]: `" + name + "` cannot be upgraded in place: " + why + nl())
+        } else if strs_get(new.ct.ftypes, at) != ty {
+            let why = "its type changed from `" + ty + "` to `" + strs_get(new.ct.ftypes, at) + "`: the stored word would be misread"
+            strs_push(changes, "{\"field\":" + ob_quote(name) + ",\"verdict\":\"incompatible\",\"why\":" + ob_quote(why) + "}")
+            strs_push(wrongs, "error[N0399]: `" + name + "` cannot be upgraded in place: " + why + nl())
+        }
+    }
+    for j in 0..strs_len(new.ct.fields) {
+        let name = strs_get(new.ct.fields, j)
+        let mut seen = false
+        for i in 0..strs_len(old.ct.fields) { if strs_get(old.ct.fields, i) == name { seen = true } }
+        if !seen {
+            strs_push(changes, "{\"field\":" + ob_quote(name) + ",\"verdict\":\"compatible\",\"why\":\"added: its slot is its own, and starts at zero\"}")
+        }
+    }
+    let incompatible = strs_len(wrongs) > 0
+    print("{\"changes\":[" + str_join(changes, ",") + "],\"outcome\":\"" + (if incompatible { "incompatible" } else { "compatible" }) + "\",\"schema\":\"nazm.evm-upgrade/1\"}" + nl())
+    eprint(str_join(wrongs, ""))
+    if incompatible { exit_with(1) }
+    0
+}
+
+// The words of a transaction's line, split at ASCII white space (`split_whitespace`).
+fn ct_words(s: Str) -> Strs {
+    let out = strs_new()
+    let mut from = 0 - 1
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        let space = b == 32 || (b >= 9 && b <= 13)
+        if space {
+            if from >= 0 { strs_push(out, str_slice(s, from, i)) }
+            from = 0 - 1
+        } else if from < 0 {
+            from = i
+        }
+    }
+    if from >= 0 { strs_push(out, str_slice(s, from, str_len(s))) }
+    out
+}
+
+fn ct_int(s: Str, ok: Ints) -> Int {
+    match text_parse_int(s) {
+        Ok(v) => {
+            ints_set(ok, 0, 1)
+            v
+        },
+        Err(_) => {
+            ints_set(ok, 0, 0)
+            0
+        },
+    }
+}
+
+/// `--txs`: the transactions of the file, one per line (`CALLER ENTRY ARG…`, every value an `Int`), run on the interpreter against a fresh `init()` state.
+/// A transaction commits only if its entrypoint returns `Ok` and — where the contract declares `conserved` — that quantity is unchanged; anything else
+/// reverts, leaving the state as it was.
+fn ct_run(io: IoCap, out: OutCap, tm: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap, cl: Cl, path: Str, text: Str) -> Int {
+    let f = cl.front.f
+    let ct = cl.ct
+    let raw = fx_core_document(f)
+    if raw == "" { ct_refuse(io, "a program whose Core IR the front end does not carry") }
+    let session = match cx_open(raw, 10000000, 512, out, io, tm, net, proc, rnd) {
+        Result.Ok(value: x) => x,
+        Result.Err(error: e) => { ct_refuse(io, "a contract the interpreter does not load: " + e); return 0 },
+    }
+    let root = fx_module_identity(f, 0)
+    let init = cx_function(session, root + "::fn init")
+    if init < 0 { ct_refuse(io, "a contract without `init` in the interpreter's table") }
+    if cx_call(session, init, ints_new()) != 0 { ct_refuse(io, "a contract whose `init` fails") }
+    let mut state = cx_result(session)
+    let conserved_fn = if ct.conserved { cx_function(session, root + "::fn conserved") } else { 0 - 1 }
+    let n = strs_len(ct.fields)
+    let runs = strs_new()
+    let broken = strs_new()
+    let mut line_no = 0
+    for raw_line in text_split(text, nl()) {
+        line_no += 1
+        let l = if ut_ends(raw_line, "\r") { str_slice(raw_line, 0, str_len(raw_line) - 1) } else { raw_line }
+        if ut_blank(l) || ut_starts(ut_trim_start(l), "#") { continue }
+        let ln = int_to_str(line_no)
+        let words = ct_words(l)
+        let ok = ints_new()
+        ints_push(ok, 1)
+        // `CALLER ENTRY ARG…`, every value an `Int`.
+        let caller = if strs_len(words) > 0 { ct_int(strs_get(words, 0), ok) } else { 0 }
+        let mut parsed = strs_len(words) >= 2 && ints_get(ok, 0) == 1
+        let args = ints_new()
+        for i in 2..strs_len(words) {
+            let v = ct_int(strs_get(words, i), ok)
+            if ints_get(ok, 0) == 0 { parsed = false }
+            ints_push(args, v)
+        }
+        if !parsed {
+            strs_push(runs, "{\"line\":" + ln + ",\"outcome\":\"malformed\",\"text\":" + ob_quote(l) + "}")
+            continue
+        }
+        let entry = strs_get(words, 1)
+        let mut e = 0 - 1
+        for i in 0..strs_len(ct.ename) { if strs_get(ct.ename, i) == entry { e = i } }
+        if e < 0 {
+            strs_push(runs, "{\"entry\":" + ob_quote(entry) + ",\"line\":" + ln + ",\"outcome\":\"no-such-entrypoint\"}")
+            continue
+        }
+        let want = strs_len(vec_get(ct.eargs, e))
+        if want != ints_len(args) {
+            strs_push(runs, "{\"entry\":" + ob_quote(entry) + ",\"expected\":" + int_to_str(want) + ",\"line\":" + ln + ",\"outcome\":\"wrong-arity\"}")
+            continue
+        }
+        let fi = cx_function(session, root + "::fn " + entry)
+        if fi < 0 { continue }
+        // The conserved quantity before, then the call with the state, the caller and the arguments.
+        let before = ct_amount(session, conserved_fn, state)
+        let calls0 = cx_calls(session)
+        let call_args = ints_new()
+        ints_push(call_args, state)
+        ints_push(call_args, cx_int(session, caller))
+        for i in 0..ints_len(args) { ints_push(call_args, cx_int(session, ints_get(args, i))) }
+        let status = cx_call(session, fi, call_args)
+        let turns = cx_turns(session)
+        let calls = cx_calls(session) - calls0
+        let head = "\"caller\":" + int_to_str(caller)
+        let tail = "\"entry\":" + ob_quote(entry) + ",\"line\":" + ln + ",\"meter\":{\"calls\":" + int_to_str(calls) + ",\"loop_turns\":" + int_to_str(turns) + "}"
+        if status == 0 {
+            let result = cx_result(session)
+            let variant = cx_variant(session, result)
+            if variant == 0 {
+                let next = cx_field(session, result, 0)
+                let after = ct_amount(session, conserved_fn, next)
+                if before == after {
+                    let changed = strs_new()
+                    for i in 0..n {
+                        let old = if cx_has_field(session, state, i) { cx_show(session, cx_field(session, state, i)) } else { "" }
+                        let new = if cx_has_field(session, next, i) { cx_show(session, cx_field(session, next, i)) } else { "" }
+                        if cx_has_field(session, state, i) && cx_has_field(session, next, i) && old != new { strs_push(changed, ob_quote(strs_get(ct.fields, i))) }
+                    }
+                    strs_push(runs, "{" + head + ",\"changed\":[" + str_join(changed, ",") + "]," + tail + ",\"outcome\":\"ok\"}")
+                    state = next
+                } else {
+                    strs_push(runs, "{" + head + ",\"code\":\"N0396\",\"conserved\":{\"after\":" + ct_option(after) + ",\"before\":" + ct_option(before) + "}," + tail + ",\"outcome\":\"rejected\"}")
+                    strs_push(broken, "error[N0396]: transaction " + ln + " (`" + entry + "`) changed the conserved quantity from " + ct_question(before) + " to " + ct_question(after)
+                            + "; it was rejected" + nl())
+                }
+            } else if variant > 0 {
+                let code = if cx_has_field(session, result, 0) { ob_quote(cx_show(session, cx_field(session, result, 0))) } else { "null" }
+                strs_push(runs, "{" + head + ",\"code\":" + code + "," + tail + ",\"outcome\":\"revert\"}")
+            } else {
+                strs_push(runs, "{" + head + "," + tail + ",\"outcome\":\"revert\"}")
+            }
+        } else {
+            strs_push(runs, "{" + head + ",\"code\":" + ob_quote(cx_code(session)) + "," + tail + ",\"outcome\":\"fail\"}")
+        }
+    }
+    // The final state, by field name.
+    let named = strs_new()
+    for i in 0..n {
+        let v = if cx_has_field(session, state, i) { cx_show(session, cx_field(session, state, i)) } else { "" }
+        strs_push(named, strs_get(ct.fields, i) + "\t" + v)
+    }
+    let fields = strs_new()
+    for row in strs_sort(named) {
+        let tab = ut_find(row, "\t", 0)
+        strs_push(fields, ob_quote(str_slice(row, 0, tab)) + ":" + ob_quote(str_slice(row, tab + 1, str_len(row))))
+    }
+    print("{\"meter\":\"per transaction, the calls the interpreter made below the entrypoint and the loop turns it took: counts, not gas\",\"schema\":\"nazm.contract-run/1\","
+            + "\"state\":{" + str_join(fields, ",") + "},\"transactions\":[" + str_join(runs, ",") + "]}" + nl())
+    eprint(str_join(broken, ""))
+    if strs_len(broken) > 0 { exit_with(1) }
+    0
+}
+
+/// The conserved quantity of a state as text, or "\u{0}" for none (no `conserved`, or a call that failed).
+fn ct_amount(session: Cx, conserved_fn: Int, state: Int) -> Str {
+    if conserved_fn < 0 { return "\u{0}" }
+    let args = ints_new()
+    ints_push(args, state)
+    if cx_call(session, conserved_fn, args) != 0 { return "\u{0}" }
+    cx_show(session, cx_result(session))
+}
+
+fn ct_option(s: Str) -> Str { if s == "\u{0}" { "null" } else { ob_quote(s) } }
+
+fn ct_question(s: Str) -> Str { if s == "\u{0}" { "?" } else { s } }
+
+pub fn contract_command(io: IoCap, out: OutCap, tm: TimeCap, net: NetCap, proc: ProcessCap, sp: SpawnCap, rnd: RandomCap, c: Cli) -> Int {
     cli_parse(io, c)
     let file = cli_value(c, 0)
     let evm = cli_present(c, 3)
     let wasm = cli_present(c, 5)
     if evm { ct_refuse(io, "`contract --evm` (the EVM back end is a deferred target: removed from the 0.11.0 cut-over, back with the smart-contract track before 1.0)") }
     if wasm { ct_refuse(io, "`contract --wasm` (the WebAssembly target is a deferred target: removed from the 0.11.0 cut-over, back with the WebAssembly track before 1.0)") }
-    let none = strs_new()
+    if cli_present(c, 4) { return ct_upgrade(io, file, cli_value(c, 4)) }
+    let accounts = cli_present(c, 6)
+    // The profile first, by the path every command enforces one: a contract that is not deterministic is not run at all.
+    ct_enforce(io, proc, sp, file, if accounts { "accounts" } else { "web3" })
+    // The module loaded; the transactions' file read after the load and before the check's diagnostics (`opened`, then the file, then `on_lowered`).
+    let inputs = strs_new()
     let texts = strs_new()
-    if cli_present(c, 4) {
-        // `upgrade_check`: the old program's layout, then the new one's; both are reported, the old one's status wins.
-        let st_old = ints_new()
-        ints_push(st_old, 0)
-        ints_push(st_old, 0)
-        tf_front(io, cli_value(c, 4), none, texts, st_old, true)
-        let st_new = ints_new()
-        ints_push(st_new, 0)
-        ints_push(st_new, 0)
-        tf_front(io, file, none, texts, st_new, true)
-        // Both are reported, the old one's status wins; but a program that does load is then asked what contract it is (`nazm_service::contract`),
-        // which the port cannot answer, and the reference reports that too: only two that do not load are compared.
-        if ints_get(st_old, 0) != 0 && ints_get(st_new, 0) != 0 {
-            exit_with(ints_get(st_old, 0))
-            return ints_get(st_old, 0)
+    let has_txs = cli_present(c, 2)
+    if has_txs { strs_push(inputs, cli_value(c, 2)) }
+    let cl = ct_load(io, file, inputs, texts, true)
+    if ints_get(cl.st, 0) != 0 { exit_with(ints_get(cl.st, 0)) }
+    let ct = cl.ct
+    if accounts {
+        let dir = cli_value(c, 6)
+        let doc = ct_accounts_doc(ct)
+        let why = strs_new()
+        if !ut_make_dirs(io, dir, why) || !ut_write_all(io, ut_join(dir, "accounts.json"), doc) {
+            eprint("nazm: cannot write " + dir + ": " + (if strs_len(why) > 0 { strs_get(why, 0) } else { "" }) + nl())
+            exit_with(1)
         }
-        ct_refuse(io, "`contract --upgrade-check` (the contract's state record and its fields, `nazm_service::contract`: R2 does not publish them)")
+        print(doc + nl())
+        return 0
     }
-    // `profile::enforce` first: a root that cannot be loaded passes it and `opened` says why; a root that loads is held to the profile, whose
-    // rules the port has not got.
-    let st = ints_new()
-    ints_push(st, 0)
-    ints_push(st, 0)
-    tf_front(io, file, none, texts, st, false)
-    // A load that failed has said why; a program that checks, or does not, is the profile's to judge first.
-    if ints_get(st, 1) == 1 {
-        exit_with(ints_get(st, 0))
-        return ints_get(st, 0)
+    if cli_present(c, 1) || !has_txs {
+        print(ct_facts(ct) + nl())
+        return 0
     }
-    let profile = if cli_present(c, 6) { "accounts" } else { "web3" }
-    ct_refuse(io, "`contract` (the `" + profile + "` profile it holds the module to first, and the contract's facts: profiles other than `general` are slice 11's, and R2 does not publish a contract's entrypoints)")
+    ct_run(io, out, tm, net, proc, rnd, cl, cli_value(c, 2), strs_get(texts, 0))
 }

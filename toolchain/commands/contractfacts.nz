@@ -29,7 +29,7 @@ pub struct Ct {
     ee: Ints,
 }
 
-fn ct_none(why: Str) -> Ct {
+pub fn ct_none(why: Str) -> Ct {
     Ct(why: why, fields: strs_new(), ftypes: strs_new(), conserved: false, ename: strs_new(), eargs: vec_new(), rall: ints_new(), reads: vec_new(), wall: ints_new(), writes: vec_new(),
             checked: ints_new(), es: ints_new(), ee: ints_new())
 }

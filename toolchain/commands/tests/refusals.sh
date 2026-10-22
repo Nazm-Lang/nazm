@@ -31,11 +31,13 @@ if [ "${1:-}" = --worker ]; then
     W=$RF_OUT/w/$n
     mkdir -p "$W"
     cd "$RF_ROOT" || exit 2
-    eval "set -- $args"
     inp=/dev/null
     [ -n "$stdin" ] && inp=$stdin
+    # `@OUT@` in a line is a directory each side writes its files to: compared afterwards.
+    eval "set -- ${args//@OUT@/$W/ref-out}"
     NAZM_CACHE_DIR=$W/cache-ref "$RF_REF" "$@" > "$W/ref.out" 2> "$W/ref.err" < "$inp"
     echo $? > "$W/ref.status"
+    eval "set -- ${args//@OUT@/$W/got-out}"
     while :; do
         NAZM_CACHE_DIR=$W/cache-got STAGE_STDIN=${stdin:-/dev/null} "$STAGE_RUN" "${RF_DEADLINE:-300}" "$RF_PORT" "$@" > "$W/got.out" 2> "$W/got.err"
         rc=$?
@@ -46,7 +48,7 @@ if [ "${1:-}" = --worker ]; then
     if [ "$rc" = 6 ] && [ "$(cat "$W/ref.status")" != 6 ]; then
         reason=$(head -n 1 "$W/got.err" | sed -e 's#[A-Za-z0-9_./-]*\.nz#FILE#g' | cut -c1-160)
         echo "refused|$label|$reason" > "$RF_OUT/res/$n"
-    elif cmp -s "$W/ref.out" "$W/got.out" && cmp -s "$W/ref.err" "$W/got.err" && cmp -s "$W/ref.status" "$W/got.status"; then
+    elif cmp -s "$W/ref.out" "$W/got.out" && cmp -s "$W/ref.err" "$W/got.err" && cmp -s "$W/ref.status" "$W/got.status" && diff -r "$W/ref-out" "$W/got-out" > /dev/null 2>&1 || { [ ! -d "$W/ref-out" ] && [ ! -d "$W/got-out" ] && cmp -s "$W/ref.out" "$W/got.out" && cmp -s "$W/ref.err" "$W/got.err" && cmp -s "$W/ref.status" "$W/got.status"; }; then
         echo "agree|$label|" > "$RF_OUT/res/$n"
     else
         echo "differ|$label|status $(cat "$W/ref.status") vs $(cat "$W/got.status")" > "$RF_OUT/res/$n"
@@ -97,6 +99,9 @@ if [ ${#files[@]} -eq 0 ]; then
     while IFS= read -r f; do files+=("$f"); done < <(
         find examples tests/compat/v1 compiler/conformance toolchain/codegen/tests/programs crates/nazm-cli/tests/refusals \
             crates/nazm-cli/tests/transfers toolchain/frontend-tests/inputs/check toolchain/frontend-tests/inputs/modules -name '*.nz' | LC_ALL=C sort -u
+        # The Rust test suites' own programs (REFUSALS_RS=1): 2406 more.
+        [ -z "${REFUSALS_RS:-}" ] || find toolchain/frontend-tests/inputs/rs -name '*.nz' | LC_ALL=C sort -u
+        [ -z "${REFUSALS_CONTRACTS:-}" ] || { ls examples/contracts/*.nz toolchain/commands/tests/accel/int_map.nz crates/nazm-cli/templates/contract/src/main.nz; ls toolchain/frontend-tests/inputs/rs/{contract,accounts,evm,wasm_contract,contract_property}*.nz; }
         # The directories of packages too: a package's directory stands for its `main` in several commands.
         [ -n "${REFUSALS_NO_PACKAGES:-}" ] || find examples tests/compat/v1 crates/nazm-cli/templates toolchain/frontend-tests/inputs -name nazm.toml | sed 's|/nazm.toml$||' | LC_ALL=C sort -u
     )
@@ -117,7 +122,9 @@ for f in "${files[@]}"; do
             mir) add "mir-spans $f" "" "mir --spans $f"; add "mir-spans-json $f" "" "mir --json --spans $f" ;;
             lir) add "lir $f" "" "lir --target aarch64-apple-darwin $f"; add "lir-ops $f" "" "lir --ops $f"; add "lir-debug $f" "" "lir --ops --debug $f" ;;
             fix) add "fix $f" "" "fix $f" ;;
-            contract) add "contract $f" "" "contract $f" ;;
+            contract) add "contract $f" "" "contract $f"; add "contract-interface $f" "" "contract $f --interface"; add "contract-accounts $f" "" "contract $f --accounts @OUT@"
+                add "contract-upgrade $f" "" "contract $f --upgrade-check $f"
+                add "contract-txs $f" "" "contract $f --txs toolchain/commands/tests/contract-txs.txt" ;;
             profile-*) add "$c $f" "" "check --no-cache --profile ${c#profile-} $f"; add "$c-report $f" "" "check --no-cache --profile ${c#profile-} --profile-report $f" ;;
             lsp-*)
                 k=${c#lsp-}
