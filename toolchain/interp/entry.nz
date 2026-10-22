@@ -344,3 +344,112 @@ pub fn interp_constant(doc: Str, root: Str, std: Str, max_iterations: Int, max_d
     let result = if vec_len(vm.res) > 0 { vec_get(vm.res, 0) } else { V.Unset }
     Ok(ie_show(vm.heap, result))
 }
+
+// --- a session: one function of a loaded program called at a time (R8 slice 11; `nazm contract --txs`) -----------------------------------------
+
+/// A loaded program whose functions are called one at a time, the heap — and so any value a call returns — kept between the calls. The values the session
+/// hands out are numbers (their places in `pool`), so a caller needs nothing of the interpreter's types.
+pub struct Cx {
+    p: Prog,
+    vm: Vm,
+    caps: Caps,
+    max_iterations: Int,
+    pool: Vec[V],
+}
+
+/// Load `doc` for calls (`Interpreter::new`).
+pub fn cx_open(doc: Str, max_iterations: Int, max_depth: Int, out: OutCap, io: IoCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap) -> Result[Cx, Str] {
+    let p = match load(doc) {
+        Ok(p) => p,
+        Err(e) => { return Err(e) },
+    }
+    let vm = vm_new(heap_new(), max_iterations, max_depth, strs_new())
+    Ok(Cx(p: p, vm: vm, caps: Caps(out: out, io: io, time: time, net: net, proc: proc, rnd: rnd), max_iterations: max_iterations, pool: vec_new[V]()))
+}
+
+/// A function by its Core IR key, or -1.
+pub fn cx_function(c: Cx, def: Str) -> Int {
+    match hashmap_get(c.p.fmap, def) {
+        Some(i) => i,
+        None => 0 - 1,
+    }
+}
+
+/// The calls the interpreter has made so far (below each entry it was asked to run), and the loop turns the last call took.
+pub fn cx_calls(c: Cx) -> Int { ints_get(c.vm.st, ST_CALLS) }
+pub fn cx_turns(c: Cx) -> Int { c.max_iterations - ints_get(c.vm.st, ST_ITER) }
+
+/// What the last call failed with: its code.
+pub fn cx_code(c: Cx) -> Str { strs_get(c.vm.err, 0) }
+
+fn cx_keep(c: Cx, v: V) -> Int {
+    vec_push(c.pool, v)
+    vec_len(c.pool) - 1
+}
+
+/// An `Int` value.
+pub fn cx_int(c: Cx, n: Int) -> Int { cx_keep(c, V.Int(v: n)) }
+
+/// Call function `f` with the values `args` (each a reference the call takes of its own): 0 where it returned a value (`cx_result`), 1 where it failed
+/// (`cx_code`), 2 where it waited for another task, which a call here has none to wait for. The limits are reset for every call.
+pub fn cx_call(c: Cx, f: Int, args: Ints) -> Int {
+    let p = c.p
+    let vm = c.vm
+    ints_set(vm.st, ST_ITER, c.max_iterations)
+    ints_set(vm.st, ST_FAILED, 0)
+    ints_set(vm.st, ST_DEPTH, 0)
+    while vec_len(vm.res) > 0 { vec_pop(vm.res) }
+    for i in 0..ints_get(p.flocals, f) {
+        if i < ints_len(args) {
+            let v = vec_get(c.pool, ints_get(args, i))
+            retain(vm.heap, v)
+            vec_push(vm.slots, v)
+        } else {
+            vec_push(vm.slots, V.Unset)
+        }
+    }
+    ints_push(vm.frames, f)
+    ints_push(vm.frames, 0 - 1)
+    ints_push(vm.frames, 0)
+    ints_push(vm.frames, 0)
+    ints_set(vm.st, ST_PC, ints_get(p.fentry, f))
+    ints_set(vm.st, ST_BASE, 0)
+    let x = exec(p, vm, c.caps)
+    if x == X_DONE { return 0 }
+    unwind(vm)
+    while ints_len(vm.frames) > 0 { ints_pop(vm.frames) }
+    if x == X_FAILED { 1 } else { 2 }
+}
+
+/// The value the last call returned.
+pub fn cx_result(c: Cx) -> Int { cx_keep(c, if vec_len(c.vm.res) > 0 { vec_get(c.vm.res, 0) } else { V.Unset }) }
+
+/// The variant of an enum value, or -1.
+pub fn cx_variant(c: Cx, h: Int) -> Int {
+    match vec_get(c.pool, h) {
+        V.Enm(def: _, variant: k, obj: _) => k,
+        _ => 0 - 1,
+    }
+}
+
+fn cx_obj(v: V) -> Int {
+    match v {
+        V.Rec(def: _, obj: o) => o,
+        V.Enm(def: _, variant: _, obj: o) => o,
+        _ => 0,
+    }
+}
+
+/// Whether the record or enum value has a field `i`, and that field (as a value).
+pub fn cx_has_field(c: Cx, h: Int, i: Int) -> Bool {
+    let o = cx_obj(vec_get(c.pool, h))
+    o > 0 && i < vec_len(fields_of(c.vm.heap, o))
+}
+
+pub fn cx_field(c: Cx, h: Int, i: Int) -> Int {
+    let o = cx_obj(vec_get(c.pool, h))
+    if o > 0 && i < vec_len(fields_of(c.vm.heap, o)) { cx_keep(c, vec_get(fields_of(c.vm.heap, o), i)) } else { cx_keep(c, V.Unset) }
+}
+
+/// A value as `Display` writes it.
+pub fn cx_show(c: Cx, h: Int) -> Str { ie_show(c.vm.heap, vec_get(c.pool, h)) }
