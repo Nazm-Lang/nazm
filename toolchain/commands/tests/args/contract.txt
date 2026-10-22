@@ -1,0 +1,36 @@
+# `nazm contract`'s command lines, run from the repository's root by `tests/tools.sh args`. A contract is held to the `web3` profile first, which the port does not carry: a program that loads is refused (status 6) after what loads, and what does not load is compared.
+--help
+-h
+(none)
+--bogus
+--interface
+examples/contracts/ledger.nz
+examples/contracts/ledger.nz --interface
+examples/contracts/ledger.nz --txs @FX@/txs.txt
+examples/contracts/ledger.nz --txs @FX@/nowhere.txt
+examples/contracts/ledger.nz --txs
+examples/contracts/ledger.nz --evm @FX@/out
+examples/contracts/ledger.nz --wasm @FX@/out
+examples/contracts/ledger.nz --accounts @FX@/out
+examples/contracts/ledger.nz --upgrade-check examples/contracts/ledger.nz
+examples/contracts/ledger.nz --upgrade-check examples/contracts/isqrt.nz
+examples/contracts/ledger.nz --upgrade-check @FX@/nowhere.nz
+@FX@/nowhere.nz --upgrade-check examples/contracts/ledger.nz
+@FX@/nowhere.nz --upgrade-check @FX@/nowhere.nz
+@FX@/typeerror.nz --upgrade-check examples/contracts/ledger.nz
+examples/contracts/ledger.nz --upgrade-check @FX@/typeerror.nz
+@FX@/typeerror.nz --upgrade-check @FX@/typeerror.nz
+@FX@/syntax.nz --upgrade-check examples/contracts/ledger.nz
+@FX@/typeerror.nz
+@FX@/syntax.nz
+@FX@/nowhere.nz
+@FX@/nowhere.nz --interface
+@FX@/emptydir
+@FX@/empty.nz
+@FX@/typeerror.nz --txs @FX@/nowhere.txt
+@FX@/nowhere.nz --txs @FX@/txs.txt
+@FX@/nowhere.nz --evm @FX@/out
+@FX@/nowhere.nz --accounts @FX@/out
+examples/contracts/isqrt.nz
+toolchain/commands/tests/accel/int_map.nz
+toolchain/commands/tests/accel/int_map.nz --txs @FX@/txs.txt

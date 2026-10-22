@@ -1,0 +1,8 @@
+fn pos(x: Int) -> Bool { x > 0 }
+
+fn k(x: Int) -> Int {
+    let p = pos(x)
+    if p { x } else { 0 }
+}
+
+fn main() -> Int { 0 }

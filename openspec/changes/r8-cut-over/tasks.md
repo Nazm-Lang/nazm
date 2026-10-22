@@ -133,7 +133,15 @@
       the Nazm `nazm-mcp` asking the Nazm `nazm`, 16 inputs of about 60 messages each (`agent.sh mcp-gen|mcp-serve|mcp-cmp`): 16 agree, 0 differ, 0 refused. `toml.nz`'s new forms, re-compared: `build.sh` args 159/0/15, `run.sh` args (all but `attest`, which needs `ssh-keygen`) 530/0/7, doc 5/0/1, init 24/0/0, `inspect.sh` trace 25/0/2 (check read no inputs: the container has no git).
 
 ## 10. Slice 10 — every command routed
-- [ ] 10.1 `bench`, `accel`; `contract` as question 1 decides
+- [x] 10.1 `bench`, `accel`; `contract` as question 1 decides. Every command line routed. Evidence (`tests/tools.sh`, design *Slice 10 — the evidence*):
+      `args` 88 agree, 0 differ, 34 refused (122 command lines); `bench` 41/0/3 (no benchmark run: nothing here builds a `@bench` function), `shape` 21/0/0
+      (the row and the harness line, on their own); `accel` 1709/0/0 (`--print-kernel` byte for byte, the refusals of an ineligible function, the inputs and their
+      number); `contract` 18/0/985. **Refused:** `contract --evm` and `--wasm` (deferred targets, open question 1) and every contract that loads (the `web3`
+      profile is slice 11's, and R2 publishes no contract facts); `accel`'s run (the providers and the interpreter's reference answer: hand-back 10.2 below);
+      `bench`'s `@cfg` of a feature, package or profile. **Intended difference:** a `bench` row's numbers are the clock's, compared by shape only.
+- [ ] 10.2 (hand-back, not started) `accel`'s run in Nazm: the provider host programs written out and run, the interpreter called per element, the `nazm.accel/3`
+      report. `contract` (`--interface`, `--txs`, `--accounts`, `--upgrade-check`) once slice 11 carries the `web3` and `accounts` profiles and R2 publishes a
+      contract's facts
 
 ## 11. Slice 11 — R5's refusals
 - [ ] 11.1 `check`, `lsp`, `patch`, `references`, `resolve`, `fix`, the MCP server: every refusal

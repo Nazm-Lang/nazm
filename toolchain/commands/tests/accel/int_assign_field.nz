@@ -1,0 +1,9 @@
+struct P { a: Int }
+
+fn k(x: Int) -> Int {
+    let mut p = P(a: x)
+    p.a = 3
+    p.a
+}
+
+fn main() -> Int { 0 }

@@ -1,0 +1,8 @@
+struct P { a: Int }
+
+fn k(x: Int) -> Int {
+    let p = P(a: x)
+    p.a
+}
+
+fn main() -> Int { 0 }

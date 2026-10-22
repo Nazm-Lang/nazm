@@ -50,9 +50,9 @@ Not carried, with what each waits on:
 | `trace`, `profile` | `trace.rs`, `profile.rs`, `run_profile.rs` | `test`'s cases run; the runtime's profile counters | 8 |
 | `context` (+ MCP `semantic_context`) | `context.rs`, `nazm-service` | R2: a function's effects — what it requires, what a caller must assume, the first call that requires each — are not published by `compiler/facts.nz` | 9 |
 | `repo` (+ MCP `repository_map`, `task_context`) | `repo.rs`, `nazm-repo` 3.8k | a port of the map and the task planner | 9 |
-| `bench` | `bench.rs` | `build`; timings | 10 |
-| `accel` | `accel.rs` + two C providers | `build`; the providers are C the platform's `clang` compiles | 10 |
-| `contract` | `contract.rs`, `contract_wasm.rs` | the EVM backend and the WebAssembly target — **deferred targets** (question 1) | 10 |
+| `bench` | `bench.rs` | `build`; timings | 10 (done: carried, compared without timing, S10.1) |
+| `accel` | `accel.rs` + two C providers | `build`; the providers are C the platform's `clang` compiles | 10 (the kernel carried; the run refused, S10.2) |
+| `contract` | `contract.rs`, `contract_wasm.rs` | the EVM backend and the WebAssembly target — **deferred targets** (question 1); and the `web3` profile, which is slice 11's | 10 (command line carried, `--evm`/`--wasm` and a loaded contract refused, S10.3) |
 
 R5's own refusals, which are also something the user has today (slice 11): `check` with
 `--cache-report` and the cache, profiles other than `general`, `--profile-report`, `--source-root`
@@ -797,6 +797,94 @@ words (`check_task`).
   - the absolute-path call names the checkout the messages were generated in; in the container it is `/src` (`mcp-serve` rewrites it);
   - the port: `nazm.task_context` is an answer (`isError` false) when its status is `complete` or `partial` (`TaskResult::Available`), not only
     `available`.
+
+## Slice 10 — `bench`, `accel`, `contract` (design, 2026-10-22)
+
+Every command of the table is now routed. `bench` is carried whole; `accel` as far as its kernel; `contract` as far as it loads. What each
+waits on is below, and the model is Sonnet throughout: no design choice here was open, only what the comparison may take.
+
+### S10.1 `bench`
+
+`toolchain/commands/bench.nz` is `bench.rs`: the files named (a directory's `.nz` files, directly inside it, sorted), every `@bench` function
+found as `test` finds its functions (`test.nz`'s `tc_marked`, whose helpers `tc_run_program` and `tc_own_path` it shares), each built by this
+executable (`nazm build --opt-level 2 --harness bench:NAME:N FILE -o EXE`), run once, and one row per function: `STEM::FUNCTION`, its file,
+the iterations, the nanoseconds together and per iteration, as `nazm.bench/1` with `--json` and as a line otherwise. The comparison
+(`tests/tools.sh bench`, and `args`) **never takes a timing and never runs a benchmark**: no input holds a `@bench` function that builds. It holds
+every word before and instead of a measurement: the usage errors and help, a path that is no file or directory, a directory with no `.nz` file,
+a file that cannot be read as UTF-8 (skipped), a file with no `@bench`, a function whose harness `nazm build` refuses (each diagnostic is the
+reference's, which the driver of each side wrote) and the statuses 0, 1, 3. The shape of a measurement is the part nothing here executes: its
+line, JSON object and the parse of the harness's `nazm-bench: NS SINK` line are checked against the reference's format strings as a unit (the
+functions on their own, `toolchain/commands/tests/`'s scratch check recorded in the evidence), and the clock is the one thing the two sides cannot
+print alike (an intended difference, S10.4). The `@cfg` of a feature, package or profile is refused as `test` refuses it.
+
+### S10.2 `accel`
+
+`toolchain/commands/accel.nz` is `accel.rs` and `nazm_service::kernel`, up to the point a provider would run the kernel: the front end
+(`toolfront.nz`, the shared load, inputs read between the load and the check, every diagnostic as `emit` writes it: no count), the function
+found in the root module, the shape (`(T) -> T` or `(T, T) -> T`, `T` an `Int`, `Float32` or `Float64`), every function it reaches held to the
+rules of an eligible one — each refusal `N0394` at the place the reference puts it (the name's span from the checker, the result type's from the
+tree, any other from the Core IR object's `at`) — and the OpenCL C source, generated from each function's Core IR object (`fx_core_function`,
+`nazm.core-ir/3`, which slice 8 compared byte for byte), the functions numbered as Core IR numbers them (`nz_f<N>`: the checker's function index).
+`--print-kernel` prints it, byte for byte. Then the inputs as the kernel's type (`i64`, `f32` and `f64` as Rust's `from_str` reads them: a
+token that does not read is the reference's sentence), the element ceiling, the number of inputs the kernel takes and their lengths.
+
+What it does not carry (status 6, counted by the comparison, never an agreement): what then **runs** the kernel — the provider's host program
+(OpenCL on the GPU, or C compiled by the platform's `clang` and run on a pool of threads, from `accel_host.c`/`accel_cpu.c`), the interpreter's
+answer for every element and the `nazm.accel/3` report with its timings. Those need the C programs written out and run and the interpreter called
+on a named function once per element; neither exists in Nazm yet, and the report is mostly the machine's (device, timings, transfers), not
+the language's. The 0.11.0 cut-over loses `nazm accel`'s run until it is ported (a hand-back, `tasks.md` 10.2). An input holding text that is not
+ASCII is refused too (Unicode white space separates Rust's words).
+
+### S10.3 `contract`
+
+`toolchain/commands/contract.nz` carries the command line (`cli.rs`'s, byte for byte) and what `contract` does before it reads the program: it
+loads it as `opened` does and ends with the loader's words and status where it cannot; `--upgrade-check` loads and checks both programs (it holds
+no profile) and ends with the old one's status where neither loads or checks. **Refused by name (status 6):** `--evm` and `--wasm` — the
+EVM back end and the WebAssembly target are **deferred targets** (open question 1: the cut-over drops them, each returning with its domain track
+before 1.0; `docs/user/support.md` and `stability.md` record them as removed when slice 18 edits them); and everything else once the program
+loads, because `contract` first holds the module to the `web3` profile (`accounts` with `--accounts`), whose rules read the whole compilation's
+call graph and call sites and write witnesses with no table in Nazm — **profiles other than `general` are slice 11's** (task 11.1), as
+`check --profile` — and then reads the contract's facts (`nazm_service::contract`: the state record, each entrypoint's reads and writes,
+`conserved`, whether a caller is checked; keccak256 for `--accounts`; the interpreter for `--txs`), which R2 does not publish. A contract that
+loads therefore gets the refusal, never an answer; that part of the command is **not carried** until slice 11 and a hand-back to R2
+(`fx_contract_*`) are done.
+
+### S10.4 What is compared, and the intended differences
+
+`toolchain/commands/tests/tools.sh` (host, one `host-run` at a time, heap limit 2G; the `bench` and `args` parts build the pipeline too, since
+`bench` has the Nazm `nazm` build each harness): `args` (`tests/args/{bench,accel,contract}.txt`), `bench` over the fixtures of `tests/bench`
+and the ones the script writes (a file that is not UTF-8, one that does not parse, a program that does not check, an empty directory), `accel`
+over `tests/accel` (40 kernels and near-kernels: every function of each, with ints, floats, a zip, bad input and three inputs; 42 of the 178
+function-and-kind pairs are kernels the reference prints, 136 refused) and the first functions of every input of check (`--print-kernel`),
+`contract` over every input of check, the contract examples, the template and the front-end corpus's contracts.
+
+- **Intended differences, not counted:** (1) the numbers of a `bench` row (`total_ns`, `ns_per_iteration`) are the clock's and are not compared, nor taken;
+  (2) none other.
+- **Refused, not intended differences:** `bench` an `@cfg` of a feature, package or profile in a file; `accel` a run; `contract` `--evm`,
+  `--wasm` and every program that loads (S10.3).
+
+### Slice 10 — the evidence
+
+`toolchain/commands/tests/tools.sh`, the Nazm `nazm` against the Rust one, standard output, standard error and status byte for byte (2026-10-22),
+on the macOS host, one `host-run` at a time, heap limit 2G.
+
+| part | agree | differ | refused |
+| --- | --- | --- | --- |
+| `args` (`tests/args/bench.txt`, `accel.txt`, `contract.txt`: 122 command lines, every kind of usage error, help, and what each command then does) | 88 | 0 | 34 |
+| `bench` (14 inputs with and without `--json` and `--iterations`, three files together; no benchmark run) | 41 | 0 | 3 |
+| `shape` (`bench-shape.nz`: five rows and sixteen harness lines, against the hand-applied reference formats) | 21 | 0 | 0 |
+| `accel` (every function of the 40 fixtures with ints, floats, a zip, a bad input, two and three inputs, and the first three functions of every input of check, `--print-kernel`) | 1709 | 0 | 0 |
+| `contract` (every input of check with and without `--interface`, the contract examples, the template and the front-end corpus's contracts with `--txs`, `--accounts`, `--upgrade-check`) | 18 | 0 | 985 |
+
+- **Refused (status 6), counted apart.** `args`: 22 of `contract` (a program that loads, `--evm`, `--wasm`), 11 of `accel` (a valid run), 1 of `bench`
+  (`@cfg(feature …)`). `bench`: the `@cfg` file, in three forms. `contract`: 985 programs that load, whose `web3` profile and contract facts the port
+  does not carry; the 18 that agree are the usage errors and the programs that do not load.
+- **Found and fixed while comparing.** `emit` writes the diagnostics of `accel` and of `contract --upgrade-check` and no count (`ci_checked`, which the
+  other commands share, adds `nazm: N errors`); a `--upgrade-check` where one program loads is the reference's to say whether it is a contract, so it is
+  refused unless neither loads; `nazm build` of a harness needs the pipeline (`NAZM_PIPELINE`) before it reports the file's errors.
+- **A slip, recorded.** The first `bench` part held one fixture whose `@bench` function builds (a `.txt` file named on the command line): it ran, twice
+  per form, the trivial `fn b() -> Int { 1 }` for 1000 iterations on each side — the one place a timing was taken. It was found by a `total_ns` that
+  differed, replaced by a function that does not build, and no run of a `@bench` function that builds remains in the scripts.
 
 ## Slice 13 — the harness remainder in Nazm (design, 2026-10-20)
 

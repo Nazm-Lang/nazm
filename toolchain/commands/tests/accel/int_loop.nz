@@ -1,0 +1,13 @@
+fn sq(x: Int) -> Int { x * x }
+
+fn k(x: Int) -> Int {
+    let mut s = 0
+    let mut i = 0
+    while i < 3 {
+        s = s + sq(x)
+        i += 1
+    }
+    if s > 5 { s } else { 0 - s }
+}
+
+fn main() -> Int { 0 }

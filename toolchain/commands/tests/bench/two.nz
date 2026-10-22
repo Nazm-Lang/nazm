@@ -1,0 +1,7 @@
+fn main() -> Int { 0 }
+
+@bench
+fn first() -> Int { "x" }
+
+@bench
+fn second() -> Int { undefined_name }

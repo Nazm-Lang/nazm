@@ -1,0 +1,4 @@
+@bench
+fn b() -> Str { "" }
+
+fn main() -> Int { 0 }
