@@ -2,6 +2,8 @@
 //
 //     pipeline mir CORE.json       print `nazm.mir/1`, as `nazm mir` does, once the validator
 //                                  accepted it
+//     pipeline mir-spans CORE.json print it with each function's and statement's position
+//                                  (`nazm mir --spans`, R8 slice 11): CORE.json carries the sources
 //     pipeline verify CORE.json    lower and validate, and say so
 //     pipeline mutants CORE.json   break one invariant at a time and check the validator says so
 //     pipeline ops-debug CORE.json print `nazm lir --ops --debug`: positions, the variables a
@@ -78,6 +80,7 @@ use "lldebug.nz"
 use "@std/hash"
 use "@std/blake3"
 use "@std/hashmap"
+use "@std/json"
 use "@std/text"
 use "@std/fs"
 use "@std/process"
@@ -167,8 +170,8 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
     }
     let first = if strs_len(args) > 0 { strs_get(args, 0) } else { "" }
     let mode = if strs_len(args) == 2 || (first == "runtime" && strs_len(args) == 4) || (first == "build" && (strs_len(args) == 5 || strs_len(args) == 7)) { first } else { "" }
-    if mode != "mir" && mode != "verify" && mode != "mutants" && mode != "lir" && mode != "ops" && mode != "tables" && mode != "runtime" && mode != "ops-debug" && mode != "build" {
-        eprint("usage: pipeline [--target TRIPLE] mir|lir|tables|ops|ops-debug|verify|mutants CORE.json | pipeline runtime CORE.json [STACK HEAP] | pipeline build CORE.json OUTDIR STACK HEAP\n")
+    if mode != "mir" && mode != "mir-spans" && mode != "verify" && mode != "mutants" && mode != "lir" && mode != "ops" && mode != "tables" && mode != "runtime" && mode != "ops-debug" && mode != "build" {
+        eprint("usage: pipeline [--target TRIPLE] mir|mir-spans|lir|tables|ops|ops-debug|verify|mutants CORE.json | pipeline runtime CORE.json [STACK HEAP] | pipeline build CORE.json OUTDIR STACK HEAP\n")
         return 2
     }
     let text = match fs_read(io, strs_get(args, 1)) {
@@ -254,6 +257,26 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
     }
     if mode == "verify" {
         print(int_to_str(vec_len(p.fns)) + " functions, valid\n")
+    } else if mode == "mir-spans" {
+        let sources: HashMap[Str, Str] = hashmap_new()
+        let starts: HashMap[Str, Ints] = hashmap_new()
+        let paths: HashMap[Str, Str] = hashmap_new()
+        let mods = kid(c, json_root(c.doc), "modules")
+        for i in 0..count(c, mods) {
+            let m = at(c, mods, i)
+            hashmap_set(sources, sval(c, m, "name"), sval(c, m, "source"))
+            hashmap_set(starts, sval(c, m, "name"), text_line_starts(sval(c, m, "source")))
+            hashmap_set(paths, sval(c, m, "name"), sval(c, m, "path"))
+        }
+        let fn_ats = strs_new()
+        let fn_names = strs_new()
+        for f in p.fns {
+            strs_push(fn_ats, fn_span_of(c, f))
+            strs_push(fn_names, name_at_of(c, sources, f))
+        }
+        let spans: Vec[MirSpans] = vec_new()
+        vec_push(spans, MirSpans(fn_ats: fn_ats, fn_names: fn_names, sources: sources, starts: starts, paths: paths))
+        print(print_mir_at(p, spans))
     } else {
         print(print_mir(p))
     }
