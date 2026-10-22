@@ -20,6 +20,10 @@ use "cli.nz"
 use "front.nz"
 use "util.nz"
 use "coreir.nz"
+use "obligations.nz"
+use "@std/json"
+use "@std/sort"
+use "@std/text"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -73,11 +77,91 @@ pub fn explain_cost_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -
     0
 }
 
+// A place as JSON (`place`): `null` for none, else `{"column":..,"line":..,"module":".."}`, the module by its durable name or, where it has
+// none, the name it was loaded under; and as `shown` writes it.
+fn ex_place(f: Facts, names: Strs, at: Int, end: Int) -> Strs {
+    let out = strs_new()
+    let m = fx_module_at(f, at)
+    if m < 0 {
+        strs_push(out, "null")
+        strs_push(out, "(compiler-made)")
+        return out
+    }
+    let local = at - fx_module_base(f, m)
+    let text = fx_module_text(f, m)
+    let line = ob_line(text, local)
+    let col = ob_column(text, local)
+    let key = fx_module_key(f, m)
+    let module = if key != "" { key } else { strs_get(names, m) }
+    strs_push(out, "{\"column\":" + int_to_str(col) + ",\"line\":" + int_to_str(line) + ",\"module\":" + json_quote(module) + "}")
+    strs_push(out, module + ":" + int_to_str(line) + ":" + int_to_str(col))
+    out
+}
+
 pub fn explain_flow_command(io: IoCap, c: Cli) -> Int {
     cli_parse(io, c)
+    let file = ci_entry(io, cli_value(c, 0))
+    let json = cli_present(c, 1)
     // `on_checked_map` checks the root as a program: a module with no `main` is `N0204`.
-    ci_checked_as(io, cli_value(c, 0), false, "", true)
-    ex_refuse(io, "`explain-flow` (the checker's sinks and the traces of the origins that reach them: R2 publishes a function's provenance, not these, an R2 hand-back)")
+    let f = ci_checked_as(io, file, false, "", true)
+    let names = fe_names(f, fe_prefix(io, file))
+    let n = fx_sink_count(f)
+    if fx_sink_declined(f) { ex_refuse(io, "a function of more than 60 parameters and captures (provenance)") }
+    let keyed = strs_new()
+    let blocks = strs_new()
+    for i in 0..n {
+        let at = ex_place(f, names, fx_sink_start(f, i), fx_sink_end(f, i))
+        let class = fx_sink_class(f, i)
+        let origins = fx_sink_origins(f, i)
+        let quoted = strs_new()
+        for o in origins { strs_push(quoted, json_quote(o)) }
+        let traces = strs_new()
+        let lines = strs_new()
+        for t in 0..fx_sink_traces(f, i) {
+            let steps = strs_new()
+            let origin = fx_sink_trace_origin(f, i, t)
+            strs_push(lines, "    " + origin + ":" + nl())
+            for k in 0..fx_sink_steps(f, i, t) {
+                let sp = ex_place(f, names, fx_sink_step_start(f, i, t, k), fx_sink_step_end(f, i, t, k))
+                strs_push(steps, "{\"at\":" + strs_get(sp, 0) + ",\"note\":" + json_quote(fx_sink_step_note(f, i, t, k)) + "}")
+                strs_push(lines, "      " + strs_get(sp, 1) + "  " + fx_sink_step_note(f, i, t, k) + nl())
+            }
+            strs_push(traces, "{\"origin\":" + json_quote(origin) + ",\"steps\":[" + str_join(steps, ",") + "]}")
+        }
+        let function = fx_sink_function(f, i)
+        let key = "{\"at\":" + strs_get(at, 0) + ",\"class\":" + json_quote(class) + ",\"function\":" + json_quote(function) + ",\"origins\":[" + str_join(quoted, ",")
+                + "],\"traces\":[" + str_join(traces, ",") + "]}"
+        strs_push(keyed, key + str_from_byte(1) + int_to_str(i))
+        let what = if class == "vouch" { "vouch, clearing" } else { "receives" }
+        let received = if strs_len(origins) == 0 { "nothing restricted (no origin)" } else { str_join(origins, ", ") }
+        strs_push(blocks, strs_get(at, 1) + "  " + class + " in `" + function + "`: " + what + " " + received + nl() + str_join(lines, ""))
+    }
+    let order = strs_new()
+    for k in strs_sort(keyed) {
+        let mut cut = str_len(k)
+        for q in 0..str_len(k) { if str_byte(k, q) == 1 { cut = q } }
+        strs_push(order, str_slice(k, cut + 1, str_len(k)))
+    }
+    if json {
+        let items = strs_new()
+        for k in strs_sort(keyed) {
+            let mut cut = str_len(k)
+            for q in 0..str_len(k) { if str_byte(k, q) == 1 { cut = q } }
+            strs_push(items, str_slice(k, 0, cut))
+        }
+        print("{\"schema\":\"nazm.flow/2\",\"sinks\":[" + str_join(items, ",") + "]}" + nl())
+        return 0
+    }
+    if n == 0 { print("(no sink)" + nl()) }
+    let out = strs_new()
+    for q in 0..strs_len(order) {
+        match text_parse_int(strs_get(order, q)) {
+            Ok(i) => strs_push(out, strs_get(blocks, i)),
+            Err(_) => {},
+        }
+    }
+    print(str_join(out, ""))
+    0
 }
 
 pub fn profile_command(io: IoCap, c: Cli) -> Int {
