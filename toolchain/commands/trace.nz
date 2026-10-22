@@ -200,7 +200,7 @@ pub fn trace_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int {
         Result.Ok(value: doc) => doc,
         Result.Err(error: e) => { tr_refuse(io, "Core IR's document does not parse: " + e); json_new() },
     }
-    let census = ob_census(io, d)
+    let census = ob_census(io, d, ob_proved(f))
     // The program's own module's functions: name to a row, the last of a name winning.
     let root = json_root(d)
     let mods = ob_kid(d, root, "modules")
