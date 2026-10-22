@@ -128,7 +128,9 @@
       evidence*): effects 437 agree, 0 differ (`refdump effects`); `context` 3635 agree, 0 differ, 99 refused (97 errors that leave the
       facts' index unlike the reference's, 2 a record the facts do not publish); command lines 52/0/1.
 - [x] 9.2 `repo` (`nazm-repo` ported); MCP `nazm.repository_map`, `nazm.task_context`. Evidence: `repo --map` and 568 `--task` requests
-      568 agree, 0 differ, 0 refused; command lines 54/0/2 (no `--root`); the MCP tools are written and `nazm-mcp` builds, but a contained session did not finish in the runner's hour: their comparison (`agent.sh mcp-gen|mcp-serve|mcp-cmp`) is open.
+      568 agree, 0 differ, 0 refused; command lines 54/0/2 (no `--root`). MCP: `nazm.semantic_context` (the offsets, the absolute path and 7 argument
+      errors), `nazm.repository_map` and `nazm.task_context` (every kind of seed, every intent, a budget, the stale state and 12 invalid requests) through
+      the Nazm `nazm-mcp` asking the Nazm `nazm`, 16 inputs of about 60 messages each (`agent.sh mcp-gen|mcp-serve|mcp-cmp`): 16 agree, 0 differ, 0 refused. `toml.nz`'s new forms, re-compared: `build.sh` args 159/0/15, `run.sh` args (all but `attest`, which needs `ssh-keygen`) 530/0/7, doc 5/0/1, init 24/0/0, `inspect.sh` trace 25/0/2 (check read no inputs: the container has no git).
 
 ## 10. Slice 10 — every command routed
 - [ ] 10.1 `bench`, `accel`; `contract` as question 1 decides
