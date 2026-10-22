@@ -27,6 +27,7 @@ use "cli.nz"
 use "front.nz"
 use "summary.nz"
 use "lockcheck.nz"
+use "profile.nz"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -301,7 +302,7 @@ fn finish_summary(io: IoCap, f: Facts, abs: Str, given: Str, library: Str, which
 }
 
 // `nazm check`, its arguments read into `c` (`check_cli`) from where `cli_from` says.
-pub fn check_command(io: IoCap, c: Cli) -> Int {
+pub fn check_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int {
     cli_parse(io, c)
     let mut file = cli_value(c, 0)
     let named = file
@@ -374,18 +375,23 @@ pub fn check_command(io: IoCap, c: Cli) -> Int {
             exit_with(1)
         }
     }
-    // `profile::enforce`: an unknown profile is refused before anything is checked; a profile
-    // other than `general`, and the report, are not carried.
+    // `profile::enforce`: an unknown profile is refused before anything is checked; the rules of the profiles in force are held after the program
+    // has checked (below), before the command says anything.
+    let in_force = strs_new()
     if cli_present(c, 7) {
-        let known = profiles()
-        let mut found = false
-        for i in 0..strs_len(known) {
-            if strs_get(known, i) == profile { found = true }
-        }
-        if !found { unknown_profile(io, profile) }
-        if profile != "general" { refuse(io, "the profile `" + profile + "`") }
+        if !pf_known(profile) { unknown_profile(io, profile) }
+        strs_push(in_force, profile)
     }
-    if cli_present(c, 9) { refuse(io, "`--profile-report`") }
+    if packaged {
+        for i in 0..pk_count(packages) {
+            let p = pk_profile(packages, i)
+            if p != "" {
+                if !pf_known(p) { pf_unknown(io, p, "the package `" + pk_name(packages, i) + "`'s manifest") }
+                strs_push(in_force, p)
+            }
+        }
+    }
+    let profile_report = cli_present(c, 9)
     // `--source-root`: the root as given (`root::decide`'s `given`), absolute as the reference makes
     // it, its refusal in the words the user wrote it in; not carried for a package's file, whose
     // packages the reference resolves under another root than it loads from.
@@ -448,6 +454,10 @@ pub fn check_command(io: IoCap, c: Cli) -> Int {
         for m in 0..fx_modules(f) {
             if contains(fx_module_text(f, m), "@cfg") { refuse(io, "`--profile` where a module asks `@cfg`") }
         }
+    }
+    if strs_len(in_force) > 0 || profile_report {
+        // The report names a file as the loader did; `locked` is whether the package was held to its lockfile.
+        pf_enforce(io, proc, sp, f, abs, names, in_force, locked || (packaged && pf_lock_ok(io, packages)), profile_report)
     }
     if report {
         let how = if cli_present(c, 2) { "given" } else if pk_root_how(root) == 1 { "package" } else { "derived" }

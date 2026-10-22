@@ -67,6 +67,7 @@ mkdir -p "$OUT/bin" "$OUT/res" "$OUT/w"
 jobs=8
 cmds="check snapshot diagnostics resolve obligations explain-cost explain-flow mir fix contract"
 files=()
+all_profiles="profile-embedded profile-critical profile-cyber profile-realtime profile-web3 profile-accounts profile-authority profile-kernel profile-robotics profile-automotive profile-aerospace profile-assurance profile-industrial profile-medical"
 while [ $# -gt 0 ]; do
     case $1 in
         -j) jobs=$2; shift 2 ;;
@@ -75,6 +76,7 @@ while [ $# -gt 0 ]; do
         *) echo "refusals: unknown argument $1"; exit 2 ;;
     esac
 done
+cmds=${cmds//profile-all/$all_profiles}
 [ "$STAGE_MODE" = host ] && jobs=1
 
 if [ -z "${NAZM_PORT:-}" ]; then
@@ -109,14 +111,14 @@ for f in "${files[@]}"; do
             snapshot) add "snapshot $f" "" "snapshot --root $f --json" ;;
             diagnostics) add "diagnostics $f" "" "diagnostics --root $f --json" ;;
             resolve) add "resolve $f" "" "resolve $f" ;;
-            obligations) add "obligations $f" "" "obligations $f" ;;
+            obligations) add "obligations $f" "" "obligations $f"; add "obligations-json $f" "" "obligations --json $f" ;;
             explain-cost) add "explain-cost $f" "" "explain-cost $f"; add "explain-cost-json $f" "" "explain-cost --json $f" ;;
             explain-flow) add "explain-flow $f" "" "explain-flow $f"; add "explain-flow-json $f" "" "explain-flow --json $f" ;;
             mir) add "mir-spans $f" "" "mir --spans $f"; add "mir-spans-json $f" "" "mir --json --spans $f" ;;
             lir) add "lir $f" "" "lir --target aarch64-apple-darwin $f"; add "lir-ops $f" "" "lir --ops $f"; add "lir-debug $f" "" "lir --ops --debug $f" ;;
             fix) add "fix $f" "" "fix $f" ;;
             contract) add "contract $f" "" "contract $f" ;;
-            profile-*) add "$c $f" "" "check --no-cache --profile ${c#profile-} $f" ;;
+            profile-*) add "$c $f" "" "check --no-cache --profile ${c#profile-} $f"; add "$c-report $f" "" "check --no-cache --profile ${c#profile-} --profile-report $f" ;;
             lsp-*)
                 k=${c#lsp-}
                 s=${LSP_DIR:?lsp needs LSP_DIR (lsp-gen.sh writes it)}/$k/$(echo "$f" | tr '/' '_').bin

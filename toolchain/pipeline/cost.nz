@@ -329,3 +329,215 @@ pub fn cost_report(c: Cir, tt: TypeTable, p: MirProgram, ms: MirSpans, json: Boo
     }
     str_join(out, "")
 }
+
+// --- what the profile rules read off MIR (`crates/nazm-cli/src/profile.rs`, `mir_facts`; R8 slice 11) ------------------------------------
+
+/// A span for a witness: `MODULE:START..END` (Core IR's spelling, local to its module), `@name` resolved to the function's name span; "" for none.
+fn cs_span(ms: MirSpans, fi: Int, at: Str) -> Str {
+    if at == "@name" { return strs_get(ms.fn_names, fi) }
+    at
+}
+
+/// The sites of function `fi` that are calls of something that may allocate, through any chain of calls (`cost::allocating_calls`).
+fn cs_allocating_calls(p: MirProgram, tt: TypeTable, ms: MirSpans, own: Vec[Vec[CsSite]], fi: Int, may: Ints, anyone: Bool) -> Vec[CsSite] {
+    let f = vec_get(p.fns, fi)
+    let cyclic = cs_on_cycles(f)
+    let out: Vec[CsSite] = vec_new()
+    for i in 0..vec_len(f.blocks) {
+        let b = vec_get(f.blocks, i)
+        let unknown = ints_get(cyclic, i) == 1
+        let failure = b.origin != 0
+        let mut k = 0
+        for s in b.stmts {
+            let raw = if k < strs_len(b.ats) { strs_get(b.ats, k) } else { "" }
+            let at = cs_span(ms, fi, raw)
+            match s {
+                Stmt.Assign(dst: _, value: v, unwind: _) => {
+                    match v {
+                        Rvalue.Call(callee: g, args: _) => {
+                            if ints_get(may, g) == 1 { cs_push(out, "allocation", "call of `" + vec_get(p.fns, g).name + "`", at, unknown, failure) }
+                        },
+                        Rvalue.CallIndirect(callee: _, args: _) => {
+                            if anyone { cs_push(out, "allocation", "call through a function value", at, unknown, failure) }
+                        },
+                        _ => {},
+                    }
+                },
+                _ => {},
+            }
+            k += 1
+        }
+    }
+    out
+}
+
+fn cs_line(kind: Str, at: Str, note: Str) -> Str {
+    kind + "\t" + at + "\t" + note + "\n"
+}
+
+/// `profile-facts`: one line per fact, `KIND\tAT\tNOTE`: `unbounded` (an allocation in a loop, a call that may allocate in one), `allocation` (every
+/// allocation site), `recursive` (a function in a call cycle), `indirect` (a call through a function value), `feeding` (a `@task` that feeds the
+/// watchdog, its name), then `stats\tALLOCATION_SITES\tTASK_SITES\tCALL_DEPTH` (`-` for none).
+pub fn profile_facts(c: Cir, tt: TypeTable, p: MirProgram, ms: MirSpans) -> Str ! {} {
+    let n = vec_len(p.fns)
+    let all: Vec[Vec[CsSite]] = vec_new()
+    for i in 0..n { vec_push(all, cs_sites(p, tt, ms, i)) }
+    // The functions that may allocate, to a fixed point.
+    let may = ints_new()
+    for i in 0..n {
+        let mut m = 0
+        for s in vec_get(all, i) { if s.kind == "allocation" { m = 1 } }
+        ints_push(may, m)
+    }
+    let mut changed = true
+    while changed {
+        changed = false
+        for i in 0..n {
+            if ints_get(may, i) == 1 { continue }
+            let f = vec_get(p.fns, i)
+            let mut any_may = false
+            for q in 0..ints_len(may) { if ints_get(may, q) == 1 { any_may = true } }
+            let mut reaches = false
+            for b in f.blocks {
+                for s in b.stmts {
+                    match s {
+                        Stmt.Assign(dst: _, value: v, unwind: _) => {
+                            match v {
+                                Rvalue.Call(callee: g, args: _) => { if ints_get(may, g) == 1 { reaches = true } },
+                                Rvalue.CallIndirect(callee: _, args: _) => { if any_may { reaches = true } },
+                                _ => {},
+                            }
+                        },
+                        _ => {},
+                    }
+                }
+            }
+            if reaches {
+                ints_set(may, i, 1)
+                changed = true
+            }
+        }
+    }
+    let mut anyone = false
+    for q in 0..ints_len(may) { if ints_get(may, q) == 1 { anyone = true } }
+    let out = strs_new()
+    // `cost::of`'s allocation sites in a loop, then the calls that may allocate in one.
+    for i in 0..n {
+        let name = vec_get(p.fns, i).name
+        for s in vec_get(all, i) {
+            if s.kind == "allocation" && s.unknown { strs_push(out, cs_line("unbounded", s.at, "`" + s.op + "` allocates here in a loop of `" + name + "`")) }
+        }
+    }
+    for i in 0..n {
+        let name = vec_get(p.fns, i).name
+        for s in cs_allocating_calls(p, tt, ms, all, i, may, anyone) {
+            if s.unknown { strs_push(out, cs_line("unbounded", s.at, "`" + s.op + "` allocates here in a loop of `" + name + "`")) }
+        }
+    }
+    let mut sites = 0
+    for i in 0..n {
+        let name = vec_get(p.fns, i).name
+        for s in vec_get(all, i) {
+            if s.kind == "allocation" {
+                sites += 1
+                strs_push(out, cs_line("allocation", s.at, "`" + s.op + "` allocates here, in `" + name + "`"))
+            }
+        }
+    }
+    // The call graph over direct calls and spawns.
+    let edges: Vec[Ints] = vec_new()
+    let mut tasks = 0
+    for i in 0..n {
+        let f = vec_get(p.fns, i)
+        let es = ints_new()
+        for b in f.blocks {
+            let mut k = 0
+            for s in b.stmts {
+                let raw = if k < strs_len(b.ats) { strs_get(b.ats, k) } else { "" }
+                match s {
+                    Stmt.Assign(dst: _, value: v, unwind: _) => {
+                        match v {
+                            Rvalue.Call(callee: g, args: _) => ints_push(es, g),
+                            Rvalue.CallIndirect(callee: _, args: _) => strs_push(out, cs_line("indirect", cs_span(ms, i, raw), "`" + f.name + "` calls a function value here")),
+                            _ => {},
+                        }
+                    },
+                    Stmt.Spawn(list: _, callee: g, args: _, unwind: _) => {
+                        ints_push(es, g)
+                        tasks += 1
+                    },
+                    _ => {},
+                }
+                k += 1
+            }
+        }
+        vec_push(edges, es)
+    }
+    let mut recursive = 0
+    for i in 0..n {
+        // A function is in a cycle when it reaches itself.
+        let seen = ints_new()
+        for q in 0..n { ints_push(seen, 0) }
+        let stack = ints_new()
+        let first = vec_get(edges, i)
+        for q in 0..ints_len(first) { ints_push(stack, ints_get(first, q)) }
+        let mut cycle = false
+        while ints_len(stack) > 0 && !cycle {
+            let j = ints_pop(stack)
+            if j == i { cycle = true } else if ints_get(seen, j) == 0 {
+                ints_set(seen, j, 1)
+                let next = vec_get(edges, j)
+                for q in 0..ints_len(next) { ints_push(stack, ints_get(next, q)) }
+            }
+        }
+        if cycle {
+            recursive += 1
+            strs_push(out, cs_line("recursive", strs_get(ms.fn_ats, i), "`" + vec_get(p.fns, i).name + "` is in a call cycle"))
+        }
+    }
+    // The tasks that feed the watchdog.
+    for i in 0..n {
+        let f = vec_get(p.fns, i)
+        if f.node >= 0 && kid(c, kid(c, f.node, "attributes"), "task") >= 0 {
+            let mut feeds = false
+            for b in f.blocks {
+                for s in b.stmts {
+                    match s {
+                        Stmt.Assign(dst: _, value: v, unwind: _) => {
+                            match v {
+                                Rvalue.Primitive(op: op, elem: _, args: _) => { if op == "watchdog_feed" { feeds = true } },
+                                _ => {},
+                            }
+                        },
+                        _ => {},
+                    }
+                }
+            }
+            if feeds { strs_push(out, "feeding\t\t" + f.name + "\n") }
+        }
+    }
+    // The longest chain of direct calls from `main`, where there is no cycle and no call through a value.
+    let mut depth = "-"
+    let mut indirect = 0
+    for l in out { if text_starts_with(l, "indirect\t") { indirect += 1 } }
+    if recursive == 0 && indirect == 0 && p.entry >= 0 {
+        let memo = ints_new()
+        for q in 0..n { ints_push(memo, 0) }
+        depth = int_to_str(cs_depth(edges, p.entry, memo))
+    }
+    strs_push(out, "stats\t" + int_to_str(sites) + "\t" + int_to_str(tasks) + "\t" + depth + "\n")
+    str_join(out, "")
+}
+
+/// The longest chain of calls from `f`, counting `f`, over an acyclic graph (`depth`), by its post-order.
+fn cs_depth(edges: Vec[Ints], f: Int, memo: Ints) -> Int {
+    if ints_get(memo, f) > 0 { return ints_get(memo, f) }
+    let mut best = 0
+    let es = vec_get(edges, f)
+    for q in 0..ints_len(es) {
+        let d = cs_depth(edges, ints_get(es, q), memo)
+        if d > best { best = d }
+    }
+    ints_set(memo, f, 1 + best)
+    1 + best
+}

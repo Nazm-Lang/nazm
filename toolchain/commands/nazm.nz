@@ -414,7 +414,7 @@ fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, tm: TimeCap, out
     if s == "bench" { return bench_command(io, proc, sp, v, c) }
     if s == "accel" { return accel_command(io, c) }
     if s == "contract" { return contract_command(io, c) }
-    check_command(io, c)
+    check_command(io, proc, sp, c)
 }
 
 // No command named: the short help, as an error (status 5, clap's `arg_required_else_help`).
