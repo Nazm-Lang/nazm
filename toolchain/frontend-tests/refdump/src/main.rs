@@ -326,7 +326,8 @@ fn analysed(path: &str) -> Result<(nazm_service::load::Loaded, nazm_core::Analys
     loaded.graph =
         std::mem::take(&mut loaded.graph).with_config(nazm_core::sema::BuildConfig::host());
     let a = nazm_core::analyse(&loaded.map, &loaded.graph, nazm_core::Entry::Absent);
-    if !a.diagnostics.is_empty() {
+    // `R2_WITH_ERRORS=1`: the facts of a compilation that does not check clean, as the language service reads them (R8 slice 11).
+    if !a.diagnostics.is_empty() && std::env::var_os("R2_WITH_ERRORS").is_none() {
         return Err("fails");
     }
     Ok((loaded, a))

@@ -53,6 +53,8 @@ pub struct Facts {
     // The source root, normalised, which a file's place in the language service's identities is
     // relative to ("" until the compilation is rooted).
     sroot: Strs,
+    // Whether the dumps of `facts-dump.nz` are written for a compilation that fails too (a comparison's knob, `fx_dump_errors`).
+    dump_errors: Ints,
 }
 
 // A line break, written so that no string literal in this file holds one.
@@ -61,7 +63,8 @@ fn nl() -> Str { str_from_byte(10) }
 fn facts_new() -> Facts {
     let t = sx_tree();
     let f = Facts(why: strs_new(), refused: ints_new(), refusal: strs_new(), d: dg_new(), t: t, c: ck_none(t), names: strs_new(), texts: strs_new(), bases: ints_new(),
-            keys: strs_new(), programs: ints_new(), dir: strs_new(), sroot: strs_new());
+            keys: strs_new(), programs: ints_new(), dir: strs_new(), sroot: strs_new(), dump_errors: ints_new());
+    ints_push(f.dump_errors, 0);
     strs_push(f.sroot, "");
     strs_push(f.why, "");
     ints_push(f.refused, 0);
@@ -189,7 +192,7 @@ fn check_as(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os: S
     let mut stopped = ck_stopped(c);
     if unsure { stopped = "a condition on the host, which was not given"; }
     let done = Facts(why: f.why, refused: f.refused, refusal: f.refusal, d: d, t: t, c: c, names: f.names, texts: f.texts, bases: f.bases, keys: f.keys, programs: f.programs,
-            dir: f.dir, sroot: f.sroot);
+            dir: f.dir, sroot: f.sroot, dump_errors: f.dump_errors);
     if stopped == "" {
         if program {
             dg_append(d, ck_diags(c), 0);
@@ -258,6 +261,12 @@ pub fn fx_render(f: Facts) -> Str {
 }
 
 pub fn fx_checker(f: Facts) -> Ck { f.c }
+// The comparisons of what a tool reads of a compilation with errors (R8 slice 11): `facts-dump.nz` writes its dumps for such a compilation when asked to.
+pub fn fx_dump_errors(f: Facts, on: Bool) -> Int {
+    ints_set(f.dump_errors, 0, if on { 1 } else { 0 });
+    0
+}
+pub fn fx_dumps_errors(f: Facts) -> Bool { ints_get(f.dump_errors, 0) == 1 }
 pub fn fx_tree(f: Facts) -> Tree { f.t }
 
 pub fn fx_modules(f: Facts) -> Int { strs_len(f.names) }

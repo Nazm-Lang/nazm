@@ -15,6 +15,7 @@ use "../../compiler/package.nz"
 use "../../compiler/facts.nz"
 use "../../compiler/builtins.nz"
 use "front.nz"
+use "util.nz"
 use "sym.nz"
 use "@std/blake3"
 
@@ -716,8 +717,13 @@ pub fn snap_build(f: Facts) -> Snap {
     // After these errors the checker leaves out what the reference's index still records (design D23).
     for i in 0..dg_len(d) {
         let code = dg_code(d, i)
-        if code == "N0203" || code == "N0386" || code == "N0305" || code == "N0101" || code == "N0334" || code == "N0610" {
+        // A refused capture is attributed by the reference to a slot of the closure that nothing declares (the checker's recovery); a function
+        // defined twice has the reference's provenance, which settles its result from the body it kept (`N0203`).
+        if code == "N0386" {
             return snap_fail(s, "a compilation whose errors leave the facts' index unlike the reference's")
+        }
+        if code == "N0203" && ut_contains(strs_get(d.message, i), "is defined more than once in this module") {
+            return snap_fail(s, "a function defined twice, whose provenance the reference settles from the definition it kept")
         }
     }
     if fx_module_key(f, 0) == "" {
