@@ -133,6 +133,11 @@ pub fn cli_required_option(c: Cli, long: Str, value: Str, path: Bool, help: Str)
     cli_add(c, cli_k_opt(), "", long, value, true, false, path, "", false, help, "")
 }
 
+// A required option that may be given again, a path each time (`Vec<PathBuf>` with `required = true`), its values not split.
+pub fn cli_required_list(c: Cli, long: Str, value: Str, help: Str, long_help: Str) -> Int {
+    cli_add(c, cli_k_opt(), "", long, value, true, true, true, "", false, help, long_help)
+}
+
 // An option that may be given again, each value split at `delim` (`Vec<String>` with
 // `value_delimiter`: clap's `ArgAction::Append`).
 pub fn cli_list(c: Cli, short: Str, long: Str, value: Str, delim: Str, help: Str, long_help: Str) -> Int {
