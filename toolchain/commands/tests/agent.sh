@@ -174,6 +174,7 @@ for p in "${parts[@]}"; do
             : "${MCP_DIR:?mcp-gen needs MCP_DIR}"; mkdir -p "$MCP_DIR"
             MCP_REF=${NAZM_MCP_REF:-$(dirname "$REF")/nazm-mcp}
             k=0
+            printf '%s\n' "$ROOT" > "$MCP_DIR/root"
             for f in "${files[@]}"; do
                 NAZM_REF="$REF" python3 -I "$ROOT/toolchain/commands/tests/mcp-compare.py" agent-gen "$MCP_REF" x "$ROOT" "$f" "$MCP_DIR/$k"
                 echo "$f" > "$MCP_DIR/$k.name"
@@ -192,7 +193,10 @@ for p in "${parts[@]}"; do
             for i in "$MCP_DIR"/*.in; do
                 n=$(basename "${i%.in}")
                 f=$(cat "${i%.in}.name")
-                NAZM_EXE="$PORT" "$STAGE_RUN" "${AGENT_DEADLINE:-600}" "$OUT/bin/nazm-mcp" --root "$f" --docs "$ROOT" < "$i" > "$OUT/mcp/$n.got" 2> "$OUT/mcp/$n.err" || true
+                # The messages name the checkout the host generated them in once (the absolute-path call): here it is $ROOT. The runner gives
+                # the program its standard input from STAGE_STDIN (`< "$i"` on the command would be replaced by /dev/null: the hang of 2026-10-22).
+                sed "s#$(cat "$MCP_DIR/root")#$ROOT#g" "$i" > "$OUT/mcp/$n.in"
+                NAZM_EXE="$PORT" STAGE_STDIN="$OUT/mcp/$n.in" "$STAGE_RUN" "${AGENT_DEADLINE:-600}" "$OUT/bin/nazm-mcp" --root "$f" --docs "$ROOT" > "$OUT/mcp/$n.got" 2> "$OUT/mcp/$n.err" || true
                 printf 'GOT %s %s\n' "$n" "$(base64 < "$OUT/mcp/$n.got" | tr -d '\n')"
             done ;;
         mcp-cmp)

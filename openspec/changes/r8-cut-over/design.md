@@ -775,7 +775,7 @@ words (`check_task`).
 | `context` command lines (`tests/args/context.txt`) | 52 | 0 | 1 |
 | `repo --map` (both forms) and `repo --task` (568 requests: every package, source root, root, module, document, schema, profile, diagnostic of the bad examples; samples of targets, definitions, sections, mutations, tests; every intent for the first of each kind; budgets, stale state, invalid requests) | 568 | 0 | 0 |
 | `repo` command lines (`tests/args/repo.txt`) | 54 | 0 | 2 |
-| MCP tools (`agent.sh mcp-gen`, `mcp-serve`, `mcp-cmp`) | not run | | |
+| MCP tools (`agent.sh mcp-gen`, `mcp-serve`, `mcp-cmp`; 16 inputs of about 60 messages: the argument errors, `nazm.semantic_context` at 4 offsets, the repository map, `nazm.task_context` over every kind of seed, every intent, a budget and the stale state) | 16 | 0 | 0 |
 
 - **Refused (status 6), counted apart.** `context`: 97 over 7 inputs whose errors leave the facts' index unlike the reference's (S9.2,
   as `snapshot`), 2 over a record whose fields the facts do not publish; the one command line is `--source-root` naming a directory that
@@ -784,11 +784,19 @@ words (`check_task`).
   calls `@std/…` was longer); the effect reasons are in effect order (`io`, `spawn`, then the effect parameter), not the order the
   checker met them; a `Value` object's members are in key order (a diagnostic's `primary` inside `content`); clap's usage of a missing
   required group has no `[OPTIONS]` and a missing value of an option with possible values lists them (`cli.nz`, which `docs` shares).
-- **Not compared: the MCP tools.** The server reads standard input, which a `host-run` does not have, so it runs contained only; the container
-  has no Python and one CPU. The three-step comparison (`mcp-gen` on the host writes the messages and the reference's answers, `mcp-serve`
-  contained answers them, `mcp-cmp` on the host compares) is written; its contained step built both programs but did not finish a session of
-  38 messages in the runner's hour (twice), so the tools are built (`nazm-mcp` builds) and their commands are compared, but their
-  argument checks and answers through the server are **open** (task 9.2).
+- **The MCP tools** run contained only (the server reads standard input, which a `host-run` does not have; the container has no Python): `mcp-gen`
+  on the host writes the messages and the reference's answers, `mcp-serve` contained answers them (at most five inputs per container run: the
+  runner caps a container's output at 8 MB, and an answer is base64 on standard output), `mcp-cmp` on the host compares. 16 inputs (the `examples`,
+  a few of the bad examples, the compatibility and conformance programs) agree, 0 differ. Three faults of the harness and one of the port were
+  found, none of them an intended difference:
+  - the hang: `stage-run.sh` gives a contained program the standard input of `$STAGE_STDIN` (`/dev/null` by default), so the `< "$i"` on the
+    command was replaced and the server saw an empty input; the messages go in through `STAGE_STDIN` now. A session then takes about 100 s;
+  - the reference drops answers: it serves requests concurrently and, at the end of its input, abandons those still being worked on (a repository
+    map takes seconds), so a recorded session lost different answers at each run. The reference's session is recorded with its input kept open
+    until every request is answered (`session_patient`, `mcp-compare.py`);
+  - the absolute-path call names the checkout the messages were generated in; in the container it is `/src` (`mcp-serve` rewrites it);
+  - the port: `nazm.task_context` is an answer (`isError` false) when its status is `complete` or `partial` (`TaskResult::Available`), not only
+    `available`.
 
 ## Slice 13 — the harness remainder in Nazm (design, 2026-10-20)
 
