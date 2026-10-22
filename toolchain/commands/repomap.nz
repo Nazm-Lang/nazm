@@ -1,0 +1,439 @@
+// `nazm.repository-map/1` (R8 slice 9, task 9.2; `crates/nazm-repo/src/map.rs`): what the repository has, how it is related, and where to ask for
+// more — identities and structure, never a body. Every entity names the authority it is read from; nothing here decides what a program means
+// or what a document says.
+//
+// `rm_build` answers the map or the problems that make it unavailable, compact JSON in the order the reference's structs declare their fields.
+
+use "../../compiler/diag.nz"
+use "docs.nz"
+use "front.nz"
+use "jsonin.nz"
+use "repocomp.nz"
+use "repoload.nz"
+use "snap.nz"
+use "util.nz"
+
+fn nul() -> Str { str_from_byte(0) }
+
+// --- the entities ---------------------------------------------------------------------------------------------------------------------
+
+pub struct Ent {
+    id: Str,
+    kind: Str,
+    // A target's Cargo kind, a definition's kind, or whether a compilation is complete.
+    detail: Str,
+    hasdetail: Bool,
+    // Only where it is not the class's: a document's N32 authority.
+    authority: Str,
+    hasauthority: Bool,
+    parent: Str,
+    hasparent: Bool,
+    // Where it is, from the repository root.
+    source: Str,
+    hassource: Bool,
+    // How many current diagnostics a compilation has; -1 for none.
+    diagnostics: Int,
+    // By kind, then target: rows `KIND\0TARGET`.
+    relations: Strs,
+    // Compact objects `{"schema":…,"args":{…}}`.
+    retrieval: Strs,
+}
+
+pub fn ent_new(id: Str, kind: Str) -> Ent {
+    Ent(id: id, kind: kind, detail: "", hasdetail: false, authority: "", hasauthority: false, parent: "", hasparent: false, source: "", hassource: false, diagnostics: 0 - 1,
+            relations: strs_new(), retrieval: strs_new())
+}
+
+// Every entity kind, in canonical order, with its authority and its identity.
+pub fn rm_kinds() -> Int { 9 }
+pub fn rm_kind(i: Int) -> Str {
+    if i == 0 { return "package" }
+    if i == 1 { return "target" }
+    if i == 2 { return "sources" }
+    if i == 3 { return "root" }
+    if i == 4 { return "module" }
+    if i == 5 { return "definition" }
+    if i == 6 { return "document" }
+    if i == 7 { return "schema" }
+    "profile"
+}
+fn kind_authority(i: Int) -> Str {
+    if i == 0 || i == 1 { return "cargo" }
+    if i == 2 { return "repository_manifest" }
+    if i >= 3 && i <= 5 { return "compiler" }
+    if i == 6 { return "documentation" }
+    if i == 7 { return "interface" }
+    "mutation_catalogue"
+}
+fn kind_identity(i: Int) -> Str {
+    if i == 0 { return "the Cargo package name" }
+    if i == 1 { return "package, Cargo target kind and target name" }
+    if i == 2 { return "the source root's manifest id" }
+    if i == 3 { return "source root and the root module's durable key" }
+    if i == 4 { return "source root and durable module key" }
+    if i == 5 { return "source root and durable definition key" }
+    if i == 6 { return "the N32 document id" }
+    if i == 7 { return "the schema constant the file declares" }
+    "the profile name"
+}
+pub fn rm_rank(kind: Str) -> Int {
+    for i in 0..rm_kinds() {
+        if rm_kind(i) == kind { return i }
+    }
+    rm_kinds()
+}
+
+// The id prefix of a kind.
+fn prefix_of(kind: Str) -> Str {
+    if kind == "definition" { return "def" }
+    if kind == "document" { return "doc" }
+    kind
+}
+
+fn relation_known(k: Str) -> Bool {
+    k == "covers" || k == "depends_on" || k == "dev_depends_on" || k == "documented_by" || k == "includes" || k == "observed_by"
+}
+
+fn retrieval_known(s: Str) -> Bool {
+    s == "nazm.context/3" || s == "nazm.diagnostic-detail/1" || s == "nazm.diagnostic-index/1" || s == "nazm.docs-index/1" || s == "nazm.docs-section/1"
+            || s == "nazm.snapshot/3" || s == "nazm.task-context/1"
+}
+
+fn authority_known(a: Str) -> Bool {
+    a == "architecture" || a == "cargo" || a == "compiler" || a == "documentation" || a == "evidence" || a == "goal" || a == "grammar" || a == "guide" || a == "interface"
+            || a == "law" || a == "mutation_catalogue" || a == "normative" || a == "operational" || a == "planning" || a == "repository_manifest" || a == "research"
+            || a == "mutation_catalogue"
+}
+
+// A retrieval: which existing answer holds more, and exactly how to ask for it. `keys` and `values` (JSON texts) in any order; `args` is a map.
+pub fn rm_retrieval(schema: Str, keys: Strs, values: Strs) -> Str {
+    let rows = strs_new()
+    for i in 0..strs_len(keys) { strs_push(rows, strs_get(keys, i) + str_from_byte(1) + strs_get(values, i)) }
+    let sorted = sn_sort(rows)
+    let args = strs_new()
+    for i in 0..strs_len(sorted) {
+        let row = strs_get(sorted, i)
+        let mut cut = 0
+        while str_byte(row, cut) != 1 { cut += 1 }
+        strs_push(args, json_str(str_slice(row, 0, cut)) + ":" + str_slice(row, cut + 1, str_len(row)))
+    }
+    "{\"schema\":" + json_str(schema) + ",\"args\":{" + str_join(args, ",") + "}}"
+}
+
+pub fn rm_retrieval1(schema: Str, key: Str, value: Str) -> Str {
+    let k = strs_new()
+    let v = strs_new()
+    strs_push(k, key)
+    strs_push(v, value)
+    rm_retrieval(schema, k, v)
+}
+
+fn ent_json(e: Ent) -> Str {
+    let out = strs_new()
+    strs_push(out, "\"id\":" + json_str(e.id))
+    strs_push(out, "\"kind\":" + json_str(e.kind))
+    if e.hasdetail { strs_push(out, "\"detail\":" + json_str(e.detail)) }
+    if e.hasauthority { strs_push(out, "\"authority\":" + json_str(e.authority)) }
+    if e.hasparent { strs_push(out, "\"parent\":" + json_str(e.parent)) }
+    if e.hassource { strs_push(out, "\"source\":" + json_str(e.source)) }
+    if e.diagnostics >= 0 { strs_push(out, "\"diagnostics\":" + int_to_str(e.diagnostics)) }
+    if strs_len(e.relations) > 0 {
+        let rs = strs_new()
+        for i in 0..strs_len(e.relations) {
+            let row = strs_get(e.relations, i)
+            let mut cut = 0
+            while str_byte(row, cut) != 0 { cut += 1 }
+            strs_push(rs, "{\"kind\":" + json_str(str_slice(row, 0, cut)) + ",\"target\":" + json_str(str_slice(row, cut + 1, str_len(row))) + "}")
+        }
+        strs_push(out, "\"relations\":[" + str_join(rs, ",") + "]")
+    }
+    if strs_len(e.retrieval) > 0 { strs_push(out, "\"retrieval\":[" + str_join(e.retrieval, ",") + "]") }
+    "{" + str_join(out, ",") + "}"
+}
+
+fn relate(e: Ent, kind: Str, target: Str) -> Int {
+    strs_push(e.relations, kind + nul() + target)
+    0
+}
+
+// The canonical order: each entity's relations by kind and target, once.
+fn canonical_relations(e: Ent) -> Int {
+    let s = rl_problems_sorted(e.relations)
+    while strs_len(e.relations) > 0 { strs_pop(e.relations) }
+    for i in 0..strs_len(s) { strs_push(e.relations, strs_get(s, i)) }
+    0
+}
+
+// --- the map ------------------------------------------------------------------------------------------------------------------------------
+
+pub struct MapOut {
+    json: Str,
+    available: Bool,
+}
+
+pub fn rm_unavailable(problems: Strs) -> MapOut {
+    MapOut(json: "{\"schema\":\"nazm.repository-map/1\",\"status\":\"unavailable\",\"problems\":" + rl_problems_json(rl_problems_sorted(problems)) + "}", available: false)
+}
+
+fn count_kind(ents: Vec[Ent], kind: Str) -> Int {
+    let mut n = 0
+    for i in 0..vec_len(ents) {
+        if vec_get(ents, i).kind == kind { n += 1 }
+    }
+    n
+}
+
+// The entities in canonical order: kinds in `KINDS` order, ids in byte order; the order of each entity's rows.
+pub fn rm_sorted(ents: Vec[Ent]) -> Vec[Ent] {
+    let rows = strs_new()
+    for i in 0..vec_len(ents) {
+        canonical_relations(vec_get(ents, i))
+        strs_push(rows, int_to_str(rm_rank(vec_get(ents, i).kind) + 100) + vec_get(ents, i).id + str_from_byte(1) + int_to_str(i + 1000000))
+    }
+    let sorted = sn_sort(rows)
+    let out = vec_new[Ent]()
+    for r in 0..strs_len(sorted) {
+        let row = strs_get(sorted, r)
+        let n = str_to_index(str_slice(row, str_len(row) - 7, str_len(row))) - 1000000
+        vec_push(out, vec_get(ents, n))
+    }
+    out
+}
+
+fn str_to_index(s: Str) -> Int {
+    let mut n = 0
+    for i in 0..str_len(s) { n = n * 10 + str_byte(s, i) - 48 }
+    n
+}
+
+// Every way the map is not one this crate may publish (`validate`): a duplicate id, a parent or a relationship target that does not exist — an
+// N32 section counts as existing when the corpus has it — an unknown relationship, retrieval or authority.
+pub fn rm_validate(ents: Vec[Ent], corp: Corp, problems: Strs) -> Int {
+    let ids = strs_new()
+    for i in 0..vec_len(ents) { strs_push(ids, vec_get(ents, i).id) }
+    let sorted = sn_sort(ids)
+    for i in 1..strs_len(sorted) {
+        if strs_get(sorted, i) == strs_get(sorted, i - 1) { rl_problem(problems, "duplicate_entity", strs_get(sorted, i)) }
+    }
+    for i in 0..vec_len(ents) {
+        let e = vec_get(ents, i)
+        if rm_rank(e.kind) == rm_kinds() { rl_problem(problems, "unknown_kind", e.id) }
+        if !ut_starts(e.id, prefix_of(e.kind) + ":") { rl_problem(problems, "malformed_id", e.id) }
+    }
+    for i in 0..vec_len(ents) {
+        let e = vec_get(ents, i)
+        if e.hasparent && !has_id(sorted, e.parent) { rl_problem(problems, "broken_parent", e.id) }
+        for k in 0..strs_len(e.relations) {
+            let row = strs_get(e.relations, k)
+            let kind = rl_row(row, 0)
+            let target = rl_row(row, 1)
+            if !relation_known(kind) { rl_problem(problems, "unknown_relation", e.id) }
+            let mut found = has_id(sorted, target)
+            if !found && kind == "documented_by" && ut_starts(target, "doc:") { found = rl_section_exists(corp, str_slice(target, 4, str_len(target))) }
+            if !found { rl_problem(problems, "broken_relation", e.id + " " + kind + " " + target) }
+        }
+        for k in 0..strs_len(e.retrieval) {
+            let j = j_parse(strs_get(e.retrieval, k))
+            if !retrieval_known(j_str(j, j_get(j, 0, "schema"))) { rl_problem(problems, "unknown_retrieval", e.id) }
+        }
+        if e.hasauthority && !authority_known(e.authority) { rl_problem(problems, "unknown_authority", e.id) }
+        if e.kind == "document" && !e.hasauthority { rl_problem(problems, "missing_authority", e.id) }
+    }
+    0
+}
+
+fn has_id(sorted: Strs, id: Str) -> Bool {
+    let mut lo = 0
+    let mut hi = strs_len(sorted)
+    while lo < hi {
+        let mid = (lo + hi) / 2
+        if strs_get(sorted, mid) == id { return true }
+        if fe_str_less(strs_get(sorted, mid), id) { lo = mid + 1 } else { hi = mid }
+    }
+    false
+}
+
+fn omission(kind: Str, count: Int, reason: Str) -> Str {
+    "{\"kind\":" + json_str(kind) + (if count >= 0 { ",\"count\":" + int_to_str(count) } else { "" }) + ",\"reason\":" + json_str(reason) + "}"
+}
+
+// The map of the repository `repo`, or the problems that make it unavailable.
+pub fn rm_build(io: IoCap, repo: Repo) -> MapOut {
+    let problems = strs_new()
+    let ents = vec_new[Ent]()
+    let ps = repo.ps
+    for i in 0..strs_len(ps.name) {
+        let mut e = ent_new(rl_pkg_id(ps, i), "package")
+        e.source = strs_get(ps.manifest, i)
+        e.hassource = true
+        let deps = vec_get(ps.deps, i)
+        for k in 0..strs_len(deps) { relate(e, rl_row(strs_get(deps, k), 0), "package:" + rl_row(strs_get(deps, k), 1)) }
+        let docs = vec_get(ps.docs, i)
+        for k in 0..strs_len(docs) { relate(e, "documented_by", "doc:" + strs_get(docs, k)) }
+        vec_push(ents, e)
+        let ts = vec_get(ps.targets, i)
+        for k in 0..strs_len(ts) {
+            let row = strs_get(ts, k)
+            let mut t = ent_new(rl_target_id(strs_get(ps.name, i), row), "target")
+            t.detail = rl_row(row, 0)
+            t.hasdetail = true
+            t.parent = rl_pkg_id(ps, i)
+            t.hasparent = true
+            t.source = rl_row(row, 2)
+            t.hassource = true
+            vec_push(ents, t)
+        }
+    }
+    // Every compilation, in manifest order; a definition is its first complete compilation's, and must be the same declaration in every other.
+    let def_keys = strs_new()
+    let def_kinds = strs_new()
+    let def_files = strs_new()
+    let def_places = strs_new()
+    let mod_rows = strs_new()
+    let mut diagnostics = 0
+    let mut recovered = 0
+    let mut untracked = 0
+    for s in 0..rl_sources() {
+        let mut e = ent_new("sources:" + rl_source_id(s), "sources")
+        e.source = rl_source_dir(s)
+        e.hassource = true
+        let docs = rl_source_docs(s)
+        for d in 0..strs_len(docs) { relate(e, "documented_by", "doc:" + strs_get(docs, d)) }
+        vec_push(ents, e)
+        let roots = rl_source_roots(s)
+        for r in 0..strs_len(roots) {
+            let c = rc_open(io, repo, s, strs_get(roots, r))
+            if !c.ok {
+                strs_push(problems, c.bad)
+                continue
+            }
+            let mut root = ent_new(rc_id(c), "root")
+            root.parent = "sources:" + rl_source_id(s)
+            root.hasparent = true
+            root.source = rc_location(c)
+            root.hassource = true
+            root.detail = if c.complete { "complete" } else { "incomplete" }
+            root.hasdetail = true
+            diagnostics += c.diagnostics
+            root.diagnostics = c.diagnostics
+            for m in 0..strs_len(c.modules) {
+                strs_push(mod_rows, rl_source_id(s) + nul() + strs_get(c.modules, m))
+                relate(root, "includes", "module:" + rl_source_id(s) + ":" + strs_get(c.modules, m))
+            }
+            let at = json_str(rc_location(c))
+            strs_push(root.retrieval, rm_retrieval1("nazm.snapshot/3", "root", at))
+            strs_push(root.retrieval, rm_retrieval1("nazm.diagnostic-index/1", "root", at))
+            vec_push(ents, root)
+            if !c.complete {
+                recovered += 1
+            } else {
+                untracked += c.untracked
+                for d in 0..strs_len(c.d_identity) {
+                    let place = strs_get(c.d_file, d) + nul() + int_to_str(ints_get(c.d_start, d)) + nul() + int_to_str(ints_get(c.d_end, d))
+                    let key = rl_source_id(s) + nul() + strs_get(c.d_identity, d)
+                    let mut at_key = 0 - 1
+                    for q in 0..strs_len(def_keys) {
+                        if at_key < 0 && strs_get(def_keys, q) == key { at_key = q }
+                    }
+                    if at_key >= 0 {
+                        if strs_get(def_places, at_key) != place { rl_problem(problems, "conflicting_definition", "def:" + rl_source_id(s) + ":" + strs_get(c.d_identity, d)) }
+                    } else {
+                        strs_push(def_keys, key)
+                        strs_push(def_kinds, strs_get(c.d_kind, d))
+                        strs_push(def_files, strs_get(c.d_file, d))
+                        strs_push(def_places, place)
+                    }
+                }
+            }
+        }
+    }
+    let modules = rl_problems_sorted(mod_rows)
+    for i in 0..strs_len(modules) {
+        let s = rl_row(strs_get(modules, i), 0)
+        let m = rl_row(strs_get(modules, i), 1)
+        let mut e = ent_new("module:" + s + ":" + m, "module")
+        e.parent = "sources:" + s
+        e.hasparent = true
+        e.source = rl_source_dir(rl_source_named(s)) + "/" + m
+        e.hassource = true
+        vec_push(ents, e)
+    }
+    for i in 0..strs_len(def_keys) {
+        let s = rl_row(strs_get(def_keys, i), 0)
+        let identity = rl_row(strs_get(def_keys, i), 1)
+        let mut e = ent_new("def:" + s + ":" + identity, "definition")
+        e.detail = strs_get(def_kinds, i)
+        e.hasdetail = true
+        e.parent = "module:" + s + ":" + strs_get(def_files, i)
+        e.hasparent = true
+        vec_push(ents, e)
+    }
+    let corp = repo.corp
+    for d in 0..strs_len(corp.d_id) {
+        let mut e = ent_new("doc:" + strs_get(corp.d_id, d), "document")
+        e.authority = strs_get(corp.d_auth, d)
+        e.hasauthority = true
+        e.source = strs_get(corp.d_path, d)
+        e.hassource = true
+        strs_push(e.retrieval, rm_retrieval1("nazm.docs-index/1", "document", json_str(strs_get(corp.d_id, d))))
+        vec_push(ents, e)
+    }
+    for i in 0..strs_len(repo.schema_name) {
+        let mut e = ent_new("schema:" + strs_get(repo.schema_name, i), "schema")
+        e.source = strs_get(repo.schema_file, i)
+        e.hassource = true
+        vec_push(ents, e)
+    }
+    let cat = repo.cat
+    for i in 0..strs_len(cat.pname) {
+        let mut e = ent_new("profile:" + strs_get(cat.pname, i), "profile")
+        e.source = rl_catalogue_path()
+        e.hassource = true
+        let targets = vec_get(cat.ptargets, i)
+        for k in 0..strs_len(targets) { relate(e, "observed_by", strs_get(targets, k)) }
+        let owns = vec_get(cat.powns, i)
+        for k in 0..strs_len(owns) {
+            let o = strs_get(owns, k)
+            for q in 0..strs_len(ps.name) {
+                if strs_get(ps.dir, q) != "" && rl_pkg_prefix(ps, q) == o { relate(e, "covers", rl_pkg_id(ps, q)) }
+            }
+            for s in 0..rl_sources() {
+                if rl_source_dir(s) + "/" == o { relate(e, "covers", "sources:" + rl_source_id(s)) }
+            }
+        }
+        vec_push(ents, e)
+    }
+    if strs_len(problems) > 0 { return rm_unavailable(problems) }
+
+    let sorted = rm_sorted(ents)
+    let classes = strs_new()
+    for i in 0..rm_kinds() {
+        strs_push(classes, "{\"kind\":" + json_str(rm_kind(i)) + ",\"authority\":" + json_str(kind_authority(i)) + ",\"identity\":" + json_str(kind_identity(i)) + ",\"count\":"
+                + int_to_str(count_kind(sorted, rm_kind(i))) + "}")
+    }
+    let rows = strs_new()
+    for i in 0..vec_len(sorted) { strs_push(rows, ent_json(vec_get(sorted, i))) }
+    let sections = ints_len(corp.s_doc)
+    let section_count = if sections > strs_len(corp.d_id) { sections - strs_len(corp.d_id) } else { 0 }
+    let catalogue = json_str(rl_catalogue_path())
+    let delegated = strs_new()
+    strs_push(delegated, "{\"kind\":\"section\",\"authority\":\"documentation\",\"count\":" + int_to_str(section_count) + ",\"retrieval\":" + rm_retrieval("nazm.docs-index/1", strs_new(), strs_new()) + "}")
+    strs_push(delegated, "{\"kind\":\"mutation\",\"authority\":\"mutation_catalogue\",\"count\":" + int_to_str(strs_len(cat.mname)) + ",\"retrieval\":"
+            + rm_retrieval1("nazm.task-context/1", "catalogue", catalogue) + "}")
+    strs_push(delegated, "{\"kind\":\"test\",\"authority\":\"mutation_catalogue\",\"count\":" + int_to_str(strs_len(cat.tests)) + ",\"retrieval\":"
+            + rm_retrieval1("nazm.task-context/1", "catalogue", catalogue) + "}")
+    strs_push(delegated, "{\"kind\":\"diagnostic\",\"authority\":\"compiler\",\"count\":" + int_to_str(diagnostics) + ",\"retrieval\":" + rm_retrieval("nazm.diagnostic-index/1", strs_new(), strs_new()) + "}")
+    let omitted = strs_new()
+    strs_push(omitted, omission("rust_item", 0 - 1, "no compiler-owned semantic identity for Rust source: its packages and targets are mapped"))
+    strs_push(omitted, omission("local", 0 - 1, "a local, parameter or label has no durable identity"))
+    strs_push(omitted, omission("prelude_definition", 0 - 1, "the core prelude has no source file in any compilation"))
+    strs_push(omitted, omission("untracked_definition", untracked, "no durable key, or one key given to two declarations"))
+    strs_push(omitted, omission("recovered_compilation", recovered, "needed syntax recovery or lacks a module: its modules are mapped, its definitions are not"))
+    strs_push(omitted, omission("test_function", 0 - 1, "a test the catalogue does not name as a killer has no identity without building and listing it"))
+    let json = "{\"schema\":\"nazm.repository-map/1\",\"status\":\"available\",\"state\":" + json_str(repo.state) + ",\"compiler\":" + json_str(rl_compiler()) + ",\"classes\":["
+            + str_join(classes, ",") + "],\"entities\":[" + str_join(rows, ",") + "],\"delegated\":[" + str_join(delegated, ",") + "],\"omitted\":[" + str_join(omitted, ",") + "]}"
+    let invalid = strs_new()
+    rm_validate(sorted, corp, invalid)
+    if strs_len(invalid) > 0 { return rm_unavailable(invalid) }
+    MapOut(json: json, available: true)
+}

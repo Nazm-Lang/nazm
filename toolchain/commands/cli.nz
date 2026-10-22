@@ -77,6 +77,8 @@ pub struct Cli {
     possible: Strs,
     hidden: Ints,
     vkind: Ints,
+    // 1 once an error is being written whose usage is the "smart" one (clap's `create_smart_usage`): no `[OPTIONS]` where nothing was used.
+    smart: Ints,
 }
 
 pub fn cli_command(name: Str, about: Str, long_about: Str) -> Cli {
@@ -85,7 +87,7 @@ pub fn cli_command(name: Str, about: Str, long_about: Str) -> Cli {
             has_default: ints_new(), help: strs_new(), long_help: strs_new(), order: ints_new(), explicit: ints_new(),
             val_arg: ints_new(), val_text: strs_new(), pend: ints_new(), pend_vals: strs_new(), delim: strs_new(), numeric: ints_new(), lastp: ints_new(), grp: ints_new(),
             conf_a: ints_new(), conf_b: ints_new(), req_a: ints_new(), req_b: ints_new(), first: ints_new(),
-            possible: strs_new(), hidden: ints_new(), vkind: ints_new())
+            possible: strs_new(), hidden: ints_new(), vkind: ints_new(), smart: ints_new())
 }
 
 fn cli_add(c: Cli, kind: Int, short: Str, long: Str, value: Str, required: Bool, multiple: Bool, path: Bool,
@@ -490,7 +492,7 @@ fn cli_needs_options_tag(c: Cli) -> Bool {
 // The usage with no title: the help's usage when nothing is used, the "smart" usage otherwise.
 pub fn cli_usage_no_title(c: Cli, used: Ints) -> Str {
     let mut s = "nazm " + c.name + " "
-    if ints_len(used) == 0 && cli_needs_options_tag(c) { s = s + "[OPTIONS] " }
+    if ints_len(used) == 0 && cli_needs_options_tag(c) && (ints_len(c.smart) == 0 || ints_get(c.smart, 0) == 0) { s = s + "[OPTIONS] " }
     cli_trim_end(s + cli_write_args(c, used))
 }
 
@@ -665,7 +667,21 @@ fn cli_invalid_possible(io: IoCap, c: Cli, a: Int, v: Str, names: Strs) -> Int {
 }
 
 fn cli_empty_value(io: IoCap, c: Cli, a: Int) -> Int {
-    cli_fail(io, "a value is required for '" + cli_display(c, a) + "' but none was supplied")
+    let mut text = "a value is required for '" + cli_display(c, a) + "' but none was supplied"
+    if strs_get(c.possible, a) != "" {
+        // `[possible values: a, b]`, as clap lists the parser's values.
+        let names = strs_new()
+        let list = strs_get(c.possible, a)
+        let mut from = 0
+        for i in 0..str_len(list) + 1 {
+            if i == str_len(list) || str_byte(list, i) == 44 {
+                strs_push(names, str_slice(list, from, i))
+                from = i + 1
+            }
+        }
+        text = text + cli_nl() + "  [possible values: " + str_join(names, ", ") + "]"
+    }
+    cli_fail(io, text)
 }
 
 fn cli_unknown(io: IoCap, c: Cli, shown: Str, similar: Str, trailing_tip: Bool, used: Ints) -> Int {
@@ -1238,6 +1254,8 @@ pub fn cli_parse(io: IoCap, c: Cli) -> Int {
         if group_missing { strs_push(lines, cli_group_text(c)) }
         let used = cli_used(c, false)
         for i in 0..ints_len(missing) { ints_push(used, ints_get(missing, i)) }
+        // Nothing used and a group missing: the smart usage (no `[OPTIONS]`).
+        if ints_len(used) == 0 { ints_push(c.smart, 1) }
         // An argument another asks for is written where it is declared (clap's usage of `requires`); a missing
         // positional is not one of those, and the options keep the order they were given.
         let mut asked_for = false

@@ -1,10 +1,10 @@
-// A reader for the subset of TOML the toolchain's own files are written in (R5, design D21): a package's
-// `nazm.toml`, a `nazm.lock`, a registry's `index/NAME.toml`. Comments, `[table]` and `[[array of
-// tables]]` headers (dotted names), `key = value` with a bare or quoted key, and for values basic and
-// literal strings, booleans, decimal integers, single-line arrays and inline tables. Anything else —
-// multi-line strings, floats, dates, dotted keys, a key given twice, a line the grammar cannot read —
-// is not guessed at: the tree is marked unsupported with the reason, and the command refuses (the
-// `toml` crate's own error text is what the reference prints for those).
+// A reader for the subset of TOML the toolchain's own files are written in (R5, design D21; R8 slice 9 added the forms the
+// repository's `Cargo.toml`s and mutation catalogue use): a package's `nazm.toml`, a `nazm.lock`, a registry's
+// `index/NAME.toml`, a `Cargo.toml`. Comments, `[table]` and `[[array of tables]]` headers (dotted names), `key = value`
+// with a bare, quoted or dotted key, and for values basic, literal and multi-line strings, booleans, decimal integers,
+// arrays (on several lines too) and inline tables. Anything else — floats, dates, a multi-line string with a carriage
+// return, a key given twice, a line the grammar cannot read — is not guessed at: the tree is marked unsupported with the
+// reason, and the command refuses (the `toml` crate's own error text is what the reference prints for those).
 //
 // The tree keeps every table's keys in document order, which is the order serde's derived readers
 // meet them — the first error a manifest gives is the first thing in the file that is wrong.
@@ -124,16 +124,104 @@ fn utf8_of(cp: Int) -> Str {
     str_from_byte(240 + cp / 262144) + str_from_byte(128 + (cp / 4096) % 64) + str_from_byte(128 + (cp / 64) % 64) + str_from_byte(128 + cp % 64)
 }
 
+// The escape whose backslash is at `i` of `s`, decoded into `out`; the index after it, or -1 with the tree marked where it is bad.
+fn read_escape(t: Toml, s: Str, i0: Int, out: Strs) -> Int {
+    let mut i = i0
+    if i + 1 >= str_len(s) {
+        tm_syntax(t, "invalid basic string, expected `\"`")
+        return 0 - 1
+    }
+    let e = str_byte(s, i + 1)
+    i += 2
+    if e == 34 { strs_push(out, "\"") } else if e == 92 { strs_push(out, "\\") } else if e == 98 { strs_push(out, str_from_byte(8)) }
+            else if e == 102 { strs_push(out, str_from_byte(12)) } else if e == 110 { strs_push(out, str_from_byte(10)) }
+            else if e == 114 { strs_push(out, str_from_byte(13)) } else if e == 116 { strs_push(out, str_from_byte(9)) }
+            else if e == 101 { strs_push(out, str_from_byte(27)) }
+            else if e == 117 || e == 85 {
+        let n = if e == 117 { 4 } else { 8 }
+        let mut cp = 0
+        for k in 0..n {
+            let h = if i + k < str_len(s) { hex_val(str_byte(s, i + k)) } else { 0 - 1 }
+            if h < 0 {
+                tm_unsupported(t, "a bad unicode escape")
+                return 0 - 1
+            }
+            cp = cp * 16 + h
+        }
+        if cp > 1114111 || (cp >= 55296 && cp <= 57343) {
+            tm_unsupported(t, "a bad unicode escape")
+            return 0 - 1
+        }
+        i += n
+        strs_push(out, utf8_of(cp))
+    } else {
+        tm_syntax(t, "missing escaped value, expected `b`, `e`, `f`, `n`, `r`, `\\`, `\"`, `x`, `u`, `U`")
+        return 0 - 1
+    }
+    i
+}
+
+// A multi-line string (`"""…"""` or `'''…'''`) whose opening quotes begin at the cursor, decoded: a newline right after the opening
+// quotes is dropped, a basic string's `\` at a line's end takes the whitespace after it, and up to two quotes may end the text.
+// A carriage return is not read (the tree is marked unsupported).
+fn read_multiline(t: Toml) -> Str {
+    let s = strs_get(t.src, 0)
+    let q = peek(t)
+    let mut i = ints_get(t.at, 0) + 3
+    if i < str_len(s) && str_byte(s, i) == 10 { i += 1 }
+    let out = strs_new()
+    let mut from = i
+    while i < str_len(s) {
+        let b = str_byte(s, i)
+        if b == q {
+            let mut n = 0
+            while i + n < str_len(s) && str_byte(s, i + n) == q { n += 1 }
+            if n >= 3 {
+                if n > 5 {
+                    tm_syntax(t, "invalid multi-line string")
+                    return ""
+                }
+                strs_push(out, str_slice(s, from, i + n - 3))
+                ints_set(t.at, 0, i + n)
+                return str_join(out, "")
+            }
+            i += n
+        } else if b == 13 || (b < 32 && b != 9 && b != 10) || b == 127 {
+            tm_unsupported(t, "a multi-line string with a carriage return or a control character")
+            return ""
+        } else if q == 34 && b == 92 {
+            strs_push(out, str_slice(s, from, i))
+            let e = if i + 1 < str_len(s) { str_byte(s, i + 1) } else { 0 - 1 }
+            if e == 32 || e == 9 || e == 10 {
+                // A line-ending backslash: the whitespace after it, line breaks included, is dropped.
+                let mut j = i + 1
+                while j < str_len(s) && (str_byte(s, j) == 32 || str_byte(s, j) == 9) { j += 1 }
+                if j >= str_len(s) || str_byte(s, j) != 10 {
+                    tm_syntax(t, "missing escaped value, expected `b`, `e`, `f`, `n`, `r`, `\\`, `\"`, `x`, `u`, `U`")
+                    return ""
+                }
+                while j < str_len(s) && (str_byte(s, j) == 32 || str_byte(s, j) == 9 || str_byte(s, j) == 10) { j += 1 }
+                i = j
+            } else {
+                i = read_escape(t, s, i, out)
+                if i < 0 { return "" }
+            }
+            from = i
+        } else {
+            i += 1
+        }
+    }
+    tm_unsupported(t, "an unterminated multi-line string")
+    ""
+}
+
 // A basic (`"…"`) or literal (`'…'`) string at the cursor, decoded; "" with the tree unsupported where
-// it is anything else (a multi-line string, a control character, a bad escape).
+// it is anything else (a control character, a bad escape).
 fn read_string(t: Toml) -> Str {
     let s = strs_get(t.src, 0)
     let q = peek(t)
     let mut i = ints_get(t.at, 0) + 1
-    if i + 1 < str_len(s) && str_byte(s, i) == q && str_byte(s, i + 1) == q {
-        tm_unsupported(t, "a multi-line string")
-        return ""
-    }
+    if i + 1 < str_len(s) && str_byte(s, i) == q && str_byte(s, i + 1) == q { return read_multiline(t) }
     let out = strs_new()
     let mut from = i
     while i < str_len(s) && str_byte(s, i) != q {
@@ -144,37 +232,8 @@ fn read_string(t: Toml) -> Str {
         }
         if q == 34 && b == 92 {
             strs_push(out, str_slice(s, from, i))
-            if i + 1 >= str_len(s) {
-                tm_syntax(t, "invalid basic string, expected `\"`")
-                return ""
-            }
-            let e = str_byte(s, i + 1)
-            i += 2
-            if e == 34 { strs_push(out, "\"") } else if e == 92 { strs_push(out, "\\") } else if e == 98 { strs_push(out, str_from_byte(8)) }
-            else if e == 102 { strs_push(out, str_from_byte(12)) } else if e == 110 { strs_push(out, str_from_byte(10)) }
-            else if e == 114 { strs_push(out, str_from_byte(13)) } else if e == 116 { strs_push(out, str_from_byte(9)) }
-            else if e == 101 { strs_push(out, str_from_byte(27)) }
-            else if e == 117 || e == 85 {
-                let n = if e == 117 { 4 } else { 8 }
-                let mut cp = 0
-                for k in 0..n {
-                    let h = if i + k < str_len(s) { hex_val(str_byte(s, i + k)) } else { 0 - 1 }
-                    if h < 0 {
-                        tm_unsupported(t, "a bad unicode escape")
-                        return ""
-                    }
-                    cp = cp * 16 + h
-                }
-                if cp > 1114111 || (cp >= 55296 && cp <= 57343) {
-                    tm_unsupported(t, "a bad unicode escape")
-                    return ""
-                }
-                i += n
-                strs_push(out, utf8_of(cp))
-            } else {
-                tm_syntax(t, "missing escaped value, expected `b`, `e`, `f`, `n`, `r`, `\\`, `\"`, `x`, `u`, `U`")
-                return ""
-            }
+            i = read_escape(t, s, i, out)
+            if i < 0 { return "" }
             from = i
         } else {
             i += 1
@@ -349,7 +408,7 @@ fn descend(t: Toml, path: Strs, array: Bool) -> Int {
             }
         } else if ints_get(t.kind, c) == tm_table() {
             if last && !array {
-                if ints_get(t.explicit, c) == 1 { return tm_syntax(t, "duplicate key") }
+                if ints_get(t.explicit, c) == 1 || ints_get(t.explicit, c) == 3 { return tm_syntax(t, "duplicate key") }
                 ints_set(t.explicit, c, 1)
             }
             if last && array { return tm_unsupported(t, "a table redefined as an array of tables") }
@@ -359,6 +418,21 @@ fn descend(t: Toml, path: Strs, array: Bool) -> Int {
         cur = c
     }
     cur
+}
+
+// The table a dotted key names by `key` in `holder`, made (marked 3, which a header may not define again) where there is none; -1 where
+// `key` is already something else.
+fn dotted_table(t: Toml, holder: Int, key: Str) -> Int {
+    let c = tm_get(t, holder, key)
+    if c < 0 {
+        let n = tm_node(t, tm_table(), "", key)
+        tm_add(t, holder, n)
+        ints_set(t.explicit, n, 3)
+        return n
+    }
+    if ints_get(t.kind, c) == tm_table() && ints_get(t.explicit, c) == 3 { return c }
+    tm_syntax(t, "duplicate key")
+    0 - 1
 }
 
 pub fn tm_parse(text: Str) -> Toml {
@@ -421,21 +495,33 @@ pub fn tm_parse(text: Str) -> Toml {
             if cur < 0 { break }
             continue
         }
-        let k = read_key(t)
+        let mut k = read_key(t)
         if !tm_ok(t) { break }
         skip_blanks(t)
+        // A dotted key's tables, made as the keys are met, and the table the last key is in.
+        let mut holder = cur
+        while peek(t) == 46 {
+            holder = dotted_table(t, holder, k)
+            if holder < 0 { break }
+            ints_set(t.at, 0, ints_get(t.at, 0) + 1)
+            skip_blanks(t)
+            k = read_key(t)
+            if !tm_ok(t) { break }
+            skip_blanks(t)
+        }
+        if holder < 0 || !tm_ok(t) { break }
         if peek(t) != 61 {
-            if peek(t) == 46 { tm_unsupported(t, "a dotted key") } else { tm_syntax(t, "key with no value, expected `=`") }
+            tm_syntax(t, "key with no value, expected `=`")
             break
         }
         ints_set(t.at, 0, ints_get(t.at, 0) + 1)
         let v = read_value(t, k)
         if v < 0 { break }
-        if tm_get(t, cur, k) >= 0 {
+        if tm_get(t, holder, k) >= 0 {
             tm_syntax(t, "duplicate key")
             break
         }
-        tm_add(t, cur, v)
+        tm_add(t, holder, v)
         if !end_of_line(t) {
             tm_syntax(t, "unexpected key or value, expected newline, `#`")
             break

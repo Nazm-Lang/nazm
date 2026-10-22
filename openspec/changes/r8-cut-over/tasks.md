@@ -124,8 +124,11 @@
       `BUILD_PART=args` after the cli.nz merge with slice 6: 158 agree, 0 differ, 16 refused.
 
 ## 9. Slice 9 — the agent commands whole
-- [ ] 9.1 R2 publishes a function's effects; `context` and MCP `nazm.semantic_context`
-- [ ] 9.2 `repo` (`nazm-repo` ported); MCP `nazm.repository_map`, `nazm.task_context`
+- [x] 9.1 R2 publishes a function's effects; `context` and MCP `nazm.semantic_context`. Evidence (`tests/agent.sh`, design *Slice 9 — the
+      evidence*): effects 437 agree, 0 differ (`refdump effects`); `context` 3635 agree, 0 differ, 99 refused (97 errors that leave the
+      facts' index unlike the reference's, 2 a record the facts do not publish); command lines 52/0/1.
+- [x] 9.2 `repo` (`nazm-repo` ported); MCP `nazm.repository_map`, `nazm.task_context`. Evidence: `repo --map` and 568 `--task` requests
+      568 agree, 0 differ, 0 refused; command lines 54/0/2 (no `--root`); the MCP tools are written and `nazm-mcp` builds, but a contained session did not finish in the runner's hour: their comparison (`agent.sh mcp-gen|mcp-serve|mcp-cmp`) is open.
 
 ## 10. Slice 10 — every command routed
 - [ ] 10.1 `bench`, `accel`; `contract` as question 1 decides

@@ -1,0 +1,191 @@
+// One Nazm compilation of the repository, as the compiler analyses it (R8 slice 9, task 9.2; `crates/nazm-repo/src/sources.rs`): a root of a
+// source root, opened as `nazm check --source-root` would load it, the source root being the directory durable keys are measured from. Every
+// semantic fact is the front end's (`compiler/facts.nz`): which files the compilation loaded, its durable definitions (`snap.nz`, N28's, each
+// with where its name is), a definition's context packet (`context.nz`, N27) and the current diagnostics (`semantic.nz`, N30). A compilation
+// that loads a file outside its source root reads something the repository state does not cover, and is refused with a problem.
+//
+// Where the facts do not carry what the reference reads, the command says so on standard error and exits 6 before writing anything.
+
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/package.nz"
+use "../../compiler/facts.nz"
+use "context.nz"
+use "front.nz"
+use "repoload.nz"
+use "semantic.nz"
+use "snap.nz"
+use "sym.nz"
+use "util.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+fn nul() -> Str { str_from_byte(0) }
+
+pub fn rc_refuse(io: IoCap, why: Str) -> Int {
+    eprint("repo: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+pub struct Comp {
+    // Whether it opened; else the problem, as a row `KIND\0VALUE` (`bad`).
+    ok: Bool,
+    bad: Str,
+    source: Int,
+    root: Str,
+    // The root file and the source root, absolute and canonical.
+    path: Str,
+    dir: Str,
+    facts: Facts,
+    // The module keys it loaded, in byte order.
+    modules: Strs,
+    // Whether it has durable definitions: not one that needed syntax recovery or lacks a module.
+    complete: Bool,
+    // The durable definitions, ordered by identity: kind, file (the module key), the declaration and the name's range.
+    d_identity: Strs,
+    d_kind: Strs,
+    d_file: Strs,
+    d_start: Ints,
+    d_end: Ints,
+    d_ns: Ints,
+    d_ne: Ints,
+    untracked: Int,
+    // How many diagnostics the compilation's index holds.
+    diagnostics: Int,
+}
+
+fn failed(source: Int, root: Str, row: Str, facts: Facts) -> Comp {
+    Comp(ok: false, bad: row, source: source, root: root, path: "", dir: "", facts: facts, modules: strs_new(), complete: false, d_identity: strs_new(), d_kind: strs_new(),
+            d_file: strs_new(), d_start: ints_new(), d_end: ints_new(), d_ns: ints_new(), d_ne: ints_new(), untracked: 0, diagnostics: 0)
+}
+
+// The facts of a root that the repository's compilations never are: an empty set, for a compilation that did not open.
+fn no_facts(io: IoCap) -> Facts { fx_check_module_in("", "", "", "", "", io) }
+
+// Open root `root` of source root `s` (an index) of the repository.
+pub fn rc_open(io: IoCap, repo: Repo, s: Int, root: Str) -> Comp {
+    let at = rl_source_dir(s) + "/" + root
+    let unreadable = "unreadable_root" + nul() + at
+    let outside = "source_outside_state" + nul() + at
+    let dir = fe_canonical(io, ut_join(repo.root, rl_source_dir(s)))
+    if dir == "" { return failed(s, root, unreadable, no_facts(io)) }
+    let path = dir + "/" + root
+    if ut_read_error(io, path, true) != "" { return failed(s, root, unreadable, no_facts(io)) }
+    let library = os_env_get("NAZM_LIBRARY")
+    if library == "" { rc_refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
+    let f = fx_check_module_in(path, dir, library, fe_host_os(), fe_host_arch(), io)
+    if fx_refusal(f) != "" { return failed(s, root, unreadable, f) }
+    if !fx_carried(f) { rc_refuse(io, fx_why(f)) }
+    let modules = strs_new()
+    for m in 0..fx_modules(f) {
+        let name = fx_module_name(f, m)
+        if name == "@core/prelude.nz" { continue }
+        let norm = pk_normalise(name)
+        let prefix = dir + "/"
+        if !fe_starts(norm, prefix) { return failed(s, root, outside, f) }
+        let key = str_slice(norm, str_len(prefix), str_len(norm))
+        let mut plain = true
+        for i in 0..str_len(key) {
+            if str_byte(key, i) == 47 || str_byte(key, i) == 92 { plain = false }
+        }
+        if !plain || !rl_has_source(repo, s, key) { return failed(s, root, outside, f) }
+        strs_push(modules, key)
+    }
+    let sorted = sn_sort(modules)
+    let unique = strs_new()
+    for i in 0..strs_len(sorted) {
+        if i > 0 && strs_get(sorted, i) == strs_get(sorted, i - 1) { continue }
+        strs_push(unique, strs_get(sorted, i))
+    }
+    // The durable definitions: exactly the snapshot's (N28), each with where its name is, as the outline has it.
+    let c = Comp(ok: true, bad: "", source: s, root: root, path: path, dir: dir, facts: f, modules: unique, complete: false, d_identity: strs_new(), d_kind: strs_new(),
+            d_file: strs_new(), d_start: ints_new(), d_end: ints_new(), d_ns: ints_new(), d_ne: ints_new(), untracked: 0, diagnostics: 0)
+    let snap = snap_build(f)
+    if snap_why(snap) != "" { rc_refuse(io, snap_why(snap)) }
+    if snap_reason(snap) == "" {
+        let names = strs_new()
+        let ns = ints_new()
+        let ne = ints_new()
+        // Every declaration's name, by its file and whole range.
+        let starts = ints_new()
+        let ends = ints_new()
+        for m in 0..fx_modules(f) {
+            if !fx_file_known(f, m) || fe_starts(fx_module_name(f, m), "@") { continue }
+            let y = symbols_of(f, m, false)
+            for i in 0..sy_len(y) {
+                if sy_kind(y, i) <= 3 {
+                    strs_push(names, fx_file_path(f, m))
+                    ints_push(starts, sy_start(y, i))
+                    ints_push(ends, sy_end(y, i))
+                    ints_push(ns, sy_name_start(y, i))
+                    ints_push(ne, sy_name_end(y, i))
+                }
+            }
+        }
+        let mut untracked = snap_untracked(snap)
+        for i in 0..snap_count(snap) {
+            let mut found = 0 - 1
+            for q in 0..strs_len(names) {
+                if found < 0 && strs_get(names, q) == snap_file(snap, i) && ints_get(starts, q) == snap_start(snap, i) && ints_get(ends, q) == snap_end(snap, i) { found = q }
+            }
+            if found < 0 {
+                untracked += 1
+                continue
+            }
+            strs_push(c.d_identity, snap_identity(snap, i))
+            strs_push(c.d_kind, snap_kind(snap, i))
+            strs_push(c.d_file, snap_file(snap, i))
+            ints_push(c.d_start, snap_start(snap, i))
+            ints_push(c.d_end, snap_end(snap, i))
+            ints_push(c.d_ns, ints_get(ns, found))
+            ints_push(c.d_ne, ints_get(ne, found))
+        }
+        let done = Comp(ok: true, bad: "", source: s, root: root, path: path, dir: dir, facts: f, modules: unique, complete: true, d_identity: c.d_identity, d_kind: c.d_kind,
+                d_file: c.d_file, d_start: c.d_start, d_end: c.d_end, d_ns: c.d_ns, d_ne: c.d_ne, untracked: untracked, diagnostics: sd_total(f))
+        return done
+    }
+    Comp(ok: true, bad: "", source: s, root: root, path: path, dir: dir, facts: f, modules: unique, complete: false, d_identity: c.d_identity, d_kind: c.d_kind,
+            d_file: c.d_file, d_start: c.d_start, d_end: c.d_end, d_ns: c.d_ns, d_ne: c.d_ne, untracked: 0, diagnostics: sd_total(f))
+}
+
+// `root:SOURCE:ROOT`.
+pub fn rc_id(c: Comp) -> Str { "root:" + rl_source_id(c.source) + ":" + c.root }
+
+// The root file, from the repository root.
+pub fn rc_location(c: Comp) -> Str { rl_source_dir(c.source) + "/" + c.root }
+
+pub fn rc_includes(c: Comp, module: Str) -> Bool {
+    for i in 0..strs_len(c.modules) {
+        if strs_get(c.modules, i) == module { return true }
+    }
+    false
+}
+
+// A durable definition of this compilation by its key (binary search in the reference; the list is sorted by identity): its position or -1.
+pub fn rc_definition(c: Comp, identity: Str) -> Int {
+    for i in 0..strs_len(c.d_identity) {
+        if strs_get(c.d_identity, i) == identity { return i }
+    }
+    0 - 1
+}
+
+// The module of the compilation whose key is `file`, or -1.
+fn module_of(c: Comp, file: Str) -> Int {
+    let f = c.facts
+    for m in 0..fx_modules(f) {
+        if !fx_file_known(f, m) || fe_starts(fx_module_name(f, m), "@") { continue }
+        if fx_file_path(f, m) == file { return m }
+    }
+    0 - 1
+}
+
+// The context packet (N27) of durable definition `d`, asked at its name: compact JSON, "" where there is none.
+pub fn rc_context(io: IoCap, c: Comp, d: Int) -> Str {
+    let m = module_of(c, strs_get(c.d_file, d))
+    if m < 0 { return "" }
+    let r = ctx_module_packet(io, c.facts, m, ints_get(c.d_ns, d))
+    if r.why != "" { rc_refuse(io, r.why) }
+    if !r.available { return "" }
+    r.json
+}

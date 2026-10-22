@@ -1,0 +1,55 @@
+# `nazm context`, run from the repository's root (`tests/agent.sh args`): clap's usage errors and help, and what the command then does.
+--help
+-h
+--root examples/max.nz --file examples/max.nz --byte 173
+--root examples/max.nz --file examples/max.nz --byte 173 --json
+--json --root examples/max.nz --file examples/max.nz --byte 173
+--root=examples/max.nz --file=examples/max.nz --byte=173 --json
+--root examples/max.nz --file examples/max.nz --byte 178 --json
+--root examples/max.nz --file examples/max.nz --byte 179 --json
+--root examples/max.nz --file examples/max.nz --byte 387 --json
+--root examples/max.nz --file examples/max.nz --byte 0 --json
+--root examples/max.nz --file examples/max.nz --byte 443 --json
+--root examples/max.nz --file examples/max.nz --byte 444 --json
+--root examples/max.nz --file examples/max.nz --byte 445 --json
+--root examples/max.nz --file examples/max.nz --byte 4294967295 --json
+--root examples/max.nz --file examples/max.nz --byte 4294967296
+--root examples/max.nz --file examples/max.nz --byte -1
+--root examples/max.nz --file examples/max.nz --byte x
+--root examples/max.nz --file examples/max.nz --byte
+--root examples/max.nz --file examples/max.nz
+--root examples/max.nz --byte 3
+--file examples/max.nz --byte 3
+--root examples/max.nz --file examples/max.nz --byte 173 extra
+--root examples/max.nz --file examples/max.nz --byte 173 --bogus
+--root examples/max.nz --root examples/sum.nz --file examples/max.nz --byte 173
+--root absent.nz --file examples/max.nz --byte 173
+--root examples --file examples/max.nz --byte 173
+--root examples/max.nz --file examples/absent.nz --byte 173
+--root examples/max.nz --file examples/primes.nz --byte 173 --json
+--root examples/max.nz --file ./examples/max.nz --byte 173 --json
+--root examples/max.nz --file examples//max.nz --byte 173 --json
+--root examples/max.nz --file /Volumes/Dev/../Dev/Documents/Documents/ferdous_persaonal/projects/nazm/nazm/.claude/worktrees/r8-slice9/examples/max.nz --byte 173 --json
+--root examples/max.nz --file examples/max.nz --byte 173 --json --source-root examples
+--root examples/max.nz --file examples/max.nz --byte 173 --json --source-root .
+--root examples/max.nz --file examples/max.nz --byte 173 --json --source-root nowhere
+--root examples/max.nz --file examples/max.nz --byte 173 --json --source-root examples/bad
+--root examples/max.nz --file examples/max.nz --byte 173 --json --source-root examples/max.nz
+--root examples/tour/records-enums.nz --file examples/tour/records-enums.nz --byte 50 --json
+--root examples/tour/records-enums.nz --file examples/tour/records-enums.nz --byte 133 --json
+--root examples/tour/records-enums.nz --file examples/tour/records-enums.nz --byte 140
+--root examples/tour/records-enums.nz --file examples/tour/records-enums.nz --byte 12 --json
+--root toolchain/frontend-tests/inputs/modules/imported-generic.nz --file toolchain/frontend-tests/inputs/modules/lib/a.nz --byte 7 --json
+--root toolchain/frontend-tests/inputs/modules/imported-generic.nz --file toolchain/frontend-tests/inputs/modules/lib/a.nz --byte 46 --json
+--root toolchain/frontend-tests/inputs/modules/imported-generic.nz --file toolchain/frontend-tests/inputs/modules/lib/a.nz --byte 71 --json
+--root toolchain/frontend-tests/inputs/modules/imported-generic.nz --file toolchain/frontend-tests/inputs/modules/imported-generic.nz --byte 40 --json
+--root toolchain/frontend-tests/inputs/modules/broken-import.nz --file toolchain/frontend-tests/inputs/modules/broken-import.nz --byte 10 --json
+--root examples/bad/return_type_mismatch.nz --file examples/bad/return_type_mismatch.nz --byte 3 --json
+--root examples/bad/undefined_variable.nz --file examples/bad/undefined_variable.nz --byte 3 --json
+--root examples/bad/unsupported_construct.nz --file examples/bad/unsupported_construct.nz --byte 3 --json
+--root examples/effects/pure.nz --file examples/effects/pure.nz --byte 10 --json
+--root examples/capabilities/ledger.nz --file examples/capabilities/ledger.nz --byte 60 --json
+
+--root examples/packages/app/src/main.nz --file examples/packages/app/src/main.nz --byte 40 --json
+--root examples/packages/app/src/main.nz --file examples/packages/geometry/src/area.nz --byte 10 --json
+--root examples/packages/geometry/src/area.nz --file examples/packages/geometry/src/area.nz --byte 10 --json

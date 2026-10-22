@@ -57,7 +57,7 @@ fn refuse(io: IoCap, why: Str) -> Int {
 
 // --- the corpus -----------------------------------------------------------------------------------
 
-struct Corp {
+pub struct Corp {
     d_id: Strs,
     d_path: Strs,
     d_auth: Strs,
@@ -109,6 +109,10 @@ fn corp_new() -> Corp {
             k_target: strs_new(), k_has_target: ints_new(), k_scope: strs_new(), e_sec: ints_new(), e_text: strs_new(),
             p_kind: strs_new(), p_doc: strs_new(), p_line: ints_new(), p_value: strs_new(), state: strs_new())
 }
+
+// The corpus read from the repository at `root` (`Corpus::load`): sections, links, digests and the corpus state, or its problems (`p_*`).
+// What `nazm repo` reads it through (R8 slice 9).
+pub fn dc_load(io: IoCap, root: Str) -> Corp { load(io, root) }
 
 // The manifest (`manifest.rs`), in corpus order: id, path, authority, format.
 fn manifest() -> Strs {

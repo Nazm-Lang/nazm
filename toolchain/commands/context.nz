@@ -1,0 +1,745 @@
+// `nazm context` (R8 slice 9, task 9.1; R5's `openspec/changes/r5-commands/` method): one definition's semantic context
+// packet, `nazm.context/3`, as `crates/nazm-service/src/context.rs` builds it over R2's facts (`compiler/facts.nz`): the
+// target's exact source and shape, the entities its declaration uses (`dependencies`) and the records and enums it names
+// (`related_types`), every use of it, the direct checked calls into and out of a function, the diagnostics inside it,
+// and — since R8 slice 9 — a function's effects (`fx_fn_declared`, `fx_fn_required`, `fx_fn_published`, `fx_reason_*`)
+// next to its provenance (`fx_prov_*`).
+//
+// `ctx_packet` takes the facts of the root checked as a module (`fx_check_module_in`, which is what the language service
+// analyses), a file and a byte and answers the packet or the reason there is none, compact. Where the facts do not carry
+// what the reference reads (`CtxResult.why`) the caller refuses with status 6 and says what, before anything is written:
+// the compilation the checker stops at, one whose errors leave the facts' index unlike the reference's, a function whose
+// signature or provenance the facts do not spell.
+//
+// `nazm context --root ROOT --file FILE --byte BYTE [--json] [--source-root DIR]` prints it as `crates/nazm-cli` does: the
+// compact object with `--json`, else the same object indented with its keys sorted; status 0 for a packet, 1 for the
+// reason there is none, 4 for a root that cannot be read.
+
+use "../../compiler/lex.nz"
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/package.nz"
+use "../../compiler/facts.nz"
+use "../../compiler/builtins.nz"
+use "cli.nz"
+use "front.nz"
+use "jsonin.nz"
+use "snap.nz"
+use "sym.nz"
+use "util.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+pub struct CtxResult {
+    // The packet, or why there is none, as `nazm.context/3` writes it (compact); "" where the facts cannot say.
+    json: Str,
+    // Why the facts cannot say: "" where they can.
+    why: Str,
+    available: Bool,
+}
+
+fn unavailable(reason: Str) -> CtxResult {
+    CtxResult(json: "{\"schema\":\"nazm.context/3\",\"status\":\"unavailable\",\"reason\":" + json_str(reason) + "}", why: "", available: false)
+}
+
+fn refused(why: Str) -> CtxResult { CtxResult(json: "", why: why, available: false) }
+
+fn pad12(n: Int) -> Str {
+    let t = int_to_str(n)
+    let mut z = ""
+    for i in 0..12 - str_len(t) { z = z + "0" }
+    z + t
+}
+
+fn opt_str(has: Bool, s: Str) -> Str { if has { json_str(s) } else { "null" } }
+
+fn names_json(names: Strs) -> Str {
+    let out = strs_new()
+    for i in 0..strs_len(names) { strs_push(out, json_str(strs_get(names, i))) }
+    "[" + str_join(out, ",") + "]"
+}
+
+// `Path::canonicalize`, or where the file is not there its directory's with its name (`service::identity`).
+fn identity_path(io: IoCap, path: Str) -> Str {
+    let c = fe_canonical(io, path)
+    if c != "" { return c }
+    let norm = pk_normalise(path)
+    let dir = fe_canonical(io, ut_parent(norm))
+    if dir == "" { return norm }
+    if dir == "/" { return "/" + ut_file_name(norm) }
+    dir + "/" + ut_file_name(norm)
+}
+
+// The identifier at byte `at` of `text` (`name_at`): the one holding it, or the one ending there; its span, or -1 for none.
+// -2 where the text does not lex.
+fn name_at(text: Str, at: Int) -> Ints {
+    let kinds = ints_new()
+    let starts = ints_new()
+    let ends = ints_new()
+    let texts = strs_new()
+    let d = dg_new()
+    lex_all(text, kinds, starts, ends, texts, d)
+    let out = ints_new()
+    if dg_len(d) > 0 {
+        ints_push(out, 0 - 2)
+        ints_push(out, 0 - 2)
+        return out
+    }
+    for k in 0..ints_len(kinds) {
+        if ints_get(starts, k) <= at && at < ints_get(ends, k) {
+            if ints_get(kinds, k) == k_ident() {
+                ints_push(out, ints_get(starts, k))
+                ints_push(out, ints_get(ends, k))
+                return out
+            }
+        }
+    }
+    for k in 0..ints_len(kinds) {
+        if ints_get(kinds, k) == k_ident() && ints_get(ends, k) == at {
+            ints_push(out, ints_get(starts, k))
+            ints_push(out, ints_get(ends, k))
+            return out
+        }
+    }
+    ints_push(out, 0 - 1)
+    ints_push(out, 0 - 1)
+    out
+}
+
+// The entity the identifier at `st..en` (absolute) is of — its declaration or one of its uses — or -1.
+fn entity_at(f: Facts, st: Int, en: Int) -> Int {
+    let n = fx_ref_count(f)
+    for i in 0..n {
+        if fx_ref_decl_start(f, i) == st && fx_ref_decl_end(f, i) == en { return i }
+    }
+    for i in 0..n {
+        for k in 0..fx_ref_use_count(f, i) {
+            if fx_ref_use_start(f, i, k) == st && fx_ref_use_end(f, i, k) == en { return i }
+        }
+    }
+    0 - 1
+}
+
+// The identity of an entity as the packets write it.
+fn identity_json(ents: Ents, e: Int) -> Str {
+    "{\"definition\":" + opt_str(ints_get(ents.hasdef, e) == 1, strs_get(ents.def, e)) + ",\"member\":" + opt_str(ints_get(ents.hasmem, e) == 1, strs_get(ents.mem, e)) + "}"
+}
+
+// The durable identity of function `g`, as `{"definition":…,"member":null}`.
+fn fn_identity_json(f: Facts, g: Int) -> Str {
+    let c = fx_checker(f)
+    let m = ck_fn_module(c, g)
+    if m < 0 || fx_module_key(f, m) == "" { return "{\"definition\":null,\"member\":null}" }
+    "{\"definition\":" + json_str(fx_fn_identity(f, g)) + ",\"member\":null}"
+}
+
+fn kind_word(kind: Str) -> Str {
+    if kind == "payload field" { return "payload_field" }
+    if kind == "trait method" { return "trait_method" }
+    kind
+}
+
+// The place `a..b` (absolute) as `{"file":…,"start":…,"end":…}`, in the file it is in; "null" where that file has no place in the identities.
+fn span_json(f: Facts, a: Int, b: Int) -> Str {
+    let m = fx_module_at(f, a)
+    if m < 0 || !fx_file_known(f, m) { return "null" }
+    let base = fx_module_base(f, m)
+    "{\"file\":" + json_str(fx_file_path(f, m)) + ",\"start\":" + int_to_str(a - base) + ",\"end\":" + int_to_str(b - base) + "}"
+}
+
+// A definition's declared name, read from the definition tables (`name_of`): of a function, record or enum, declared at `ds`.
+fn name_of(f: Facts, kind: Str, ds: Int) -> Str {
+    let c = fx_checker(f)
+    if kind == "function" {
+        for g in 0..ck_fn_count(c) {
+            if ck_fn_name_start(c, g) == ds { return ck_fn_name(c, g) }
+        }
+    }
+    if kind == "record" {
+        for r in 0..ck_record_count(c) {
+            if ck_record_name_start(c, r) == ds { return ck_record_name(c, r) }
+        }
+    }
+    if kind == "enum" {
+        for e in 0..ck_enum_count(c) {
+            if ck_enum_name_start(c, e) == ds { return ck_enum_name(c, e) }
+        }
+    }
+    ""
+}
+
+// A link's order: kind's rank, where it is declared (none first), its identity.
+fn link_key(f: Facts, ents: Ents, t: Int) -> Str {
+    let ds = fx_ref_decl_start(f, t)
+    let m = fx_module_at(f, ds)
+    let base = fx_module_base(f, m)
+    let decl = "1" + fx_file_path(f, m) + str_from_byte(0) + pad12(ds - base) + str_from_byte(0) + pad12(fx_ref_decl_end(f, t) - base)
+    let rank = ints_get(ents.rank, t)
+    let hasdef = ints_get(ents.hasdef, t) == 1
+    let hasmem = ints_get(ents.hasmem, t) == 1
+    pad12(rank) + str_from_byte(0) + decl + str_from_byte(0) + (if hasdef { "1" + strs_get(ents.def, t) } else { "0" }) + str_from_byte(0)
+            + (if hasmem { "1" + strs_get(ents.mem, t) } else { "0" })
+}
+
+fn link_json(f: Facts, ents: Ents, t: Int, starts: Ints, ends: Ints) -> Str {
+    let kind = fx_ref_kind(f, t)
+    let ds = fx_ref_decl_start(f, t)
+    let name = if ints_get(ents.hasmem, t) == 1 { strs_get(ents.mem, t) } else { name_of(f, kind, ds) }
+    let occ = strs_new()
+    for i in 0..ints_len(starts) { strs_push(occ, "{\"start\":" + int_to_str(ints_get(starts, i)) + ",\"end\":" + int_to_str(ints_get(ends, i)) + "}") }
+    "{\"identity\":" + identity_json(ents, t) + ",\"kind\":" + json_str(kind_word(kind)) + ",\"name\":" + json_str(name) + ",\"declaration\":" + span_json(f, ds, fx_ref_decl_end(f, t))
+            + ",\"occurrences\":[" + str_join(occ, ",") + "]}"
+}
+
+// The rows of `keys` sorted bytewise, each with the number of the row it was.
+fn sorted_rows(keys: Strs) -> Strs {
+    let rows = strs_new()
+    for i in 0..strs_len(keys) { strs_push(rows, strs_get(keys, i) + str_from_byte(1) + int_to_str(i)) }
+    sn_sort(rows)
+}
+
+fn row_number(row: Str) -> Int {
+    let mut cut = str_len(row) - 1
+    while str_byte(row, cut) != 1 { cut -= 1 }
+    let mut n = 0
+    for i in cut + 1..str_len(row) { n = n * 10 + str_byte(row, i) - 48 }
+    n
+}
+
+// `ints` sorted ascending by `(a, b)` with each pair once.
+fn sort_pairs(a: Ints, b: Ints, typed: Ints, outa: Ints, outb: Ints) -> Int {
+    let n = ints_len(a)
+    let order = ints_new()
+    for i in 0..n {
+        let mut at = ints_len(order)
+        while at > 0 && (ints_get(a, i) < ints_get(a, ints_get(order, at - 1))
+                || (ints_get(a, i) == ints_get(a, ints_get(order, at - 1)) && ints_get(b, i) < ints_get(b, ints_get(order, at - 1)))) { at -= 1 }
+        ints_push(order, 0)
+        let mut k = ints_len(order) - 1
+        while k > at {
+            ints_set(order, k, ints_get(order, k - 1))
+            k -= 1
+        }
+        ints_set(order, at, i)
+    }
+    for r in 0..n {
+        let i = ints_get(order, r)
+        if ints_len(outa) > 0 && ints_get(outa, ints_len(outa) - 1) == ints_get(a, i) && ints_get(outb, ints_len(outb) - 1) == ints_get(b, i) { continue }
+        ints_push(outa, ints_get(a, i))
+        ints_push(outb, ints_get(b, i))
+    }
+    0
+}
+
+fn effect_name(e: Int) -> Str {
+    let mut bit = 1
+    for i in 0..e { bit = bit * 2 }
+    strs_get(ck_effect_names(bit), 0)
+}
+
+// A function's effects as the packet writes them, "null" for one whose body was not checked.
+fn effects_json(f: Facts, g: Int) -> Str {
+    let required = fx_fn_required(f, g)
+    if required < 0 { return "null" }
+    let declared = fx_fn_declared(f, g)
+    let reasons = strs_new()
+    for k in 0..fx_reason_count(f, g) {
+        let callee = fx_reason_callee(f, g, k)
+        let builtin = fx_reason_builtin(f, g, k)
+        let source = fx_reason_source(f, g, k)
+        strs_push(reasons, "{\"effect\":" + json_str(effect_name(fx_reason_effect(f, g, k))) + ",\"at\":" + span_json(f, fx_reason_start(f, g, k), fx_reason_end(f, g, k))
+                + ",\"source\":" + json_str(source) + ",\"builtin\":" + (if source == "builtin" { json_str(builtin) } else { "null" }) + ",\"callee\":"
+                + (if callee >= 0 { fn_identity_json(f, callee) } else { "null" }) + "}")
+    }
+    "{\"declared\":" + (if declared >= 0 { names_json(ck_effect_names(declared)) } else { "null" }) + ",\"required\":" + names_json(ck_effect_names(required))
+            + ",\"published\":" + names_json(ck_effect_names(fx_fn_published(f, g))) + ",\"reasons\":[" + str_join(reasons, ",") + "]}"
+}
+
+// A function's parameter names, `out` first for a `main` that is given one; empty (and a reason in `why`) where the facts do not name them.
+fn param_names(f: Facts, g: Int, why: Strs) -> Strs {
+    let c = fx_checker(f)
+    let t = fx_tree(f)
+    let node = ck_fn_node(c, g)
+    let out = strs_new()
+    let params = sx_items(t, sx_field(t, node, "params"))
+    let tys = ck_fn_params(c, g)
+    let implicit = strs_len(tys) - ints_len(params)
+    if implicit < 0 || implicit > 1 {
+        strs_push(why, "a function whose parameters the facts do not name")
+        return out
+    }
+    if implicit == 1 { strs_push(out, "out") }
+    for k in 0..ints_len(params) {
+        let p = sx_name(t, ints_get(params, k), "name")
+        if p == "" {
+            strs_push(why, "a function whose parameters the facts do not name")
+            return out
+        }
+        strs_push(out, p)
+    }
+    out
+}
+
+// A function's provenance, "null" for one that was not solved; a reason in `why` where the facts do not name what it names.
+fn provenance_json(f: Facts, g: Int, why: Strs) -> Str {
+    if !fx_prov_has(f, g) { return "null" }
+    let names = param_names(f, g, why)
+    if strs_len(why) > 0 { return "null" }
+    let passes = strs_new()
+    let ps = fx_prov_passes_on(f, g)
+    for k in 0..ints_len(ps) {
+        // A capture's name is not a parameter's: the facts do not publish it.
+        if ints_get(ps, k) >= strs_len(names) {
+            strs_push(why, "a function whose provenance names a capture")
+            return "null"
+        }
+        strs_push(passes, strs_get(names, ints_get(ps, k)))
+    }
+    let reaches = strs_new()
+    let rs = fx_prov_reaches(f, g)
+    for k in 0..ints_len(rs) {
+        if ints_get(rs, k) >= strs_len(names) {
+            strs_push(why, "a function whose provenance names a capture")
+            return "null"
+        }
+        strs_push(reaches, strs_get(names, ints_get(rs, k)))
+    }
+    let receives = strs_new()
+    for k in 0..strs_len(names) {
+        strs_push(receives, "{\"param\":" + json_str(strs_get(names, k)) + ",\"origins\":" + names_json(fx_prov_receives(f, g, k)) + "}")
+    }
+    "{\"origins\":" + names_json(fx_prov_origins(f, g)) + ",\"passes_on\":" + names_json(passes) + ",\"reaches_write_path\":" + names_json(reaches) + ",\"receives\":["
+            + str_join(receives, ",") + "]}"
+}
+
+// --- a record's fields and an enum's variants, in the order the reference lists them ---------------------------------------------
+
+fn field_json(y: Sy, q: Int) -> Str { "{\"name\":" + json_str(sy_name(y, q)) + ",\"type\":" + json_str(sy_detail(y, q)) + "}" }
+
+fn fields_json(y: Sy, kids: Ints, sorted: Bool) -> Str {
+    let names = strs_new()
+    for k in 0..ints_len(kids) { strs_push(names, sy_name(y, ints_get(kids, k))) }
+    let order = by_name_order(names, sorted)
+    let out = strs_new()
+    for k in 0..ints_len(order) { strs_push(out, field_json(y, ints_get(kids, ints_get(order, k)))) }
+    "[" + str_join(out, ",") + "]"
+}
+
+fn variants_json(y: Sy, kids: Ints) -> Str {
+    let names = strs_new()
+    for k in 0..ints_len(kids) { strs_push(names, sy_name(y, ints_get(kids, k))) }
+    let order = by_name_order(names, true)
+    let out = strs_new()
+    for k in 0..ints_len(order) {
+        let v = ints_get(kids, ints_get(order, k))
+        out_push_variant(out, y, v)
+    }
+    "[" + str_join(out, ",") + "]"
+}
+
+fn out_push_variant(out: Strs, y: Sy, v: Int) -> Int {
+    strs_push(out, "{\"name\":" + json_str(sy_name(y, v)) + ",\"fields\":" + fields_json(y, sy_kids(y, v), true) + "}")
+    0
+}
+
+// --- calls: the source functions of the compilation and the direct checked calls between them ---------------------------
+
+struct Decls {
+    // Per function (the checker's number): the module and name span (local) of its outline symbol, -1 for none.
+    module: Ints,
+    ns: Ints,
+    ne: Ints,
+}
+
+fn decls_new(f: Facts) -> Decls {
+    let c = fx_checker(f)
+    let d = Decls(module: ints_new(), ns: ints_new(), ne: ints_new())
+    for g in 0..ck_fn_count(c) {
+        ints_push(d.module, 0 - 1)
+        ints_push(d.ns, 0 - 1)
+        ints_push(d.ne, 0 - 1)
+    }
+    for m in 0..fx_modules(f) {
+        // A standard module has no file an editor can open: its functions are never hierarchy items.
+        if !fx_file_known(f, m) || fe_starts(fx_module_name(f, m), "@") { continue }
+        let y = symbols_of(f, m, false)
+        for i in 0..sy_len(y) {
+            if sy_kind(y, i) == 1 {
+                let g = sy_def(y, i)
+                ints_set(d.module, g, m)
+                ints_set(d.ns, g, sy_name_start(y, i))
+                ints_set(d.ne, g, sy_name_end(y, i))
+            }
+        }
+    }
+    d
+}
+
+// Whether item `a` goes before `b`: by the file it is declared in (`Path`'s order), then where its name is, then its name.
+fn item_before(f: Facts, d: Decls, a: Int, b: Int) -> Bool {
+    let c = fx_checker(f)
+    let ma = ints_get(d.module, a)
+    let mb = ints_get(d.module, b)
+    if ma != mb {
+        let pa = pk_normalise(fx_module_name(f, ma))
+        let pb = pk_normalise(fx_module_name(f, mb))
+        if pa != pb { return fe_path_before(pa, pb) }
+    }
+    if ints_get(d.ns, a) != ints_get(d.ns, b) { return ints_get(d.ns, a) < ints_get(d.ns, b) }
+    fe_str_less(ck_fn_name(c, a), ck_fn_name(c, b))
+}
+
+// The functions `others` (one per call, with the call's span `from..to`, absolute) as the items of `calls`, in the reference's order.
+fn calls_json(f: Facts, d: Decls, others: Ints, from: Ints, to: Ints) -> Str {
+    let c = fx_checker(f)
+    let distinct = ints_new()
+    for i in 0..ints_len(others) {
+        let g = ints_get(others, i)
+        let mut seen = false
+        for k in 0..ints_len(distinct) {
+            if ints_get(distinct, k) == g { seen = true }
+        }
+        if !seen { ints_push(distinct, g) }
+    }
+    let order = ints_new()
+    for i in 0..ints_len(distinct) {
+        let g = ints_get(distinct, i)
+        let mut at = ints_len(order)
+        while at > 0 && item_before(f, d, g, ints_get(order, at - 1)) { at -= 1 }
+        ints_push(order, 0)
+        let mut k = ints_len(order) - 1
+        while k > at {
+            ints_set(order, k, ints_get(order, k - 1))
+            k -= 1
+        }
+        ints_set(order, at, g)
+    }
+    let items = strs_new()
+    for r in 0..ints_len(order) {
+        let g = ints_get(order, r)
+        let sa = ints_new()
+        let sb = ints_new()
+        let none = ints_new()
+        for i in 0..ints_len(others) {
+            if ints_get(others, i) == g {
+                ints_push(sa, ints_get(from, i))
+                ints_push(sb, ints_get(to, i))
+                ints_push(none, 0)
+            }
+        }
+        let ua = ints_new()
+        let ub = ints_new()
+        sort_pairs(sa, sb, none, ua, ub)
+        let calls = strs_new()
+        for i in 0..ints_len(ua) {
+            let s = span_json(f, ints_get(ua, i), ints_get(ub, i))
+            if s != "null" { strs_push(calls, s) }
+        }
+        let m = ints_get(d.module, g)
+        let base = fx_module_base(f, m)
+        strs_push(items, "{\"identity\":" + fn_identity_json(f, g) + ",\"name\":" + json_str(ck_fn_name(c, g)) + ",\"declaration\":"
+                + span_json(f, base + ints_get(d.ns, g), base + ints_get(d.ne, g)) + ",\"calls\":[" + str_join(calls, ",") + "]}")
+    }
+    "{\"status\":\"available\",\"items\":[" + str_join(items, ",") + "]}"
+}
+
+// --- the packet ------------------------------------------------------------------------------------------------------------
+
+fn unreliable_code(code: Str) -> Bool {
+    code == "N0203" || code == "N0386" || code == "N0305" || code == "N0101" || code == "N0334" || code == "N0610"
+}
+
+// The packet of the definition declared or used at byte `byte` of `file` (as given), in the compilation `f` of the root at
+// `root_path` (absolute), checked as a module (`fx_check_module_in`).
+pub fn ctx_packet(io: IoCap, f: Facts, root_path: Str, file: Str, byte: Int) -> CtxResult {
+    let want = identity_path(io, fe_prefix(io, file) + file)
+    // A root the reference cannot decide analyses as an empty compilation with a missing module: the root is its one file.
+    if fx_refusal(f) != "" {
+        if want == identity_path(io, root_path) { return unavailable("incomplete_compilation") }
+        return unavailable("not_in_compilation")
+    }
+    if !fx_carried(f) { return refused(fx_why(f)) }
+    // The file, among those the compilation loaded — by identity, never by reading it.
+    let mut m = 0 - 1
+    for k in 0..fx_modules(f) {
+        if m < 0 && fe_starts(fx_module_name(f, k), "/") && identity_path(io, fx_module_name(f, k)) == want { m = k }
+    }
+    if m < 0 { return unavailable("not_in_compilation") }
+    ctx_module_packet(io, f, m, byte)
+}
+
+// The packet of the definition declared or used at byte `byte` of module `m` of the compilation `f` (a module of its own: one the loader read
+// from a path), which the front end carried.
+pub fn ctx_module_packet(io: IoCap, f: Facts, m: Int, byte: Int) -> CtxResult {
+    let d = fx_diags(f)
+    let mut incomplete = early_errors(f) > 0
+    for i in 0..dg_len(d) {
+        if dg_code(d, i) == "N0205" { incomplete = true }
+    }
+    if incomplete { return unavailable("incomplete_compilation") }
+    if fe_load_failed(f) { return refused("a compilation that does not load") }
+    let text = fx_module_text(f, m)
+    if byte > str_len(text) { return unavailable("out_of_range") }
+    for i in 0..dg_len(d) {
+        if unreliable_code(dg_code(d, i)) { return refused("a compilation whose errors leave the facts' index unlike the reference's") }
+    }
+    let at = name_at(text, byte)
+    if ints_get(at, 0) == 0 - 2 { return refused("a position in a document that does not lex") }
+    if ints_get(at, 0) < 0 { return unavailable("not_a_name") }
+    let base = fx_module_base(f, m)
+    let e = entity_at(f, base + ints_get(at, 0), base + ints_get(at, 1))
+    if e < 0 { return unavailable("not_a_target") }
+    let kind = fx_ref_kind(f, e)
+    if kind != "function" && kind != "record" && kind != "enum" { return unavailable("not_a_target") }
+    let ds = fx_ref_decl_start(f, e)
+    if ds < 0 { return unavailable("not_a_target") }
+    let md = fx_module_at(f, ds)
+    if md < 0 || !fx_file_known(f, md) { return unavailable("not_a_target") }
+    let dbase = fx_module_base(f, md)
+    let y = symbols_of(f, md, false)
+    if sy_why(y) != "" { return refused(sy_why(y)) }
+    let want_kind = if kind == "function" { 1 } else if kind == "record" { 2 } else { 3 }
+    let mut sym = 0 - 1
+    for i in 0..sy_len(y) {
+        if sy_kind(y, i) == want_kind && dbase + sy_name_start(y, i) == ds && sym < 0 { sym = i }
+    }
+    if sym < 0 { return unavailable("not_a_target") }
+    let c = fx_checker(f)
+    let why = strs_new()
+    let ents = ents_new(f)
+    let def = sy_def(y, sym)
+    let dstart = dbase + sy_start(y, sym)
+    let dend = dbase + sy_end(y, sym)
+
+    // --- the target ---
+    let mut signature = "null"
+    let mut fields = "null"
+    let mut variants = "null"
+    if kind == "function" {
+        let shown = fn_label(f, def, why)
+        if strs_len(why) > 0 { return refused(strs_get(why, 0)) }
+        signature = json_str(shown)
+    }
+    if kind == "record" {
+        let rt = fx_record_type(f, def)
+        fields = fields_json(y, sy_kids(y, sym), ck_cross_in(c, rt) == "")
+    }
+    if kind == "enum" { variants = variants_json(y, sy_kids(y, sym)) }
+    let source = str_slice(fx_module_text(f, md), sy_start(y, sym), sy_end(y, sym))
+    let n = fx_ref_count(f)
+    let target = "{\"identity\":" + identity_json(ents, e) + ",\"kind\":" + json_str(kind) + ",\"name\":" + json_str(sy_name(y, sym)) + ",\"signature\":" + signature
+            + ",\"fields\":" + fields + ",\"variants\":" + variants + ",\"source\":{\"file\":" + json_str(fx_file_path(f, md)) + ",\"start\":" + int_to_str(sy_start(y, sym))
+            + ",\"end\":" + int_to_str(sy_end(y, sym)) + ",\"name_start\":" + int_to_str(sy_name_start(y, sym)) + ",\"name_end\":" + int_to_str(sy_name_end(y, sym))
+            + ",\"text\":" + json_str(source) + "}}"
+    let dep_keys = strs_new()
+    let dep_json = strs_new()
+    let rel_keys = strs_new()
+    let rel_json = strs_new()
+    // Every entity the declaration uses, grouped, in the links' order.
+    for t in 0..n {
+        if t == e || ints_get(ents.linked, t) != 1 { continue }
+        let sa = ints_new()
+        let sb = ints_new()
+        let ty = ints_new()
+        for u in 0..fx_ref_use_count(f, t) {
+            let a = fx_ref_use_start(f, t, u)
+            let b = fx_ref_use_end(f, t, u)
+            if a >= dstart && b <= dend {
+                ints_push(sa, a - dbase)
+                ints_push(sb, b - dbase)
+                ints_push(ty, if ck_type_name_at(c, a, b) >= 0 { 1 } else { 0 })
+            }
+        }
+        if ints_len(sa) == 0 { continue }
+        let ua = ints_new()
+        let ub = ints_new()
+        sort_pairs(sa, sb, ty, ua, ub)
+        let ta = ints_new()
+        let tb = ints_new()
+        let tsa = ints_new()
+        let tsb = ints_new()
+        let tnone = ints_new()
+        for i in 0..ints_len(sa) {
+            if ints_get(ty, i) == 1 {
+                ints_push(tsa, ints_get(sa, i))
+                ints_push(tsb, ints_get(sb, i))
+                ints_push(tnone, 0)
+            }
+        }
+        sort_pairs(tsa, tsb, tnone, ta, tb)
+        let key = link_key(f, ents, t)
+        let k = fx_ref_kind(f, t)
+        if ints_len(ta) > 0 && (k == "record" || k == "enum") {
+            strs_push(rel_keys, key)
+            strs_push(rel_json, link_json(f, ents, t, ta, tb))
+        }
+        strs_push(dep_keys, key)
+        strs_push(dep_json, link_json(f, ents, t, ua, ub))
+    }
+    let dependencies = strs_new()
+    let sd = sorted_rows(dep_keys)
+    for r in 0..strs_len(sd) { strs_push(dependencies, strs_get(dep_json, row_number(strs_get(sd, r)))) }
+    let related = strs_new()
+    let sr = sorted_rows(rel_keys)
+    for r in 0..strs_len(sr) { strs_push(related, strs_get(rel_json, row_number(strs_get(sr, r)))) }
+
+    // --- every use of the target ---
+    let ref_keys = strs_new()
+    let ref_json = strs_new()
+    for u in 0..fx_ref_use_count(f, e) {
+        let a = fx_ref_use_start(f, e, u)
+        let b = fx_ref_use_end(f, e, u)
+        let um = fx_module_at(f, a)
+        if um < 0 || !fx_file_known(f, um) { continue }
+        let ub = fx_module_base(f, um)
+        strs_push(ref_keys, fx_file_path(f, um) + str_from_byte(0) + pad12(a - ub) + str_from_byte(0) + pad12(b - ub))
+        strs_push(ref_json, span_json(f, a, b))
+    }
+    let references = strs_new()
+    let sorted_refs = sorted_rows(ref_keys)
+    for r in 0..strs_len(sorted_refs) {
+        let i = row_number(strs_get(sorted_refs, r))
+        if r > 0 && strs_get(ref_keys, i) == strs_get(ref_keys, row_number(strs_get(sorted_refs, r - 1))) { continue }
+        strs_push(references, strs_get(ref_json, i))
+    }
+
+    // --- the calls into and out of a function ---
+    let mut callers = "{\"status\":\"not_applicable\",\"items\":null}"
+    let mut callees = "{\"status\":\"not_applicable\",\"items\":null}"
+    if kind == "function" {
+        let decls = decls_new(f)
+        let inc_other = ints_new()
+        let inc_from = ints_new()
+        let inc_to = ints_new()
+        for q in 0..ck_fn_count(c) {
+            if ints_get(decls.module, q) < 0 { continue }
+            for k in 0..fx_call_count(f, q) {
+                if fx_call_kind(f, q, k) == "function" && fx_call_function(f, q, k) == def {
+                    ints_push(inc_other, q)
+                    ints_push(inc_from, fx_call_start(f, q, k))
+                    ints_push(inc_to, fx_call_end(f, q, k))
+                }
+            }
+        }
+        let out_other = ints_new()
+        let out_from = ints_new()
+        let out_to = ints_new()
+        for k in 0..fx_call_count(f, def) {
+            if fx_call_kind(f, def, k) == "function" {
+                let h = fx_call_function(f, def, k)
+                if h >= 0 && ints_get(decls.module, h) >= 0 {
+                    ints_push(out_other, h)
+                    ints_push(out_from, fx_call_start(f, def, k))
+                    ints_push(out_to, fx_call_end(f, def, k))
+                }
+            }
+        }
+        callers = calls_json(f, decls, inc_other, inc_from, inc_to)
+        callees = calls_json(f, decls, out_other, out_from, out_to)
+    }
+
+    // --- the diagnostics inside the declaration ---
+    let diag_keys = strs_new()
+    let diag_json = strs_new()
+    for i in 0..dg_len(d) {
+        if dg_severity(d, i) != "error" || dg_code(d, i) == "N0204" { continue }
+        let mut dm = 0
+        if dg_file(d, i) >= 0 {
+            dm = dg_file(d, i)
+        } else {
+            for q in 0..fx_modules(f) {
+                if fx_module_base(f, q) <= dg_start(d, i) { dm = q }
+            }
+        }
+        if dm != md { continue }
+        let a = dg_start(d, i) - dbase
+        let b = dg_end(d, i) - dbase
+        if a < sy_start(y, sym) || b > sy_end(y, sym) { continue }
+        strs_push(diag_keys, pad12(a) + str_from_byte(0) + pad12(b) + str_from_byte(0) + dg_code(d, i) + str_from_byte(0) + pad12(i))
+        strs_push(diag_json, "{\"code\":" + json_str(dg_code(d, i)) + ",\"severity\":\"error\",\"start\":" + int_to_str(a) + ",\"end\":" + int_to_str(b) + ",\"fixes\":"
+                + int_to_str(dg_fix_total(d, i)) + "}")
+    }
+    let diagnostics = strs_new()
+    let sorted_diags = sorted_rows(diag_keys)
+    for r in 0..strs_len(sorted_diags) { strs_push(diagnostics, strs_get(diag_json, row_number(strs_get(sorted_diags, r)))) }
+
+    // --- a function's effects and provenance ---
+    let mut effects = "null"
+    let mut provenance = "null"
+    if kind == "function" {
+        effects = effects_json(f, def)
+        provenance = provenance_json(f, def, why)
+        if strs_len(why) > 0 { return refused(strs_get(why, 0)) }
+    }
+    let json = "{\"schema\":\"nazm.context/3\",\"status\":\"available\",\"root\":" + json_str(fx_file_path(f, 0)) + ",\"target\":" + target + ",\"dependencies\":["
+            + str_join(dependencies, ",") + "],\"related_types\":[" + str_join(related, ",") + "],\"references\":[" + str_join(references, ",") + "],\"callers\":" + callers
+            + ",\"callees\":" + callees + ",\"diagnostics\":[" + str_join(diagnostics, ",") + "],\"effects\":" + effects + ",\"provenance\":" + provenance
+            + ",\"availability\":{\"capabilities\":\"unsupported\",\"tests\":\"unsupported\",\"semantic_changes\":\"unsupported\",\"semantic_delta\":\"unsupported\"}}"
+    CtxResult(json: json, why: "", available: true)
+}
+
+// --- nazm context ----------------------------------------------------------------------------------------------------------
+
+pub fn context_cli() -> Cli {
+    let c = cli_command("context", "Print one definition's semantic context packet, `nazm.context/3`",
+            "Print one definition's semantic context packet, `nazm.context/3`." + nl() + nl()
+            + "The function, record or enum declared or used at byte `--byte` of `--file`, a file the compilation rooted at `--root` loads: "
+            + "its exact source, and compact links to what it uses, what uses it, what it calls and what calls it, from the disk as it is now. "
+            + "`docs/internal/architecture.md` §7.29.")
+    cli_required_option(c, "root", "ROOT", true, "The compilation's root module: every fact in the packet is of this program")
+    cli_required_option(c, "file", "FILE", true, "The file the position is in. It must be one the root's compilation loads")
+    let b = cli_required_option(c, "byte", "BYTE", false, "The position, as a byte offset into `--file`")
+    cli_numeric(c, b)
+    cli_flag(c, "", "json", "The one canonical compact serialisation. Without it, the same object indented", "")
+    cli_option(c, "", "source-root", "SOURCE_ROOT", true, "", false, "Measure every module's durable identity from this directory, as `nazm check "
+            + "--source-root` does", "")
+    c
+}
+
+fn refuse(io: IoCap, why: Str) -> Int {
+    eprint("context: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+// A decimal number as written on the command line (a `u32`, already checked), saturated.
+fn number(s: Str) -> Int {
+    let mut n = 0
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        if b >= 48 && b <= 57 {
+            if n > 100000000000000000 { return 1000000000000000000 }
+            n = n * 10 + b - 48
+        }
+    }
+    n
+}
+
+pub fn context_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let root = cli_value(c, 0)
+    let file = cli_value(c, 1)
+    let byte = number(cli_value(c, 2))
+    let json = cli_present(c, 3)
+    let why = ut_read_error(io, root, true)
+    if why != "" {
+        eprint("nazm context: " + root + ": " + why + nl())
+        exit_with(4)
+    }
+    let library = os_env_get("NAZM_LIBRARY")
+    if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
+    let prefix = fe_prefix(io, root)
+    let given_set = cli_present(c, 4)
+    let given = if given_set { fe_prefix(io, cli_value(c, 4)) + cli_value(c, 4) } else { "" }
+    let f = fx_check_module_in(prefix + root, given, library, fe_host_os(), fe_host_arch(), io)
+    let r = ctx_packet(io, f, prefix + root, file, byte)
+    if r.why != "" { refuse(io, r.why) }
+    if json {
+        print(r.json + nl())
+    } else {
+        print(j_pretty(j_parse(r.json)) + nl())
+    }
+    if !r.available { exit_with(1) }
+    0
+}

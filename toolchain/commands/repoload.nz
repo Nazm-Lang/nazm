@@ -1,0 +1,1096 @@
+// What `nazm repo` reads of a repository (R8 slice 9, task 9.2): the port of `crates/nazm-repo`'s `manifest.rs`, `repository.rs`, `cargo.rs`
+// and `catalogue.rs` — the layout (the Nazm source roots and their compilation roots), the Cargo workspace as Cargo describes it, the
+// mutation catalogue, the published schemas, the `.nz` files directly in a source root, the documentation corpus (`docs.nz`) and the
+// repository `state`, BLAKE3 over every input framed by its class, its repository-relative path and its exact bytes, in the order they
+// are read. Each input is read once per request; nothing is kept.
+//
+// `rl_load` answers the repository or its problems, each by kind with the offending id, path or name where there is one, sorted and once
+// each, exactly as `Repository::load` does.
+
+use "@std/blake3"
+use "../../compiler/diag.nz"
+use "../../compiler/builtins.nz"
+use "docs.nz"
+use "front.nz"
+use "jsonin.nz"
+use "snap.nz"
+use "toml.nz"
+use "util.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+fn nul() -> Str { str_from_byte(0) }
+
+// --- the layout (`manifest.rs`) --------------------------------------------------------------------------------------------------
+
+pub fn rl_compiler() -> Str { "nazm " + strs_get(bi_identity(), 1) }
+
+fn words(a: Str) -> Strs {
+    let out = strs_new()
+    let mut from = 0
+    for i in 0..str_len(a) + 1 {
+        if i == str_len(a) || str_byte(a, i) == 32 {
+            if i > from { strs_push(out, str_slice(a, from, i)) }
+            from = i + 1
+        }
+    }
+    out
+}
+
+pub fn rl_sources() -> Int { 3 }
+
+// The id, directory, compilation roots and documentation sections of source root `i`, in the manifest's order.
+pub fn rl_source_id(i: Int) -> Str { if i == 0 { "compiler" } else if i == 1 { "examples" } else { "examples-bad" } }
+pub fn rl_source_dir(i: Int) -> Str { if i == 0 { "compiler" } else if i == 1 { "examples" } else { "examples/bad" } }
+pub fn rl_source_roots(i: Int) -> Strs {
+    if i == 0 { return words("emit.nz check.nz parser.nz lexer.nz") }
+    if i == 1 { return words("max.nz pipeline.nz primes.nz search.nz sum.nz worker-pool.nz") }
+    words("assign_to_immutable.nz bare_return.nz break_as_value.nz break_outside_loop.nz condition_not_bool.nz deep_recursion.nz division_by_zero.nz "
+            + "invalid_operands.nz long_chain.nz mutable_parameter.nz mutual_recursion.nz nesting_too_deep.nz paren_nesting.nz return_type_mismatch.nz "
+            + "runaway_loop.nz runaway_recursion.nz undefined_variable.nz unreachable_after_break.nz unsupported_construct.nz wrong_argument_count.nz")
+}
+pub fn rl_source_docs(i: Int) -> Strs {
+    if i == 0 { return words("bootstrap bootstrap:2") }
+    if i == 1 { return words("guide:a-whole-program") }
+    words("diagnostics")
+}
+// The source root with id `id`, or -1.
+pub fn rl_source_named(id: Str) -> Int {
+    for i in 0..rl_sources() {
+        if rl_source_id(i) == id { return i }
+    }
+    0 - 1
+}
+
+pub fn rl_catalogue_path() -> Str { "xtask/mutations/mutations.toml" }
+pub fn rl_schema_dir() -> Str { "schema" }
+
+// --- problems and the sorting they come in -------------------------------------------------------------------------------------------
+
+pub fn rl_problem(p: Strs, kind: Str, value: Str) -> Int {
+    strs_push(p, kind + nul() + value)
+    0
+}
+
+// The problems sorted and each once, as rows `KIND\0VALUE`.
+pub fn rl_problems_sorted(p: Strs) -> Strs {
+    let s = sn_sort(p)
+    let out = strs_new()
+    for i in 0..strs_len(s) {
+        if i > 0 && strs_get(s, i) == strs_get(s, i - 1) { continue }
+        strs_push(out, strs_get(s, i))
+    }
+    out
+}
+
+pub fn rl_problems_json(p: Strs) -> Str {
+    let out = strs_new()
+    for i in 0..strs_len(p) {
+        let row = strs_get(p, i)
+        let mut cut = 0
+        while str_byte(row, cut) != 0 { cut += 1 }
+        strs_push(out, "{\"kind\":" + json_str(str_slice(row, 0, cut)) + ",\"value\":" + json_str(str_slice(row, cut + 1, str_len(row))) + "}")
+    }
+    "[" + str_join(out, ",") + "]"
+}
+
+// --- the inputs and the state they digest to ------------------------------------------------------------------------------------------
+
+pub struct Inputs {
+    // The framed parts, in the order they were read.
+    parts: Strs,
+    // The files read, with their text.
+    paths: Strs,
+    texts: Strs,
+}
+
+fn le8(n: Int) -> Str {
+    let parts = strs_new()
+    let mut v = n
+    for _ in 0..8 {
+        strs_push(parts, str_from_byte(v % 256))
+        v = v / 256
+    }
+    str_join(parts, "")
+}
+
+// Length-prefixed, so no two sequences of parts frame to the same bytes.
+fn in_part(i: Inputs, bytes: Str) -> Int {
+    strs_push(i.parts, le8(str_len(bytes)))
+    strs_push(i.parts, bytes)
+    0
+}
+
+fn in_new() -> Inputs {
+    let i = Inputs(parts: strs_new(), paths: strs_new(), texts: strs_new())
+    in_part(i, "nazm.repository-state/1")
+    in_part(i, rl_compiler())
+    i
+}
+
+pub fn in_frame(i: Inputs, class: Str, value: Str) -> Int {
+    in_part(i, class)
+    in_part(i, value)
+    0
+}
+
+// Read `path` under `root`, framed into the state: its index among the texts, or -1 if it is not a readable UTF-8 file — which is framed
+// too, so a file's disappearance moves the state.
+pub fn in_read(io: IoCap, i: Inputs, root: Str, path: Str, class: Str) -> Int {
+    in_part(i, class)
+    in_part(i, path)
+    let ok = ints_new()
+    ints_push(ok, 1)
+    let text = ut_read_text(io, ut_join(root, path), ok)
+    if ints_get(ok, 0) == 1 {
+        in_part(i, "+")
+        in_part(i, text)
+        strs_push(i.paths, path)
+        strs_push(i.texts, text)
+        return strs_len(i.paths) - 1
+    }
+    in_part(i, "-")
+    0 - 1
+}
+
+// A file already read, or "" and `found[0]` 0.
+pub fn in_text(i: Inputs, path: Str, found: Ints) -> Str {
+    for k in 0..strs_len(i.paths) {
+        if strs_get(i.paths, k) == path {
+            ints_set(found, 0, 1)
+            return strs_get(i.texts, k)
+        }
+    }
+    ints_set(found, 0, 0)
+    ""
+}
+
+fn in_state(i: Inputs) -> Str { blake3_hex(bytes_from_str(str_join(i.parts, ""))) }
+
+// --- the file system, as the loader reads it ---------------------------------------------------------------------------------------------
+
+// Whether `path` under `root` is a file (`Path::is_file`, which follows links).
+fn is_file(io: IoCap, root: Str, path: Str) -> Bool { ut_kind(io, ut_join(root, path)) == 0 }
+
+// The names of the files directly in `dir` ending in `suffix`, in byte order (`files`).
+pub fn rl_files(io: IoCap, root: Str, dir: Str, suffix: Str) -> Strs {
+    let out = strs_new()
+    let abs = ut_join(root, dir)
+    let h = os_dir_open(abs)
+    if os_status(h) < 0 { return out }
+    let buf = bytes_new(1024)
+    let mut n = os_dir_next(h, buf)
+    while n > 0 {
+        let name = bytes_to_str(bytes_slice(buf, 0, n))
+        if ut_ends(name, suffix) && ut_kind(io, ut_join(abs, name)) == 0 { strs_push(out, name) }
+        n = os_dir_next(h, buf)
+    }
+    os_close(h)
+    sn_sort(out)
+}
+
+// `dir/*.rs` and `dir/*/main.rs`, by name — the only shapes auto-discovery takes: rows `NAME\0PATH`, by name.
+fn discover(io: IoCap, root: Str, dir: Str) -> Strs {
+    let names = strs_new()
+    let paths = strs_new()
+    let abs = ut_join(root, dir)
+    let h = os_dir_open(abs)
+    if os_status(h) < 0 { return strs_new() }
+    let buf = bytes_new(1024)
+    let mut n = os_dir_next(h, buf)
+    while n > 0 {
+        let name = bytes_to_str(bytes_slice(buf, 0, n))
+        let full = ut_join(abs, name)
+        let mut stem = ""
+        let mut path = ""
+        if ut_kind(io, full) == 0 {
+            if ut_ends(name, ".rs") {
+                stem = str_slice(name, 0, str_len(name) - 3)
+                path = dir + "/" + name
+            }
+        } else if ut_kind(io, ut_join(full, "main.rs")) == 0 {
+            stem = name
+            path = dir + "/" + name + "/main.rs"
+        }
+        if path != "" {
+            let mut at = 0 - 1
+            for k in 0..strs_len(names) {
+                if strs_get(names, k) == stem { at = k }
+            }
+            if at >= 0 {
+                strs_set(paths, at, path)
+            } else {
+                strs_push(names, stem)
+                strs_push(paths, path)
+            }
+        }
+        n = os_dir_next(h, buf)
+    }
+    os_close(h)
+    let rows = strs_new()
+    for k in 0..strs_len(names) { strs_push(rows, strs_get(names, k) + nul() + strs_get(paths, k)) }
+    sn_sort(rows)
+}
+
+// --- the Cargo workspace (`cargo.rs`) -----------------------------------------------------------------------------------------------------
+
+pub struct Pkgs {
+    name: Strs,
+    // From the repository root, without a trailing `/`; "" for a root package.
+    dir: Strs,
+    // `dir/Cargo.toml`.
+    manifest: Strs,
+    // N32 section ids, as the manifest declares them.
+    docs: Vec[Strs],
+    // Other members, by name: rows `RELATION\0NAME`, relation `depends_on` or `dev_depends_on`, sorted.
+    deps: Vec[Strs],
+    // Targets, rows `KIND\0NAME\0PATH`, sorted: kind `lib`, `bin`, `test`, `bench` or `example`; the path from the repository root.
+    targets: Vec[Strs],
+}
+
+fn pk_new() -> Pkgs { Pkgs(name: strs_new(), dir: strs_new(), manifest: strs_new(), docs: vec_new[Strs](), deps: vec_new[Strs](), targets: vec_new[Strs]()) }
+
+pub fn rl_pkg_id(p: Pkgs, i: Int) -> Str { "package:" + strs_get(p.name, i) }
+
+// The directory a path must be under to be package `i`'s, with its `/`.
+pub fn rl_pkg_prefix(p: Pkgs, i: Int) -> Str { if strs_get(p.dir, i) == "" { "" } else { strs_get(p.dir, i) + "/" } }
+
+fn row_part(row: Str, k: Int) -> Str {
+    let mut from = 0
+    let mut part = 0
+    for i in 0..str_len(row) + 1 {
+        if i == str_len(row) || str_byte(row, i) == 0 {
+            if part == k { return str_slice(row, from, i) }
+            part += 1
+            from = i + 1
+        }
+    }
+    ""
+}
+
+pub fn rl_row(row: Str, k: Int) -> Str { row_part(row, k) }
+
+// A target's id (`Target::id`): `target:PACKAGE:KIND:NAME`.
+pub fn rl_target_id(package: Str, row: Str) -> Str { "target:" + package + ":" + row_part(row, 0) + ":" + row_part(row, 1) }
+
+// A repository-relative path that stays inside the repository.
+fn relative(path: Str) -> Bool {
+    if str_len(path) == 0 || str_byte(path, 0) == 47 { return false }
+    let mut from = 0
+    for i in 0..str_len(path) + 1 {
+        if i == str_len(path) || str_byte(path, i) == 47 {
+            if str_slice(path, from, i) == ".." { return false }
+            from = i + 1
+        }
+        if i < str_len(path) && str_byte(path, i) == 92 { return false }
+    }
+    true
+}
+
+fn has_char(s: Str, chars: Str) -> Bool {
+    for i in 0..str_len(s) {
+        for k in 0..str_len(chars) {
+            if str_byte(s, i) == str_byte(chars, k) { return true }
+        }
+    }
+    false
+}
+
+// The string at `key` of table `n`, in `has[0]`.
+fn get_str(t: Toml, n: Int, key: Str, has: Ints) -> Str {
+    let v = tm_get(t, n, key)
+    if tm_kind(t, v) == tm_string() {
+        ints_set(has, 0, 1)
+        return tm_text(t, v)
+    }
+    ints_set(has, 0, 0)
+    ""
+}
+
+fn join_dir(dir: Str, p: Str) -> Str { if dir == "" { p } else { dir + "/" + p } }
+
+// Whether table `n` has the boolean `key` true; `dflt` where it has none (`unwrap_or`).
+fn get_bool(t: Toml, n: Int, key: Str, dflt: Bool) -> Bool {
+    let v = tm_get(t, n, key)
+    if tm_kind(t, v) == tm_bool() { return tm_text(t, v) == "true" }
+    dflt
+}
+
+// A package of the manifest table `table` (node 0 of `t`) in `dir`, added to `ps`; problems where it is none.
+fn package(io: IoCap, root: Str, dir: Str, manifest: Str, t: Toml, ps: Pkgs, problems: Strs) -> Int {
+    let pkg = tm_get(t, 0, "package")
+    if tm_kind(t, pkg) != tm_table() {
+        rl_problem(problems, "not_a_package", manifest)
+        return 0
+    }
+    let has = ints_new()
+    ints_push(has, 0)
+    let name = get_str(t, pkg, "name", has)
+    if ints_get(has, 0) == 0 {
+        rl_problem(problems, "malformed_manifest", manifest)
+        return 0
+    }
+    let rows = strs_new()
+    let lib = tm_get(t, 0, "lib")
+    let lib_table = tm_kind(t, lib) == tm_table()
+    if lib_table || is_file(io, root, join_dir(dir, "src/lib.rs")) {
+        let mut lib_name = str_replace_dashes(name)
+        let mut lib_path = "src/lib.rs"
+        if lib_table {
+            let x = get_str(t, lib, "name", has)
+            if ints_get(has, 0) == 1 { lib_name = x }
+            let q = get_str(t, lib, "path", has)
+            if ints_get(has, 0) == 1 { lib_path = q }
+        }
+        strs_push(rows, "lib" + nul() + lib_name + nul() + join_dir(dir, lib_path))
+    }
+    let kinds = words("bin test bench example")
+    let keys = words("bin test bench example")
+    let autos = words("autobins autotests autobenches autoexamples")
+    let dirs = words("src/bin tests benches examples")
+    for kx in 0..4 {
+        let kind = strs_get(kinds, kx)
+        let key = strs_get(keys, kx)
+        let default_dir = strs_get(dirs, kx)
+        let explicit = strs_new()
+        let enames = strs_new()
+        let epaths = strs_new()
+        let arr = tm_get(t, 0, key)
+        if tm_kind(t, arr) == tm_array() {
+            let mut e = tm_first(t, arr)
+            while e >= 0 {
+                let t_name = get_str(t, e, "name", has)
+                if ints_get(has, 0) == 0 {
+                    rl_problem(problems, "malformed_manifest", manifest)
+                } else {
+                    let given = get_str(t, e, "path", has)
+                    let mut path = ""
+                    if ints_get(has, 0) == 1 {
+                        path = given
+                    } else if kind == "bin" && t_name == name && is_file(io, root, join_dir(dir, "src/main.rs")) {
+                        path = "src/main.rs"
+                    } else if is_file(io, root, join_dir(dir, default_dir + "/" + t_name + ".rs")) {
+                        path = default_dir + "/" + t_name + ".rs"
+                    } else {
+                        path = default_dir + "/" + t_name + "/main.rs"
+                    }
+                    strs_push(enames, t_name)
+                    strs_push(epaths, join_dir(dir, path))
+                }
+                e = tm_next(t, e)
+            }
+        }
+        let fnames = strs_new()
+        let fpaths = strs_new()
+        if get_bool(t, pkg, autos_key(autos, kx), true) {
+            if kind == "bin" && is_file(io, root, join_dir(dir, "src/main.rs")) {
+                strs_push(fnames, name)
+                strs_push(fpaths, join_dir(dir, "src/main.rs"))
+            }
+            let found = discover(io, root, join_dir(dir, default_dir))
+            for k in 0..strs_len(found) {
+                strs_push(fnames, row_part(strs_get(found, k), 0))
+                strs_push(fpaths, row_part(strs_get(found, k), 1))
+            }
+        }
+        for k in 0..strs_len(fnames) {
+            let mut dup = false
+            for q in 0..strs_len(enames) {
+                if strs_get(enames, q) == strs_get(fnames, k) || strs_get(epaths, q) == strs_get(fpaths, k) { dup = true }
+            }
+            if !dup {
+                strs_push(enames, strs_get(fnames, k))
+                strs_push(epaths, strs_get(fpaths, k))
+            }
+        }
+        for q in 0..strs_len(enames) { strs_push(rows, kind + nul() + strs_get(enames, q) + nul() + strs_get(epaths, q)) }
+    }
+    let sorted = sn_sort(rows)
+    let targets = strs_new()
+    for k in 0..strs_len(sorted) {
+        if k > 0 && strs_get(sorted, k) == strs_get(sorted, k - 1) { continue }
+        strs_push(targets, strs_get(sorted, k))
+    }
+    // `[package.metadata.nazm] docs`: the strings of the array.
+    let docs = strs_new()
+    let nz = tm_get(t, tm_get(t, pkg, "metadata"), "nazm")
+    let da = tm_get(t, nz, "docs")
+    if tm_kind(t, da) == tm_array() {
+        let mut e = tm_first(t, da)
+        while e >= 0 {
+            if tm_kind(t, e) == tm_string() { strs_push(docs, tm_text(t, e)) }
+            e = tm_next(t, e)
+        }
+    }
+    strs_push(ps.name, name)
+    strs_push(ps.dir, dir)
+    strs_push(ps.manifest, manifest)
+    vec_push(ps.docs, docs)
+    vec_push(ps.deps, strs_new())
+    vec_push(ps.targets, targets)
+    0
+}
+
+fn autos_key(autos: Strs, k: Int) -> Str { strs_get(autos, k) }
+
+fn str_replace_dashes(s: Str) -> Str {
+    let out = strs_new()
+    for i in 0..str_len(s) { strs_push(out, if str_byte(s, i) == 45 { "_" } else { str_slice(s, i, i + 1) }) }
+    str_join(out, "")
+}
+
+// The members `dependencies` tables of `t` name (`dependencies`): rows `RELATION\0NAME`, sorted and each once.
+fn dependencies(t: Toml, members: Strs, own: Str) -> Strs {
+    let rows = strs_new()
+    read_deps(t, tm_get(t, 0, "dependencies"), "depends_on", members, own, rows)
+    read_deps(t, tm_get(t, 0, "build-dependencies"), "depends_on", members, own, rows)
+    read_deps(t, tm_get(t, 0, "dev-dependencies"), "dev_depends_on", members, own, rows)
+    let targets = tm_get(t, 0, "target")
+    if tm_kind(t, targets) == tm_table() {
+        let mut c = tm_first(t, targets)
+        while c >= 0 {
+            read_deps(t, tm_get(t, c, "dependencies"), "depends_on", members, own, rows)
+            read_deps(t, tm_get(t, c, "build-dependencies"), "depends_on", members, own, rows)
+            read_deps(t, tm_get(t, c, "dev-dependencies"), "dev_depends_on", members, own, rows)
+            c = tm_next(t, c)
+        }
+    }
+    let sorted = sn_sort(rows)
+    let out = strs_new()
+    for i in 0..strs_len(sorted) {
+        if i > 0 && strs_get(sorted, i) == strs_get(sorted, i - 1) { continue }
+        strs_push(out, strs_get(sorted, i))
+    }
+    out
+}
+
+fn read_deps(t: Toml, deps: Int, relation: Str, members: Strs, own: Str, rows: Strs) -> Int {
+    if tm_kind(t, deps) != tm_table() { return 0 }
+    let has = ints_new()
+    ints_push(has, 0)
+    let mut c = tm_first(t, deps)
+    while c >= 0 {
+        let mut name = tm_key(t, c)
+        if tm_kind(t, c) == tm_table() {
+            let x = get_str(t, c, "package", has)
+            if ints_get(has, 0) == 1 { name = x }
+        }
+        let mut member = false
+        for k in 0..strs_len(members) {
+            if strs_get(members, k) == name { member = true }
+        }
+        if member && name != own { strs_push(rows, relation + nul() + name) }
+        c = tm_next(t, c)
+    }
+    0
+}
+
+// The workspace under `root`, or nothing if it has no root manifest.
+fn cargo_load(io: IoCap, root: Str, inputs: Inputs, problems: Strs) -> Pkgs {
+    let ps = pk_new()
+    let top_at = in_read(io, inputs, root, "Cargo.toml", "cargo_manifest")
+    if top_at < 0 { return ps }
+    let top = tm_parse(strs_get(inputs.texts, top_at))
+    if !tm_ok(top) {
+        if tm_message(top) == "" { rl_unsupported(io, tm_why(top)) }
+        rl_problem(problems, "malformed_manifest", "Cargo.toml")
+        return ps
+    }
+    let dirs = strs_new()
+    if tm_kind(top, tm_get(top, 0, "package")) != 0 - 1 { strs_push(dirs, "") }
+    let members = tm_get(top, tm_get(top, 0, "workspace"), "members")
+    if tm_kind(top, members) == tm_array() {
+        let mut m = tm_first(top, members)
+        while m >= 0 {
+            if tm_kind(top, m) == tm_string() {
+                let text = tm_text(top, m)
+                if has_char(text, "*?[") {
+                    rl_problem(problems, "unsupported_member_pattern", text)
+                } else if !relative(text) {
+                    rl_problem(problems, "member_outside", text)
+                } else {
+                    let mut end = str_len(text)
+                    while end > 0 && str_byte(text, end - 1) == 47 { end -= 1 }
+                    strs_push(dirs, str_slice(text, 0, end))
+                }
+            } else {
+                rl_problem(problems, "malformed_manifest", "Cargo.toml")
+            }
+            m = tm_next(top, m)
+        }
+    }
+    for k in 0..strs_len(dirs) {
+        let dir = strs_get(dirs, k)
+        let manifest = if dir == "" { "Cargo.toml" } else { dir + "/Cargo.toml" }
+        if dir == "" {
+            package(io, root, dir, manifest, top, ps, problems)
+        } else {
+            let at = in_read(io, inputs, root, manifest, "cargo_manifest")
+            if at < 0 {
+                if !is_file(io, root, manifest) { rl_problem(problems, "missing_manifest", manifest) }
+            } else {
+                let t = tm_parse(strs_get(inputs.texts, at))
+                if !tm_ok(t) {
+                    if tm_message(t) == "" { rl_unsupported(io, tm_why(t)) }
+                    rl_problem(problems, "malformed_manifest", manifest)
+                    if !is_file(io, root, manifest) { rl_problem(problems, "missing_manifest", manifest) }
+                } else {
+                    package(io, root, dir, manifest, t, ps, problems)
+                }
+            }
+        }
+    }
+    let seen = strs_new()
+    for i in 0..strs_len(ps.name) {
+        let mut dup = false
+        for q in 0..strs_len(seen) {
+            if strs_get(seen, q) == strs_get(ps.name, i) { dup = true }
+        }
+        if dup { rl_problem(problems, "duplicate_package", strs_get(ps.name, i)) } else { strs_push(seen, strs_get(ps.name, i)) }
+    }
+    // Dependencies need every member's name, so they are read in a second pass.
+    for i in 0..strs_len(ps.name) {
+        let t = if strs_get(ps.dir, i) == "" { top } else { tm_parse(rl_cached(inputs, strs_get(ps.manifest, i))) }
+        if tm_ok(t) { vec_set(ps.deps, i, dependencies(t, ps.name, strs_get(ps.name, i))) }
+    }
+    let sorted = rl_sort_packages(ps)
+    for i in 0..strs_len(sorted.name) {
+        let ts = vec_get(sorted.targets, i)
+        for k in 0..strs_len(ts) {
+            let row = strs_get(ts, k)
+            in_frame(inputs, "cargo_target", rl_target_id(strs_get(sorted.name, i), row) + nul() + row_part(row, 2) + nul() + strs_get(sorted.dir, i))
+        }
+    }
+    sorted
+}
+
+fn rl_cached(inputs: Inputs, path: Str) -> Str {
+    let found = ints_new()
+    ints_push(found, 0)
+    in_text(inputs, path, found)
+}
+
+// A TOML form this reader does not read, in a file the reference reads: nothing is guessed at.
+fn rl_unsupported(io: IoCap, why: Str) -> Int {
+    eprint("repo: not carried: a Cargo manifest or catalogue with " + why + nl())
+    exit_with(6)
+    0
+}
+
+// The packages by name (a stable sort), each target recorded in the state.
+fn rl_sort_packages(ps: Pkgs) -> Pkgs {
+    let n = strs_len(ps.name)
+    let order = ints_new()
+    for i in 0..n {
+        let mut at = ints_len(order)
+        while at > 0 && fe_str_less(strs_get(ps.name, i), strs_get(ps.name, ints_get(order, at - 1))) { at -= 1 }
+        ints_push(order, 0)
+        let mut k = ints_len(order) - 1
+        while k > at {
+            ints_set(order, k, ints_get(order, k - 1))
+            k -= 1
+        }
+        ints_set(order, at, i)
+    }
+    let out = pk_new()
+    for r in 0..n {
+        let i = ints_get(order, r)
+        strs_push(out.name, strs_get(ps.name, i))
+        strs_push(out.dir, strs_get(ps.dir, i))
+        strs_push(out.manifest, strs_get(ps.manifest, i))
+        vec_push(out.docs, vec_get(ps.docs, i))
+        vec_push(out.deps, vec_get(ps.deps, i))
+        vec_push(out.targets, vec_get(ps.targets, i))
+    }
+    out
+}
+
+// --- the mutation catalogue (`catalogue.rs`) -----------------------------------------------------------------------------------------------
+
+pub struct Cat {
+    // Each mutation, by name: its file, its `find`, each verified killer's test id (sorted, once each) and the profile it names.
+    mname: Strs,
+    mfile: Strs,
+    mfind: Strs,
+    mkillers: Vec[Strs],
+    mprofile: Strs,
+    mhasprofile: Ints,
+    // Each profile, by name: the paths it owns and its target ids (sorted, once each).
+    pname: Strs,
+    powns: Vec[Strs],
+    ptargets: Vec[Strs],
+    // Every distinct killer, rows `ID\0TARGET\0NAME`, sorted.
+    tests: Strs,
+}
+
+fn cat_new() -> Cat {
+    Cat(mname: strs_new(), mfile: strs_new(), mfind: strs_new(), mkillers: vec_new[Strs](), mprofile: strs_new(), mhasprofile: ints_new(), pname: strs_new(),
+            powns: vec_new[Strs](), ptargets: vec_new[Strs](), tests: strs_new())
+}
+
+// Whether `n` is an array whose elements are all of `kind`.
+fn all_of(t: Toml, n: Int, kind: Int) -> Bool {
+    if tm_kind(t, n) != tm_array() { return false }
+    let mut e = tm_first(t, n)
+    while e >= 0 {
+        if tm_kind(t, e) != kind { return false }
+        e = tm_next(t, e)
+    }
+    true
+}
+
+// `RawTarget`: a package, `lib` a boolean, `test`, `bin` and `name` strings, each where it is given.
+fn raw_target_ok(t: Toml, n: Int) -> Bool {
+    if tm_kind(t, n) != tm_table() { return false }
+    if tm_kind(t, tm_get(t, n, "package")) != tm_string() { return false }
+    let lib = tm_get(t, n, "lib")
+    if lib >= 0 && tm_kind(t, lib) != tm_bool() { return false }
+    let keys = words("test bin name")
+    for k in 0..3 {
+        let v = tm_get(t, n, strs_get(keys, k))
+        if v >= 0 && tm_kind(t, v) != tm_string() { return false }
+    }
+    true
+}
+
+fn raw_targets_ok(t: Toml, arr: Int) -> Bool {
+    if arr < 0 { return true }
+    if tm_kind(t, arr) != tm_array() { return false }
+    let mut e = tm_first(t, arr)
+    while e >= 0 {
+        if !raw_target_ok(t, e) { return false }
+        e = tm_next(t, e)
+    }
+    true
+}
+
+// Whether the catalogue is what `Raw` deserialises.
+fn catalogue_ok(t: Toml) -> Bool {
+    let ms = tm_get(t, 0, "mutation")
+    if ms >= 0 {
+        if tm_kind(t, ms) != tm_array() { return false }
+        let mut m = tm_first(t, ms)
+        while m >= 0 {
+            if tm_kind(t, m) != tm_table() { return false }
+            let req = words("name file find")
+            for k in 0..3 {
+                if tm_kind(t, tm_get(t, m, strs_get(req, k))) != tm_string() { return false }
+            }
+            if !raw_targets_ok(t, tm_get(t, m, "killers")) { return false }
+            let p = tm_get(t, m, "profile")
+            if p >= 0 && tm_kind(t, p) != tm_string() { return false }
+            m = tm_next(t, m)
+        }
+    }
+    let ps = tm_get(t, 0, "profile")
+    if ps >= 0 {
+        if tm_kind(t, ps) != tm_array() { return false }
+        let mut p = tm_first(t, ps)
+        while p >= 0 {
+            if tm_kind(t, p) != tm_table() { return false }
+            if tm_kind(t, tm_get(t, p, "name")) != tm_string() { return false }
+            let owns = tm_get(t, p, "owns")
+            if owns >= 0 && !all_of(t, owns, tm_string()) { return false }
+            if !raw_targets_ok(t, tm_get(t, p, "targets")) { return false }
+            p = tm_next(t, p)
+        }
+    }
+    true
+}
+
+// A catalogue target as the Cargo target it names, if the workspace has it: its id, "" for none.
+fn cat_target(t: Toml, k: Int, ps: Pkgs) -> Str {
+    let has = ints_new()
+    ints_push(has, 0)
+    let package_name = get_str(t, k, "package", has)
+    let mut pi = 0 - 1
+    for i in 0..strs_len(ps.name) {
+        if pi < 0 && strs_get(ps.name, i) == package_name { pi = i }
+    }
+    if pi < 0 { return "" }
+    let lib = get_bool(t, k, "lib", false)
+    let test = get_str(t, k, "test", has)
+    let has_test = ints_get(has, 0) == 1
+    let bin = get_str(t, k, "bin", has)
+    let has_bin = ints_get(has, 0) == 1
+    let mut kind = ""
+    let mut name = ""
+    let mut named = false
+    if lib && !has_test && !has_bin {
+        kind = "lib"
+    } else if !lib && has_test && !has_bin {
+        kind = "test"
+        name = test
+        named = true
+    } else if !lib && !has_test && has_bin {
+        kind = "bin"
+        name = bin
+        named = true
+    } else {
+        return ""
+    }
+    let ts = vec_get(ps.targets, pi)
+    for q in 0..strs_len(ts) {
+        let row = strs_get(ts, q)
+        if row_part(row, 0) == kind && (!named || row_part(row, 1) == name) { return rl_target_id(package_name, row) }
+    }
+    ""
+}
+
+fn sorted_once(xs: Strs) -> Strs {
+    let s = sn_sort(xs)
+    let out = strs_new()
+    for i in 0..strs_len(s) {
+        if i > 0 && strs_get(s, i) == strs_get(s, i - 1) { continue }
+        strs_push(out, strs_get(s, i))
+    }
+    out
+}
+
+// The catalogue at `path` under `root`, its every target resolved against `ps`.
+fn catalogue_load(io: IoCap, root: Str, path: Str, ps: Pkgs, inputs: Inputs, problems: Strs) -> Cat {
+    let cat = cat_new()
+    let at = in_read(io, inputs, root, path, "mutation_catalogue")
+    if at < 0 {
+        rl_problem(problems, "missing_catalogue", path)
+        return cat
+    }
+    let t = tm_parse(strs_get(inputs.texts, at))
+    if !tm_ok(t) {
+        if tm_message(t) == "" { rl_unsupported(io, tm_why(t)) }
+        rl_problem(problems, "malformed_catalogue", path)
+        return cat
+    }
+    if !catalogue_ok(t) {
+        rl_problem(problems, "malformed_catalogue", path)
+        return cat
+    }
+    let has = ints_new()
+    ints_push(has, 0)
+    let tests = strs_new()
+    let ms = tm_get(t, 0, "mutation")
+    let mut m = if ms >= 0 { tm_first(t, ms) } else { 0 - 1 }
+    while m >= 0 {
+        let name = get_str(t, m, "name", has)
+        let killers = strs_new()
+        let ks = tm_get(t, m, "killers")
+        let mut k = if ks >= 0 { tm_first(t, ks) } else { 0 - 1 }
+        while k >= 0 {
+            let target = cat_target(t, k, ps)
+            let kname = get_str(t, k, "name", has)
+            if target != "" && ints_get(has, 0) == 1 {
+                // `trim_start_matches("target:")`.
+                let mut bare = target
+                while ut_starts(bare, "target:") { bare = str_slice(bare, 7, str_len(bare)) }
+                let id = "test:" + bare + "::" + kname
+                strs_push(killers, id)
+                strs_push(tests, id + nul() + target + nul() + kname)
+            } else {
+                rl_problem(problems, "unresolved_killer", name)
+            }
+            k = tm_next(t, k)
+        }
+        strs_push(cat.mname, name)
+        strs_push(cat.mfile, get_str(t, m, "file", has))
+        strs_push(cat.mfind, get_str(t, m, "find", has))
+        vec_push(cat.mkillers, sorted_once(killers))
+        let prof = get_str(t, m, "profile", has)
+        strs_push(cat.mprofile, prof)
+        ints_push(cat.mhasprofile, ints_get(has, 0))
+        m = tm_next(t, m)
+    }
+    let pr = tm_get(t, 0, "profile")
+    let mut p = if pr >= 0 { tm_first(t, pr) } else { 0 - 1 }
+    while p >= 0 {
+        let name = get_str(t, p, "name", has)
+        let owns = strs_new()
+        let os = tm_get(t, p, "owns")
+        if os >= 0 {
+            let mut e = tm_first(t, os)
+            while e >= 0 {
+                strs_push(owns, tm_text(t, e))
+                e = tm_next(t, e)
+            }
+        }
+        let targets = strs_new()
+        let ts = tm_get(t, p, "targets")
+        let mut e = if ts >= 0 { tm_first(t, ts) } else { 0 - 1 }
+        while e >= 0 {
+            let id = cat_target(t, e, ps)
+            if id != "" { strs_push(targets, id) } else { rl_problem(problems, "unresolved_profile_target", name) }
+            e = tm_next(t, e)
+        }
+        strs_push(cat.pname, name)
+        vec_push(cat.powns, owns)
+        vec_push(cat.ptargets, sorted_once(targets))
+        p = tm_next(t, p)
+    }
+    // The tests, once each; mutations and profiles by name.
+    for i in 0..strs_len(tests) { strs_push(cat.tests, strs_get(tests, i)) }
+    let sorted_tests = sorted_once(cat.tests)
+    let out = cat_new()
+    for i in 0..strs_len(sorted_tests) { strs_push(out.tests, strs_get(sorted_tests, i)) }
+    let names = sn_sort(cat.mname)
+    for i in 1..strs_len(names) {
+        if strs_get(names, i) == strs_get(names, i - 1) { rl_problem(problems, "duplicate_mutation", strs_get(names, i)) }
+    }
+    for i in 0..strs_len(cat.mname) {
+        if ints_get(cat.mhasprofile, i) == 1 {
+            let mut found = false
+            for q in 0..strs_len(cat.pname) {
+                if strs_get(cat.pname, q) == strs_get(cat.mprofile, i) { found = true }
+            }
+            if !found { rl_problem(problems, "unknown_profile", strs_get(cat.mname, i)) }
+        }
+    }
+    let morder = order_by(cat.mname)
+    for r in 0..ints_len(morder) {
+        let i = ints_get(morder, r)
+        strs_push(out.mname, strs_get(cat.mname, i))
+        strs_push(out.mfile, strs_get(cat.mfile, i))
+        strs_push(out.mfind, strs_get(cat.mfind, i))
+        vec_push(out.mkillers, vec_get(cat.mkillers, i))
+        strs_push(out.mprofile, strs_get(cat.mprofile, i))
+        ints_push(out.mhasprofile, ints_get(cat.mhasprofile, i))
+    }
+    let porder = order_by(cat.pname)
+    for r in 0..ints_len(porder) {
+        let i = ints_get(porder, r)
+        strs_push(out.pname, strs_get(cat.pname, i))
+        vec_push(out.powns, vec_get(cat.powns, i))
+        vec_push(out.ptargets, vec_get(cat.ptargets, i))
+    }
+    out
+}
+
+// The positions of `names` in ascending byte order of their values (stable), by merging.
+fn order_by(names: Strs) -> Ints {
+    let rows = strs_new()
+    for i in 0..strs_len(names) { strs_push(rows, strs_get(names, i) + str_from_byte(1) + pad12(i)) }
+    let sorted = sn_sort(rows)
+    let out = ints_new()
+    for r in 0..strs_len(sorted) {
+        let row = strs_get(sorted, r)
+        let mut n = 0
+        for i in str_len(row) - 12..str_len(row) { n = n * 10 + str_byte(row, i) - 48 }
+        ints_push(out, n)
+    }
+    out
+}
+
+fn pad12(n: Int) -> Str {
+    let t = int_to_str(n)
+    let mut z = ""
+    for i in 0..12 - str_len(t) { z = z + "0" }
+    z + t
+}
+
+// The profile whose `owns` is the longest prefix of `path` — the catalogue's own rule for which tests observe a file — or -1. Of equally
+// long ones, the smaller name (`max_by` over the length, then the name reversed).
+pub fn rl_profile_for(c: Cat, path: Str) -> Int {
+    let mut best = 0 - 1
+    let mut best_len = 0 - 1
+    for i in 0..strs_len(c.pname) {
+        let owns = vec_get(c.powns, i)
+        let mut longest = 0 - 1
+        for k in 0..strs_len(owns) {
+            let o = strs_get(owns, k)
+            if ut_starts(path, o) && str_len(o) > longest { longest = str_len(o) }
+        }
+        if longest < 0 { continue }
+        if best < 0 || longest > best_len || (longest == best_len && !fe_str_less(strs_get(c.pname, best), strs_get(c.pname, i))) {
+            best = i
+            best_len = longest
+        }
+    }
+    best
+}
+
+pub fn rl_profile_named(c: Cat, name: Str) -> Int {
+    for i in 0..strs_len(c.pname) {
+        if strs_get(c.pname, i) == name { return i }
+    }
+    0 - 1
+}
+
+// A killer's row by its id, or -1: `Catalogue::test`.
+pub fn rl_test_named(c: Cat, id: Str) -> Int {
+    for i in 0..strs_len(c.tests) {
+        if row_part(strs_get(c.tests, i), 0) == id { return i }
+    }
+    0 - 1
+}
+
+// --- the repository (`repository.rs`) -------------------------------------------------------------------------------------------------------
+
+pub struct Repo {
+    root: Str,
+    state: Str,
+    ps: Pkgs,
+    cat: Cat,
+    corp: Corp,
+    // The published schemas, by the `schema` constant each declares: name and file.
+    schema_name: Strs,
+    schema_file: Strs,
+    // Every `.nz` file directly in a source root: rows `SOURCE ID\0FILE NAME`, and their text.
+    src_key: Strs,
+    src_text: Strs,
+}
+
+// Every `*.json` directly in the schema directory, by the `schema` constant it declares.
+fn schemas_load(io: IoCap, root: Str, dir: Str, inputs: Inputs, problems: Strs, names: Strs, files: Strs) -> Int {
+    let listed = rl_files(io, root, dir, ".json")
+    let rows = strs_new()
+    for i in 0..strs_len(listed) {
+        let file = dir + "/" + strs_get(listed, i)
+        let at = in_read(io, inputs, root, file, "schema")
+        if at < 0 { continue }
+        let j = j_parse(strs_get(inputs.texts, at))
+        let mut declared = ""
+        let mut named = false
+        if j_ok(j) {
+            let c = j_get(j, j_get(j, j_get(j, 0, "properties"), "schema"), "const")
+            if j_kind(j, c) == 4 {
+                declared = j_str(j, c)
+                named = true
+            }
+        }
+        if named { strs_push(rows, declared + nul() + file) } else { rl_problem(problems, "schema_without_name", file) }
+    }
+    let sorted = sn_sort(rows)
+    for i in 0..strs_len(sorted) {
+        strs_push(names, row_part(strs_get(sorted, i), 0))
+        strs_push(files, row_part(strs_get(sorted, i), 1))
+    }
+    // The `schema` constants are bytewise-ordered here (the reference orders by name alone: the same, files being unique per name).
+    for i in 1..strs_len(names) {
+        if strs_get(names, i) == strs_get(names, i - 1) { rl_problem(problems, "duplicate_schema", strs_get(names, i - 1)) }
+    }
+    0
+}
+
+fn sources_load(io: IoCap, root: Str, inputs: Inputs, problems: Strs, keys: Strs, texts: Strs) -> Int {
+    for s in 0..rl_sources() {
+        let dir = rl_source_dir(s)
+        let present = strs_new()
+        let listed = rl_files(io, root, dir, ".nz")
+        for n in 0..strs_len(listed) {
+            let name = strs_get(listed, n)
+            let at = in_read(io, inputs, root, dir + "/" + name, "nazm_source")
+            if at >= 0 {
+                strs_push(keys, rl_source_id(s) + nul() + name)
+                strs_push(texts, strs_get(inputs.texts, at))
+                strs_push(present, name)
+            }
+        }
+        let roots = rl_source_roots(s)
+        for r in 0..strs_len(roots) {
+            let mut found = false
+            for q in 0..strs_len(present) {
+                if strs_get(present, q) == strs_get(roots, r) { found = true }
+            }
+            if !found { rl_problem(problems, "missing_root", dir + "/" + strs_get(roots, r)) }
+        }
+    }
+    0
+}
+
+// Whether the corpus has a section with this id (`section_exists`).
+pub fn rl_section_exists(c: Corp, id: Str) -> Bool {
+    for i in 0..strs_len(c.s_id) {
+        if strs_get(c.s_id, i) == id { return true }
+    }
+    false
+}
+
+// Read every input the layout names, or say in `problems` (sorted, once each) every problem that makes the repository unreadable.
+pub fn rl_load(io: IoCap, root: Str, problems: Strs) -> Repo {
+    let inputs = in_new()
+    let found = strs_new()
+    for s in 0..rl_sources() {
+        in_frame(inputs, "source_root", rl_source_id(s) + nul() + rl_source_dir(s))
+        let roots = rl_source_roots(s)
+        for r in 0..strs_len(roots) { in_frame(inputs, "compilation_root", strs_get(roots, r)) }
+        let docs = rl_source_docs(s)
+        for d in 0..strs_len(docs) { in_frame(inputs, "source_root_doc", strs_get(docs, d)) }
+    }
+    in_frame(inputs, "catalogue", rl_catalogue_path())
+    in_frame(inputs, "schemas", rl_schema_dir())
+    let corp = dc_load(io, root)
+    let corpus_ok = ints_len(corp.p_line) == 0
+    if corpus_ok {
+        in_frame(inputs, "documentation", strs_get(corp.state, 0))
+    } else {
+        for i in 0..ints_len(corp.p_line) { rl_problem(problems, "documentation_unavailable", strs_get(corp.p_doc, i) + " " + strs_get(corp.p_kind, i)) }
+    }
+    let ps = cargo_load(io, root, inputs, problems)
+    let cat = catalogue_load(io, root, rl_catalogue_path(), ps, inputs, problems)
+    let schema_name = strs_new()
+    let schema_file = strs_new()
+    schemas_load(io, root, rl_schema_dir(), inputs, problems, schema_name, schema_file)
+    let src_key = strs_new()
+    let src_text = strs_new()
+    sources_load(io, root, inputs, problems, src_key, src_text)
+    if corpus_ok {
+        for i in 0..strs_len(ps.name) {
+            let docs = vec_get(ps.docs, i)
+            for k in 0..strs_len(docs) {
+                if !rl_section_exists(corp, strs_get(docs, k)) { rl_problem(problems, "broken_documentation_link", rl_pkg_id(ps, i) + " " + strs_get(docs, k)) }
+            }
+        }
+        for s in 0..rl_sources() {
+            let docs = rl_source_docs(s)
+            for k in 0..strs_len(docs) {
+                if !rl_section_exists(corp, strs_get(docs, k)) { rl_problem(problems, "broken_documentation_link", "sources:" + rl_source_id(s) + " " + strs_get(docs, k)) }
+            }
+        }
+    }
+    let repo = Repo(root: root, state: in_state(inputs), ps: ps, cat: cat, corp: corp, schema_name: schema_name, schema_file: schema_file, src_key: src_key, src_text: src_text)
+    if strs_len(problems) > 0 {
+        let sorted = rl_problems_sorted(problems)
+        // `problems` is the caller's: replaced by its sorted, deduplicated rows.
+        while strs_len(problems) > 0 { strs_pop(problems) }
+        for i in 0..strs_len(sorted) { strs_push(problems, strs_get(sorted, i)) }
+    }
+    repo
+}
+
+// The text of source file `FILE` of source root `source` (an index), in `has[0]`.
+pub fn rl_source_text(r: Repo, source: Int, file: Str, has: Ints) -> Str {
+    let key = rl_source_id(source) + nul() + file
+    for i in 0..strs_len(r.src_key) {
+        if strs_get(r.src_key, i) == key {
+            ints_set(has, 0, 1)
+            return strs_get(r.src_text, i)
+        }
+    }
+    ints_set(has, 0, 0)
+    ""
+}
+
+pub fn rl_has_source(r: Repo, source: Int, file: Str) -> Bool {
+    let has = ints_new()
+    ints_push(has, 0)
+    rl_source_text(r, source, file, has)
+    ints_get(has, 0) == 1
+}
+
+// The package a repository path is in: the member whose directory is its longest prefix, as Cargo owns files; or -1.
+pub fn rl_owner(r: Repo, path: Str) -> Int {
+    let mut best = 0 - 1
+    let mut best_len = 0 - 1
+    for i in 0..strs_len(r.ps.name) {
+        let prefix = rl_pkg_prefix(r.ps, i)
+        if ut_starts(path, prefix) && str_len(prefix) >= best_len {
+            best = i
+            best_len = str_len(prefix)
+        }
+    }
+    best
+}
+
+pub fn rl_package_named(r: Repo, name: Str) -> Int {
+    for i in 0..strs_len(r.ps.name) {
+        if strs_get(r.ps.name, i) == name { return i }
+    }
+    0 - 1
+}

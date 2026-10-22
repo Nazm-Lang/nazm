@@ -3,6 +3,10 @@
 
     mcp-compare.py protocol REF PORT REPO [ARGS...]    the scripted session of tests/mcp/protocol.txt, the
                                                        documentation sections of the index it gets, then ARGS
+    mcp-compare.py agent REF PORT REPO FILE         the agent tools of slice 9: `nazm.semantic_context` at the first offsets of FILE (and the
+                                                    argument errors), `nazm.repository_map`, `nazm.task_context` (seeds read from the map)
+    mcp-compare.py agent-gen REF PORT REPO FILE PREFIX   writes PREFIX.in (the messages) and PREFIX.ref (the reference's answers)
+    mcp-compare.py agent-cmp PREFIX PORT REPO            compares PREFIX.got (the port's raw standard output) with PREFIX.ref
     mcp-compare.py file REF PORT REPO FILE [ARGS...]   the tools asked of FILE as the root: the snapshot, the
                                                        diagnostics, the check, `nazm.semantic_delta` against
                                                        the snapshot the reference gave and against two baselines
@@ -189,12 +193,80 @@ def file_session(ref, port, repo, f, extra, env):
     return 'agree'
 
 
+def agent_messages(ref, repo, f, extra, env):
+    ids = Ids()
+    msgs = start()
+    out = subprocess.run([sys.executable, '-I', HERE + '/context-positions.py', repo + '/' + f, '2' if os.environ.get('AGENT_MCP_LITE') else '4'], capture_output=True).stdout.decode().split()
+    for b in out:
+        msgs.append(ids.call('nazm.semantic_context', {'file': os.path.basename(f), 'byte_offset': int(b)}))
+    msgs.append(ids.call('nazm.semantic_context', {'file': os.path.abspath(repo + '/' + f), 'byte_offset': 3}))
+    for bad in [{}, {'file': 'x.nz'}, {'file': 1, 'byte_offset': 1}, {'file': 'x.nz', 'byte_offset': -1}, {'file': 'x.nz', 'byte_offset': 4294967296},
+                {'file': 'x.nz', 'byte_offset': 1, 'z': 2}, {'file': 'nope.nz', 'byte_offset': 1}]:
+        msgs.append(ids.call('nazm.semantic_context', bad))
+    msgs.append(ids.call('nazm.repository_map', {}))
+    msgs.append(ids.call('nazm.repository_map', {'x': 1}))
+    probe = start() + [{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "nazm.repository_map", "arguments": {}}}]
+    r, _ = session(ref, f, extra, probe, repo, env)
+    m = result_of(r, 2)
+    if m and 'result' in m:
+        sc = m['result']['structuredContent']
+        state = sc['state']
+        ents = sc['entities']
+        pick = [e['id'] for e in ents if e['kind'] in ('package', 'sources', 'root', 'module', 'document', 'profile')][::(40 if os.environ.get('AGENT_MCP_LITE') else 6)]
+        pick += [e['id'] for e in ents if e['kind'] == 'definition'][::(700 if os.environ.get('AGENT_MCP_LITE') else 150)]
+        for s in pick:
+            msgs.append(ids.call('nazm.task_context', {'seeds': [s], 'state': state}))
+        for intent in (('edit',) if os.environ.get('AGENT_MCP_LITE') else ('understand', 'edit', 'diagnose', 'test')):
+            msgs.append(ids.call('nazm.task_context', {'seeds': pick[:2], 'state': state, 'intent': intent, 'max_entities': 4}))
+        msgs.append(ids.call('nazm.task_context', {'seeds': pick[:1], 'state': 'stale'}))
+        msgs.append(ids.call('nazm.task_context', {'seeds': [], 'state': state}))
+    for bad in [{}, {'seeds': ['a']}, {'seeds': 'a', 'state': 's'}, {'seeds': [1], 'state': 's'}, {'seeds': ['a'], 'state': 5}, {'seeds': ['a'], 'state': 's', 'intent': 'bogus'},
+                {'seeds': ['a'], 'state': 's', 'intent': 3}, {'seeds': ['a'], 'state': 's', 'max_entities': -1}, {'seeds': ['a'], 'state': 's', 'max_entities': 'x'},
+                {'seeds': ['a'], 'state': 's', 'max_entities': 1.5}, {'seeds': ['a'], 'state': 's', 'zz': 1}, {'seeds': None, 'state': 's'}]:
+        msgs.append(ids.call('nazm.task_context', bad))
+    return msgs
+
+
+def agent(ref, port, repo, f, extra, env):
+    return run_both(ref, port, f, extra, agent_messages(ref, repo, f, extra, env), repo, env, f + '.agent')
+
+
+def agent_gen(ref, repo, f, prefix, extra, env):
+    """The messages of `agent`, and the reference's answers to them, written for a port run elsewhere (a container has no Python)."""
+    msgs = agent_messages(ref, repo, f, extra, env)
+    open(prefix + '.in', 'w').write(''.join(json.dumps(m, separators=(',', ':')) + '\n' for m in msgs))
+    r, _ = session(ref, f, extra, msgs, repo, env)
+    open(prefix + '.ref', 'w').write('\n'.join(r) + '\nexit 0\n')
+
+
+def agent_cmp(prefix):
+    rows = []
+    for n, line in enumerate(open(prefix + '.got').read().split('\n')):
+        if not line:
+            continue
+        try:
+            key = json.loads(line).get('id')
+        except Exception:
+            key = None
+        rows.append(((0, key, n) if isinstance(key, int) else (1, 0, n), line))
+    rows.sort(key=lambda r: r[0])
+    got = [r[1] for r in rows] + ['exit 0']
+    want = [l for l in open(prefix + '.ref').read().split('\n') if l]
+    return compare(want, got, '', os.path.basename(prefix))
+
+
 def main():
     mode = sys.argv[1]
     ref, port, repo = sys.argv[2], sys.argv[3], sys.argv[4]
     env = dict(os.environ)
     env['NAZM_EXE'] = env.get('NAZM_PORT', '')
-    if mode == 'protocol':
+    if mode == 'agent':
+        print(agent(ref, port, repo, sys.argv[5], ['--docs', repo], env))
+    elif mode == 'agent-gen':
+        agent_gen(ref, repo, sys.argv[5], sys.argv[6], ['--docs', repo], env)
+    elif mode == 'agent-cmp':
+        print(agent_cmp(ref))
+    elif mode == 'protocol':
         print(protocol(ref, port, repo, ['--docs', repo] + sys.argv[5:], env))
     else:
         print(file_session(ref, port, repo, sys.argv[5], ['--docs', repo] + sys.argv[6:], env))

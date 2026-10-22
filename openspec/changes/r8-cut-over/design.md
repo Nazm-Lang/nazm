@@ -698,6 +698,98 @@ checkout under `$HOME`, in slices of the corpus (`INTERACTIVE_SLICE=K/N`, a cont
 - **Not done here.** The compiled leg's source-root, package and `--features` runs (slice 6's packages); the host smoke of `repl` (a
   `host-run` has no standard input).
 
+## Slice 9 — the agent commands whole (design, 2026-10-22)
+
+`context` and `repo` are the two commands R5 left refused (design *The rest of the toolchain*) because an agent answer needs what the front
+end did not yet publish and a repository reader that did not yet exist in Nazm. Both are ports against the Rust oracle, as R5's were:
+`crates/nazm-service/src/context.rs` and `crates/nazm-repo` (3.8k lines) written over R2's facts, compared byte for byte. The model is
+Sonnet; the one place a design choice was needed is below.
+
+### S9.1 R2 publishes a function's effects (task 9.1)
+
+`compiler/sema.nz` keeps what `analyse_effects` already settled — the first reason for each effect a function requires — in the checker
+(`Ck.fnrs`, the list the function used to build and drop), and `ck_fn_published` writes what a caller in another module must assume of a
+function (`declared_effects`, else `assumed`: every effect the compatibility bridge covers, `foreign` too where a parameter can carry a
+`ForeignCap`). `compiler/facts.nz` publishes them: `fx_fn_declared`, `fx_fn_required`, `fx_fn_published`, `fx_effects_names`, and per
+function `fx_reason_count` with `fx_reason_effect`, `fx_reason_start`, `fx_reason_end`, `fx_reason_source` (`builtin`, `spawn`, `inferred`,
+`declared`, `undeclared`, `indirect`), `fx_reason_builtin` and `fx_reason_callee`. R2's own comparison grows a mode for them, as the call
+graph and the provenance summaries had one: `compiler/diagnose.nz --effects` (`fd_effects`), `toolchain/frontend-tests/refdump effects` and
+`toolchain/frontend-tests/run.sh effects`.
+
+### S9.2 `context` (task 9.1)
+
+`toolchain/commands/context.nz` is `LanguageService::context` over the facts: the entity at a byte (`name_at`, then the reference index), the
+outline symbol of a function, record or enum, its signature, fields or variants, the entities its declaration uses grouped and ordered as
+the reference's `LinkKey` orders them, the records and enums it names, every use, the direct checked calls in and out (the order of
+`hierarchy.rs`: the declaring file as `Path` orders it, then the name's place, then the name), the diagnostics inside it, a function's
+effects (S9.1) and its provenance. It is the one function (`ctx_packet`) that `nazm context`, the MCP tool `nazm.semantic_context` (through
+the command) and `repo` (`ctx_module_packet`, for a definition of a compilation it opened) all use. It refuses, as `snapshot` does, what the
+facts do not carry: the compilations whose errors leave the facts' index unlike the reference's (`N0203`, `N0386`, `N0305`, `N0101`,
+`N0334`, `N0610`), a function whose signature or parameters the facts do not name, and a checker that stops.
+
+### S9.3 `repo` (task 9.2)
+
+Four modules, as the Rust crate has them: `repoload.nz` (`manifest.rs`, `repository.rs`, `cargo.rs`, `catalogue.rs`: the layout, the
+Cargo workspace as Cargo describes it, the mutation catalogue, the schemas, the sources, the state — BLAKE3 over each input framed by its
+class, its path and its bytes, in the order they are read), `repocomp.nz` (`sources.rs`: one root compilation, opened with the source
+root as the directory durable keys are measured from; its durable definitions are the snapshot's, each with where its name is),
+`repomap.nz` (`map.rs`: the entities, their canonical order and `validate`) and `repotask.nz` (`task.rs`: seeds, closure, classes,
+budget). The documentation corpus is `docs.nz`'s (`Corp`, made `pub`); the diagnostic index is `semantic.nz`'s (`sd_*`).
+
+TOML: the Rust crate reads the workspace's `Cargo.toml`s and the catalogue with the `toml` crate, whose forms those files use and the R5
+reader (`toml.nz`) did not: multi-line basic and literal strings (the catalogue's `find` and `replace`) and dotted keys
+(`version.workspace = true`). `toml.nz` reads both now; every other form it still refuses by name (status 6).
+
+`serde_json::Value` objects have their members in key order (the crate is built without `preserve_order`), so every `content` object and
+every object inside one is written in key order (`jo`); every other object is written in the order its struct declares its fields.
+
+### S9.4 The MCP tools
+
+`nazm-mcp` asks `nazm context --json` for `nazm.semantic_context` (the `file` joined to the source root as `Path::join` does, which needs the
+source root `root::decide` chooses: `source_base`), and `nazm repo --map|--task --json --root DOCS` for `nazm.repository_map` and
+`nazm.task_context` (`--docs` is the repository, as for the documentation tools). Their arguments are read as `serde` reads them, in `serde`'s
+words (`check_task`).
+
+### S9.5 What is compared, and the intended differences
+
+- `toolchain/commands/tests/agent.sh` (host, one `host-run` at a time, heap limit 2G): `context` at the offsets
+  `context-positions.py` chooses in every input (the declarations' names and ends, uses, and places that are no name), compact and indented;
+  `args` (`tests/args/context.txt`, `repo.txt`); `repo --map` in both forms; `repo --task` over seeds read from the reference's map
+  (`repo-seeds.py`: every package, source root, root, module, document, schema and profile, samples of the targets, definitions, sections,
+  mutations and tests, every diagnostic of the bad examples, each under the default intent and the first few of each kind under every
+  intent), the budgets, the stale state and the invalid requests. Both sides read a copy of the repository made once, so that nothing edited
+  meanwhile moves the state.
+- **Refused, not intended differences.** `repo` and the MCP tools without a repository named (`--root`, `--docs`): the default is the
+  repository the reference was built from, which a port cannot know (as `docs`); a TOML form `toml.nz` does not read in a `Cargo.toml` or in
+  the catalogue; a compilation the front end does not carry (the checker stops). `context`: the list in S9.2.
+
+### Slice 9 — the evidence
+
+`toolchain/commands/tests/agent.sh`, the Nazm `nazm` against the Rust one, standard output, standard error and status byte for byte
+(2026-10-22), on the macOS host, one `host-run` at a time, heap limit 2G (peak resident of `repo --map`: 109 MB).
+
+| part | agree | differ | refused |
+| --- | --- | --- | --- |
+| `effects` (R2: `diagnose --effects` against `refdump effects`, 437 inputs) | 437 | 0 | 0 |
+| `context` (4 offsets per input of the 437, compact and the first indented) | 3635 | 0 | 99 |
+| `context` command lines (`tests/args/context.txt`) | 52 | 0 | 1 |
+| `repo --map` (both forms) and `repo --task` (568 requests: every package, source root, root, module, document, schema, profile, diagnostic of the bad examples; samples of targets, definitions, sections, mutations, tests; every intent for the first of each kind; budgets, stale state, invalid requests) | 568 | 0 | 0 |
+| `repo` command lines (`tests/args/repo.txt`) | 54 | 0 | 2 |
+| MCP tools (`agent.sh mcp-gen`, `mcp-serve`, `mcp-cmp`) | not run | | |
+
+- **Refused (status 6), counted apart.** `context`: 97 over 7 inputs whose errors leave the facts' index unlike the reference's (S9.2,
+  as `snapshot`), 2 over a record whose fields the facts do not publish; the one command line is `--source-root` naming a directory that
+  does not hold the root (the loader's refusal, as `snapshot`). `repo`: the two command lines that name no `--root`.
+- **Found and fixed while comparing.** A standard module's functions are no call-hierarchy items (a `callees` list of a program that
+  calls `@std/…` was longer); the effect reasons are in effect order (`io`, `spawn`, then the effect parameter), not the order the
+  checker met them; a `Value` object's members are in key order (a diagnostic's `primary` inside `content`); clap's usage of a missing
+  required group has no `[OPTIONS]` and a missing value of an option with possible values lists them (`cli.nz`, which `docs` shares).
+- **Not compared: the MCP tools.** The server reads standard input, which a `host-run` does not have, so it runs contained only; the container
+  has no Python and one CPU. The three-step comparison (`mcp-gen` on the host writes the messages and the reference's answers, `mcp-serve`
+  contained answers them, `mcp-cmp` on the host compares) is written; its contained step built both programs but did not finish a session of
+  38 messages in the runner's hour (twice), so the tools are built (`nazm-mcp` builds) and their commands are compared, but their
+  argument checks and answers through the server are **open** (task 9.2).
+
 ## Slice 13 — the harness remainder in Nazm (design, 2026-10-20)
 
 R7's 6.2 and 6.3: the contained runner, `host-run`, the mutation campaign runner, `bench` and

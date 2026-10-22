@@ -1,0 +1,57 @@
+# `nazm repo`, run from the repository's root (`tests/agent.sh repo-args`): clap's usage errors and help, and what the command then does.
+--help
+-h
+(none)
+--map --root .
+--map --json --root .
+--json --map --root .
+--map --root=. --json
+--task --root . --seed package:nazm-docs --json
+--task --root . --seed package:nazm-docs --intent understand --json
+--task --root . --seed package:nazm-docs --intent edit --json
+--task --root . --seed package:nazm-docs --intent diagnose --json
+--task --root . --seed package:nazm-docs --intent test --json
+--task --root . --seed package:nazm-docs
+--task --root . --seed package:nazm-docs --seed package:nazm-repo --json
+--task --root . --seed package:nazm-docs --max-entities 1 --json
+--task --root . --seed package:nazm-docs --max-entities 0 --json
+--task --root . --seed package:nazm-docs --max-source-bytes 0 --max-doc-bytes 0 --json
+--task --root . --seed package:nazm-docs --max-doc-bytes 200 --json
+--task --root . --seed doc:spec --max-entities 3 --max-doc-bytes 3000 --json
+--task --root . --seed sources:examples --json
+--task --root . --seed schema:nazm.context/3 --json
+--task --root . --seed profile:docs --json
+--task --root . --seed root:examples:max.nz --json
+--task --root . --seed module:examples:max.nz --json
+--task --root . --seed 'def:examples:max.nz::fn clamp' --json
+--task --root . --seed 'def:examples:max.nz::fn max' --intent understand --json
+--task --root . --seed 'def:examples:max.nz::fn nope' --json
+--task --root . --seed package:nope --json
+--task --root . --seed nope --json
+--task --root . --json
+--task --root . --seed a --seed a --json
+--task --root . --seed package:a --seed package:b --seed package:c --seed package:d --seed package:e --seed package:f --seed package:g --seed package:h --seed package:i --json
+--task --root . --seed package:nazm-docs --state 0000 --json
+--map --task --root .
+--map --root . --intent edit
+--map --root . --seed package:nazm-docs
+--map --root . --state 0000
+--map --root . --max-entities 3
+--task --root . --intent bogus --seed package:nazm-docs
+--task --root . --intent
+--task --root . --seed
+--task --root . --seed package:nazm-docs --max-entities x
+--task --root . --seed package:nazm-docs --max-entities -1
+--task --root . --seed package:nazm-docs --max-entities 18446744073709551615 --json
+--task --root . --seed package:nazm-docs --max-entities 18446744073709551616
+--task --root nowhere --seed package:nazm-docs --json
+--map --root nowhere
+--map --root docs --json
+--map --root examples --json
+--map --root crates/nazm-docs --json
+--map --root . extra
+--map --bogus
+--map --map --root .
+--task --task --root . --seed package:nazm-docs --json
+--map
+--task --seed package:nazm-docs

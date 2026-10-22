@@ -1,0 +1,84 @@
+// `nazm repo` (R8 slice 9, task 9.2; R5's method, `openspec/changes/r5-commands/`): the repository context map, `nazm.repository-map/1`, or the
+// minimum context for a task, `nazm.task-context/1`, as `crates/nazm-cli/src/repo.rs` prints them over `crates/nazm-repo`, ported in
+// `repoload.nz` (the repository's inputs and its state), `repocomp.nz` (a root compilation), `repomap.nz` and `repotask.nz`.
+//
+// Every answer is read from the repository as it is on disk at this call and dropped. With `--json`, standard output is exactly one object,
+// whatever the answer, and standard error is empty; the exit status is 0 with a map or a context — complete or partial — and 1 with a refusal.
+// Without it, the same object indented, its members in the order the structs declare them.
+//
+// The default root is the repository the reference binary was built from, which a port cannot know: without `--root` the command says so and
+// exits 6 (design D5, as `nazm docs`).
+
+use "../../compiler/diag.nz"
+use "cli.nz"
+use "jsonin.nz"
+use "repoload.nz"
+use "repomap.nz"
+use "repotask.nz"
+use "util.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+pub fn repo_cli() -> Cli {
+    let c = cli_command("repo", "Print the repository context map, `nazm.repository-map/1`, or the minimum context for a task, `nazm.task-context/1`",
+            "Print the repository context map, `nazm.repository-map/1`, or the minimum context for a task, `nazm.task-context/1`." + nl() + nl()
+            + "`--map`: every package, target, source root, compilation root, module, durable definition, document, schema and mutation profile, with its "
+            + "authority, its structural relationships and where to retrieve more — never a body. `--task`: for the seeds (map ids) and the intent, the "
+            + "smallest context the repository can justify — each item with its reason, authority and retrieval, the seed's exact source and the selected "
+            + "sections' exact text — within a structural budget; a budget the seeds do not fit is refused, and anything else it cuts is listed and makes "
+            + "the answer `partial`. `--state` refuses a repository that has changed since. Ids only; no path is read. `docs/internal/architecture.md` §7.35.")
+    let map = cli_flag(c, "", "map", "Print the map", "")
+    let task = cli_flag(c, "", "task", "Print the context for a task", "")
+    let intent = cli_option(c, "", "intent", "INTENT", false, "", false, "`understand`, `edit`, `diagnose` or `test`. Without it, `edit`, the widest", "")
+    cli_possible(c, intent, "understand,edit,diagnose,test")
+    let seed = cli_list(c, "", "seed", "SEED", "", "A repository entity id, from a map or an earlier context. Repeatable", "")
+    let state = cli_option(c, "", "state", "STATE", false, "", false, "A map's `state`: refuse the task if the repository has changed since", "")
+    let me = cli_option(c, "", "max-entities", "MAX_ENTITIES", false, "", false, "At most this many items", "")
+    cli_numeric_size(c, me)
+    let ms = cli_option(c, "", "max-source-bytes", "MAX_SOURCE_BYTES", false, "", false, "At most this many bytes of definition source", "")
+    cli_numeric_size(c, ms)
+    let md = cli_option(c, "", "max-doc-bytes", "MAX_DOC_BYTES", false, "", false, "At most this many bytes of section text", "")
+    cli_numeric_size(c, md)
+    cli_flag(c, "", "json", "The one canonical compact serialisation. Without it, the same object indented", "")
+    cli_option(c, "", "root", "ROOT", true, "", false, "The repository. Without it, the one this binary was built from", "")
+    cli_conflicts(c, intent, map)
+    cli_conflicts(c, seed, map)
+    cli_conflicts(c, state, map)
+    cli_conflicts(c, me, map)
+    cli_conflicts(c, ms, map)
+    cli_conflicts(c, md, map)
+    cli_require_one(c, map, task)
+    c
+}
+
+fn refuse(io: IoCap, why: Str) -> Int {
+    eprint("repo: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+// What the reference prints an answer as: compact with `--json`, else indented in the order the structs declare.
+fn show(text: Str, json: Bool) -> Str {
+    if json { return text + nl() }
+    j_pretty_written(j_parse(text)) + nl()
+}
+
+pub fn repo_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let map = cli_present(c, 0)
+    let json = cli_present(c, 8)
+    if !cli_present(c, 9) { refuse(io, "the repository this binary was built from (name one with `--root`)") }
+    let root = cli_value(c, 9)
+    if map {
+        let problems = strs_new()
+        let repo = rl_load(io, root, problems)
+        let out = if strs_len(problems) > 0 { rm_unavailable(problems) } else { rm_build(io, repo) }
+        print(show(out.json, json))
+        if !out.available { exit_with(1) }
+        return 0
+    }
+    let out = rt_command(io, c, root)
+    print(show(out.json, json))
+    if !out.available { exit_with(1) }
+    0
+}
