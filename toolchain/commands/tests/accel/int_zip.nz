@@ -1,0 +1,3 @@
+fn k(a: Int, b: Int) -> Int { a * b - a }
+
+fn main() -> Int { 0 }

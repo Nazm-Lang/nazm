@@ -1,0 +1,11 @@
+fn k(x: Float64) -> Float64 {
+    let mut s = 0.0
+    let mut i = 0
+    while i < 4 {
+        s = s + x
+        i += 1
+    }
+    s
+}
+
+fn main() -> Int { 0 }

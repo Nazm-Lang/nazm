@@ -1,0 +1,21 @@
+a::b                                              123 ns/iteration  (5 iterations)
+                                                    0 ns/iteration  (1 iterations)
+é::ünïcode                                          7 ns/iteration  (1000 iterations)
+a_very_long_name_that_is_longer_than_forty_characters::function 123456789012 ns/iteration  (4294967295 iterations)
+exactly_forty_characters_long_name_ab::   99999999999 ns/iteration  (2 iterations)
+4567
+4567
+4567
+4567
+-1
+-1
+12
+12
+-1
+-1
+-1
+-1
+-1
+-1
+7
+1

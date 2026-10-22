@@ -1,0 +1,9 @@
+fn k(x: Int) -> Int {
+    let y = {
+        let z = x + 1
+        z * 2
+    }
+    y
+}
+
+fn main() -> Int { 0 }

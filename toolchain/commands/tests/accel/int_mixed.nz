@@ -1,0 +1,3 @@
+fn k(a: Int, b: Float64) -> Int { a }
+
+fn main() -> Int { 0 }
