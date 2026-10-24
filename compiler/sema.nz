@@ -419,6 +419,10 @@ pub struct Ck {
     // Per call site, a generic call's settled type arguments (a run of `sargs`) and the result
     // type the checker formed for it (`type_args`, `checked_call`'s instance); -1 for none.
     sargf: Ints,
+    // Per call site: what a generic call settled each type parameter to, for signature help: where its run is in `sip` (or -1 for a call that is not generic), then the
+    // settled arguments (-1 for one nothing settled), then whether the call is polymorphic in its effects.
+    sipf: Ints,
+    sip: Ints,
     sargc: Ints,
     sargs: Ints,
     sret: Ints,
@@ -1234,6 +1238,60 @@ fn subst(c: Ck, t: Int, owner: Int, id: Int, args: Ints) -> Int {
     intern(c, g, ta(c, t), ints_get(c.tyb, t), ints_get(c.tyc, t), strs_get(c.tyname, t), out)
 }
 
+// `subst`, answered from the types that existed when the table held `wm` of them (`Types::substituted`): -1 where the answer would need a type nobody had made.
+fn subst_found(c: Ck, t: Int, owner: Int, id: Int, args: Ints, wm: Int) -> Int {
+    let g = tag(c, t);
+    if g == tag_param() {
+        if ta(c, t) == owner && ints_get(c.tyb, t) == id {
+            let i = ints_get(c.tyc, t);
+            if i < ints_len(args) { return ints_get(args, i); }
+            return 0 - 1;
+        }
+        return t;
+    }
+    if g == tag_builtin() { return t; }
+    if targc(c, t) == 0 { return t; }
+    if mentions(c, t, owner, id) == false { return t; }
+    let out = ints_new();
+    let mut i = 0;
+    while i < targc(c, t) {
+        let r = subst_found(c, targ(c, t, i), owner, id, args, wm);
+        if r < 0 { return 0 - 1; }
+        ints_push(out, r);
+        i = i + 1;
+    }
+    // A box, cell, chain or vector is found by its element's vector (`find_vec`): that is what the reference interns, the holder being the vector's.
+    if g == tag_box() || g == tag_cell() || g == tag_chain() || g == tag_vec() {
+        let va = ints_new();
+        ints_push(va, ints_get(out, 0));
+        let vk = strs_new();
+        strs_push(vk, int_to_str(tag_vec()));
+        strs_push(vk, "0");
+        strs_push(vk, "0");
+        strs_push(vk, "0");
+        strs_push(vk, "");
+        strs_push(vk, int_to_str(ints_get(out, 0)));
+        let vf = strs_find(c.tykey, str_join(vk, ":"));
+        if vf < 0 || vf >= wm { return 0 - 1; }
+        if g == tag_vec() { return vf; }
+        return holder_of(c, g, ints_get(out, 0));
+    }
+    let parts = strs_new();
+    strs_push(parts, int_to_str(g));
+    strs_push(parts, int_to_str(ta(c, t)));
+    strs_push(parts, int_to_str(ints_get(c.tyb, t)));
+    strs_push(parts, int_to_str(ints_get(c.tyc, t)));
+    strs_push(parts, strs_get(c.tyname, t));
+    i = 0;
+    while i < ints_len(out) {
+        strs_push(parts, int_to_str(ints_get(out, i)));
+        i = i + 1;
+    }
+    let found = strs_find(c.tykey, str_join(parts, ":"));
+    if found < 0 || found >= wm { return 0 - 1; }
+    found
+}
+
 // A record type's fields: their names and types, the application's arguments substituted.
 fn record_field(c: Ck, t: Int, name: Str) -> Int {
     let r = ta(c, t);
@@ -1514,7 +1572,7 @@ fn new_ck(t: Tree) -> Ck {
             sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new(), fnreq: ints_new(), fnrs: Reasons(fnid: ints_new(), effect: ints_new(), start: ints_new(), end: ints_new(), source: ints_new(), which: ints_new()), bds: ints_new(), bde: ints_new(),
             bmut: ints_new(), mlit: sm_new(), mfld: sm_new(), mfldty: sm_new(), ipend: ints_new(), rlog: ints_new(), elog: ints_new(), mvty: sm_new(), mvix: sm_new(),
             minit: sm_new(), mfini: sm_new(), mcref: sm_new(), mtrm: sm_new(), rix: rix_new(), mconst: sm_new(), mrefu: sm_new(), rzb: ints_new(), rzf: ints_new(), uk: ints_new(), ui: ints_new(), us: strs_new(), mconv: sm_new(), cvto: ints_new(),
-            cvmode: strs_new(), cvres: ints_new(), sargf: ints_new(), sargc: ints_new(), sargs: ints_new(), sret: ints_new());
+            cvmode: strs_new(), cvres: ints_new(), sargf: ints_new(), sipf: ints_new(), sip: ints_new(), sargc: ints_new(), sargs: ints_new(), sret: ints_new());
     let mut i = 0;
     while i < s_slots() {
         ints_push(c.st, 0);
@@ -8279,6 +8337,8 @@ fn check_generic_call(c: Ck, call: Call, targs: Int, expected: Int) -> Int {
     let sites = ints_len(c.sfn);
     record_site(c, call.at, call.target);
     if ints_len(c.sfn) > sites && call.n > 0 { ints_set(c.starg, sites, ints_get(settled, 0)); }
+    // The types that exist before the call's own result is made: what the instantiation shown by signature help may read.
+    let watermark = strs_len(c.tykey);
     let mut ret = subst(c, call.ret, call.owner, call.oid, settled);
     // The effect parameter, as this call bound it (N51): what the call performs, and what a
     // function type in its result says — which is the result the call has.
@@ -8302,6 +8362,14 @@ fn check_generic_call(c: Ck, call: Call, targs: Int, expected: Int) -> Int {
             i = i + 1;
         }
         ints_set(c.sret, sites, ret);
+        ints_set(c.sipf, sites, ints_len(c.sip));
+        i = 0;
+        while i < call.n {
+            ints_push(c.sip, ints_get(g.ty, i));
+            i = i + 1;
+        }
+        if call.poly { ints_push(c.sip, 1); } else { ints_push(c.sip, 0); }
+        ints_push(c.sip, watermark);
     }
     ret
 }
@@ -11388,6 +11456,7 @@ fn record_site(c: Ck, at: Int, target: Int) -> Int {
     ints_push(c.sbind, 0);
     ints_push(c.sheld, held_caps(c));
     ints_push(c.sargf, ints_len(c.sargs));
+    ints_push(c.sipf, 0 - 1);
     ints_push(c.sargc, 0);
     ints_push(c.sret, 0 - 1);
     0
@@ -11410,6 +11479,7 @@ fn record_indirect_site(c: Ck, at: Int, t: Int) -> Int {
     ints_push(c.sbind, 0);
     ints_push(c.sheld, held_caps(c));
     ints_push(c.sargf, ints_len(c.sargs));
+    ints_push(c.sipf, 0 - 1);
     ints_push(c.sargc, 0);
     ints_push(c.sret, 0 - 1);
     0
@@ -14824,6 +14894,159 @@ pub fn ck_type_class(c: Ck, t: Int) -> Str {
 // The binding the name written at `s..e` (absolute) is, or -1.
 pub fn ck_binding_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mvar, s, e) }
 // Whether the mention at `s..e` is of a capture the checker refused (`N0386`): of a slot of the closure that nothing declares.
+// --- signature help (`Signature::of_call` and `render`) ---------------------------------------------------
+
+// The declared signature of the checked call at `site`, as `Signature::render` spells it with the call's instantiation: the label, then the start and end (bytes in the
+// label) of each parameter. Empty where the site is none the reference describes.
+pub fn ck_site_label(c: Ck, site: Int) -> Strs {
+    let out = strs_new();
+    let f = ints_get(c.suser, site);
+    let bi = ints_get(c.sbuiltin, site);
+    let ind = ints_get(c.sind, site);
+    let mut name = "";
+    let mut foreign = "";
+    let mut owner = 0 - 1;
+    let mut oid = 0 - 1;
+    let tpn = strs_new();
+    let tpe = ints_new();
+    let ptys = ints_new();
+    let pnames = strs_new();
+    let mut ret = 0;
+    let mut eff = 0 - 1;
+    if f >= 0 {
+        name = strs_get(c.fnname, f);
+        foreign = ck_fn_foreign(c, f);
+        owner = own_fn();
+        oid = f;
+        let mut k = 0;
+        while k < ints_get(c.fntpc, f) {
+            strs_push(tpn, strs_get(c.tpname, ints_get(c.fntpf, f) + k));
+            ints_push(tpe, ints_get(c.tpeq, ints_get(c.fntpf, f) + k));
+            k = k + 1;
+        }
+        let params = kids(c, ints_get(c.fnnode, f), "params");
+        let implicit = ints_get(c.fnpc, f) - ints_len(params);
+        k = 0;
+        while k < ints_get(c.fnpc, f) {
+            ints_push(ptys, ints_get(c.ptys, ints_get(c.fnpf, f) + k));
+            if k < implicit { strs_push(pnames, "out"); } else { strs_push(pnames, fname_of(c, ints_get(params, k - implicit), "name")); }
+            k = k + 1;
+        }
+        ret = ints_get(c.fnret, f);
+        eff = ints_get(c.fneff, f);
+    } else {
+        if bi >= 0 {
+            name = strs_get(c.bname, bi);
+            owner = own_builtin();
+            oid = bi;
+            if ints_get(c.bgen, bi) > 0 {
+                strs_push(tpn, "T");
+                ints_push(tpe, 0);
+                let tp = param_ty(c, own_builtin(), bi, 0, "T");
+                let shapes = split(strs_get(c.bshapes, bi), 44);
+                let mut k = 0;
+                while k < strs_len(shapes) {
+                    if strs_get(shapes, k) != "" { ints_push(ptys, shape_of(c, strs_get(shapes, k), tp)); strs_push(pnames, ""); }
+                    k = k + 1;
+                }
+                ret = shape_of(c, strs_get(c.bretshape, bi), tp);
+            } else {
+                let mut k = 0;
+                while k < ints_get(c.bpc, bi) {
+                    ints_push(ptys, ints_get(c.ptys, ints_get(c.bpf, bi) + k));
+                    strs_push(pnames, "");
+                    k = k + 1;
+                }
+                ret = ints_get(c.bret, bi);
+            }
+            let e = builtin_effect(c, bi);
+            if e >= 0 { eff = with_bit(0, e); }
+        } else {
+            if ind < 0 { return out; }
+            name = show(c, ind);
+            let mut k = 0;
+            while k + 1 < targc(c, ind) {
+                ints_push(ptys, targ(c, ind, k));
+                strs_push(pnames, "");
+                k = k + 1;
+            }
+            ret = fn_ret(c, ind);
+            eff = ta(c, ind);
+        }
+    }
+    // What the call settled, where it is generic.
+    let first = ints_get(c.sipf, site);
+    let n = strs_len(tpn);
+    let mut args = ints_new();
+    let mut poly = false;
+    if first >= 0 {
+        let mut k = 0;
+        while k < n {
+            let t = ints_get(c.sip, first + k);
+            if t >= 0 { ints_push(args, t); } else { ints_push(args, param_ty(c, owner, oid, k, strs_get(tpn, k))); }
+            k = k + 1;
+        }
+        poly = ints_get(c.sip, first + n) == 1;
+    }
+    let mut text = "fn ";
+    if foreign != "" { text = "extern \"C\" fn "; }
+    text = str_concat(text, name);
+    if n > 0 {
+        let shown = strs_new();
+        let mut k = 0;
+        while k < n {
+            let t = if first >= 0 { ints_get(c.sip, first + k) } else { 0 - 1 };
+            if t >= 0 { strs_push(shown, show(c, t)); }
+            else {
+                if ints_get(tpe, k) == 1 { strs_push(shown, cat3(strs_get(tpn, k), ": ", "Equality")); } else { strs_push(shown, strs_get(tpn, k)); }
+            }
+            k = k + 1;
+        }
+        text = cat3(text, "[", str_concat(str_join(shown, ", "), "]"));
+    }
+    let marks = strs_new();
+    text = str_concat(text, "(");
+    let mut k = 0;
+    while k < ints_len(ptys) {
+        if k > 0 { text = str_concat(text, ", "); }
+        let st = str_len(text);
+        if strs_get(pnames, k) != "" { text = cat3(text, strs_get(pnames, k), ": "); }
+        let mut ty = ints_get(ptys, k);
+        if first >= 0 && owner >= 0 {
+            let r = subst_found(c, ty, owner, oid, args, ints_get(c.sip, first + n + 1));
+            if r >= 0 { ty = r; }
+        }
+        text = str_concat(text, show(c, ty));
+        strs_push(marks, int_to_str(st));
+        strs_push(marks, int_to_str(str_len(text)));
+        k = k + 1;
+    }
+    text = str_concat(text, ") -> ");
+    let mut rt = ret;
+    if first >= 0 && owner >= 0 {
+        if poly { rt = ints_get(c.sret, site); } else {
+            let r = subst_found(c, ret, owner, oid, args, ints_get(c.sip, first + n + 1));
+            if r >= 0 { rt = r; }
+        }
+    }
+    text = str_concat(text, show(c, rt));
+    if foreign != "" {
+        text = cat3(text, " = \"", str_concat(foreign, "\""));
+    } else {
+        if eff >= 0 {
+            let names = ck_effect_names(eff);
+            if strs_len(names) == 0 { text = str_concat(text, " ! {}"); } else { text = cat3(text, " ! { ", str_concat(str_join(names, ", "), " }")); }
+        }
+    }
+    strs_push(out, text);
+    k = 0;
+    while k < strs_len(marks) {
+        strs_push(out, strs_get(marks, k));
+        k = k + 1;
+    }
+    out
+}
+
 // What the type name written at `s..e` is: 1 a built-in type, 2 a type parameter used, 3 one declared, or 0 (`Resolution::written_type`).
 pub fn ck_written_type_at(c: Ck, s: Int, e: Int) -> Int { let k = sm_get(c.mwty, s, e); if k < 0 { return 0; } k }
 pub fn ck_refused_capture_at(c: Ck, s: Int, e: Int) -> Bool { sm_get(c.mrefu, s, e) >= 0 }
@@ -15043,6 +15266,8 @@ pub fn ck_variant_index_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mvix, s, e) 
 pub fn ck_init_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.minit, s, e) }
 // A record type's fields: how many, and each one's name; an enum type's variant `v`: its name,
 // how many payload fields, and each one's name.
+// Whether C sees record type `t` in the order it was declared (`CRepr` other than `Nazm`).
+pub fn ck_record_c_layout(c: Ck, t: Int) -> Bool { record_repr(c, ck_record_node(c, ta(c, t))) != 0 }
 pub fn ck_record_arity(c: Ck, t: Int) -> Int { ints_get(c.rfc, ta(c, t)) }
 pub fn ck_record_field_name(c: Ck, t: Int, i: Int) -> Str { strs_get(c.fname, ints_get(c.rff, ta(c, t)) + i) }
 pub fn ck_variant_name(c: Ck, t: Int, v: Int) -> Str { strs_get(c.vname, ints_get(c.evf, ta(c, t)) + v) }
