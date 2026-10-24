@@ -331,6 +331,8 @@ pub struct Ck {
     // The record or enum each type name written resolved to, by the name's span (for `lsp`'s
     // definition).
     mtyn: Smap,
+    // What each type name written is, by the name's span (`record_written_type`, for the semantic tokens): 1 a built-in type, 2 a type parameter, 3 a type parameter declared.
+    mwty: Smap,
     // The type a list or array literal, or a `[v; n]`, was made as, by its span.
     marr: Smap,
     mfor: Smap,
@@ -1507,7 +1509,7 @@ fn new_ck(t: Tree) -> Ck {
             imtrait: ints_new(), imty: ints_new(), immod: ints_new(), imis: ints_new(), imie: ints_new(), imff: ints_new(), imfn: ints_new(), imrf: ints_new(), imrc: ints_new(), imreq: ints_new(),
             hds: ints_new(), hde: ints_new(), htr: ints_new(), hty: ints_new(), fnmeth: ints_new(), tpbound: ints_new(),
             tsname: strs_new(), tsid: ints_new(), bfn: ints_new(), bty: ints_new(), bnm: strs_new(), bshr: ints_new(), sbid: ints_new(),
-            fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), capat: ints_new(), fbf: ints_new(), fbc: ints_new(), fbl: ints_new(), fcf: ints_new(), fcc: ints_new(), fcl: ints_new(), clid: ints_new(), clty: ints_new(), mvar: sm_new(), mclo: sm_new(), crfn: ints_new(), crb: ints_new(), mzero: sm_new(), mtyn: sm_new(), marr: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
+            fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), capat: ints_new(), fbf: ints_new(), fbc: ints_new(), fbl: ints_new(), fcf: ints_new(), fcc: ints_new(), fcl: ints_new(), clid: ints_new(), clty: ints_new(), mvar: sm_new(), mclo: sm_new(), crfn: ints_new(), crb: ints_new(), mzero: sm_new(), mtyn: sm_new(), mwty: sm_new(), marr: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
             stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new(), epown: ints_new(), epnm: strs_new(),
             sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new(), fnreq: ints_new(), fnrs: Reasons(fnid: ints_new(), effect: ints_new(), start: ints_new(), end: ints_new(), source: ints_new(), which: ints_new()), bds: ints_new(), bde: ints_new(),
             bmut: ints_new(), mlit: sm_new(), mfld: sm_new(), mfldty: sm_new(), ipend: ints_new(), rlog: ints_new(), elog: ints_new(), mvty: sm_new(), mvix: sm_new(),
@@ -2742,6 +2744,12 @@ fn resolve_written(c: Ck, w: Int, pnames: Strs, ptys: Ints, d: Diags) -> Int {
 
 fn max_depth() -> Int { 32 }
 
+// A written type name's identity, where it was decided (`record_written_type`).
+fn note_written(c: Ck, ns: Int, kind: Int) -> Int {
+    if gs(c, s_quiet()) == 0 { sm_put(c.mwty, sps(c, ns), spe(c, ns), kind); }
+    0
+}
+
 // How deeply a type nests through its arguments (`nesting`): 1 for a type with none.
 fn nesting(c: Ck, t: Int) -> Int {
     let mut deepest = 1;
@@ -2831,6 +2839,7 @@ fn resolve_written_inner(c: Ck, w: Int, pnames: Strs, ptys: Ints, d: Diags) -> I
     let at = strs_find(pnames, name);
     if at >= 0 {
         if has_args { not_generic(c, d, name, "a type parameter", span); }
+        if tag(c, ints_get(ptys, at)) == tag_param() { note_written(c, ns, 2); }
         return ints_get(ptys, at);
     }
     // `Chan[T]` (N53): a generic channel, for a `T` that may cross into a task; `Chan` alone is
@@ -2840,6 +2849,7 @@ fn resolve_written_inner(c: Ck, w: Int, pnames: Strs, ptys: Ints, d: Diags) -> I
         let mut elem = t_int();
         if ints_len(args) > 0 { elem = ints_get(args, 0); }
         channel_element(c, d, elem, span);
+        note_written(c, ns, 1);
         return chan_of(c, elem);
     }
     // `Box[T]` and `Chain[T]` (R1a) and `Cell[T]` (R1b): prelude names, so a module's own type of
@@ -2856,6 +2866,7 @@ fn resolve_written_inner(c: Ck, w: Int, pnames: Strs, ptys: Ints, d: Diags) -> I
         if ints_len(args) != 1 { wrong_arity(c, d, name, 1, ints_len(args), span); }
         let mut elem = t_int();
         if ints_len(args) > 0 { elem = ints_get(args, 0); }
+        note_written(c, ns, 1);
         if name == "Box" { return holder_of(c, tag_box(), elem); }
         if name == "Cell" { return holder_of(c, tag_cell(), elem); }
         return holder_of(c, tag_chain(), elem);
@@ -2870,6 +2881,7 @@ fn resolve_written_inner(c: Ck, w: Int, pnames: Strs, ptys: Ints, d: Diags) -> I
         if ints_len(args) != 1 { wrong_arity(c, d, "List", 1, ints_len(args), span); }
         let mut elem = t_int();
         if ints_len(args) > 0 { elem = ints_get(args, 0); }
+        note_written(c, ns, 1);
         return vec_of(c, elem);
     }
     if name == "Vec" {
@@ -2881,11 +2893,13 @@ fn resolve_written_inner(c: Ck, w: Int, pnames: Strs, ptys: Ints, d: Diags) -> I
         if ints_len(args) != 1 { wrong_arity(c, d, "Vec", 1, ints_len(args), span); }
         let mut elem = t_int();
         if ints_len(args) > 0 { elem = ints_get(args, 0); }
+        note_written(c, ns, 1);
         return vec_of(c, elem);
     }
     let t = resolve_name(c, name, ns, d);
     if is_builtin_name(name) {
         if has_args { not_generic(c, d, name, "a built-in type", span); }
+        note_written(c, ns, 1);
         return t;
     }
     applied_written(c, t, has_args, args, ns, span, d)
@@ -3114,6 +3128,7 @@ fn type_params(c: Ck, decl: Int, owner: Int, id: Int, pn: Strs, pt: Ints) -> Int
         let n = fname_of(c, ints_get(params, i), "name");
         strs_push(pn, n);
         ints_push(pt, param_ty(c, owner, id, i, n));
+        note_written(c, fld(c, ints_get(params, i), "span"), 3);
         i = i + 1;
     }
     0
@@ -4756,6 +4771,7 @@ fn declare_function(c: Ck, m: Int, f: Int, hdr: Int) -> Int {
                 strs_push(c.tpname, strs_get(pn, k));
                 ints_push(c.tpeq, 0);
                 ints_push(c.tpbound, 0 - 1);
+                note_written(c, fld(c, ints_get(tps, k), "span"), 3);
                 k = k + 1;
             }
             requirements(c, f, true, id);
@@ -14808,6 +14824,8 @@ pub fn ck_type_class(c: Ck, t: Int) -> Str {
 // The binding the name written at `s..e` (absolute) is, or -1.
 pub fn ck_binding_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mvar, s, e) }
 // Whether the mention at `s..e` is of a capture the checker refused (`N0386`): of a slot of the closure that nothing declares.
+// What the type name written at `s..e` is: 1 a built-in type, 2 a type parameter used, 3 one declared, or 0 (`Resolution::written_type`).
+pub fn ck_written_type_at(c: Ck, s: Int, e: Int) -> Int { let k = sm_get(c.mwty, s, e); if k < 0 { return 0; } k }
 pub fn ck_refused_capture_at(c: Ck, s: Int, e: Int) -> Bool { sm_get(c.mrefu, s, e) >= 0 }
 pub fn ck_binding_count(c: Ck) -> Int { ints_len(c.bfn) }
 pub fn ck_binding_fn(c: Ck, b: Int) -> Int { ints_get(c.bfn, b) }
@@ -16572,6 +16590,23 @@ pub fn ck_ref_member(c: Ck, i: Int) -> Str {
     if v < 0 { return ""; }
     if k == 5 { return strs_get(c.vname, v); }
     strs_get(c.vname, v) + "." + strs_get(c.fname, ent - bfld)
+}
+// The binding a local entity `i` is, else -1; the position of binding `b` among its function's bindings (its slot: a function's parameters come first).
+pub fn ck_ref_binding(c: Ck, i: Int) -> Int {
+    if ints_get(c.rix.k, i) != 2 { return 0 - 1; }
+    let b = ints_get(c.rix.og, i) - strs_len(c.fnname);
+    if b >= ints_len(c.bfn) { return 0 - 1; }
+    b
+}
+pub fn ck_binding_slot(c: Ck, b: Int) -> Int {
+    let f = ints_get(c.bfn, b);
+    let mut n = 0;
+    let mut i = 0;
+    while i < b {
+        if ints_get(c.bfn, i) == f { n = n + 1; }
+        i = i + 1;
+    }
+    n
 }
 pub fn ck_ref_decl_start(c: Ck, i: Int) -> Int { ints_get(c.rix.ds, i) }
 pub fn ck_ref_decl_end(c: Ck, i: Int) -> Int { ints_get(c.rix.de, i) }

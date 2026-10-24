@@ -1447,6 +1447,180 @@ fn words(s: Str) -> Strs {
     out
 }
 
+// --- semantic tokens (`semantic.rs`, `encode_tokens`) ----------------------------------------------------
+
+// The token type (the legend's index) and modifier bits (`declaration` 1, `defaultLibrary` 2) of the identifier at `st..en`, or nothing where
+// the checker recorded nothing there: as `semantic::classify` decides it — the reference index first, then a call to a built-in, then a written type.
+fn token_class(f: Facts, st: Int, en: Int) -> Ints {
+    let c = fx_checker(f)
+    let out = ints_new()
+    let e = entity_at(f, st, en)
+    if e >= 0 {
+        let kind = fx_ref_kind(f, e)
+        let mut ty = 5
+        if kind == "function" { ty = 8 }
+        if kind == "local" {
+            let b = ck_ref_binding(c, e)
+            let params = if b >= 0 { ck_fn_param_count(c, ck_binding_fn(c, b)) } else { 0 }
+            ty = if b >= 0 && ck_binding_slot(c, b) < params { 4 } else { 5 }
+        }
+        if kind == "record" { ty = 1 }
+        if kind == "enum" { ty = 2 }
+        if kind == "variant" { ty = 7 }
+        if kind == "field" || kind == "payload field" { ty = 6 }
+        if kind == "trait" { ty = 9 }
+        if kind == "trait method" { ty = 10 }
+        ints_push(out, ty)
+        ints_push(out, if fx_ref_decl_start(f, e) == st && fx_ref_decl_end(f, e) == en { 1 } else { 0 })
+        return out
+    }
+    let site = ck_site_at(c, st, en)
+    if site >= 0 && ck_site_builtin(c, site) >= 0 {
+        ints_push(out, 8)
+        ints_push(out, 2)
+        return out
+    }
+    let w = ck_written_type_at(c, st, en)
+    if w == 1 { ints_push(out, 0); ints_push(out, 2) }
+    if w == 2 { ints_push(out, 3); ints_push(out, 0) }
+    if w == 3 { ints_push(out, 3); ints_push(out, 1) }
+    out
+}
+
+fn line_of(starts: Ints, offset: Int) -> Int {
+    let mut line = 0
+    for k in 0..ints_len(starts) {
+        if ints_get(starts, k) <= offset { line = k }
+    }
+    line
+}
+
+// The UTF-16 column of byte `offset`.
+fn column_of(text: Str, starts: Ints, offset: Int) -> Int {
+    let mut col = 0
+    let mut i = ints_get(starts, line_of(starts, offset))
+    while i < offset {
+        let b = str_byte(text, i)
+        if b < 128 || b >= 192 { col += units(b) }
+        i += 1
+    }
+    col
+}
+
+fn semantic_tokens(io: IoCap, s: Server, j: J) -> Str {
+    let p = j_get(j, 0, "params")
+    let td = j_get(j, p, "textDocument")
+    let uri = j_get(j, td, "uri")
+    if j_kind(j, uri) != 4 || !plain_uri(j_str(j, uri)) { refuse(io, "a request's parameters this port does not read as the reference does") }
+    let path = path_of(j_str(j, uri))
+    let k = if path == "" { 0 - 1 } else { doc_named(io, s, path) }
+    if k < 0 || vec_len(s.facts) == 0 { return "null" }
+    let f = vec_get(s.facts, 0)
+    let text = fx_module_text(f, 0)
+    let starts = line_starts(text)
+    let kinds = ints_new()
+    let sts = ints_new()
+    let ens = ints_new()
+    let texts = strs_new()
+    lex_all(text, kinds, sts, ens, texts, dg_new())
+    let data = strs_new()
+    let mut pl = 0
+    let mut pc = 0
+    let mut first = true
+    for i in 0..ints_len(kinds) {
+        if ints_get(kinds, i) != k_ident() { continue }
+        let st = ints_get(sts, i)
+        let en = ints_get(ens, i)
+        let cl = token_class(f, st, en)
+        if ints_len(cl) == 0 { continue }
+        let line = line_of(starts, st)
+        let col = column_of(text, starts, st)
+        let width = column_of(text, starts, en) - col
+        let dl = if first { line } else { line - pl }
+        let dc = if first || line != pl { col } else { col - pc }
+        strs_push(data, int_to_str(dl) + "," + int_to_str(dc) + "," + int_to_str(width) + "," + int_to_str(ints_get(cl, 0)) + "," + int_to_str(ints_get(cl, 1)))
+        first = false
+        pl = line
+        pc = col
+    }
+    "{\"data\":[" + str_join(data, ",") + "]}"
+}
+
+// --- code actions (`fixes.rs`, `code_actions`) -----------------------------------------------------------
+
+// Whether the requested range `a..b` touches the span `s..e`, by the half-open rule of `fixes.rs`.
+fn touches(s: Int, e: Int, a: Int, b: Int) -> Bool {
+    if a == b { return s <= a && a <= e }
+    if s == e { return a <= s && s <= b }
+    a < e && s < b
+}
+
+// A position's line and character of a request's range, or refused where the reference's types would not read it.
+fn range_end_offset(io: IoCap, j: J, text: Str, starts: Ints, pos: Int) -> Int {
+    let line = j_get(j, pos, "line")
+    let ch = j_get(j, pos, "character")
+    if !j_int_in(j, line, 0, 4294967295) || !j_int_in(j, ch, 0, 4294967295) { refuse(io, "a request's parameters this port does not read as the reference does") }
+    offset(text, starts, j_int(j, line), j_int(j, ch))
+}
+
+// `textDocument/codeAction`: a quick fix per fix of each current error the range touches.
+fn code_actions(io: IoCap, s: Server, j: J) -> Str {
+    let p = j_get(j, 0, "params")
+    let td = j_get(j, p, "textDocument")
+    let uri = j_get(j, td, "uri")
+    let rg = j_get(j, p, "range")
+    let ctx = j_get(j, p, "context")
+    if j_kind(j, uri) != 4 || !plain_uri(j_str(j, uri)) || j_kind(j, rg) != 6 || j_kind(j, ctx) != 6 || j_kind(j, j_get(j, ctx, "diagnostics")) != 5 {
+        refuse(io, "a request's parameters this port does not read as the reference does")
+    }
+    let only = j_get(j, ctx, "only")
+    if only >= 0 && j_kind(j, only) != 0 {
+        if j_kind(j, only) != 5 { refuse(io, "a request's parameters this port does not read as the reference does") }
+        let mut wanted = false
+        let mut c = ints_get(j.first, only)
+        while c >= 0 {
+            if j_kind(j, c) != 4 { refuse(io, "a request's parameters this port does not read as the reference does") }
+            if j_str(j, c) == "" || j_str(j, c) == "quickfix" { wanted = true }
+            c = ints_get(j.next, c)
+        }
+        if !wanted { return "[]" }
+    }
+    let path = path_of(j_str(j, uri))
+    let k = if path == "" { 0 - 1 } else { doc_named(io, s, path) }
+    if k < 0 || vec_len(s.facts) == 0 { return "null" }
+    let f = vec_get(s.facts, 0)
+    let text = strs_get(s.texts, 0)
+    let starts = line_starts(text)
+    let a = range_end_offset(io, j, text, starts, j_get(j, rg, "start"))
+    let b = range_end_offset(io, j, text, starts, j_get(j, rg, "end"))
+    let d = fx_diags(f)
+    let bases = fe_bases(f)
+    let held = fx_module_text(f, 0)
+    let hstarts = line_starts(held)
+    let out = strs_new()
+    for i in 0..dg_len(d) {
+        if dg_severity(d, i) != "error" || dg_code(d, i) == "N0204" || file_at(d, i, bases) != 0 { continue }
+        if !touches(ints_get(d.start, i), ints_get(d.end, i), a, b) { continue }
+        let ff = ints_get(d.fix_first, i)
+        let n = ints_get(d.fix_count, i)
+        for q in 0..n {
+            let fs = ints_get(d.fix_start, ff + q)
+            let fe = ints_get(d.fix_end, ff + q)
+            if fs < 0 || fe < fs || fe > str_len(held) || fx_module_at(f, fs) != 0 { continue }
+            if ints_get(s.flags, 0) == 0 { continue }
+            let automatic = strs_get(d.fix_applicability, ff + q) == "automatic"
+            let desc = strs_get(d.fix_description, ff + q)
+            let title = if automatic { "Fix " + dg_code(d, i) + ": " + desc } else {
+                "Review fix " + dg_code(d, i) + ": " + desc + " " + str_from_byte(226) + str_from_byte(128) + str_from_byte(148) + " right only if " + strs_get(d.fix_precondition, ff + q) }
+            let edit = "{\"documentChanges\":[{\"edits\":[{\"newText\":" + json_str(strs_get(d.fix_replacement, ff + q)) + ",\"range\":" + range(text, starts, fs, fe)
+                    + "}],\"textDocument\":{\"uri\":" + json_str(uri_of(strs_get(s.paths, 0))) + ",\"version\":" + int_to_str(ints_get(s.versions, 0)) + "}}]}"
+            strs_push(out, "{\"diagnostics\":[" + diagnostic_json(d, i, held, hstarts) + "],\"edit\":" + edit + (if automatic && n == 1 { ",\"isPreferred\":true" } else { "" })
+                    + ",\"kind\":\"quickfix\",\"title\":" + json_str(title) + "}")
+        }
+    }
+    "[" + str_join(out, ",") + "]"
+}
+
 fn request(io: IoCap, s: Server, j: J, method: Str, id: Str) -> Int {
     if method == "textDocument/hover" { return respond(io, id, hover(io, s, j)) }
     if method == "textDocument/definition" { return respond(io, id, definition(io, s, j)) }
@@ -1455,6 +1629,8 @@ fn request(io: IoCap, s: Server, j: J, method: Str, id: Str) -> Int {
     if method == "textDocument/rename" { return rename(io, s, j, id) }
     if method == "textDocument/documentSymbol" { return respond(io, id, document_symbols(io, s, j)) }
     if method == "workspace/symbol" { return respond(io, id, workspace_symbols(io, s, j)) }
+    if method == "textDocument/codeAction" { return respond(io, id, code_actions(io, s, j)) }
+    if method == "textDocument/semanticTokens/full" { return respond(io, id, semantic_tokens(io, s, j)) }
     if implemented(method) { refuse(io, "`" + method + "`") }
     respond_error(io, id, 0 - 32601, "`" + method + "` is not implemented by nazm lsp")
 }

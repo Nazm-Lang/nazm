@@ -57,7 +57,7 @@ def main():
     )
     doc = {"uri": uri}
     caps = {}
-    if mode in ("nav", "syms"):
+    if mode in ("nav", "syms", "actions"):
         caps = {
             "workspace": {"workspaceEdit": {"documentChanges": True}},
             "textDocument": {"documentSymbol": {"hierarchicalDocumentSymbolSupport": True}},
@@ -81,6 +81,19 @@ def main():
     elif mode == "hoverall":
         for line, character, _ in names(text, 60):
             ask("textDocument/hover", {"textDocument": doc, "position": {"line": line, "character": character}})
+    elif mode == "actions":
+        lines = text.split("\n")
+        # The whole document, then each line's start, middle and end: whatever a fix is attached to.
+        ask("textDocument/codeAction", {"textDocument": doc, "range": {"start": {"line": 0, "character": 0}, "end": {"line": len(lines), "character": 0}}, "context": {"diagnostics": []}})
+        ask("textDocument/codeAction", {"textDocument": doc, "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}, "context": {"diagnostics": [], "only": ["refactor"]}})
+        step = max(1, len(lines) // 40)
+        for line in range(0, len(lines), step):
+            width = utf16(lines[line])
+            for character in sorted({0, width // 2, width}):
+                at = {"line": line, "character": character}
+                ask("textDocument/codeAction", {"textDocument": doc, "range": {"start": at, "end": at}, "context": {"diagnostics": [], "only": ["quickfix"]}})
+    elif mode == "tokens":
+        ask("textDocument/semanticTokens/full", {"textDocument": doc})
     elif mode in ("syms", "symsflat"):
         ask("textDocument/documentSymbol", {"textDocument": doc})
         ask("workspace/symbol", {"query": ""})
