@@ -296,7 +296,6 @@ pub fn reload_command(io: IoCap, c: Cli) -> Int {
     let old = cli_value(c, 0)
     let new = cli_value(c, 1)
     let library = os_env_get("NAZM_LIBRARY")
-    if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
     let a = shape_of(io, old, library)
     let b = shape_of(io, new, library)
     if ints_get(a.status, 0) != 0 {

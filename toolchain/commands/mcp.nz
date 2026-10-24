@@ -549,7 +549,6 @@ fn call_tool(io: IoCap, proc: ProcessCap, sp: SpawnCap, s: Server, id: Str, j: J
         return answer(io, id, run_command(io, proc, sp, s, args, false, "", name), false)
     }
     // The two documentation tools.
-    if !s.has_docs { refuse(io, "the repository this binary was built from (name one with `--docs`)") }
     let names = strs_new()
     let kinds = strs_new()
     let req = ints_new()
@@ -570,7 +569,7 @@ fn call_tool(io: IoCap, proc: ProcessCap, sp: SpawnCap, s: Server, id: Str, j: J
     if why != "" { return fail(io, id, 0 - 32602, why) }
     strs_push(args, "docs")
     strs_push(args, "--json")
-    strs_push(args, "--root=" + s.docs)
+    if s.has_docs { strs_push(args, "--root=" + s.docs) }
     if name == "nazm.docs_index" {
         strs_push(args, "--index")
         let d = j_get(j, argn, "document")

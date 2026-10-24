@@ -886,6 +886,42 @@ on the macOS host, one `host-run` at a time, heap limit 2G.
   per form, the trivial `fn b() -> Int { 1 }` for 1000 iterations on each side — the one place a timing was taken. It was found by a `total_ns` that
   differed, replaced by a function that does not build, and no run of a `@bench` function that builds remains in the scripts.
 
+## Slice 12 — a `nazm` that needs no `NAZM_LIBRARY` (2026-10-24)
+
+**How the Rust `nazm` does it.** The standard library and the core prelude are `include_str!`ed into `nazm-sema` (`stdlib.rs`, `prelude.rs`): no
+installation directory. The runtime is inside the binary too. Only the code generator and (for the Nazm `nazm`) the stages are files, found from the
+executable (`../libexec/nazm/`). `nazm docs` reads the checkout the binary was built from, which an archive does not have.
+
+**Decision: carried, as generated modules of string constants, not a directory beside `bin/`.** A Nazm program cannot ask for its own path (`args`
+excludes the program's name; there is no `os_exe` primitive, and adding one would change the runtime and every backend), so "a directory beside `bin/`"
+is not findable. The library is `compiler/stdlib_data.nz` (`gen-stdlib.py`: `sd_std(name)`, `sd_prelude()`), read by `compiler/load.nz` and
+`toolchain/interp/entry.nz` where `library` is "" (the three reads of `load.nz`: the module, the prelude, the prelude table). `NAZM_LIBRARY`, where set,
+still wins (the comparison scripts and the harness use it; `NAZM_NO_LIBRARY=1` unsets it in `run.sh`, `tools.sh`, `agent.sh`, `inspect.sh`). Every
+command's "set NAZM_LIBRARY" refusal is gone. The documentation corpus is `toolchain/commands/docsdata.nz` (`gen-docsdata.py`, the fourteen documents of
+the manifest, 2.5 MB): `nazm docs` and the MCP docs tools without `--root` answer from it.
+
+**Intended differences.** (1) Without `--root`, `docs` answers from the corpus carried at build time; the Rust one from the live checkout. The two agree
+while the corpus is unchanged (compared); regenerate `docsdata.nz` with the docs. (2) The binary grows by about 15 MB (one `strs_push` per line).
+(3) The stages `nazm-pipeline` and `nzcg` are found by `NAZM_PIPELINE`/`NAZM_NZCG`/`NAZM_LIBEXEC`, else `libexec/nazm` beside the `bin/` of the first `nazm`
+on `PATH` (links followed; `util.nz` `ut_libexec`): INSTALL.txt already says to put `bin/` on `PATH`. A `nazm` run by path and not on `PATH` needs
+`NAZM_LIBEXEC` until a primitive for the executable's path exists (open, slice 15-18). Still refused: `repo` and the MCP `repository_map` / `task_context`
+without `--root`/`--docs` (they map a repository's catalogue and schemas, which an archive does not hold).
+
+**Archive layout** (`scripts/host-archive.sh`, slice 18 to adopt): `bin/nazm`, `libexec/nazm/{nazm-pipeline,nzcg}`, the licence files and `docs/user/`.
+Nothing else: no `library/`.
+
+### Slice 12 — the evidence
+
+`toolchain/commands/tests/archive.sh`: the Nazm `nazm` copied into that layout in a scratch directory with no checkout, run from a scratch work
+directory (a copy of `examples/`) with an empty environment (`env -i`, `PATH` holding the archive's `bin/`), against the Rust `nazm` run the same way;
+standard output, standard error, status byte for byte; macOS host, one `host-run` at a time, heap 2G.
+
+| part | agree | differ | refused |
+| --- | --- | --- | --- |
+| `check`, `check --json`, `interface`, `doc` of the 61 `.nz` files of `examples/`, `run` of the 6 top-level programs among them | 250 | 0 | 0 |
+| `docs --index --json`, `docs --index`, `docs --section` of four ids, no `--root` | 6 | 0 | 0 |
+| `tools.sh` with `NAZM_NO_LIBRARY=1`: `args` / `bench` / `shape` (as slice 10) | 88 / 41 / 21 | 0 | 34 / 3 / 0 |
+
 ## Slice 13 — the harness remainder in Nazm (design, 2026-10-20)
 
 R7's 6.2 and 6.3: the contained runner, `host-run`, the mutation campaign runner, `bench` and

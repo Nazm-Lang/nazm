@@ -313,7 +313,6 @@ pub fn check_command(io: IoCap, c: Cli) -> Int {
     let features = cli_values(c, 8)
     let deny = cli_present(c, 10)
     let library = os_env_get("NAZM_LIBRARY")
-    if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
     let prefix = fe_prefix(io, file)
 
     // `prepare`: a directory is a package or nothing; a library package — no `main` — is checked as

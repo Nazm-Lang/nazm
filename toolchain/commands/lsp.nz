@@ -1519,7 +1519,6 @@ pub fn lsp_command(io: IoCap, c: Cli) -> Int {
     let given = cli_value(c, 0)
     let root = if cli_present(c, 0) { fe_prefix(io, given) + given } else { "" }
     let library = os_env_get("NAZM_LIBRARY")
-    if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
     let h = os_stdin()
     // `initialize_start`: the first message must be `initialize`.
     let first = read_message(io, h)

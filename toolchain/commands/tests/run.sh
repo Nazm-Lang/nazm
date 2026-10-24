@@ -111,7 +111,9 @@ fi
 export NAZM_TEST_DRIVER="$ref"
 mkdir -p "$work/bin" "$work/cache"
 # The checker recurses with the program's nesting, as the reference's does on its 24 MiB stack.
-export NAZM_LIBRARY="$root/library" NAZM_CACHE_DIR="$work/cache"
+# NAZM_NO_LIBRARY=1 leaves NAZM_LIBRARY unset: the Nazm `nazm` then reads the library it carries (R8 slice 12).
+if [ -n "${NAZM_NO_LIBRARY:-}" ]; then unset NAZM_LIBRARY; else export NAZM_LIBRARY="$root/library"; fi
+export NAZM_CACHE_DIR="$work/cache"
 if [ -n "${NAZM_PORT:-}" ]; then
   # A port already built from this checkout's toolchain/commands/nazm.nz.
   port=$NAZM_PORT

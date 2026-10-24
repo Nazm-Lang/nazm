@@ -466,7 +466,7 @@ fn bd_stage(io: IoCap, o: Opts, variable: Str, name: Str) -> Str {
         }
         return named
     }
-    let dir = os_env_get("NAZM_LIBEXEC")
+    let dir = ut_libexec(io)
     if dir == "" {
         bd_fail(io, o, "nazm: `nazm build` runs " + name + ": set `" + variable + "`, or `NAZM_LIBEXEC` to the directory holding it", 4)
     }
@@ -700,7 +700,6 @@ fn bd_how(root: Root) -> Str {
 
 fn bd_front(io: IoCap, o: Opts, packages: Packages, target: Str, output: Str) -> Front {
     let library = os_env_get("NAZM_LIBRARY")
-    if library == "" { bd_refuse(io, o, "the standard library's directory (set NAZM_LIBRARY)") }
     let file = o.file
     let prefix = fe_prefix(io, file)
     let abs = prefix + file

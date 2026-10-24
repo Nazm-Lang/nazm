@@ -12,6 +12,7 @@ use "heap.nz"
 use "diag.nz"
 use "sched.nz"
 use "num.nz"
+use "../../compiler/stdlib_data.nz"
 use "@std/hash"
 use "@std/hashmap"
 
@@ -58,6 +59,13 @@ fn display(key: Str, root_key: Str, root: Str) -> Str {
 /// library module's from `std`, any other read from its file.
 fn source(io: IoCap, key: Str, root_key: Str, root: Str, std: Str, over: Str, has_over: Bool) -> Str {
     if has_over && key == root_key { return over }
+    if std == "" && str_len(key) > 0 && str_byte(key, 0) == 64 {
+        // No library directory named: the library this program carries (`compiler/stdlib_data.nz`).
+        let name = str_slice(key, 1, str_len(key))
+        if name == "core/prelude" { return sd_prelude() }
+        if str_len(name) > 4 && str_slice(name, 0, 4) == "std/" { return sd_std(str_slice(name, 4, str_len(name))) }
+        return ""
+    }
     let path = if str_len(key) > 0 && str_byte(key, 0) == 64 {
         std + "/" + str_slice(key, 1, str_len(key)) + ".nz"
     } else {

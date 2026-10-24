@@ -69,7 +69,8 @@ if [ ${#files[@]} -eq 0 ]; then
     )
 fi
 
-export NAZM_LIBRARY="$ROOT/library"
+# NAZM_NO_LIBRARY=1 leaves NAZM_LIBRARY unset: the Nazm `nazm` then reads the library it carries (R8 slice 12).
+if [ -n "${NAZM_NO_LIBRARY:-}" ]; then unset NAZM_LIBRARY; else export NAZM_LIBRARY="$ROOT/library"; fi
 cd "$ROOT" || exit 2
 
 agree=0
