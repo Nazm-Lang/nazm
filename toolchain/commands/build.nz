@@ -421,6 +421,7 @@ pub fn bd_prepare(io: IoCap, o: Opts, entry_out: Strs) -> Packages {
         packages = pk_context(pk_root_path(root), io)
         if pk_packages_state(packages) != 1 { bd_refuse(io, o, "a package that does not resolve here: " + pk_packages_why(packages)) }
     }
+    if packaged && pk_heap(packages, pk_root_package(packages)) >= 0 { bd_refuse(io, o, "a manifest's `heap-limit` (the build's heap limit is its own `--heap-limit`)") }
     if o.locked && !packaged {
         eprint("nazm: `--locked` holds a package build to its lockfile, and `" + named + "` is not in a package" + nl())
         exit_with(5)
