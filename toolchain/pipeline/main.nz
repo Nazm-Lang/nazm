@@ -77,6 +77,7 @@ use "objcache.nz"
 use "rtext.nz"
 use "mir.nz"
 use "cost.nz"
+use "expand.nz"
 use "bounds.nz"
 use "vectorize.nz"
 use "llvm.nz"
@@ -193,6 +194,16 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
             return 1
         },
     }
+    // Polymorphic recursion (`N0357`): its diagnostics, rendered, on standard error and status 3.
+    let expanding = expansions(c)
+    if strs_len(expanding) > 0 {
+        let ms = module_spans(c)
+        for e in expanding {
+            let parts = text_split(e, "\t")
+            eprint(render_expansion(ms, strs_get(parts, 0), strs_get(parts, 1)))
+        }
+        return 3
+    }
     // A native build's rewrite of Core IR (N66), as `nazm build` makes it before MIR.
     if mode == "build" { vectorize(c) }
     let p = match lower_program(c) {
@@ -278,6 +289,18 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
 
 /// What a position needs naming: each module's source and path, each function's span and name span (`mir-spans`, `cost`).
 fn spans_of(c: Cir, p: MirProgram) -> MirSpans {
+    let ms = module_spans(c)
+    let sources = ms.sources
+    let fn_ats = strs_new()
+    let fn_names = strs_new()
+    for f in p.fns {
+        strs_push(fn_ats, fn_span_of(c, f))
+        strs_push(fn_names, name_at_of(c, sources, f))
+    }
+    MirSpans(fn_ats: fn_ats, fn_names: fn_names, sources: sources, starts: ms.starts, paths: ms.paths)
+}
+
+fn module_spans(c: Cir) -> MirSpans {
     let sources: HashMap[Str, Str] = hashmap_new()
     let starts: HashMap[Str, Ints] = hashmap_new()
     let paths: HashMap[Str, Str] = hashmap_new()
@@ -288,13 +311,7 @@ fn spans_of(c: Cir, p: MirProgram) -> MirSpans {
         hashmap_set(starts, sval(c, m, "name"), text_line_starts(sval(c, m, "source")))
         hashmap_set(paths, sval(c, m, "name"), sval(c, m, "path"))
     }
-    let fn_ats = strs_new()
-    let fn_names = strs_new()
-    for f in p.fns {
-        strs_push(fn_ats, fn_span_of(c, f))
-        strs_push(fn_names, name_at_of(c, sources, f))
-    }
-    MirSpans(fn_ats: fn_ats, fn_names: fn_names, sources: sources, starts: starts, paths: paths)
+    MirSpans(fn_ats: strs_new(), fn_names: strs_new(), sources: sources, starts: starts, paths: paths)
 }
 
 /// What the LLVM backend asks of `build`: its text rather than the code generator's, debug
