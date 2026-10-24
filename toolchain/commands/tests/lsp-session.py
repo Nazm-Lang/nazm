@@ -37,6 +37,84 @@ def names(text, wanted):
     return [found[int(i * step)] for i in range(wanted)]
 
 
+def multi_session(path, named, text, uri, frame):
+    """Two documents open at once: the file and one it imports (or a sibling): requests of both, an edit of the second, its close."""
+    import re as _re
+    here = os.path.dirname(path)
+    others = []
+    for m in _re.finditer(r'use\s+"([^"]+)"', text):
+        cand = os.path.normpath(os.path.join(here, m.group(1)))
+        if cand != path and os.path.isfile(cand) and cand not in others:
+            others.append(cand)
+    if not others:
+        siblings = sorted(f for f in os.listdir(here) if f.endswith(".nz") and os.path.join(here, f) != path)
+        others = [os.path.join(here, f) for f in siblings[:1]]
+    if not others:
+        sys.exit(1)
+    other = others[0]
+    try:
+        with open(other, "rb") as f:
+            other_text = f.read().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        sys.exit(1)
+    old = os.environ.get("LSP_AS")
+    other_named = other
+    if old:
+        a, b = old.split("=", 1)
+        if other.startswith(a):
+            other_named = b + other[len(a):]
+
+    def to_uri(p):
+        return "file://" + "".join(c if (c.isascii() and (c.isalnum() or c in "-._~/")) else "".join("%%%02X" % b for b in c.encode("utf-8")) for c in p)
+
+    docs = [({"uri": uri}, text), ({"uri": to_uri(other_named)}, other_text)]
+    out = [
+        frame({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {
+            "workspace": {"workspaceEdit": {"documentChanges": True}},
+            "textDocument": {"documentSymbol": {"hierarchicalDocumentSymbolSupport": True}}}}}),
+        frame({"jsonrpc": "2.0", "method": "initialized", "params": {}}),
+    ]
+    n = [2]
+
+    def ask(method, params):
+        out.append(frame({"jsonrpc": "2.0", "id": n[0], "method": method, "params": params}))
+        n[0] += 1
+
+    def open_doc(d, t, version):
+        out.append(frame({"jsonrpc": "2.0", "method": "textDocument/didOpen",
+                          "params": {"textDocument": {"uri": d["uri"], "languageId": "nazm", "version": version, "text": t}}}))
+
+    def probe(first_count):
+        for d, t in docs:
+            ask("textDocument/documentSymbol", {"textDocument": d})
+            ask("textDocument/semanticTokens/full", {"textDocument": d})
+            for line, character, word in names(t, first_count):
+                at = {"textDocument": d, "position": {"line": line, "character": character}}
+                ask("textDocument/hover", at)
+                ask("textDocument/definition", at)
+                ask("textDocument/references", dict(at, context={"includeDeclaration": True}))
+                ask("textDocument/prepareCallHierarchy", at)
+                ask("textDocument/signatureHelp", at)
+        ask("workspace/symbol", {"query": ""})
+        ask("workspace/symbol", {"query": "a"})
+
+    open_doc(*docs[0], 1)
+    open_doc(*docs[1], 1)
+    probe(12)
+    # The second document edited whole: every open document is analysed again and published again.
+    docs[1] = (docs[1][0], docs[1][1] + "\n// edited\n")
+    out.append(frame({"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
+        "textDocument": {"uri": docs[1][0]["uri"], "version": 2}, "contentChanges": [{"text": docs[1][1]}]}}))
+    probe(6)
+    out.append(frame({"jsonrpc": "2.0", "method": "textDocument/didClose", "params": {"textDocument": docs[1][0]}}))
+    docs.pop()
+    probe(6)
+    out.append(frame({"jsonrpc": "2.0", "method": "textDocument/didClose", "params": {"textDocument": docs[0][0]}}))
+    out.append(frame({"jsonrpc": "2.0", "id": n[0], "method": "shutdown"}))
+    out.append(frame({"jsonrpc": "2.0", "method": "exit"}))
+    sys.stdout.buffer.write(b"".join(out))
+
+
 def main():
     path = sys.argv[1]
     mode = sys.argv[2] if sys.argv[2:] else ""
@@ -55,6 +133,9 @@ def main():
         c if (c.isascii() and (c.isalnum() or c in "-._~/")) else "".join("%%%02X" % b for b in c.encode("utf-8"))
         for c in named
     )
+    if mode == "multi":
+        multi_session(path, named, text, uri, frame)
+        return
     doc = {"uri": uri}
     caps = {}
     if mode in ("nav", "syms", "actions"):

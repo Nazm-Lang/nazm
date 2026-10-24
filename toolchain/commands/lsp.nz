@@ -88,6 +88,9 @@ struct Server {
     flags: Ints,
 }
 
+// The open document the request being handled is about (set where its document is looked up: `doc_named`).
+fn cur(s: Server) -> Int { ints_get(s.flags, 3) }
+
 fn doc_index(s: Server, path: Str) -> Int {
     for i in 0..strs_len(s.paths) {
         if strs_get(s.paths, i) == path { return i }
@@ -99,7 +102,10 @@ fn doc_index(s: Server, path: Str) -> Int {
 // reference keys documents by the file, this port by the path as written.
 fn doc_named(io: IoCap, s: Server, path: Str) -> Int {
     let k = doc_index(s, path)
-    if k >= 0 { return k }
+    if k >= 0 {
+        ints_set(s.flags, 3, k)
+        return k
+    }
     let canon = fe_canonical(io, path)
     for i in 0..strs_len(s.paths) {
         let other = fe_canonical(io, strs_get(s.paths, i))
@@ -397,38 +403,53 @@ fn refresh(io: IoCap, s: Server) -> Int {
     // The service's generation: bumped by every refresh (`LanguageService::refresh`).
     ints_set(s.flags, 2, ints_get(s.flags, 2) + 1)
     while vec_len(s.facts) > 0 { vec_pop(s.facts) }
-    if strs_len(s.paths) > 1 { refuse(io, "more than one open document (the reference publishes them in a hash map's order)") }
-    if strs_len(s.paths) == 0 { return 0 }
-    let path = strs_get(s.paths, 0)
-    let text = strs_get(s.texts, 0)
-    // The document's text stands for its file, saved or not (`fx_check_over`); the compilation is
-    // checked as a module, so the program's missing `main` (`N0204`) is not among what is published.
-    let over_paths = strs_new()
-    let over_texts = strs_new()
-    strs_push(over_paths, path)
-    strs_push(over_texts, text)
-    let f = fx_check_over(path, strs_get(s.root, 0), over_paths, over_texts, strs_get(s.library, 0), fe_host_os(), fe_host_arch(), io)
-    if fx_refusal(f) != "" { refuse(io, "a source root the reference refuses") }
-    if fe_load_failed(f) { refuse(io, "a compilation that does not load") }
-    if !fx_carried(f) { refuse(io, fx_why(f)) }
-    let d = fx_diags(f)
-    let bases = fe_bases(f)
-    // Positions are in the text the compilation holds for the file: the loader ends it with a line
-    // break where the file does not, and a diagnostic at its end is after that break.
-    let held = fx_module_text(f, 0)
-    let starts = line_starts(held)
-    let out = strs_new()
-    for i in 0..dg_len(d) {
-        if dg_severity(d, i) == "error" && dg_code(d, i) != "N0204" && file_at(d, i, bases) == 0 { strs_push(out, diagnostic_json(d, i, held, starts)) }
+    let n = strs_len(s.paths)
+    // Every open document is analysed against the open buffers (`Overlaid`): each document's text stands for its file, saved or not
+    // (`fx_check_over`); a compilation is checked as a module, so the program's missing `main` (`N0204`) is not among what is published.
+    for k in 0..n {
+        let f = fx_check_over(strs_get(s.paths, k), strs_get(s.root, 0), s.paths, s.texts, strs_get(s.library, 0), fe_host_os(), fe_host_arch(), io)
+        if fx_refusal(f) != "" { refuse(io, "a source root the reference refuses") }
+        if fe_load_failed(f) { refuse(io, "a compilation that does not load") }
+        if !fx_carried(f) { refuse(io, fx_why(f)) }
+        vec_push(s.facts, f)
     }
-    // The checker's warnings are kept beside its errors (`Ck.w`) and published with them, as the service chains `nazm_core::warnings` after
-    // the errors, after a syntax error too.
-    let w = fx_checker(f).w
-    for i in 0..dg_len(w) {
-        if file_at(w, i, bases) == 0 { strs_push(out, diagnostic_json(w, i, held, starts)) }
+    // Published in the order of the documents' identity paths (the service keeps them in a `BTreeMap`).
+    let order = ints_new()
+    let keys = strs_new()
+    for k in 0..n { strs_push(keys, identity_of(io, strs_get(s.paths, k))) }
+    for k in 0..n {
+        let mut at = ints_len(order)
+        while at > 0 && fe_path_before(strs_get(keys, k), strs_get(keys, ints_get(order, at - 1))) { at -= 1 }
+        ints_push(order, 0)
+        let mut q = ints_len(order) - 1
+        while q > at {
+            ints_set(order, q, ints_get(order, q - 1))
+            q -= 1
+        }
+        ints_set(order, at, k)
     }
-    vec_push(s.facts, f)
-    publish(io, path, int_to_str(ints_get(s.versions, 0)), out)
+    for r in 0..n {
+        let k = ints_get(order, r)
+        let f = vec_get(s.facts, k)
+        let d = fx_diags(f)
+        let bases = fe_bases(f)
+        // Positions are in the text the compilation holds for the file: the loader ends it with a line
+        // break where the file does not, and a diagnostic at its end is after that break.
+        let held = fx_module_text(f, 0)
+        let starts = line_starts(held)
+        let out = strs_new()
+        for i in 0..dg_len(d) {
+            if dg_severity(d, i) == "error" && dg_code(d, i) != "N0204" && file_at(d, i, bases) == 0 { strs_push(out, diagnostic_json(d, i, held, starts)) }
+        }
+        // The checker's warnings are kept beside its errors (`Ck.w`) and published with them, as the service chains `nazm_core::warnings` after
+        // the errors, after a syntax error too.
+        let w = fx_checker(f).w
+        for i in 0..dg_len(w) {
+            if file_at(w, i, bases) == 0 { strs_push(out, diagnostic_json(w, i, held, starts)) }
+        }
+        publish(io, strs_get(s.paths, k), int_to_str(ints_get(s.versions, k)), out)
+    }
+    0
 }
 
 // --- the document's names ----------------------------------------------------------------------------
@@ -482,7 +503,7 @@ fn locate(io: IoCap, s: Server, j: J) -> Ints {
     }
     let path = path_of(j_str(j, uri))
     let k = if path == "" { 0 - 1 } else { doc_named(io, s, path) }
-    if k < 0 || vec_len(s.facts) == 0 {
+    if k < 0 || cur(s) >= vec_len(s.facts) {
         ints_push(out, 0 - 1)
         ints_push(out, 0 - 2)
         return out
@@ -566,8 +587,8 @@ fn hover(io: IoCap, s: Server, j: J) -> Str {
     let st = ints_get(span, 0)
     if st < 0 { return "null" }
     let en = ints_get(span, 1)
-    let text = strs_get(s.texts, 0)
-    let f = vec_get(s.facts, 0)
+    let text = strs_get(s.texts, cur(s))
+    let f = vec_get(s.facts, cur(s))
     let c = fx_checker(f)
     let name = str_slice(text, st, en)
     let site = ck_site_at(c, st, en)
@@ -645,7 +666,7 @@ fn definition(io: IoCap, s: Server, j: J) -> Str {
     let span = locate(io, s, j)
     let st = ints_get(span, 0)
     if st < 0 { return "null" }
-    let f = vec_get(s.facts, 0)
+    let f = vec_get(s.facts, cur(s))
     let e = entity_at(f, st, ints_get(span, 1))
     if e < 0 { return "null" }
     let ds = fx_ref_decl_start(f, e)
@@ -663,6 +684,12 @@ fn loc_less(f: Facts, m1: Int, s1: Int, e1: Int, m2: Int, s2: Int, e2: Int) -> B
     e1 < e2
 }
 
+// What a file of a compilation is known by (`FileKey`): a path's identity, or the name of a module the toolchain owns.
+fn module_identity(io: IoCap, name: Str) -> Str {
+    if fe_starts(name, "@") { return name }
+    identity_of(io, pk_normalise(name))
+}
+
 fn references(io: IoCap, s: Server, j: J) -> Str {
     let p = j_get(j, 0, "params")
     let inc = j_get(j, j_get(j, p, "context"), "includeDeclaration")
@@ -670,49 +697,74 @@ fn references(io: IoCap, s: Server, j: J) -> Str {
     let span = locate(io, s, j)
     let st = ints_get(span, 0)
     if st < 0 { return "null" }
-    let f = vec_get(s.facts, 0)
+    let own = cur(s)
+    let f = vec_get(s.facts, own)
     let e = entity_at(f, st, ints_get(span, 1))
     if e < 0 { return "null" }
-    // The uses in the files an editor can open, and the declaration where asked for and there is one.
-    let ms = ints_new()
-    let ss = ints_new()
-    let es = ints_new()
+    // The anchor: where the entity is declared (or, with no declaration in source, where it was asked about), as a place in a file.
     let ds = fx_ref_decl_start(f, e)
-    for k in 0..fx_ref_use_count(f, e) {
-        let a = fx_ref_use_start(f, e, k)
-        let m = fx_module_at(f, a)
-        if module_file(f, m) {
-            ints_push(ms, m)
-            ints_push(ss, a - fx_module_base(f, m))
-            ints_push(es, fx_ref_use_end(f, e, k) - fx_module_base(f, m))
+    let anchor_s = if ds >= 0 { ds } else { st }
+    let anchor_e = if ds >= 0 { fx_ref_decl_end(f, e) } else { ints_get(span, 1) }
+    let am = fx_module_at(f, anchor_s)
+    let anchor_name = module_identity(io, fx_module_name(f, am))
+    let anchor_text = fx_module_text(f, am)
+    let anchor_ls = anchor_s - fx_module_base(f, am)
+    let anchor_le = anchor_e - fx_module_base(f, am)
+    // The uses, gathered from every current compilation that holds the declaring file as it was analysed, each reading its own index.
+    let rows = strs_new()
+    let keys = strs_new()
+    let seen = strs_new()
+    for dk in 0..vec_len(s.facts) {
+        let g = vec_get(s.facts, dk)
+        let mut gm = 0 - 1
+        for m in 0..fx_modules(g) {
+            if gm < 0 && module_identity(io, fx_module_name(g, m)) == anchor_name && fx_module_text(g, m) == anchor_text { gm = m }
+        }
+        if gm < 0 { continue }
+        let ge = entity_at(g, fx_module_base(g, gm) + anchor_ls, fx_module_base(g, gm) + anchor_le)
+        if ge < 0 { continue }
+        for k in 0..fx_ref_use_count(g, ge) {
+            let a = fx_ref_use_start(g, ge, k)
+            let m = fx_module_at(g, a)
+            if !module_file(g, m) { continue }
+            let ls = a - fx_module_base(g, m)
+            let le = fx_ref_use_end(g, ge, k) - fx_module_base(g, m)
+            let path = pk_normalise(fx_module_name(g, m))
+            let id = identity_of(io, path) + str_from_byte(0) + pad(ls) + pad(le)
+            let mut dup = false
+            for z in 0..strs_len(seen) {
+                if strs_get(seen, z) == id { dup = true }
+            }
+            if dup { continue }
+            strs_push(seen, id)
+            strs_push(keys, path_key(path) + str_from_byte(0) + pad(ls) + pad(le))
+            strs_push(rows, loc_json(io, g, m, ls, le))
         }
     }
+    // The declaration, where asked for and there is one in a file an editor can open.
     if j_kind(j, inc) == 1 && ds >= 0 {
         let m = fx_module_at(f, ds)
         if module_file(f, m) {
-            ints_push(ms, m)
-            ints_push(ss, ds - fx_module_base(f, m))
-            ints_push(es, fx_ref_decl_end(f, e) - fx_module_base(f, m))
+            let ls = ds - fx_module_base(f, m)
+            let le = fx_ref_decl_end(f, e) - fx_module_base(f, m)
+            strs_push(keys, path_key(pk_normalise(fx_module_name(f, m))) + str_from_byte(0) + pad(ls) + pad(le))
+            strs_push(rows, loc_json(io, f, m, ls, le))
         }
     }
     let order = ints_new()
-    for i in 0..ints_len(ms) {
-        let mut pos = 0
-        while pos < ints_len(order) && !loc_less(f, ints_get(ms, i), ints_get(ss, i), ints_get(es, i), ints_get(ms, ints_get(order, pos)),
-                ints_get(ss, ints_get(order, pos)), ints_get(es, ints_get(order, pos))) { pos += 1 }
+    for i in 0..strs_len(keys) {
+        let mut at = ints_len(order)
+        while at > 0 && fe_str_less(strs_get(keys, i), strs_get(keys, ints_get(order, at - 1))) { at -= 1 }
         ints_push(order, 0)
         let mut k = ints_len(order) - 1
-        while k > pos {
+        while k > at {
             ints_set(order, k, ints_get(order, k - 1))
             k -= 1
         }
-        ints_set(order, pos, i)
+        ints_set(order, at, i)
     }
     let out = strs_new()
-    for r in 0..ints_len(order) {
-        let i = ints_get(order, r)
-        strs_push(out, loc_json(io, f, ints_get(ms, i), ints_get(ss, i), ints_get(es, i)))
-    }
+    for r in 0..ints_len(order) { strs_push(out, strs_get(rows, ints_get(order, r))) }
     "[" + str_join(out, ",") + "]"
 }
 
@@ -769,7 +821,7 @@ fn renameable(io: IoCap, s: Server, f: Facts, st: Int, en: Int, out: Strs) -> St
     if fx_module_name(f, m) == "@core/prelude.nz" { return toolchain }
     if exported(f, kind, ds) {
         // Within a declared workspace every module that can name it is searched: not carried.
-        let root = pk_decide(strs_get(s.paths, 0), io)
+        let root = pk_decide(strs_get(s.paths, cur(s)), io)
         if strs_get(s.root, 0) != "" || pk_root_how(root) != 0 { refuse(io, "a rename of an exported name within a declared workspace") }
         return "this is exported, and a module no open program loads may use it, so every occurrence cannot be known; declare a workspace (a `nazm.root` marker or `--source-root`) and every module under it is searched"
     }
@@ -802,10 +854,10 @@ fn prepare_rename(io: IoCap, s: Server, j: J) -> Str {
     let span = locate(io, s, j)
     let st = ints_get(span, 0)
     if st < 0 { return "null" }
-    let f = vec_get(s.facts, 0)
+    let f = vec_get(s.facts, cur(s))
     let info = strs_new()
     if renameable(io, s, f, st, ints_get(span, 1), info) != "" { return "null" }
-    let text = strs_get(s.texts, 0)
+    let text = strs_get(s.texts, cur(s))
     "{\"placeholder\":" + json_str(strs_get(info, 4)) + ",\"range\":" + range(text, line_starts(text), st, ints_get(span, 1)) + "}"
 }
 
@@ -944,7 +996,7 @@ fn rename(io: IoCap, s: Server, j: J, id: Str) -> Int {
     let st = ints_get(span, 0)
     if st < 0 && ints_get(span, 1) == 0 - 2 { return respond_error(io, id, 0 - 32803, "the document is not open") }
     if st < 0 { return failure(io, id, "nothing a program declared is named here") }
-    let f = vec_get(s.facts, 0)
+    let f = vec_get(s.facts, cur(s))
     let info = strs_new()
     let why = renameable(io, s, f, st, ints_get(span, 1), info)
     if why != "" { return failure(io, id, why) }
@@ -999,11 +1051,9 @@ fn rename(io: IoCap, s: Server, j: J, id: Str) -> Int {
     }
     strs_push(parts, str_slice(text, at, str_len(text)))
     let edited = str_join(parts, "")
-    let over_paths = strs_new()
     let over_texts = strs_new()
-    strs_push(over_paths, strs_get(s.paths, 0))
-    strs_push(over_texts, edited)
-    let g = fx_check_over(strs_get(s.paths, 0), strs_get(s.root, 0), over_paths, over_texts, strs_get(s.library, 0), fe_host_os(), fe_host_arch(), io)
+    for i in 0..strs_len(s.paths) { strs_push(over_texts, if i == cur(s) { edited } else { strs_get(s.texts, i) }) }
+    let g = fx_check_over(strs_get(s.paths, cur(s)), strs_get(s.root, 0), s.paths, over_texts, strs_get(s.library, 0), fe_host_os(), fe_host_arch(), io)
     if fx_refusal(g) != "" { refuse(io, "a source root the reference refuses") }
     if fe_load_failed(g) { refuse(io, "a candidate program that does not load") }
     if !fx_carried(g) { refuse(io, fx_why(g)) }
@@ -1014,7 +1064,7 @@ fn rename(io: IoCap, s: Server, j: J, id: Str) -> Int {
         return failure(io, id, "the renamed program would mean something else: a use would refer to a different definition")
     }
     // `plan_is_current`: the text the plan was made from is the document's.
-    if strs_get(s.texts, 0) != text { return respond_error(io, id, 0 - 32803, "the program changed while the rename was being planned") }
+    if strs_get(s.texts, cur(s)) != text { return respond_error(io, id, 0 - 32803, "the program changed while the rename was being planned") }
     if ints_get(s.flags, 0) == 0 {
         return respond_error(io, id, 0 - 32803, "this client does not accept versioned edits, so a rename could be applied to a" + spaces(14)
                 + "document that has since changed")
@@ -1024,8 +1074,8 @@ fn rename(io: IoCap, s: Server, j: J, id: Str) -> Int {
     for k in 0..ints_len(e_start) {
         strs_push(edits, "{\"newText\":" + json_str(j_str(j, name)) + ",\"range\":" + range(text, starts_of, ints_get(e_start, k), ints_get(e_end, k)) + "}")
     }
-    respond(io, id, "{\"documentChanges\":[{\"edits\":[" + str_join(edits, ",") + "],\"textDocument\":{\"uri\":" + json_str(uri_of(strs_get(s.paths, 0)))
-            + ",\"version\":" + int_to_str(ints_get(s.versions, 0)) + "}}]}")
+    respond(io, id, "{\"documentChanges\":[{\"edits\":[" + str_join(edits, ",") + "],\"textDocument\":{\"uri\":" + json_str(uri_of(strs_get(s.paths, cur(s))))
+            + ",\"version\":" + int_to_str(ints_get(s.versions, cur(s))) + "}}]}")
 }
 
 fn spaces(n: Int) -> Str {
@@ -1234,8 +1284,8 @@ fn document_symbols(io: IoCap, s: Server, j: J) -> Str {
     if j_kind(j, uri) != 4 || !plain_uri(j_str(j, uri)) { refuse(io, "a request's parameters this port does not read as the reference does") }
     let path = path_of(j_str(j, uri))
     let k = if path == "" { 0 - 1 } else { doc_named(io, s, path) }
-    if k < 0 || vec_len(s.facts) == 0 { return "null" }
-    let f = vec_get(s.facts, 0)
+    if k < 0 || cur(s) >= vec_len(s.facts) { return "null" }
+    let f = vec_get(s.facts, cur(s))
     let y = symbols_of(io, f, 0, true)
     let text = fx_module_text(f, 0)
     let starts = line_starts(text)
@@ -1255,34 +1305,43 @@ fn workspace_symbols(io: IoCap, s: Server, j: J) -> Str {
     let p = j_get(j, 0, "params")
     let q = j_get(j, p, "query")
     if j_kind(j, q) != 4 { refuse(io, "a `workspace/symbol` request without a query") }
-    if vec_len(s.facts) == 0 { return "[]" }
-    let f = vec_get(s.facts, 0)
     let query = j_str(j, q)
-    // One row per symbol: a sortable key, then the response object.
+    // One row per symbol: a sortable key, then the response object. A declaration the documents' compilations share is listed once.
     let rows = strs_new()
-    for m in 0..fx_modules(f) {
-        if !module_file(f, m) { continue }
-        let y = symbols_of(io, f, m, false)
-        let text = fx_module_text(f, m)
-        let starts = line_starts(text)
-        for i in 0..ints_len(y.kind) {
-            let name = strs_get(y.name, i)
-            if !ut_contains_text(name, query) { continue }
-            let par = ints_get(y.parent, i)
-            let mut container = ""
-            if par >= 0 {
-                container = strs_get(y.name, par)
-                // A payload field is in its variant, which is in its enum.
-                if ints_get(y.kind, i) == 6 { container = strs_get(y.name, ints_get(y.parent, par)) + "." + strs_get(y.name, par) }
+    let seen = strs_new()
+    for dk in 0..vec_len(s.facts) {
+        let f = vec_get(s.facts, dk)
+        for m in 0..fx_modules(f) {
+            if !module_file(f, m) { continue }
+            let y = symbols_of(io, f, m, false)
+            let text = fx_module_text(f, m)
+            let starts = line_starts(text)
+            for i in 0..ints_len(y.kind) {
+                let id = path_key(pk_normalise(fx_module_name(f, m))) + str_from_byte(0) + pad(ints_get(y.ns, i)) + pad(ints_get(y.ne, i)) + int_to_str(ints_get(y.kind, i))
+                let mut dup = false
+                for z in 0..strs_len(seen) {
+                    if strs_get(seen, z) == id { dup = true }
+                }
+                if dup { continue }
+                strs_push(seen, id)
+                let name = strs_get(y.name, i)
+                if !ut_contains_text(name, query) { continue }
+                let par = ints_get(y.parent, i)
+                let mut container = ""
+                if par >= 0 {
+                    container = strs_get(y.name, par)
+                    // A payload field is in its variant, which is in its enum.
+                    if ints_get(y.kind, i) == 6 { container = strs_get(y.name, ints_get(y.parent, par)) + "." + strs_get(y.name, par) }
+                }
+                let mut parts = strs_new()
+                if par >= 0 { strs_push(parts, "\"containerName\":" + json_str(container)) }
+                strs_push(parts, "\"kind\":" + int_to_str(lsp_kind(ints_get(y.kind, i))))
+                strs_push(parts, "\"location\":" + loc_json(io, f, m, ints_get(y.ns, i), ints_get(y.ne, i)))
+                strs_push(parts, "\"name\":" + json_str(name))
+                // (name, path, where the name is, kind), in that order, each a fixed-width field.
+                let key = name + str_from_byte(0) + path_key(pk_normalise(fx_module_name(f, m))) + str_from_byte(0) + pad(ints_get(y.ns, i)) + int_to_str(ints_get(y.kind, i))
+                strs_push(rows, key + str_from_byte(1) + "{" + str_join(parts, ",") + "}")
             }
-            let mut parts = strs_new()
-            if par >= 0 { strs_push(parts, "\"containerName\":" + json_str(container)) }
-            strs_push(parts, "\"kind\":" + int_to_str(lsp_kind(ints_get(y.kind, i))))
-            strs_push(parts, "\"location\":" + loc_json(io, f, m, ints_get(y.ns, i), ints_get(y.ne, i)))
-            strs_push(parts, "\"name\":" + json_str(name))
-            // (name, path, where the name is, kind), in that order, each a fixed-width field.
-            let key = name + str_from_byte(0) + path_key(pk_normalise(fx_module_name(f, m))) + str_from_byte(0) + pad(ints_get(y.ns, i)) + int_to_str(ints_get(y.kind, i))
-            strs_push(rows, key + str_from_byte(1) + "{" + str_join(parts, ",") + "}")
         }
     }
     let sorted = sort_strs(rows)
@@ -1516,8 +1575,8 @@ fn semantic_tokens(io: IoCap, s: Server, j: J) -> Str {
     if j_kind(j, uri) != 4 || !plain_uri(j_str(j, uri)) { refuse(io, "a request's parameters this port does not read as the reference does") }
     let path = path_of(j_str(j, uri))
     let k = if path == "" { 0 - 1 } else { doc_named(io, s, path) }
-    if k < 0 || vec_len(s.facts) == 0 { return "null" }
-    let f = vec_get(s.facts, 0)
+    if k < 0 || cur(s) >= vec_len(s.facts) { return "null" }
+    let f = vec_get(s.facts, cur(s))
     let text = fx_module_text(f, 0)
     let starts = line_starts(text)
     let kinds = ints_new()
@@ -1589,9 +1648,9 @@ fn code_actions(io: IoCap, s: Server, j: J) -> Str {
     }
     let path = path_of(j_str(j, uri))
     let k = if path == "" { 0 - 1 } else { doc_named(io, s, path) }
-    if k < 0 || vec_len(s.facts) == 0 { return "null" }
-    let f = vec_get(s.facts, 0)
-    let text = strs_get(s.texts, 0)
+    if k < 0 || cur(s) >= vec_len(s.facts) { return "null" }
+    let f = vec_get(s.facts, cur(s))
+    let text = strs_get(s.texts, cur(s))
     let starts = line_starts(text)
     let a = range_end_offset(io, j, text, starts, j_get(j, rg, "start"))
     let b = range_end_offset(io, j, text, starts, j_get(j, rg, "end"))
@@ -1615,7 +1674,7 @@ fn code_actions(io: IoCap, s: Server, j: J) -> Str {
             let title = if automatic { "Fix " + dg_code(d, i) + ": " + desc } else {
                 "Review fix " + dg_code(d, i) + ": " + desc + " " + str_from_byte(226) + str_from_byte(128) + str_from_byte(148) + " right only if " + strs_get(d.fix_precondition, ff + q) }
             let edit = "{\"documentChanges\":[{\"edits\":[{\"newText\":" + json_str(strs_get(d.fix_replacement, ff + q)) + ",\"range\":" + range(text, starts, fs, fe)
-                    + "}],\"textDocument\":{\"uri\":" + json_str(uri_of(strs_get(s.paths, 0))) + ",\"version\":" + int_to_str(ints_get(s.versions, 0)) + "}}]}"
+                    + "}],\"textDocument\":{\"uri\":" + json_str(uri_of(strs_get(s.paths, cur(s)))) + ",\"version\":" + int_to_str(ints_get(s.versions, cur(s))) + "}}]}"
             strs_push(out, "{\"diagnostics\":[" + diagnostic_json(d, i, held, hstarts) + "],\"edit\":" + edit + (if automatic && n == 1 { ",\"isPreferred\":true" } else { "" })
                     + ",\"kind\":\"quickfix\",\"title\":" + json_str(title) + "}")
         }
@@ -1656,7 +1715,7 @@ fn hier_item(io: IoCap, s: Server, f: Facts, g: Int) -> Str {
     let ne = ck_fn_name_end(c, g) - base
     let name = pk_normalise(fx_module_name(f, m))
     "{\"data\":{\"end\":" + int_to_str(ne) + ",\"file\":" + json_str(identity_of(io, name)) + ",\"generation\":" + int_to_str(ints_get(s.flags, 2))
-            + ",\"root\":" + json_str(identity_of(io, strs_get(s.paths, 0))) + ",\"start\":" + int_to_str(ns) + ",\"version\":" + int_to_str(ints_get(s.versions, 0))
+            + ",\"root\":" + json_str(identity_of(io, strs_get(s.paths, cur(s)))) + ",\"start\":" + int_to_str(ns) + ",\"version\":" + int_to_str(ints_get(s.versions, cur(s)))
             + "},\"detail\":" + json_str(fn_label(io, f, g)) + ",\"kind\":12,\"name\":" + json_str(ck_fn_name(c, g)) + ",\"range\":"
             + range(mtext, mstarts, fx_start(f, span), fx_end(f, span)) + ",\"selectionRange\":" + range(mtext, mstarts, ns, ne) + ",\"uri\":" + json_str(uri_of(name)) + "}"
 }
@@ -1665,7 +1724,7 @@ fn prepare_hierarchy(io: IoCap, s: Server, j: J) -> Str {
     let span = locate(io, s, j)
     let st = ints_get(span, 0)
     if st < 0 { return "null" }
-    let f = vec_get(s.facts, 0)
+    let f = vec_get(s.facts, cur(s))
     let e = entity_at(f, st, ints_get(span, 1))
     if e < 0 || fx_ref_kind(f, e) != "function" { return "null" }
     let g = ck_ref_function(fx_checker(f), e)
@@ -1737,10 +1796,15 @@ fn hier_bound(io: IoCap, s: Server, j: J) -> Int {
     if j_kind(j, root) != 4 || j_kind(j, file) != 4 || !j_int_in(j, version, 0 - 2147483648, 2147483647) || !j_int_in(j, generation, 0, 2147483647)
             || !j_int_in(j, start, 0, 2147483647) || !j_int_in(j, end, 0, 2147483647) || j_get(j, d, "root") < 0 { return 0 - 1 }
     if j_int(j, generation) != ints_get(s.flags, 2) { return 0 - 1 }
-    if strs_len(s.paths) == 0 || vec_len(s.facts) == 0 { return 0 - 1 }
-    if identity_of(io, strs_get(s.paths, 0)) != j_str(j, root) { return 0 - 1 }
-    if ints_get(s.versions, 0) != j_int(j, version) { return 0 - 1 }
-    let f = vec_get(s.facts, 0)
+    // The open document whose identity the item names.
+    let mut k = 0 - 1
+    for i in 0..strs_len(s.paths) {
+        if k < 0 && identity_of(io, strs_get(s.paths, i)) == j_str(j, root) { k = i }
+    }
+    if k < 0 || k >= vec_len(s.facts) { return 0 - 1 }
+    ints_set(s.flags, 3, k)
+    if ints_get(s.versions, k) != j_int(j, version) { return 0 - 1 }
+    let f = vec_get(s.facts, k)
     let c = fx_checker(f)
     let mut m = 0 - 1
     for k in 0..fx_modules(f) {
@@ -1757,7 +1821,7 @@ fn hier_bound(io: IoCap, s: Server, j: J) -> Int {
 fn incoming_calls(io: IoCap, s: Server, j: J) -> Str {
     let target = hier_bound(io, s, j)
     if target < 0 { return "null" }
-    let f = vec_get(s.facts, 0)
+    let f = vec_get(s.facts, cur(s))
     let c = fx_checker(f)
     let callers = ints_new()
     let cfrom = ints_new()
@@ -1779,7 +1843,7 @@ fn incoming_calls(io: IoCap, s: Server, j: J) -> Str {
 fn outgoing_calls(io: IoCap, s: Server, j: J) -> Str {
     let caller = hier_bound(io, s, j)
     if caller < 0 { return "null" }
-    let f = vec_get(s.facts, 0)
+    let f = vec_get(s.facts, cur(s))
     let c = fx_checker(f)
     let callees = ints_new()
     let cfrom = ints_new()
@@ -1859,7 +1923,7 @@ fn request_offset(io: IoCap, s: Server, j: J) -> Int {
     }
     let path = path_of(j_str(j, uri))
     let k = if path == "" { 0 - 1 } else { doc_named(io, s, path) }
-    if k < 0 || vec_len(s.facts) == 0 { return 0 - 1 }
+    if k < 0 || cur(s) >= vec_len(s.facts) { return 0 - 1 }
     let text = strs_get(s.texts, k)
     offset(text, line_starts(text), j_int(j, line), j_int(j, ch))
 }
@@ -1994,7 +2058,7 @@ fn constructor_help(f: Facts, n: Int, at: Int) -> Str {
 fn signature_help(io: IoCap, s: Server, j: J) -> Str {
     let at = request_offset(io, s, j)
     if at < 0 { return "null" }
-    let f = vec_get(s.facts, 0)
+    let f = vec_get(s.facts, cur(s))
     let d = fx_diags(f)
     // A recovered syntax answers nothing (`RecoveredSyntax`, and no call or construction is found in a tree that lost its parts).
     for i in 0..dg_len(d) {
@@ -2163,6 +2227,7 @@ pub fn lsp_command(io: IoCap, c: Cli) -> Int {
     let caps = j_get(j0, j_get(j0, 0, "params"), "capabilities")
     ints_push(flags, if j_kind(j0, j_get(j0, j_get(j0, j_get(j0, caps, "workspace"), "workspaceEdit"), "documentChanges")) == 1 { 1 } else { 0 })
     ints_push(flags, if j_kind(j0, j_get(j0, j_get(j0, j_get(j0, caps, "textDocument"), "documentSymbol"), "hierarchicalDocumentSymbolSupport")) == 1 { 1 } else { 0 })
+    ints_push(flags, 0)
     ints_push(flags, 0)
     let s = Server(paths: strs_new(), versions: ints_new(), texts: strs_new(), facts: vec_new[Facts](), library: libs, root: roots, flags: flags)
     while true {
