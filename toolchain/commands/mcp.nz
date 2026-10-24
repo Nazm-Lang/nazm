@@ -321,17 +321,6 @@ fn source_base(io: IoCap, s: Server) -> Str {
     pk_root_path(r)
 }
 
-// The root module's name as the compilation's files are named, which is what a patch's `file` is
-// matched with: the diagnostics' index says it. "" where there is none.
-fn root_module(io: IoCap, proc: ProcessCap, sp: SpawnCap, s: Server) -> Str {
-    let args = strs_new()
-    root_args(s, "diagnostics", args)
-    let j = j_parse(run_command(io, proc, sp, s, args, false, "", "nazm.diagnostics"))
-    let m = j_get(j, j_get(j, 0, "root"), "module")
-    if m < 0 || j_kind(j, m) != 4 { return "" }
-    j_str(j, m)
-}
-
 // `text` with the first `from` written `to`.
 fn replaced(text: Str, from: Str, to: Str) -> Str {
     let at = ut_find(text, from, 0)
@@ -530,15 +519,15 @@ fn call_tool(io: IoCap, proc: ProcessCap, sp: SpawnCap, s: Server, id: Str, j: J
         let bad = check_fields(j, argn, names, kinds, req, "operation")
         if bad == "?" { refuse(io, "an argument error `serde` words in a way this port does not") }
         if bad != "" { return fail(io, id, 0 - 32602, bad) }
-        // The root module is the one file this port plans a patch in (`patchplan.nz`).
-        let file = j_str(j, j_get(j, argn, "file"))
-        let module = root_module(io, proc, sp, s)
-        if module == "" || file != module { refuse(io, "a patch in a file other than the root module") }
+        // `file` is relative to the source root, as a patch names files, or absolute: joined as `Path::join` does.
+        let base = source_base(io, s)
+        if base == "" { refuse(io, "a root whose source root the reference reports as an error rather than a result") }
+        let named = j_str(j, j_get(j, argn, "file"))
         strs_push(args, "patch")
         strs_push(args, if op == "rename" { "rename" } else { "fix" })
         strs_push(args, "--json")
         strs_push(args, "--root=" + s.root)
-        strs_push(args, "--file=" + s.root)
+        strs_push(args, "--file=" + (if str_len(named) > 0 && str_byte(named, 0) == 47 { named } else { base + "/" + named }))
         strs_push(args, "--byte=" + j_str(j, j_get(j, argn, "byte_offset")))
         if op == "rename" {
             strs_push(args, "--new-name=" + j_str(j, j_get(j, argn, "new_name")))
