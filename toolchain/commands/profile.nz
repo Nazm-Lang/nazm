@@ -600,7 +600,8 @@ pub fn pf_enforce(io: IoCap, proc: ProcessCap, sp: SpawnCap, f: Facts, file: Str
     let mut strict = false
     for p in profiles { if p != "general" { strict = true } }
     if !strict && !report { return 0 }
-    if dg_len(fx_diags(f)) > 0 { return 0 }
+    // The checker's warnings do not stop the profiles: the reference holds a warned program to them first.
+    for i in 0..dg_len(fx_diags(f)) { if dg_severity(fx_diags(f), i) != "warning" { return 0 } }
     let wants = pf_needs_cost(profiles)
     let mir = if wants { pf_mir(io, proc, sp, f, file) } else { "" }
     // Polymorphic recursion (`N0357`): no MIR facts, as the reference's `lower` fails there.
