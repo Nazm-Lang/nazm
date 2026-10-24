@@ -1754,9 +1754,9 @@ fn build_dependencies(c: Ck, graph: Graph) -> Int {
         while k < ints_len(imports) {
             let imp = ints_get(imports, k);
             let to = ints_get(graph.target, gf + k);
-            if to < 0 { stop(c, "an import the loader did not resolve"); }
+            // An import the loader did not resolve is no edge (`load_packaged` drops it, its diagnostic already made).
             if to == m && some(c, imp, "alias") { stop(c, "a module imported under a name by itself"); }
-            if to != m && index_of(targets, to) < 0 { ints_push(targets, to); }
+            if to >= 0 && to != m && index_of(targets, to) < 0 { ints_push(targets, to); }
             k = k + 1;
         }
         ints_push(c.dfirst, ints_len(c.don));
@@ -14807,6 +14807,8 @@ pub fn ck_type_class(c: Ck, t: Int) -> Str {
 
 // The binding the name written at `s..e` (absolute) is, or -1.
 pub fn ck_binding_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mvar, s, e) }
+// Whether the mention at `s..e` is of a capture the checker refused (`N0386`): of a slot of the closure that nothing declares.
+pub fn ck_refused_capture_at(c: Ck, s: Int, e: Int) -> Bool { sm_get(c.mrefu, s, e) >= 0 }
 pub fn ck_binding_count(c: Ck) -> Int { ints_len(c.bfn) }
 pub fn ck_binding_fn(c: Ck, b: Int) -> Int { ints_get(c.bfn, b) }
 pub fn ck_binding_ty(c: Ck, b: Int) -> Int { ints_get(c.bty, b) }
@@ -14985,6 +14987,8 @@ pub fn ck_fn_param_count(c: Ck, i: Int) -> Int { ints_get(c.fnpc, i) }
 pub fn ck_fn_param_ty(c: Ck, i: Int, k: Int) -> Int { ints_get(c.ptys, ints_get(c.fnpf, i) + k) }
 pub fn ck_fn_ret_ty(c: Ck, i: Int) -> Int { ints_get(c.fnret, i) }
 pub fn ck_fn_type_params(c: Ck, i: Int) -> Int { ints_get(c.fntpc, i) }
+pub fn ck_fn_type_param_name(c: Ck, i: Int, k: Int) -> Str { strs_get(c.tpname, ints_get(c.fntpf, i) + k) }
+pub fn ck_fn_type_param_equality(c: Ck, i: Int, k: Int) -> Bool { ints_get(c.tpeq, ints_get(c.fntpf, i) + k) == 1 }
 pub fn ck_fn_effect_param(c: Ck, i: Int) -> Bool { ints_len(kids(c, ints_get(c.fnnode, i), "effect_params")) > 0 }
 pub fn ck_fn_is_foreign(c: Ck, i: Int) -> Bool { ints_get(c.fnfor, i) == 1 }
 
