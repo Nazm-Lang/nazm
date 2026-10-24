@@ -73,7 +73,6 @@ pub fn rc_open(io: IoCap, repo: Repo, s: Int, root: Str) -> Comp {
     let path = dir + "/" + root
     if ut_read_error(io, path, true) != "" { return failed(s, root, unreadable, no_facts(io)) }
     let library = os_env_get("NAZM_LIBRARY")
-    if library == "" { rc_refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
     let f = fx_check_module_in(path, dir, library, fe_host_os(), fe_host_arch(), io)
     if fx_refusal(f) != "" { return failed(s, root, unreadable, f) }
     if !fx_carried(f) { rc_refuse(io, fx_why(f)) }

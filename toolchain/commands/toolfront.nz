@@ -28,10 +28,6 @@ pub struct Front {
 // process (6). `st` holds two entries.
 pub fn tf_front(io: IoCap, file: Str, inputs: Strs, texts: Strs, st: Ints, diagnose: Bool) -> Front {
     let library = os_env_get("NAZM_LIBRARY")
-    if library == "" {
-        eprint("nazm: not carried: the standard library's directory (set NAZM_LIBRARY)" + nl())
-        exit_with(6)
-    }
     ints_set(st, 0, 0)
     ints_set(st, 1, 0)
     let prefix = fe_prefix(io, file)

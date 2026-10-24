@@ -442,7 +442,6 @@ pub fn bindgen_command(io: IoCap, c: Cli) -> Int {
     let has_out = cli_present(c, 1)
     let out_path = cli_value(c, 1)
     let library = os_env_get("NAZM_LIBRARY")
-    if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
     let why = ut_read_error(io, header, true)
     if why != "" {
         eprint("nazm: cannot read " + header + ": " + why + nl())

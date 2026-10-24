@@ -150,8 +150,8 @@
       `lsp-*` 12 modes 2846 inputs each, 13 differ in all (listed in S11.3), 0 refused but `lsp` completion; profiles 12826/0/26 (N0357)
 
 ## 12. Slice 12 — a `nazm` that needs no `NAZM_LIBRARY`
-- [ ] 12.1 The standard library and the documentation corpus carried or installed; the archive
-      layout
+- [x] 12.1 The standard library and the documentation corpus carried or installed; the archive
+      layout (carried as generated modules; archive.sh 256/0/0; `design.md`, *Slice 12*)
 
 ## 13. Slice 13 — the harness remainder (`r7-harness` 6.2, 6.3)
 - [x] 13.1 Design (Opus): `design.md`, *Slice 13*, S13.1–S13.8; questions 5 and 6 open

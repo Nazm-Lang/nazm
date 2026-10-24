@@ -350,3 +350,39 @@ pub fn ut_read_error(io: IoCap, path: Str, utf8: Bool) -> Str {
     if utf8 && !ut_utf8_ok(read_file(path)) { return "stream did not contain valid UTF-8" }
     ""
 }
+
+// The directory the stages (`nazm-pipeline`, `nzcg`) are in: `NAZM_LIBEXEC`, else, as the archive lays them out
+// (`scripts/host-archive.sh`), `libexec/nazm` beside the `bin/` the first `nazm` on `PATH` is in, its links followed.
+// "" where neither names one. A program of this language cannot ask for its own path, so the archive's `INSTALL.txt`
+// says to put `bin/` on `PATH` (R8 slice 12).
+pub fn ut_libexec(io: IoCap) -> Str {
+    let named = os_env_get("NAZM_LIBEXEC")
+    if named != "" { return named }
+    let path = os_env_get("PATH")
+    let n = str_len(path)
+    let mut start = 0
+    while start <= n {
+        let mut end = start
+        while end < n && str_byte(path, end) != 58 { end += 1 }
+        let dir = str_slice(path, start, end)
+        let exe = (if dir == "" { "." } else { dir }) + "/nazm"
+        if ut_kind(io, exe) == 0 {
+            let mut room = 4096
+            while room <= 1048576 {
+                let out = bytes_new(room)
+                let m = os_realpath(exe, out)
+                if m >= 0 {
+                    let real = bytes_to_str(bytes_slice(out, 0, m))
+                    let bin = ut_parent(real)
+                    let libexec = ut_parent(bin) + "/libexec/nazm"
+                    if ut_kind(io, libexec) == 1 { return libexec }
+                    room = 2000000
+                } else {
+                    room = room * 4
+                }
+            }
+        }
+        start = end + 1
+    }
+    ""
+}

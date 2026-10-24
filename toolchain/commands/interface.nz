@@ -46,7 +46,6 @@ pub fn interface_command(io: IoCap, c: Cli) -> Int {
     let hash = cli_present(c, 1)
     let given = cli_value(c, 2)
     let library = os_env_get("NAZM_LIBRARY")
-    if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
     let given_prefix = if cli_present(c, 2) { fe_prefix(io, given) } else { "" }
     let prefix = fe_prefix(io, file)
     let f = fx_check_module_in(prefix + file, if cli_present(c, 2) { given_prefix + given } else { "" }, library, fe_host_os(), fe_host_arch(), io)
