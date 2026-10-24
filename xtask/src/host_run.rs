@@ -11,8 +11,8 @@
 //!   and prints (`crates/nazm-runtime/src/heap.rs`, `message`); it must be present, single and at
 //!   most 2 GiB.
 //!
-//! Then it admits one stage at a time (a kernel lock on a file, plus a look for a contained
-//! workload's container), runs it in the foreground in its own process group under a deadline
+//! Then it admits at most two stages at once (a kernel lock on one of two files, plus a look for
+//! a contained workload's container; two since 2026-10-22, the copyright holder's decision), runs it in the foreground in its own process group under a deadline
 //! with its output drained and capped, and records its peak resident memory
 //! (`/usr/bin/time -l`; no time is taken from it). A peak more than 256 MiB past the limit, or an
 //! `N0406` that did not end the program with status 2, is the rule's **withdrawal condition**: it
@@ -20,7 +20,8 @@
 //! investigated and removed it.
 //!
 //! It is not a sandbox. It does not bound a task's stack, the image, C's allocations or children,
-//! which is why it is one at a time and under a deadline.
+//! which is why it admits at most two at once (4 GiB of counted heap at worst) and keeps a
+//! deadline.
 
 use std::fs;
 use std::io::Read;
@@ -110,7 +111,7 @@ impl Refusal {
                  then remove the marker file named above"
             ),
             Self::AnotherStage => {
-                "another host stage this runner started is running: one at a time".into()
+                "two host stages this runner started are running: at most two at once".into()
             }
             Self::ContainedWorkload => {
                 "a contained workload is running: no host stage beside it".into()
@@ -216,6 +217,9 @@ fn contained_running() -> bool {
         .output()
         .is_ok_and(|o| o.status.success() && lists_container(&String::from_utf8_lossy(&o.stdout)))
 }
+
+/// The lock files of the two stages that may run at once.
+pub(crate) const SLOTS: [&str; 2] = ["lock", "lock-2"];
 
 /// Where the lock and the withdrawal marker live. `NAZM_HOST_RUN_DIR` moves them, for the tests.
 fn state_dir() -> PathBuf {
@@ -357,16 +361,24 @@ fn run(args: &[String]) -> Result<ExitCode, Refusal> {
             marker.display()
         )));
     }
-    let lock = fs::File::options()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(dir.join("lock"))
-        .map_err(state)?;
-    if lock.try_lock().is_err() {
-        return Err(Refusal::AnotherStage);
+    // Two slots, each a file whose kernel lock a running stage holds until it exits.
+    let mut held = None;
+    for slot in [SLOTS[0], SLOTS[1]] {
+        let lock = fs::File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(dir.join(slot))
+            .map_err(state)?;
+        if lock.try_lock().is_ok() {
+            held = Some(lock);
+            break;
+        }
     }
+    let Some(_lock) = held else {
+        return Err(Refusal::AnotherStage);
+    };
     if contained_running() {
         return Err(Refusal::ContainedWorkload);
     }
