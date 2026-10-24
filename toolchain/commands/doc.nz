@@ -684,7 +684,6 @@ pub fn doc_command(io: IoCap, c: Cli) -> Int {
     let has_out = cli_present(c, 1)
     let out = cli_value(c, 1)
     let library = os_env_get("NAZM_LIBRARY")
-    if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
     let items = Items(module: strs_new(), id: strs_new(), json: strs_new(), md: strs_new())
     let prefix = fe_prefix(io, path)
     let mut packages = pk_none()

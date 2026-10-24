@@ -129,7 +129,6 @@ pub fn pp_run(io: IoCap, c: Cli, what: Str) -> Int {
         exit_with(4)
     }
     let library = os_env_get("NAZM_LIBRARY")
-    if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
     let prefix = fe_prefix(io, root)
     let given = if given_set { fe_prefix(io, cli_value(c, 5)) + cli_value(c, 5) } else { "" }
     let path = prefix + root
