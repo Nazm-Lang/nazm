@@ -24,6 +24,7 @@ use "../../compiler/sema.nz"
 use "../../compiler/package.nz"
 use "../../compiler/facts.nz"
 use "cli.nz"
+use "util.nz"
 use "front.nz"
 use "summary.nz"
 use "lockcheck.nz"
@@ -218,6 +219,10 @@ fn undeclared_features(io: IoCap, p: Packages, features: Strs) -> Int {
     let name = pk_name(p, pk_root_package(p))
     let out = strs_new()
     for i in 0..strs_len(features) {
+        if ut_contains("," + pk_featured(p, pk_root_package(p)) + ",", "," + strs_get(features, i) + ",") {
+            eprint("nazm: not carried: `--features` enabling a feature the package declares (`@cfg(feature ...)` is not evaluated)" + nl())
+            exit_with(6)
+        }
         let m = "`--features` asks `" + name + "` for the feature `" + strs_get(features, i) + "`, which it does not declare"
         let mut at = 0
         while at < strs_len(out) && fe_str_less(strs_get(out, at), m) { at += 1 }

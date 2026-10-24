@@ -23,6 +23,10 @@ pub struct Manifest {
     main: Strs,
     has_main: Ints,
     profile: Strs,
+    // The `heap-limit`, in bytes, or -1 (one entry), and the features it declares that `default` enables (a count).
+    heap: Ints,
+    // The features it declares, as written (one entry).
+    declared: Strs,
     // Its dependencies, in name order: each one's name, path and version.
     dnames: Strs,
     dpaths: Strs,
@@ -52,7 +56,9 @@ fn pk_find(xs: Strs, s: Str) -> Int {
 
 fn new_manifest() -> Manifest {
     let m = Manifest(state: ints_new(), why: strs_new(), name: strs_new(), version: strs_new(), root: strs_new(), main: strs_new(), has_main: ints_new(),
-            profile: strs_new(), dnames: strs_new(), dpaths: strs_new(), dversions: strs_new());
+            profile: strs_new(), heap: ints_new(), declared: strs_new(), dnames: strs_new(), dpaths: strs_new(), dversions: strs_new());
+    ints_push(m.heap, 0 - 1);
+    strs_push(m.declared, "");
     ints_push(m.state, 1);
     strs_push(m.why, "");
     m
@@ -231,6 +237,51 @@ fn lines_of(text: Str) -> Strs {
     out
 }
 
+// `heap_size`: bytes, or a number with a `K`, `M` or `G` suffix, from 64 KiB to 1 TiB; -1 where it is not one (the reason is not compared); -2 where
+// the number is past what this reader adds up (more than sixteen digits).
+fn heap_size(raw: Str, why: Strs) -> Int {
+    let n = str_len(raw);
+    let mut unit = 1;
+    let mut digits = raw;
+    if n > 0 {
+        let last = str_slice(raw, n - 1, n);
+        if last == "K" || last == "k" { unit = 1024; digits = str_slice(raw, 0, n - 1); }
+        if last == "M" || last == "m" { unit = 1048576; digits = str_slice(raw, 0, n - 1); }
+        if last == "G" || last == "g" { unit = 1073741824; digits = str_slice(raw, 0, n - 1); }
+    }
+    // `u64::from_str`: an optional `+`, then digits only, not past `u64::MAX`.
+    let mut body = digits;
+    if str_len(body) > 0 && str_byte(body, 0) == 43 { body = str_slice(body, 1, str_len(body)); }
+    let mut ok = str_len(body) > 0;
+    let mut i = 0;
+    while i < str_len(body) {
+        if str_byte(body, i) < 48 || str_byte(body, i) > 57 { ok = false; }
+        i = i + 1;
+    }
+    if ok {
+        let mut z = 0;
+        while z < str_len(body) - 1 && str_byte(body, z) == 48 { z = z + 1; }
+        body = str_slice(body, z, str_len(body));
+        if str_len(body) > 20 { ok = false; }
+        if str_len(body) == 20 && body >= "18446744073709551616" { ok = false; }
+    }
+    if ok == false {
+        strs_push(why, pk_cat3("`", raw, "` is not a size: bytes, or a number with `K`, `M` or `G`"));
+        return 0 - 1;
+    }
+    if str_len(body) > 16 { return 0 - 2; }
+    let mut v = 0;
+    i = 0;
+    while i < str_len(body) { v = v * 10 + (str_byte(body, i) - 48); i = i + 1; }
+    let bytes = v * unit;
+    if v > 1099511627776 || bytes < 65536 || bytes > 1099511627776 {
+        if v > 1099511627776 && unit > 1 { return 0 - 2; }
+        strs_push(why, pk_cat3("`", raw, str_concat("` is ", str_concat(int_to_str(bytes), " bytes; a heap limit is from 64K to 1024G"))));
+        return 0 - 1;
+    }
+    bytes
+}
+
 // --- `Manifest::parse` -------------------------------------------------------------------------
 
 // A manifest's text, read and held to `Manifest::parse`'s rules.
@@ -248,6 +299,11 @@ pub fn pk_parse(text: Str) -> Manifest {
     let mut has_version = false;
     let mut root = "src";
     // The dependencies as written, before they are put in name order.
+    let fnames = strs_new();
+    let fitems = strs_new();
+    let fcounts = ints_new();
+    let fall = strs_new();
+    let fowner = strs_new();
     let dn = strs_new();
     let dp = strs_new();
     let dv = strs_new();
@@ -275,9 +331,8 @@ pub fn pk_parse(text: Str) -> Manifest {
                 if pk_find(tables, table) >= 0 { invalid(m, pk_cat3("the table `", table, "` is defined twice")); }
                 strs_push(tables, table);
                 if table == "registry" { return unsupported_m(m, "a manifest's `[registry]`"); }
-                if table == "features" { return unsupported_m(m, "a manifest's `[features]`"); }
                 if table == "package" { has_package = true; }
-                if table != "package" && table != "dependencies" { invalid(m, pk_cat3("unknown field `", table, str_concat("`", ", expected one of `schema`, `package`, `dependencies`, `registry`, `features`"))); }
+                if table != "package" && table != "dependencies" && table != "features" { invalid(m, pk_cat3("unknown field `", table, str_concat("`", ", expected one of `schema`, `package`, `dependencies`, `registry`, `features`"))); }
             } else {
                 let keys = strs_new();
                 let mut j = read_key(line, at, keys);
@@ -310,8 +365,17 @@ pub fn pk_parse(text: Str) -> Manifest {
                     }
                 }
                 if table == "package" {
-                    if key == "heap-limit" { return unsupported_m(m, "a manifest's `heap-limit`"); }
-                    let known = key == "name" || key == "version" || key == "root" || key == "main" || key == "profile";
+                    if key == "heap-limit" {
+                        if kind != 1 {
+                            invalid(m, "`heap-limit` is not a string");
+                        } else {
+                            let hwhy = strs_new();
+                            let h = heap_size(strs_get(v.text, 0), hwhy);
+                            if h == 0 - 2 { return unsupported_m(m, "a heap limit with more than sixteen digits"); }
+                            if h < 0 { invalid(m, str_concat("`heap-limit`: ", strs_get(hwhy, 0))); } else { ints_set(m.heap, 0, h); }
+                        }
+                    }
+                    let known = key == "name" || key == "version" || key == "root" || key == "main" || key == "profile" || key == "heap-limit";
                     if known == false {
                         // serde's words for a field `deny_unknown_fields` refuses: what it expected.
                         invalid(m, pk_cat3("unknown field `", key, str_concat("`", ", expected one of `name`, `version`, `root`, `main`, `profile`, `heap-limit`")));
@@ -332,6 +396,17 @@ pub fn pk_parse(text: Str) -> Manifest {
                             if key == "main" { strs_push(m.main, text_of); }
                             if key == "profile" { strs_push(m.profile, text_of); }
                         }
+                    }
+                }
+                if table == "features" {
+                    if kind != 2 {
+                        invalid(m, pk_cat3("the feature `", key, "` is not an array of strings"));
+                    } else {
+                        strs_push(fnames, key);
+                        strs_push(fitems, str_join(v.text, ","));
+                        ints_push(fcounts, strs_len(v.text));
+                        let mut fi = 0;
+                        while fi < strs_len(v.text) { strs_push(fall, strs_get(v.text, fi)); strs_push(fowner, key); fi = fi + 1; }
                     }
                 }
                 if table == "dependencies" {
@@ -402,6 +477,31 @@ pub fn pk_parse(text: Str) -> Manifest {
     if vs == 0 { return invalid_m(m, pk_cat3("`", strs_get(m.version, 0), "` is not a version: MAJOR.MINOR.PATCH")); }
     if vs < 0 { return unsupported_m(m, "a version this front end does not read"); }
     if contained(root) == false { return invalid_m(m, pk_cat3("the root `", root, "` leaves the package")); }
+    // Features: each a package name's shape, each item another feature of this package or `DEPENDENCY/FEATURE` of a dependency it declares.
+    // A feature that `default` enables changes the analysis (`@cfg(feature ...)`), which this front end does not carry.
+    let mut fk = 0;
+    while fk < strs_len(fnames) {
+        if pk_valid_name(strs_get(fnames, fk)) == false { return invalid_m(m, pk_cat3("`", strs_get(fnames, fk), "` is not a feature name: lowercase ASCII letters, digits and `-`")); }
+        fk = fk + 1;
+    }
+    fk = 0;
+    while fk < strs_len(fall) {
+        let item = strs_get(fall, fk);
+        let mut slash = 0 - 1;
+        let mut c = 0;
+        while c < str_len(item) { if str_byte(item, c) == 47 && slash < 0 { slash = c; } c = c + 1; }
+        let mut known = false;
+        if slash >= 0 {
+            known = pk_find(dn, str_slice(item, 0, slash)) >= 0 && pk_valid_name(str_slice(item, slash + 1, str_len(item)));
+        } else {
+            known = pk_find(fnames, item) >= 0;
+        }
+        if known == false { return invalid_m(m, pk_cat3("the feature `", strs_get(fowner, fk), str_concat("` enables `", str_concat(item, "`, which is neither one of this package's features nor `DEPENDENCY/FEATURE` of a dependency it declares")))); }
+        fk = fk + 1;
+    }
+    strs_set(m.declared, 0, str_join(fnames, ","));
+    let dflt = pk_find(fnames, "default");
+    if dflt >= 0 && ints_get(fcounts, dflt) > 0 { return unsupported_m(m, "a package's `default` features (`@cfg(feature ...)` is not carried)"); }
     strs_push(m.root, root);
     ints_push(m.has_main, 0);
     if strs_len(m.main) > 0 {
@@ -704,6 +804,8 @@ pub struct Packages {
     roots: Strs,
     dirs: Strs,
     profiles: Strs,
+    heaps: Ints,
+    declared: Strs,
     dfirst: Ints,
     dcount: Ints,
     dname: Strs,
@@ -712,7 +814,7 @@ pub struct Packages {
 }
 
 pub fn pk_none() -> Packages {
-    let p = Packages(state: ints_new(), why: strs_new(), names: strs_new(), versions: strs_new(), roots: strs_new(), dirs: strs_new(), profiles: strs_new(),
+    let p = Packages(state: ints_new(), why: strs_new(), names: strs_new(), versions: strs_new(), roots: strs_new(), dirs: strs_new(), profiles: strs_new(), heaps: ints_new(), declared: strs_new(),
             dfirst: ints_new(), dcount: ints_new(), dname: strs_new(), dto: ints_new(), root: ints_new());
     ints_push(p.state, 0);
     strs_push(p.why, "");
@@ -727,6 +829,9 @@ pub fn pk_name(p: Packages, i: Int) -> Str { strs_get(p.names, i) }
 pub fn pk_package_version(p: Packages, i: Int) -> Str { strs_get(p.versions, i) }
 pub fn pk_source_root(p: Packages, i: Int) -> Str { strs_get(p.roots, i) }
 pub fn pk_profile(p: Packages, i: Int) -> Str { strs_get(p.profiles, i) }
+// The package's `heap-limit` in bytes, or -1; and the features it declares, comma apart.
+pub fn pk_heap(p: Packages, i: Int) -> Int { ints_get(p.heaps, i) }
+pub fn pk_featured(p: Packages, i: Int) -> Str { strs_get(p.declared, i) }
 pub fn pk_root_package(p: Packages) -> Int { ints_get(p.root, 0) }
 
 fn refuse(p: Packages, why: Str) -> Packages {
@@ -789,6 +894,8 @@ pub fn pk_context(source_root: Str, io: IoCap) -> Packages {
         strs_push(p.roots, sr);
         strs_push(p.dirs, strs_get(f.dirs, old));
         strs_push(p.profiles, "");
+        ints_push(p.heaps, ints_get(m.heap, 0));
+        strs_push(p.declared, strs_get(m.declared, 0));
         if old == root { ints_set(p.root, 0, i); }
         i = i + 1;
     }
