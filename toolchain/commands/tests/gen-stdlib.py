@@ -27,7 +27,7 @@ def body(path):
         out.append('    strs_push(l, ' + literal(line) + ');')
     # The text ends in a line break unless the file's last line has none.
     assert last == '', path
-    out.append('    str_join(l, str_from_byte(10)) + str_from_byte(10)')
+    out.append('    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))')
     return out
 
 
