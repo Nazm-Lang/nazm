@@ -287,7 +287,7 @@ fn part_groups(p: Part, e_id: Strs, e_start: Ints, e_end: Ints, e_len: Ints) -> 
 
 
 // The open document whose identity is `key`, or -1.
-fn open_as(io: IoCap, d: Docs, key: Str) -> Int {
+pub fn open_as(io: IoCap, d: Docs, key: Str) -> Int {
     for i in 0..strs_len(d.paths) {
         if identity_of(io, strs_get(d.paths, i)) == key { return i }
     }

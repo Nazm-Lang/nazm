@@ -1273,9 +1273,30 @@ fn subst_found(c: Ck, t: Int, owner: Int, id: Int, args: Ints, wm: Int) -> Int {
         strs_push(vk, "0");
         strs_push(vk, "");
         strs_push(vk, int_to_str(ints_get(out, 0)));
-        let vf = strs_find(c.tykey, str_join(vk, ":"));
-        if vf < 0 || vf >= wm { return 0 - 1; }
-        if g == tag_vec() { return vf; }
+        let mut vf = strs_find(c.tykey, str_join(vk, ":"));
+        // The reference makes a holder's vector with it: a box, cell or chain of the element that existed counts the vector as existing.
+        if vf < 0 || vf >= wm {
+            vf = 0 - 1;
+            let gs3 = ints_new();
+            ints_push(gs3, tag_box());
+            ints_push(gs3, tag_cell());
+            ints_push(gs3, tag_chain());
+            let mut h = 0;
+            while h < 3 {
+                let hk = strs_new();
+                strs_push(hk, int_to_str(ints_get(gs3, h)));
+                strs_push(hk, "0");
+                strs_push(hk, "0");
+                strs_push(hk, "0");
+                strs_push(hk, "");
+                strs_push(hk, int_to_str(ints_get(out, 0)));
+                let hf = strs_find(c.tykey, str_join(hk, ":"));
+                if hf >= 0 && hf < wm { vf = hf; }
+                h = h + 1;
+            }
+            if vf < 0 { return 0 - 1; }
+        }
+        if g == tag_vec() { return vec_of(c, ints_get(out, 0)); }
         return holder_of(c, g, ints_get(out, 0));
     }
     let parts = strs_new();
@@ -4785,7 +4806,7 @@ fn declare_function(c: Ck, m: Int, f: Int, hdr: Int) -> Int {
             let mut place = "module";
             if method { place = "impl"; }
             err(c, "N0203", ns, cat5("`", fname_of(c, f, "name"), "` is defined more than once in this ", place, ""), "");
-            if method == false { ints_push(c.fndups, existing); }
+            if method == false && flag(c, ints_get(c.fnnode, existing), "inferred_result") { ints_push(c.fndups, existing); }
             sec_at(c, ints_get(c.fnns, existing), ints_get(c.fnne, existing), "first defined here");
         } else {
             // A foreign declaration (N42): its shape, ABI, symbol and types, and its symbol
@@ -5285,6 +5306,32 @@ fn check_function(c: Ck, f: Int) -> Int {
     let mut id = defined_fn(c, gs(c, s_module()), name);
     // An impl's method is found by where it is (N78): its name is `Trait/Type/m`.
     if some(c, f, "method_of") { id = fn_of_node(c, f); }
+    // The method of a plain impl of what is no trait is not checked: the reference drops the impl (one with type parameters it still reads).
+    if some(c, f, "method_of") && id < 0 && ints_len(kids(c, f, "type_params")) == 0 {
+        let hdr = header_at(c, sps(c, fld(c, unwrap(c, f, "method_of"), "impl_span")));
+        if hdr < 0 || ints_get(c.htr, hdr) < 0 {
+            // Its signature's types are still read, as the reference reads them; the body is not checked.
+            let ps = kids(c, f, "params");
+            let mut q = 0;
+            while q < ints_len(ps) {
+                signature_type(c, fld(c, ints_get(ps, q), "ty"));
+                q = q + 1;
+            }
+            signature_type(c, fld(c, f, "return_type"));
+            return 0;
+        }
+    }
+    // A function that redefines a built-in is not declared, and its body is not checked.
+    if id < 0 && some(c, f, "method_of") == false {
+        let ps = kids(c, f, "params");
+        let mut q = 0;
+        while q < ints_len(ps) {
+            signature_type(c, fld(c, ints_get(ps, q), "ty"));
+            q = q + 1;
+        }
+        signature_type(c, fld(c, f, "return_type"));
+        return 0;
+    }
     ss(c, s_fn(), id);
     ss(c, s_closures(), 0);
     // Its effect parameter, by name, for every type written inside it (N51).
