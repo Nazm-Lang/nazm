@@ -1,0 +1,4 @@
+// A string that is never closed: the lexer's fix needs review.
+fn main(out: OutCap) {
+    println("never closed)
+}
