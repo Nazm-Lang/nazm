@@ -919,6 +919,12 @@ open text is the text the loader gave the file (a file without a final line brea
 error for signature help or completion, as `N0205` is not; the `for#item` the parser makes for a `for` pattern, and the qualifier of a method call's receiver (`m::T.f(x)`), are read as the reference's
 tree reads them. `obligations`, `explain-flow`, `explain-cost`: 5 programs differ (`patterns-001`, `flow_v3-015`, `native_units-032`); `explain-cost` refuses 3 (`N0357`/`N0358`). These are open items, not intended differences.
 
+Slice 11b, contained, 2026-10-25, a sample of 152 inputs (every third of the main corpus and the five of the open items): `obligations`, `explain-cost`, `mir`, `lir`, `explain-flow`, `contract`
+(five forms), `check` and `check --profile` (`web3`, `accounts`, `embedded`, with and without the report) all agree, but: `lir` of `ffi_v2-012` (the reference refuses a C symbol defined twice, `N0383`, in
+its lowering; the pipeline does not check it), `explain-flow` of `flow_v3-015` (the flow facts of a function exported to C: where the note is placed, an R2 hand-back), `contract --upgrade-check` of
+`patterns-001` (the reference's message for a module that is not a contract). `native_units-032` agrees now. The MCP sessions of three files (the argument errors of the float and Unicode wording, the
+patch tool's, and a session with no `--docs`) agree. `pf_enforce` now holds a program the checker warns of to the profiles, as the reference does (`contract` of `patterns-001`).
+
 ### S11.2 What stays refused, and why
 
 - `contract --evm` and `--wasm`: deferred targets (question 1).
