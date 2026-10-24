@@ -741,14 +741,6 @@ pub fn snap_build(f: Facts) -> Snap {
         return s
     }
     if fe_load_failed(f) { return snap_fail(s, "a compilation that does not load") }
-    // After these errors the checker leaves out what the reference's index still records (design D23).
-    for i in 0..dg_len(d) {
-        let code = dg_code(d, i)
-        // A function defined twice has the reference's provenance, which settles its result from the body it kept (`N0203`).
-        if code == "N0203" && ut_contains(strs_get(d.message, i), "is defined more than once in this module") {
-            return snap_fail(s, "a function defined twice, whose provenance the reference settles from the definition it kept")
-        }
-    }
     if fx_module_key(f, 0) == "" {
         strs_set(s.reason, 0, "no_durable_root")
         return s

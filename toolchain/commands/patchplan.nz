@@ -137,14 +137,13 @@ pub fn pp_run(io: IoCap, c: Cli, what: Str) -> Int {
     // The file, among those the root's compilation loaded — by identity.
     let want = fe_canonical(io, fe_prefix(io, file) + file)
     let is_root = want != "" && want == fe_canonical(io, path)
-    let mut elsewhere = false
+    let mut fm = 0
     if !is_root && want != "" && fx_refusal(f) == "" && fx_carried(f) {
         for m in 1..fx_modules(f) {
-            if fe_starts(fx_module_name(f, m), "/") && fe_canonical(io, fx_module_name(f, m)) == want { elsewhere = true }
+            if fm == 0 && fe_starts(fx_module_name(f, m), "/") && fe_canonical(io, fx_module_name(f, m)) == want { fm = m }
         }
     }
-    if elsewhere { refuse(io, "a file of the compilation other than its root, whose own compilation the plan is made in") }
-    if !is_root {
+    if !is_root && fm == 0 {
         // A root the reference cannot analyse has no file but the root itself.
         finish(io, unavailable("not_in_compilation"), json, 1)
         return 1
@@ -160,7 +159,7 @@ pub fn pp_run(io: IoCap, c: Cli, what: Str) -> Int {
         return 1
     }
     if snap_why(s) != "" { refuse(io, snap_why(s)) }
-    let text = fx_module_text(f, 0)
+    let text = fx_module_text(f, fm)
     if byte > str_len(text) {
         finish(io, unavailable("out_of_range"), json, 1)
         return 1
@@ -171,7 +170,32 @@ pub fn pp_run(io: IoCap, c: Cli, what: Str) -> Int {
     }
     let baseline = blake3_hex(bytes_from_str(snap_json(s)))
     let root_json = "{\"module\":" + json_str(snap_root(s)) + ",\"compiler\":" + json_str(snap_compiler(s)) + "}"
-    let disk = read_file(path)
+    // The documents the service has open: the root, and the file where it is another, each analysed as a root over the buffers.
+    let disk = if fm == 0 { read_file(path) } else { text }
+    let filepath = fe_prefix(io, file) + file
+    let docs_paths = strs_new()
+    let docs_texts = strs_new()
+    let docs_versions = ints_new()
+    let docs_facts: Vec[Facts] = vec_new()
+    strs_push(docs_paths, path)
+    strs_push(docs_texts, read_file(path))
+    ints_push(docs_versions, 0)
+    vec_push(docs_facts, f)
+    let mut g = f
+    if fm != 0 {
+        strs_push(docs_paths, filepath)
+        strs_push(docs_texts, text)
+        ints_push(docs_versions, 0)
+        g = fx_check_service(filepath, given, library, fe_host_os(), fe_host_arch(), io)
+        if fx_refusal(g) != "" { refuse(io, "a root the reference refuses, as the file's own compilation") }
+        if fe_load_failed(g) || !fx_carried(g) { refuse(io, "a file whose own compilation does not load whole") }
+        vec_push(docs_facts, g)
+    }
+    let given_list = strs_new()
+    strs_push(given_list, given)
+    let library_list = strs_new()
+    strs_push(library_list, library)
+    let docs = rn_docs(docs_paths, docs_texts, docs_versions, docs_facts, given_list, library_list)
     let starts = ints_new()
     let ends = ints_new()
     let expected = strs_new()
@@ -184,18 +208,32 @@ pub fn pp_run(io: IoCap, c: Cli, what: Str) -> Int {
             finish(io, unavailable("no_entity"), json, 1)
             return 1
         }
-        let r = rn_plan(io, f, path, given, library, ints_get(at, 0), ints_get(at, 1), new_name)
+        let r = rn_plan(io, docs, if fm == 0 { 0 } else { 1 }, ints_get(at, 0), ints_get(at, 1), new_name)
         if rn_why(r) != "" { refuse(io, rn_why(r)) }
         if rn_code(r) != "" {
             finish(io, unavailable(rn_code(r)), json, 1)
             return 1
         }
-        // The target, read from the root's compilation at the entity's declaration.
-        let e = rn_entity(r)
-        let kind = fx_ref_kind(f, e)
-        let ents = ents_new(f)
+        // The target, read from the root's compilation at the entity's declaration: the same file by identity, at the same place.
+        let gm = rn_decl_module(r)
         let ds = rn_decl_start(r)
         let de = rn_decl_end(r)
+        let key = rn_module_identity(io, fx_module_name(g, gm))
+        let mut rm = 0 - 1
+        for m in 0..fx_modules(f) {
+            if rm < 0 && rn_module_identity(io, fx_module_name(f, m)) == key { rm = m }
+        }
+        if rm < 0 {
+            finish(io, unavailable("internal"), json, 1)
+            return 1
+        }
+        let e = rn_entity_at(f, fx_module_base(f, rm) + ds, fx_module_base(f, rm) + de)
+        if e < 0 || fx_ref_kind(f, e) != fx_ref_kind(g, rn_entity(r)) || fx_ref_decl_start(f, e) != fx_module_base(f, rm) + ds {
+            finish(io, unavailable("internal"), json, 1)
+            return 1
+        }
+        let kind = fx_ref_kind(f, e)
+        let ents = ents_new(f)
         let hasdef = ints_get(ents.hasdef, e) == 1
         let identity = "{\"definition\":" + (if hasdef { json_str(strs_get(ents.def, e)) } else { "null" }) + ",\"member\":"
                 + (if ints_get(ents.hasmem, e) == 1 { json_str(strs_get(ents.mem, e)) } else { "null" }) + "}"
@@ -206,46 +244,99 @@ pub fn pp_run(io: IoCap, c: Cli, what: Str) -> Int {
             let t = fx_tree(f)
             let mut best = 0 - 1
             let mut width = 0
-            for g in 0..ck_fn_count(cc) {
-                if ck_fn_module(cc, g) != 0 { continue }
-                let node = ck_fn_node(cc, g)
+            for h in 0..ck_fn_count(cc) {
+                if ck_fn_module(cc, h) != rm { continue }
+                let node = ck_fn_node(cc, h)
                 if node < 0 { continue }
                 let span = sx_field(t, node, "span")
                 if fx_start(f, span) <= ds && de <= fx_end(f, span) {
                     let w = fx_end(f, span) - fx_start(f, span)
                     if best < 0 || w < width {
-                        best = g
+                        best = h
                         width = w
                     }
                 }
             }
-            if best < 0 || ck_fn_closure(cc, best) { refuse(io, "a local declared in a closure or in no function") }
+            if best < 0 { refuse(io, "a local declared in no function") }
             let id = function_identity(f, best)
             within = if id == "" { "null" } else { json_str(id) }
         }
         let target = "{\"kind\":" + json_str(kind_word(kind)) + ",\"durable\":" + (if hasdef { "true" } else { "false" }) + ",\"identity\":"
-                + (if kind == "local" { "null" } else { identity }) + ",\"declaration\":{\"file\":" + json_str(fx_file_path(f, 0)) + ",\"start\":" + int_to_str(ds)
+                + (if kind == "local" { "null" } else { identity }) + ",\"declaration\":{\"file\":" + json_str(fx_file_path(f, rm)) + ",\"start\":" + int_to_str(ds)
                 + ",\"end\":" + int_to_str(de) + "},\"within\":" + within + "}"
-        for i in 0..rn_count(r) {
-            ints_push(starts, rn_start(r, i))
-            ints_push(ends, rn_end(r, i))
-            strs_push(expected, rn_old(r))
-            strs_push(replacement, new_name)
+        // The files: each root-relative where the root's compilation loaded it, else relative to the workspace.
+        let names = strs_new()
+        let digests = strs_new()
+        let edit_lists = strs_new()
+        let wroot = if strs_get(given_list, 0) != "" { pk_normalise(strs_get(given_list, 0)) } else { pk_root_path(pk_decide(path, io)) }
+        for q in 0..rn_file_count(r) {
+            let ptext = rn_file_text(r, q)
+            let pkey = rn_identity_of(io, rn_file_path(r, q))
+            let mut fmod = 0 - 1
+            for m in 0..fx_modules(f) {
+                if fmod < 0 && rn_module_identity(io, fx_module_name(f, m)) == pkey { fmod = m }
+            }
+            let mut rel = ""
+            if fmod >= 0 {
+                if fx_module_text(f, fmod) != ptext {
+                    finish(io, unavailable("not_current"), json, 1)
+                    return 1
+                }
+                rel = fx_file_path(f, fmod)
+            } else {
+                // A workspace rename edits files the root's compilation does not load: each is named relative to the workspace root.
+                let w = rn_identity_of(io, wroot)
+                if !fe_starts(pkey, w + "/") {
+                    finish(io, unavailable("not_in_compilation"), json, 1)
+                    return 1
+                }
+                rel = str_slice(pkey, str_len(w) + 1, str_len(pkey))
+            }
+            let es = strs_new()
+            for k in 0..rn_edit_count(r, q) {
+                strs_push(es, "{\"start\":" + int_to_str(rn_edit_start(r, q, k)) + ",\"end\":" + int_to_str(rn_edit_end(r, q, k)) + ",\"expected\":" + json_str(rn_old(r))
+                        + ",\"replacement\":" + json_str(new_name) + "}")
+            }
+            strs_push(names, rel)
+            strs_push(digests, blake3_hex(bytes_from_str(ptext)))
+            strs_push(edit_lists, str_join(es, ","))
+        }
+        // Ordered by path; a file named twice is refused.
+        let order = ints_new()
+        for q in 0..strs_len(names) {
+            let mut at = ints_len(order)
+            while at > 0 && fe_str_less(strs_get(names, q), strs_get(names, ints_get(order, at - 1))) { at -= 1 }
+            ints_push(order, 0)
+            let mut w = ints_len(order) - 1
+            while w > at {
+                ints_set(order, w, ints_get(order, w - 1))
+                w -= 1
+            }
+            ints_set(order, at, q)
+        }
+        let items = strs_new()
+        for z in 0..ints_len(order) {
+            let q = ints_get(order, z)
+            if z > 0 && strs_get(names, q) == strs_get(names, ints_get(order, z - 1)) {
+                finish(io, unavailable("internal"), json, 1)
+                return 1
+            }
+            strs_push(items, "{\"path\":" + json_str(strs_get(names, q)) + ",\"digest\":" + json_str(strs_get(digests, q)) + ",\"edits\":[" + strs_get(edit_lists, q) + "]}")
         }
         finish(io, "{\"schema\":\"nazm.patch/1\",\"status\":\"available\",\"operation\":{\"kind\":\"rename\",\"target\":" + target + ",\"old_name\":" + json_str(rn_old(r))
-                + ",\"new_name\":" + json_str(new_name) + "},\"root\":" + root_json + ",\"baseline\":{\"snapshot\":" + json_str(baseline) + "},\"files\":"
-                + files_json(fx_file_path(f, 0), rn_text(r), starts, ends, expected, replacement) + ",\"validation\":\"reanalysed\"}", json, 0)
+                + ",\"new_name\":" + json_str(new_name) + "},\"root\":" + root_json + ",\"baseline\":{\"snapshot\":" + json_str(baseline) + "},\"files\":["
+                + str_join(items, ",") + "],\"validation\":\"reanalysed\"}", json, 0)
         return 0
     }
     let diag = ints_new()
     let index = ints_new()
-    pp_fix_plans(f, disk, byte, diag, index)
+    pp_fix_plans(g, disk, byte, diag, index)
     let fix = number(cli_value(c, 3))
     if fix >= ints_len(diag) {
         finish(io, unavailable("no_such_fix"), json, 1)
         return 1
     }
-    let d = fx_diags(f)
+    let d = fx_diags(g)
     let k = ints_get(diag, fix)
     let i = ints_get(index, fix)
     let a = dg_fix_span_start(d, k, i)
@@ -261,10 +352,10 @@ pub fn pp_run(io: IoCap, c: Cli, what: Str) -> Int {
     strs_push(expected, was)
     strs_push(replacement, strs_get(d.fix_replacement, at))
     finish(io, "{\"schema\":\"nazm.patch/1\",\"status\":\"available\",\"operation\":{\"kind\":\"diagnostic_fix\",\"diagnostic\":{\"code\":" + json_str(dg_code(d, k))
-            + ",\"file\":" + json_str(fx_file_path(f, 0)) + ",\"start\":" + int_to_str(dg_start(d, k)) + ",\"end\":" + int_to_str(dg_end(d, k)) + "},\"fix\":" + int_to_str(fix)
+            + ",\"file\":" + json_str(fx_file_path(f, fm)) + ",\"start\":" + int_to_str(dg_start(d, k)) + ",\"end\":" + int_to_str(dg_end(d, k)) + "},\"fix\":" + int_to_str(fix)
             + ",\"alternatives\":" + int_to_str(ints_len(diag)) + ",\"applicability\":" + json_str(strs_get(d.fix_applicability, at)) + ",\"precondition\":"
             + json_str(strs_get(d.fix_precondition, at)) + ",\"description\":" + json_str(strs_get(d.fix_description, at)) + "},\"root\":" + root_json
-            + ",\"baseline\":{\"snapshot\":" + json_str(baseline) + "},\"files\":" + files_json(fx_file_path(f, 0), text, starts, ends, expected, replacement)
+            + ",\"baseline\":{\"snapshot\":" + json_str(baseline) + "},\"files\":" + files_json(fx_file_path(f, fm), text, starts, ends, expected, replacement)
             + ",\"validation\":\"compiler_fix\"}", json, 0)
     0
 }
