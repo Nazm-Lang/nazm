@@ -1,0 +1,8 @@
+// A binding assigned without `mut`: the checker's fix (N0310) is a quick fix at the assignment.
+fn main(out: OutCap) {
+    let x = 1
+    let y = 2
+    x = 3
+    y = 4
+    println(x + y)
+}
