@@ -1959,7 +1959,13 @@ fn signature_help(io: IoCap, s: Server, j: J) -> Str {
         if vs >= 0 && fx_start(f, vs) == fx_start(f, sx_field(t, n, "ty_span")) { continue }
         // The parentheses of its initialisers, inside the construction.
         let mut o = token_from(sts, fx_start(f, sp))
-        while o < ints_len(kinds) && ints_get(sts, o) < fx_end(f, sp) && ints_get(kinds, o) != k_lparen() { o += 1 }
+        // Not one inside the type arguments written before it (`Option[Vec[fn() -> Int]].None()`).
+        let mut brackets = 0
+        while o < ints_len(kinds) && ints_get(sts, o) < fx_end(f, sp) && (ints_get(kinds, o) != k_lparen() || brackets > 0) {
+            if ints_get(kinds, o) == k_lbracket() { brackets += 1 }
+            if ints_get(kinds, o) == k_rbracket() { brackets -= 1 }
+            o += 1
+        }
         if o >= ints_len(kinds) || ints_get(sts, o) >= fx_end(f, sp) { continue }
         let close = closing(kinds, o)
         if close < 0 { continue }
@@ -1978,7 +1984,7 @@ fn signature_help(io: IoCap, s: Server, j: J) -> Str {
     if qual >= 0 && sx_is_some(t, qual) { return "null" }
     let callee = sx_field(t, best, "callee_span")
     let site = ck_site_at(c, fx_start(f, callee), fx_end(f, callee))
-    if site < 0 { return "null" }
+    if site < 0 || ck_site_unchecked(c, site) { return "null" }
     let lab = ck_site_label(c, site)
     if strs_len(lab) == 0 { return "null" }
     // Which argument: the argument list's own separators that end at or before the offset.
