@@ -15,6 +15,8 @@
 # cases in parallel, no Git or Python in the image) and on a macOS host (one `host-run` at a time). The scripted sessions of `lsp-MODE`
 # (a host step: `lsp-gen.sh`, Python) are read from LSP_DIR/MODE/.
 #
+# `patch` is asked through `--cases` (`patch-gen.sh` writes them on the host: `patch rename` at names, `patch fix` at fixes, `patch rename` in a file the input imports).
+#
 # The Nazm `nazm` is built by the checkout's `nazm` ($NAZM, absolute) with a heap limit of at most 2 GiB; the reference is $NAZM_REF (default
 # $NAZM). NAZM_PORT names a port already built. REFUSALS_OUT is the scratch directory; KEEP=DIR keeps each difference's two records.
 set -u
