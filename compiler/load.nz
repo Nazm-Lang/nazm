@@ -321,14 +321,16 @@ pub fn ld_load_over(root: Str, library: Str, source_root: Str, packages: Package
         let carried = is_std && library == "";
         if carried {
             if sd_std(path) == "" { unreadable = "No such file or directory (os error 2)"; }
-        } else if over == false {
-            if file_exists(file) == false {
-                unreadable = "No such file or directory (os error 2)";
-            } else {
-                if ld_is_directory(file, io) {
-                    unreadable = "Is a directory (os error 21)";
+        } else {
+            if over == false {
+                if file_exists(file) == false {
+                    unreadable = "No such file or directory (os error 2)";
                 } else {
-                    if valid_utf8(read_file(file)) == false { unreadable = "stream did not contain valid UTF-8"; }
+                    if ld_is_directory(file, io) {
+                        unreadable = "Is a directory (os error 21)";
+                    } else {
+                        if valid_utf8(read_file(file)) == false { unreadable = "stream did not contain valid UTF-8"; }
+                    }
                 }
             }
         }
@@ -345,7 +347,7 @@ pub fn ld_load_over(root: Str, library: Str, source_root: Str, packages: Package
             continue;
         }
         let mut text = "";
-        if carried { text = sd_std(path); } else if over { text = ov_read(paths, texts_over, file, io); } else { text = read_file(file); }
+        if carried { text = sd_std(path); } else { if over { text = ov_read(paths, texts_over, file, io); } else { text = read_file(file); } }
         // A project file's derives, expanded before its imports are read (`derive::expand`).
         if is_std == false { text = dv_expand(text); }
         // Parsed for its imports only; its diagnostics are the caller's, from its own parse.
@@ -491,7 +493,9 @@ pub fn ld_load_over(root: Str, library: Str, source_root: Str, packages: Package
     }
     // The core prelude, last.
     strs_push(names, "@core/prelude.nz");
-    strs_push(texts, ld_with_newline(if library == "" { sd_prelude() } else { read_file(str_concat(library, "/core/prelude.nz")) }));
+    let mut prelude = sd_prelude();
+    if library != "" { prelude = read_file(str_concat(library, "/core/prelude.nz")); }
+    strs_push(texts, ld_with_newline(prelude));
     ints_push(standard, 1);
     ints_push(in_programs, 0);
     strs_push(identities, "@core/prelude.nz");
@@ -604,7 +608,7 @@ fn prelude_table(library: Str, io: IoCap) -> PreludeTable {
         let file = str_concat(str_concat(str_concat(library, "/std/"), name), ".nz");
         let t = sx_tree();
         let mut text = "";
-        if library == "" { text = sd_std(name); } else if file_exists(file) { text = read_file(file); }
+        if library == "" { text = sd_std(name); } else { if file_exists(file) { text = read_file(file); } }
         let program = sx_parse_source(text, t, dg_new());
         strs_push(tb.entry, name);
         ints_push(tb.nfirst, strs_len(tb.names));
