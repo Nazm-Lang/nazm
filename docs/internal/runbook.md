@@ -73,7 +73,9 @@ refuse to start outside the contained runner.
 The heap limit is a ceiling the program enforces on itself: every byte its code and runtime ask
 for is counted first, and an allocation past the limit does not happen (`N0406`, status 2;
 `docs/user/spec.md`, *A bounded heap*). It does not count a task's stack, the image, C's own
-allocations or child processes — hence one at a time, and the deadline.
+allocations or child processes — hence at most two at once (4 GiB of counted heap at worst, on a
+32 GB host; the copyright holder's decision of 2026-10-22, which replaced one at a time), and the
+deadline.
 
 **Still contained only:** the selfhost suite, `compiler/bootstrap.sh`, the self-build, fuzzing, the
 mutation catalogue, heavy benchmarks, any program built without a limit, and two host stages at

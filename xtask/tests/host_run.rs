@@ -285,29 +285,42 @@ fn a_missing_or_non_executable_file_is_refused_by_name() {
 
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "the host runner is macOS only")]
-fn a_second_stage_is_refused_while_one_runs() {
+fn a_third_stage_is_refused_while_two_run() {
     let d = tempfile::tempdir().unwrap();
     let exe = script(d.path(), "ok", true, Some("4194304"), "echo ran\n");
-    // The first stage's lock, held as a running stage holds it.
-    let held = fs::File::options()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(d.path().join("lock"))
-        .unwrap();
-    held.try_lock().unwrap();
-    refused_as(
-        &host_run(d.path(), &["--", exe.to_str().unwrap()]),
-        "another-stage-running",
-    );
-    drop(held);
+    let hold = |name: &str| {
+        let f = fs::File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(d.path().join(name))
+            .unwrap();
+        f.try_lock().unwrap();
+        f
+    };
+    // One stage running: a second is admitted.
+    let first = hold("lock");
     assert!(
         host_run(d.path(), &["--", exe.to_str().unwrap()])
             .status
             .success(),
-        "the lock is free once the first stage ends"
+        "a second stage runs beside the first"
     );
+    // Two running: a third is refused.
+    let second = hold("lock-2");
+    refused_as(
+        &host_run(d.path(), &["--", exe.to_str().unwrap()]),
+        "another-stage-running",
+    );
+    drop(first);
+    assert!(
+        host_run(d.path(), &["--", exe.to_str().unwrap()])
+            .status
+            .success(),
+        "a slot is free once a stage ends"
+    );
+    drop(second);
 }
 
 #[test]
