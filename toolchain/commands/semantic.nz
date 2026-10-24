@@ -70,7 +70,7 @@ fn root_facts(io: IoCap, root: Str, given: Str, given_set: Bool) -> Facts {
     if library == "" { refuse(io, "snapshot", "the standard library's directory (set NAZM_LIBRARY)") }
     let prefix = fe_prefix(io, root)
     let given_prefix = if given_set { fe_prefix(io, given) } else { "" }
-    fx_check_module_in(prefix + root, if given_set { given_prefix + given } else { "" }, library, fe_host_os(), fe_host_arch(), io)
+    fx_check_service(prefix + root, if given_set { given_prefix + given } else { "" }, library, fe_host_os(), fe_host_arch(), io)
 }
 
 // The snapshot of the compilation `f`, or the service's reason there is none, as a `Snap`.

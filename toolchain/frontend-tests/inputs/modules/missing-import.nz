@@ -1,0 +1,11 @@
+// An import that cannot be found: the language server still analyses what it can (N0205 beside the checker's own errors).
+use "nope.nz";
+use "gone.nz" as gone;
+use "lib/a.nz";
+
+fn local(x: Int) -> Int { x + 1 }
+
+fn main(out: OutCap) {
+    let y = local(2)
+    println(nope.helper(y) + gone.other(y))
+}

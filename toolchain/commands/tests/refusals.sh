@@ -123,7 +123,7 @@ for f in "${files[@]}"; do
             explain-flow) add "explain-flow $f" "" "explain-flow $f"; add "explain-flow-json $f" "" "explain-flow --json $f" ;;
             mir) add "mir-spans $f" "" "mir --spans $f"; add "mir-spans-json $f" "" "mir --json --spans $f" ;;
             lir) add "lir $f" "" "lir --target aarch64-apple-darwin $f"; add "lir-ops $f" "" "lir --ops $f"; add "lir-debug $f" "" "lir --ops --debug $f" ;;
-            fix) add "fix $f" "" "fix $f" ;;
+            fix) add "fix $f" "" "fix $f"; add "fix-json $f" "" "fix --json $f" ;;
             contract) add "contract $f" "" "contract $f"; add "contract-interface $f" "" "contract $f --interface"; add "contract-accounts $f" "" "contract $f --accounts @OUT@"
                 add "contract-upgrade $f" "" "contract $f --upgrade-check $f"
                 add "contract-txs $f" "" "contract $f --txs toolchain/commands/tests/contract-txs.txt" ;;
