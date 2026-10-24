@@ -7675,6 +7675,12 @@ fn check_spawn(c: Ck, s: Int) -> Int {
                 ints_push(c.rix.eus, sps(c, cs));
                 ints_push(c.rix.eue, spe(c, cs));
                 ints_push(c.rix.eui, target);
+                // The reference's `calls` has it too, filed under no function's body: hover reads it.
+                let keep = gs(c, s_fn());
+                ss(c, s_fn(), 0 - 1);
+                record_site(c, cs, target);
+                ints_set(c.sspawn, ints_len(c.sspawn) - 1, 2);
+                ss(c, s_fn(), keep);
             }
         }
         let mut i = 0;
@@ -16600,8 +16606,14 @@ fn ix_build(c: Ck) -> Int {
     while i < ints_len(vars.ks) {
         let rz = sm_get(c.mrefu, ints_get(vars.ks, i), ints_get(vars.ke, i));
         if rz >= 0 {
-            // A refused capture is mentioned through a slot of the closure that nothing declares.
-            ix_use(at, live, bref + rz, ints_get(vars.ks, i), ints_get(vars.ke, i));
+            // A refused capture is mentioned through the slot the captured binding has in its own function, in the closure: the entity that slot is there (a local of
+            // the closure, or what the closure's copy is of), or, where the closure has no such slot, one that nothing declares.
+            let held = refused_binding(c, rz);
+            if held >= 0 {
+                ix_use(at, live, bloc + held, ints_get(vars.ks, i), ints_get(vars.ke, i));
+            } else {
+                ix_use(at, live, bref + rz, ints_get(vars.ks, i), ints_get(vars.ke, i));
+            }
         } else {
             if ints_get(c.bfn, ints_get(vars.kv, i)) >= 0 { ix_use(at, live, bloc + ints_get(vars.kv, i), ints_get(vars.ks, i), ints_get(vars.ke, i)); }
         }
@@ -16904,6 +16916,22 @@ pub fn ck_local_table(c: Ck, fnid: Int) -> Ints {
 }
 // The closure a refused capture's mention (`ck_refused_capture_at`) is in, and the slot the reference names for it: that of the captured binding in the function declaring it, which the
 // reference looks up in the closure's own locals (a capture it refused has no copy there).
+// The binding the slot a refused capture `g` names is in the closure's locals: its own, or the one a capture there is a copy of; -1 where the closure has no such slot.
+fn refused_binding(c: Ck, g: Int) -> Int {
+    let bid = ints_get(c.rzb, g);
+    let own = ck_local_table(c, ints_get(c.bfn, bid));
+    let mut slot = 0 - 1;
+    let mut i = 0;
+    while i < ints_len(own) {
+        if ints_get(own, i) == bid { slot = i; }
+        i = i + 1;
+    }
+    let table = ck_local_table(c, ints_get(c.rzf, g));
+    if slot < 0 || slot >= ints_len(table) { return 0 - 1; }
+    let ent = ints_get(table, slot);
+    if ent >= 0 { return ent; }
+    ints_get(c.capbd, 0 - 2 - ent)
+}
 pub fn ck_refused_fn(c: Ck, s: Int, e: Int) -> Int {
     let g = sm_get(c.mrefu, s, e);
     if g < 0 { return 0 - 1; }
@@ -16996,6 +17024,8 @@ pub fn ck_call_site(c: Ck, i: Int, k: Int) -> Int { ints_get(c.rix.cgl, ints_get
 pub fn ck_site_start(c: Ck, site: Int) -> Int { ints_get(c.sstart, site) }
 pub fn ck_site_end(c: Ck, site: Int) -> Int { ints_get(c.send, site) }
 pub fn ck_site_spawned(c: Ck, site: Int) -> Bool { ints_get(c.sspawn, site) == 1 }
+// A call the reference resolved and then refused (a generic `spawn`): its callee is recorded, but no checked call.
+pub fn ck_site_unchecked(c: Ck, site: Int) -> Bool { ints_get(c.sspawn, site) == 2 }
 
 // --- provenance summaries (R5 hand-back; `FnDef::provenance`, N38) ----------------------------
 //
