@@ -373,6 +373,19 @@ fn s_hkind() -> Int { 18 }
 fn s_ha() -> Int { 19 }
 fn s_hb() -> Int { 20 }
 fn s_fv() -> Int { 21 }
+// A parse of an interpolation's hole, whose recoveries are not the document's.
+fn s_sub() -> Int { 22 }
+
+// The bytes the parser skipped in recovering, from token `from` to the one before the current: what the reference's concrete tree holds as an error node. Kept as a span node under no
+// parent, marked "recovered", so the tree the parser builds is as it was.
+fn note_error(p: Px, from: Int) -> Int { note_error_as(p, from, "recovered") }
+
+// The same, marked "recovered!" where it is not inside a block: a whole item or a whole body lost.
+fn note_error_as(p: Px, from: Int, kind: Str) -> Int {
+    if flag(p, s_sub()) || pos(p) <= from { return 0; }
+    raw_node(p.t, tk_span(), sat(p, from), eat_at(p, pos(p) - 1), kind);
+    0
+}
 
 fn hole_on(p: Px) -> Bool { g(p, s_hole()) != 0 }
 fn hole_off(p: Px) -> Int { g(p, s_hole()) - 1 }
@@ -908,7 +921,10 @@ pub fn sx_parse_items(p: Px, pr: Prog) -> Int {
             }
             push_item(p, pr, kind, item, extra);
         } else {
-            if flag(p, s_drop()) == false { recover_to_item(p, start); }
+            if flag(p, s_drop()) == false {
+                recover_to_item(p, start);
+                note_error_as(p, start, "recovered!");
+            }
         }
     }
     0
@@ -1515,7 +1531,9 @@ fn field_decl(p: Px, help: Str, after: Str) -> Int {
 fn recover_member(p: Px, start: Int, close: Int) -> Bool {
     if flag(p, s_poisoned()) == false && delimiters_balanced(p) == false { setf(p, s_muted(), true); }
     setf(p, s_poisoned(), true);
-    skip_member(p, start, close)
+    let resumable = skip_member(p, start, close);
+    note_error(p, start);
+    resumable
 }
 
 fn opens(k: Int) -> Bool { k == k_lparen() || k == k_lbrace() || k == k_lbracket() }
@@ -1656,6 +1674,7 @@ fn function(p: Px) -> Int {
     let outer = g(p, s_no_result());
     setf(p, s_no_result(), no_result && expression_body == false);
     let mut b = 0 - 1;
+    let body_start = pos(p);
     if expression_body { b = expression_body_block(p); } else { b = block(p); }
     sv(p, s_no_result(), outer);
     if b >= 0 && no_result && expression_body == false { b = returning_nothing(t, b); }
@@ -1664,6 +1683,7 @@ fn function(p: Px) -> Int {
         if flag(p, s_poisoned()) == false { body = mk_some(t, b); }
     } else {
         recover_to_item(p, first);
+        note_error_as(p, body_start, "recovered!");
     }
     let mut span_end = sx_field(t, return_type, "span");
     if sx_is_some(t, body) { span_end = sx_field(t, sx_unwrap(t, body), "span"); }
@@ -2458,6 +2478,7 @@ fn block_items(p: Px, deepest: Ints) -> Int {
             setf(p, s_poisoned(), true);
             let resumable = skip_statement(p, start);
             if resumable && pos(p) == start && at(p, k_rbrace()) == false { bump(p); }
+            note_error(p, start);
             if resumable == false { return 0 - 1; }
         }
     }
@@ -4259,6 +4280,7 @@ fn hole(p: Px, text: Str, from: Int, braces: Int) -> Int {
     lex_all(wrapped, kinds, starts, ends, texts, errors);
     let mark = ints_len(t.kind);
     let sub = sx_parser(kinds, starts, ends, texts, wrapped, t, errors);
+    sv(sub, s_sub(), 1);
     let pr = new_prog();
     sx_parse_items(sub, pr);
     let mut tail = 0 - 1;

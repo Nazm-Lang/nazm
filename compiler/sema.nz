@@ -5400,6 +5400,11 @@ fn check_function(c: Ck, f: Int) -> Int {
                 q = q + 1;
             }
             signature_type(c, fld(c, f, "return_type"));
+            // A body of no declared function: a scope the reference opens all the same, which no name is visible from.
+            ss(c, s_fn(), 0 - 1);
+            open_scope(c);
+            trace_span(c, fld(c, f, "span"));
+            close_scope(c);
             return 0;
         }
     }
@@ -5412,6 +5417,10 @@ fn check_function(c: Ck, f: Int) -> Int {
             q = q + 1;
         }
         signature_type(c, fld(c, f, "return_type"));
+        ss(c, s_fn(), 0 - 1);
+        open_scope(c);
+        trace_span(c, fld(c, f, "span"));
+        close_scope(c);
         return 0;
     }
     ss(c, s_fn(), id);
@@ -17094,6 +17103,18 @@ fn trace_row(c: Ck, m: Int, name: Str, kind: Int, id: Int) -> Int {
     let t = c.sc;
     if kind <= 1 && strs_find(t.rf, name) >= 0 { return 0; }
     if kind == 2 && strs_find(t.rt, name) >= 0 { return 0; }
+    // A name given again replaces what it meant before, as a map's insert does (a function of this name replaces the built-in's).
+    if kind <= 1 {
+        let mut i = 0;
+        while i < ints_len(t.mm) {
+            if ints_get(t.mm, i) == m && ints_get(t.mk, i) <= 1 && strs_get(t.mn, i) == name {
+                ints_set(t.mk, i, kind);
+                ints_set(t.mi, i, id);
+                return 0;
+            }
+            i = i + 1;
+        }
+    }
     ints_push(t.mm, m);
     strs_push(t.mn, name);
     ints_push(t.mk, kind);

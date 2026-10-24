@@ -2034,17 +2034,50 @@ fn syntax_diags(f: Facts) -> Ints {
     out
 }
 
+// The bytes the document's parse recovered from (the reference's error nodes), as pairs: spans the parser kept under no node.
+fn recovered(f: Facts) -> Ints {
+    let t = fx_tree(f)
+    let out = ints_new()
+    for n in 0..fx_module_program(f, 0) {
+        if sx_kind(t, n) == tk_span() && (sx_text(t, n) == "recovered" || sx_text(t, n) == "recovered!") {
+            ints_push(out, sx_s(t, n))
+            ints_push(out, sx_e(t, n))
+            ints_push(out, if sx_text(t, n) == "recovered!" { 1 } else { 0 })
+        }
+    }
+    out
+}
+
+// Where the top-level item `n` ends in the concrete tree: its span, or, where its body was lost, up to the next item's start.
+fn item_end(f: Facts, n: Int) -> Int {
+    let t = fx_tree(f)
+    let sp = sx_field(t, n, "span")
+    let body = sx_field(t, n, "body")
+    if body < 0 || sx_is_some(t, body) { return fx_end(f, sp) }
+    let root = fx_module_program(f, 0)
+    let mut next = str_len(fx_module_text(f, 0))
+    for list in words("functions records enums traits impls consts imports") {
+        let items = items_of(t, root, list)
+        for k in 0..ints_len(items) {
+            let isp = sx_field(t, ints_get(items, k), "span")
+            if isp >= 0 && fx_start(f, isp) > fx_start(f, sp) && fx_start(f, isp) < next { next = fx_start(f, isp) }
+        }
+    }
+    next
+}
+
 // Whether the function holding `offset` of the document, if any, parsed without recovery: a recovered statement may have been a `let` the checker never saw.
 fn locals_are_complete(f: Facts, offset: Int) -> Bool {
     let t = fx_tree(f)
-    let syn = syntax_diags(f)
-    if ints_len(syn) == 0 { return true }
-    let fns = sx_items(t, sx_field(t, fx_module_program(f, 0), "functions"))
+    let rec = recovered(f)
+    if ints_len(rec) == 0 { return true }
+    let fns = items_of(t, fx_module_program(f, 0), "functions")
     for k in 0..ints_len(fns) {
         let sp = sx_field(t, ints_get(fns, k), "span")
-        if fx_start(f, sp) <= offset && offset < fx_end(f, sp) {
-            for q in 0..ints_len(syn) / 3 {
-                if ints_get(syn, 3 * q) == 0 && ints_get(syn, 3 * q + 1) >= fx_start(f, sp) && ints_get(syn, 3 * q + 1) <= fx_end(f, sp) { return false }
+        let fe = item_end(f, ints_get(fns, k))
+        if fx_start(f, sp) <= offset && offset < fe {
+            for q in 0..ints_len(rec) / 3 {
+                if ints_get(rec, 3 * q) >= fx_start(f, sp) && ints_get(rec, 3 * q) <= fe { return false }
             }
             return true
         }
@@ -2059,25 +2092,25 @@ fn module_names_are_complete(f: Facts) -> Bool { ints_len(syntax_diags(f)) == 0 
 fn structure_complete(f: Facts, offset: Int) -> Bool {
     let syn = syntax_diags(f)
     if ints_len(syn) == 0 { return true }
-    let t = fx_tree(f)
-    let root = fx_module_program(f, 0)
     for q in 0..ints_len(syn) / 3 {
         if ints_get(syn, 3 * q) != 0 { return false }
-        let at = ints_get(syn, 3 * q + 1)
-        // The top-level item the recovery is in: only a function's body, away from the position, is tolerated.
+    }
+    let rec = recovered(f)
+    let t = fx_tree(f)
+    let root = fx_module_program(f, 0)
+    for q in 0..ints_len(rec) / 3 {
+        let at = ints_get(rec, 3 * q)
+        // A whole item or body lost is an error beside the block, never inside one.
+        if ints_get(rec, 3 * q + 2) == 1 { return false }
+        // Inside a top-level function (whose block the concrete tree has, though a recovered statement leaves the abstract one with none), away from the position.
         let mut ok = false
-        let fns = sx_items(t, sx_field(t, root, "functions"))
+        let fns = items_of(t, root, "functions")
         for k in 0..ints_len(fns) {
             let n = ints_get(fns, k)
             let sp = sx_field(t, n, "span")
-            if fx_start(f, sp) <= at && at <= fx_end(f, sp) {
-                let body = sx_field(t, n, "body")
-                if sx_is_some(t, body) && !sx_is_some(t, sx_field(t, n, "method_of")) {
-                    let bs = fx_start(f, sx_field(t, sx_unwrap(t, body), "span"))
-                    let be = fx_end(f, sx_field(t, sx_unwrap(t, body), "span"))
-                    let here = fx_start(f, sp) <= offset && offset <= fx_end(f, sp)
-                    if !here && bs <= at && at <= be { ok = true }
-                }
+            if fx_start(f, sp) <= at && at <= item_end(f, n) && !sx_is_some(t, sx_field(t, n, "method_of")) {
+                let here = fx_start(f, sp) <= offset && offset <= item_end(f, n)
+                if !here { ok = true }
             }
         }
         if !ok { return false }
@@ -2299,7 +2332,12 @@ fn completion(io: IoCap, s: Server, j: J) -> Str {
     let texts = strs_new()
     lex_all(fx_module_text(f, 0), kinds, sts, ens, texts, dg_new())
     let owner = ints_new()
-    let role = ident_role(f, st, en, kinds, sts, owner)
+    let mut role = ident_role(f, st, en, kinds, sts, owner)
+    // An inherent impl's type is read as a trait's name and kept nowhere in the tree: the name right after `impl` is a written type.
+    if role == 0 {
+        let k = token_from(sts, st)
+        if k > 0 && ints_get(kinds, k - 1) == k_impl() { role = 3 }
+    }
     let prefix = str_slice(text, st, if at < en { at } else { en })
     let names = strs_new()
     let ckinds = strs_new()
