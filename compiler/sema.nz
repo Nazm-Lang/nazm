@@ -42,6 +42,8 @@ pub struct Ck {
     d: Diags,
     // Why it stopped; empty while it carries everything it has met.
     stop: Strs,
+    // The functions defined again in their module (`N0203`): the reference leaves the one it kept with no solved provenance.
+    fndups: Ints,
     // Scalars, by the slots below.
     st: Ints,
     // Modules, in the compilation's order: each one's program node and the offset of its text.
@@ -1542,7 +1544,7 @@ fn parse_int(s: Str) -> Int {
 // --- the checker ------------------------------------------------------------------------------
 
 fn new_ck(t: Tree) -> Ck {
-    let c = Ck(t: t, d: dg_new(), stop: strs_new(), st: ints_new(), mprog: ints_new(), mbase: ints_new(), tytag: ints_new(),
+    let c = Ck(t: t, d: dg_new(), stop: strs_new(), fndups: ints_new(), st: ints_new(), mprog: ints_new(), mbase: ints_new(), tytag: ints_new(),
             tya: ints_new(), tyb: ints_new(), tyc: ints_new(), tyname: strs_new(), tyargf: ints_new(), tyargc: ints_new(),
             tyargs: ints_new(), tykey: strs_new(), rname: strs_new(), rmod: ints_new(), rns: ints_new(), rne: ints_new(),
             rnp: ints_new(), rff: ints_new(), rfc: ints_new(), ename: strs_new(), emod: ints_new(), ens: ints_new(),
@@ -4783,6 +4785,7 @@ fn declare_function(c: Ck, m: Int, f: Int, hdr: Int) -> Int {
             let mut place = "module";
             if method { place = "impl"; }
             err(c, "N0203", ns, cat5("`", fname_of(c, f, "name"), "` is defined more than once in this ", place, ""), "");
+            if method == false { ints_push(c.fndups, existing); }
             sec_at(c, ints_get(c.fnns, existing), ints_get(c.fnne, existing), "first defined here");
         } else {
             // A foreign declaration (N42): its shape, ABI, symbol and types, and its symbol
@@ -16933,7 +16936,15 @@ fn pv_build(c: Ck) -> Int {
     g = 0;
     while g < n {
         ints_set(r.pvf, g, ints_len(r.pvv));
-        if ints_get(ps.at, g) >= 0 {
+        if index_of(c.fndups, g) >= 0 {
+            // A function defined again: the reference gives the one it kept a solution that holds nothing.
+            ints_set(r.pvh, g, 1);
+            let mut i = 0;
+            while i < ints_get(c.fnpc, g) {
+                ints_push(r.pvv, 0);
+                i = i + 1;
+            }
+        } else if ints_get(ps.at, g) >= 0 {
             ints_set(r.pvh, g, 1);
             ints_set(r.pvo, g, ints_get(ps.so, g));
             ints_set(r.pvp, g, ints_get(ps.sp, g));
