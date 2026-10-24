@@ -820,12 +820,16 @@ fn renameable(io: IoCap, s: Server, f: Facts, st: Int, en: Int, out: Strs) -> St
     let m = fx_module_at(f, ds)
     if fx_module_name(f, m) == "@core/prelude.nz" { return toolchain }
     if exported(f, kind, ds) {
-        // Within a declared workspace every module that can name it is searched: not carried.
-        let root = pk_decide(strs_get(s.paths, cur(s)), io)
-        if strs_get(s.root, 0) != "" || pk_root_how(root) != 0 { refuse(io, "a rename of an exported name within a declared workspace") }
-        return "this is exported, and a module no open program loads may use it, so every occurrence cannot be known; declare a workspace (a `nazm.root` marker or `--source-root`) and every module under it is searched"
+        // Within a declared workspace every module that can name it is searched (N89).
+        let ws = workspace_root(io, s)
+        if ws == "" { return "this is exported, and a module no open program loads may use it, so every occurrence cannot be known; declare a workspace (a `nazm.root` marker or `--source-root`) and every module under it is searched" }
+        if ws == "!" { return "this is part of a library package's API, which other packages import; no walk of this workspace finds their uses, so it is not renamed" }
     }
-    if first_error(f) >= 0 { return "a program containing this has errors, so its uses are not all known" }
+    // Every compilation that contains the declaring file must be clean: a resolution with errors in it is not a complete account of where anything is used.
+    let held = containing(io, s, module_identity(io, fx_module_name(f, m)), fx_module_text(f, m))
+    for q in 0..ints_len(held) / 2 {
+        if first_error(vec_get(s.facts, ints_get(held, 2 * q))) >= 0 { return "a program containing this has errors, so its uses are not all known" }
+    }
     let base = fx_module_base(f, m)
     strs_push(out, int_to_str(e))
     strs_push(out, int_to_str(m))
@@ -879,51 +883,86 @@ fn invalid_name(name: Str) -> Str {
     "is not one identifier"
 }
 
-// How a compilation's occurrences group into entities: for each entity, its kind and the sorted places of
-// its declaration and uses, the groups sorted and each once. `edits` (starts, ends, replacement lengths of
-// module `shifted`, ordered) moves that module's offsets past a rename's edits.
-fn partition(f: Facts, shifted: Int, e_start: Ints, e_end: Ints, e_len: Ints) -> Strs {
-    let groups = strs_new()
-    for i in 0..fx_ref_count(f) {
-        let places = strs_new()
-        let ds = fx_ref_decl_start(f, i)
-        if ds >= 0 { strs_push(places, place_of(f, ds, fx_ref_decl_end(f, i), shifted, e_start, e_end, e_len)) }
-        for k in 0..fx_ref_use_count(f, i) {
-            strs_push(places, place_of(f, fx_ref_use_start(f, i, k), fx_ref_use_end(f, i, k), shifted, e_start, e_end, e_len))
-        }
-        strs_push(groups, fx_ref_kind(f, i) + "|" + str_join(sort_places(places), ";"))
-    }
-    sort_unique(groups)
+// How a compilation's occurrences group into entities, as places: for each entity, its kind and the places of its declaration and uses, each a file's
+// identity and local offsets. The groups are made, sorted and compared (`part_groups`) once the edits that move them are known.
+struct Part {
+    kind: Strs,
+    first: Ints,
+    count: Ints,
+    pid: Strs,
+    ps: Ints,
+    pe: Ints,
 }
 
-// `moved`: a span's place after the edits (ordered, disjoint) are applied: `NAME:START-END`, zero-padded so
-// that places sort as (name, start, end) do.
-fn place_of(f: Facts, a: Int, b: Int, shifted: Int, e_start: Ints, e_end: Ints, e_len: Ints) -> Str {
-    let m = fx_module_at(f, a)
-    let base = fx_module_base(f, m)
-    let mut s = a - base
-    let mut e = b - base
-    if m == shifted {
-        let mut delta = 0
-        let mut done = false
-        for k in 0..ints_len(e_start) {
-            if !done {
-                let grew = ints_get(e_len, k) - ints_get(e_end, k) + ints_get(e_start, k)
-                if ints_get(e_start, k) == s && ints_get(e_end, k) == e {
-                    s = s + delta
-                    e = s + ints_get(e_len, k)
-                    done = true
-                } else if ints_get(e_end, k) <= s {
-                    delta += grew
+// The identity of each module of `f` (`module_identity`).
+fn module_ids(io: IoCap, f: Facts) -> Strs {
+    let out = strs_new()
+    for m in 0..fx_modules(f) { strs_push(out, module_identity(io, fx_module_name(f, m))) }
+    out
+}
+
+fn part_of(io: IoCap, f: Facts) -> Part {
+    let p = Part(kind: strs_new(), first: ints_new(), count: ints_new(), pid: strs_new(), ps: ints_new(), pe: ints_new())
+    let ids = module_ids(io, f)
+    for i in 0..fx_ref_count(f) {
+        strs_push(p.kind, fx_ref_kind(f, i))
+        ints_push(p.first, strs_len(p.pid))
+        let mut n = 0
+        let ds = fx_ref_decl_start(f, i)
+        if ds >= 0 {
+            let m = fx_module_at(f, ds)
+            strs_push(p.pid, strs_get(ids, m))
+            ints_push(p.ps, ds - fx_module_base(f, m))
+            ints_push(p.pe, fx_ref_decl_end(f, i) - fx_module_base(f, m))
+            n += 1
+        }
+        for k in 0..fx_ref_use_count(f, i) {
+            let a = fx_ref_use_start(f, i, k)
+            let m = fx_module_at(f, a)
+            strs_push(p.pid, strs_get(ids, m))
+            ints_push(p.ps, a - fx_module_base(f, m))
+            ints_push(p.pe, fx_ref_use_end(f, i, k) - fx_module_base(f, m))
+            n += 1
+        }
+        ints_push(p.count, n)
+    }
+    p
+}
+
+// The groups of `p` with the places of the files in `e_id` moved past the edits (`e_id`, `e_start`, `e_end`, `e_len`: each edit's file, bytes and
+// replacement length, ordered within a file): sorted, each once.
+fn part_groups(p: Part, e_id: Strs, e_start: Ints, e_end: Ints, e_len: Ints) -> Strs {
+    let groups = strs_new()
+    for i in 0..strs_len(p.kind) {
+        let places = strs_new()
+        for q in 0..ints_get(p.count, i) {
+            let at = ints_get(p.first, i) + q
+            let id = strs_get(p.pid, at)
+            let mut s = ints_get(p.ps, at)
+            let mut e = ints_get(p.pe, at)
+            let mut delta = 0
+            let mut done = false
+            for k in 0..ints_len(e_start) {
+                if !done && strs_get(e_id, k) == id {
+                    let grew = ints_get(e_len, k) - ints_get(e_end, k) + ints_get(e_start, k)
+                    if ints_get(e_start, k) == s && ints_get(e_end, k) == e {
+                        s = s + delta
+                        e = s + ints_get(e_len, k)
+                        done = true
+                    } else if ints_get(e_end, k) <= s {
+                        delta += grew
+                    }
                 }
             }
+            if !done {
+                s = s + delta
+                e = e + delta
+            }
+            strs_push(places, id + str_from_byte(0) + pad(s) + "-" + pad(e))
         }
-        if !done {
-            s = s + delta
-            e = e + delta
-        }
+        strs_push(groups, strs_get(p.kind, i) + "|" + str_join(sort_places(places), ";"))
     }
-    fx_module_name(f, m) + str_from_byte(0) + pad(s) + "-" + pad(e)
+    sort_unique(groups)
 }
 
 fn pad(n: Int) -> Str {
@@ -987,6 +1026,395 @@ fn same_strs(a: Strs, b: Strs) -> Bool {
 
 fn failure(io: IoCap, id: Str, why: Str) -> Int { respond_error(io, id, 0 - 32803, "nazm cannot rename this: " + why) }
 
+// Every open compilation that contains the file `key` with exactly `text`: its document and the file's module there, pairs.
+fn containing(io: IoCap, s: Server, key: Str, text: Str) -> Ints {
+    let out = ints_new()
+    for dk in 0..vec_len(s.facts) {
+        let g = vec_get(s.facts, dk)
+        let mut found = false
+        for m in 0..fx_modules(g) {
+            if !found && module_identity(io, fx_module_name(g, m)) == key && fx_module_text(g, m) == text {
+                ints_push(out, dk)
+                ints_push(out, m)
+                found = true
+            }
+        }
+    }
+    out
+}
+
+// Whether the package whose source root is `root` is a library: its manifest names no `main` (`library_package`).
+fn library_package(io: IoCap, root: Str) -> Bool {
+    let mut dir = root
+    while dir != "" {
+        let manifest = pk_join(dir, "nazm.toml")
+        if file_exists(manifest) {
+            let m = pk_parse(read_file(manifest))
+            if pk_state(m) == 1 && pk_normalise(pk_join(dir, strs_get(m.root, 0))) == root && ints_get(m.has_main, 0) == 0 { return true }
+        }
+        dir = pk_parent(dir)
+    }
+    false
+}
+
+// The workspace the current document is in (`LanguageService::workspace`): its source root where that is declared — by `--source-root`, a `nazm.root` marker or a
+// package's manifest — "" where the root is merely the file's directory, and "!" for a library package's, whose API other packages use.
+fn workspace_root(io: IoCap, s: Server) -> Str {
+    let given = strs_get(s.root, 0)
+    if given != "" { return pk_normalise(given) }
+    let r = pk_decide(strs_get(s.paths, cur(s)), io)
+    let how = pk_root_how(r)
+    if how == 2 { return pk_root_path(r) }
+    if how == 1 {
+        if library_package(io, pk_root_path(r)) { return "!" }
+        return pk_root_path(r)
+    }
+    ""
+}
+
+// Every `.nz` file under `dir`, skipping hidden directories and `target`, following links as `Path::is_dir` does.
+fn walk_workspace(io: IoCap, dir: Str, out: Strs) -> Int {
+    let h = os_dir_open(dir)
+    if os_status(h) < 0 { return 0 }
+    let buf = bytes_new(1024)
+    let mut n = os_dir_next(h, buf)
+    let subdirs = strs_new()
+    while n > 0 {
+        let name = bytes_to_str(bytes_slice(buf, 0, n))
+        let p = if dir == "/" { "/" + name } else { dir + "/" + name }
+        if fe_stat_kind(io, p) == 1 {
+            if !fe_starts(name, ".") && name != "target" { strs_push(subdirs, p) }
+        } else if str_len(name) > 3 && str_slice(name, str_len(name) - 3, str_len(name)) == ".nz" {
+            strs_push(out, p)
+        }
+        n = os_dir_next(h, buf)
+    }
+    os_close(h)
+    for i in 0..strs_len(subdirs) { walk_workspace(io, strs_get(subdirs, i), out) }
+    0
+}
+
+// A rename's plan: the files it edits (as the protocol will name them), the text each was computed from, the version of its open document (-1 for a file that is not
+// open), and its edits; or why there is none.
+struct Plan {
+    paths: Strs,
+    texts: Strs,
+    versions: Ints,
+    first: Ints,
+    count: Ints,
+    starts: Ints,
+    ends: Ints,
+    why: Strs,
+}
+
+fn plan_new() -> Plan {
+    let p = Plan(paths: strs_new(), texts: strs_new(), versions: ints_new(), first: ints_new(), count: ints_new(), starts: ints_new(), ends: ints_new(), why: strs_new())
+    strs_push(p.why, "")
+    p
+}
+
+fn plan_fail(p: Plan, why: Str) -> Plan {
+    strs_set(p.why, 0, why)
+    p
+}
+
+// The open document whose identity is `key`, or -1.
+fn open_as(io: IoCap, s: Server, key: Str) -> Int {
+    for i in 0..strs_len(s.paths) {
+        if identity_of(io, strs_get(s.paths, i)) == key { return i }
+    }
+    0 - 1
+}
+
+// `text` with the edits `from..from+n` of (`starts`, `ends`) replaced by `new_name`.
+fn apply_edits(text: Str, starts: Ints, ends: Ints, from: Int, n: Int, new_name: Str) -> Str {
+    let parts = strs_new()
+    let mut at = 0
+    for k in 0..n {
+        strs_push(parts, str_slice(text, at, ints_get(starts, from + k)))
+        strs_push(parts, new_name)
+        at = ints_get(ends, from + k)
+    }
+    strs_push(parts, str_slice(text, at, str_len(text)))
+    str_join(parts, "")
+}
+
+// The open buffers with the files of `many` (identity, text) in their places: the paths and the texts, in the order `fx_check_over` takes them.
+fn overlay(io: IoCap, s: Server, ids: Strs, texts: Strs, out_paths: Strs, out_texts: Strs) -> Int {
+    for i in 0..strs_len(s.paths) {
+        strs_push(out_paths, strs_get(s.paths, i))
+        strs_push(out_texts, strs_get(s.texts, i))
+    }
+    for k in 0..strs_len(ids) {
+        let at = open_as(io, s, strs_get(ids, k))
+        if at >= 0 { strs_set(out_texts, at, strs_get(texts, k)) } else {
+            strs_push(out_paths, strs_get(ids, k))
+            strs_push(out_texts, strs_get(texts, k))
+        }
+    }
+    0
+}
+
+// The plan renaming the entity `e` of `f`, declared in module `m` at `ds..de` (local), a private one: its declaration and uses, all in the declaring file, validated against every open
+// compilation that contains it (`rename`, `validate`).
+fn single_plan(io: IoCap, s: Server, f: Facts, e: Int, m: Int, ds: Int, de: Int, old: Str, new_name: Str) -> Plan {
+    let p = plan_new()
+    let text = fx_module_text(f, m)
+    let base = fx_module_base(f, m)
+    let starts = ints_new()
+    let ends = ints_new()
+    ints_push(starts, ds)
+    ints_push(ends, de)
+    for k in 0..fx_ref_use_count(f, e) {
+        let a = fx_ref_use_start(f, e, k)
+        if fx_module_at(f, a) != m { return plan_fail(p, "refused: a use outside the declaring file") }
+        let mut at = ints_len(starts)
+        while at > 0 && (ints_get(starts, at - 1) > a - base || (ints_get(starts, at - 1) == a - base && ints_get(ends, at - 1) > fx_ref_use_end(f, e, k) - base)) { at -= 1 }
+        ints_push(starts, 0)
+        ints_push(ends, 0)
+        let mut q = ints_len(starts) - 1
+        while q > at {
+            ints_set(starts, q, ints_get(starts, q - 1))
+            ints_set(ends, q, ints_get(ends, q - 1))
+            q -= 1
+        }
+        ints_set(starts, at, a - base)
+        ints_set(ends, at, fx_ref_use_end(f, e, k) - base)
+    }
+    // Written under a name a re-export gave it, an occurrence keeps its spelling.
+    for k in 0..ints_len(starts) {
+        if str_slice(text, ints_get(starts, k), ints_get(ends, k)) != old { continue }
+        if ints_len(p.ends) > 0 && ints_get(p.ends, ints_len(p.ends) - 1) > ints_get(starts, k) { return plan_fail(p, "refused: two occurrences overlap") }
+        ints_push(p.starts, ints_get(starts, k))
+        ints_push(p.ends, ints_get(ends, k))
+    }
+    let key = module_identity(io, fx_module_name(f, m))
+    let edited = apply_edits(text, p.starts, p.ends, 0, ints_len(p.starts), new_name)
+    // The candidate program, for every open compilation that contains the file: clean, and the same partition.
+    let held = containing(io, s, key, text)
+    let ids = strs_new()
+    let etexts = strs_new()
+    strs_push(ids, key)
+    strs_push(etexts, edited)
+    let ps = strs_new()
+    let ts = strs_new()
+    overlay(io, s, ids, etexts, ps, ts)
+    let e_id = strs_new()
+    let e_len = ints_new()
+    for k in 0..ints_len(p.starts) {
+        strs_push(e_id, key)
+        ints_push(e_len, str_len(new_name))
+    }
+    let mut validated = 0
+    for q in 0..ints_len(held) / 2 {
+        let dk = ints_get(held, 2 * q)
+        let g = fx_check_over(strs_get(s.paths, dk), strs_get(s.root, 0), ps, ts, strs_get(s.library, 0), fe_host_os(), fe_host_arch(), io)
+        if fx_refusal(g) != "" { refuse(io, "a source root the reference refuses") }
+        if fe_load_failed(g) { refuse(io, "a candidate program that does not load") }
+        if !fx_carried(g) { refuse(io, fx_why(g)) }
+        if first_error(g) >= 0 { return plan_fail(p, "the renamed program would not check: " + strs_get(fx_diags(g).message, first_error(g))) }
+        let before = part_of(io, vec_get(s.facts, dk))
+        let after = part_of(io, g)
+        if !same_strs(part_groups(before, e_id, p.starts, p.ends, e_len), part_groups(after, strs_new(), ints_new(), ints_new(), ints_new())) {
+            return plan_fail(p, "the renamed program would mean something else: a use would refer to a different definition")
+        }
+        validated += 1
+    }
+    if validated == 0 { return plan_fail(p, "refused: no compilation contains the edited file") }
+    strs_push(p.paths, pk_normalise(fx_module_name(f, m)))
+    strs_push(p.texts, text)
+    ints_push(p.versions, open_version(io, s, key))
+    ints_push(p.first, 0)
+    ints_push(p.count, ints_len(p.starts))
+    p
+}
+
+fn open_version(io: IoCap, s: Server, key: Str) -> Int {
+    let at = open_as(io, s, key)
+    if at < 0 { return 0 - 1 }
+    ints_get(s.versions, at)
+}
+
+// The plan renaming an exported entity across a workspace (`workspace_plan`): found in every compilation by its declaration's place, its occurrences across every file merged,
+// the candidate workspace analysed again and required to mean what it meant.
+fn workspace_plan(io: IoCap, s: Server, f: Facts, m: Int, ds: Int, de: Int, old: Str, new_name: Str, root: Str) -> Plan {
+    let p = plan_new()
+    if fe_starts(fx_module_name(f, m), "@") { return plan_fail(p, "this is the core prelude's, which the toolchain owns") }
+    let key = module_identity(io, fx_module_name(f, m))
+    let within = key == root || fe_starts(key, root + "/") || (root == "/" && fe_starts(key, "/"))
+    let id_root = identity_of(io, root)
+    if !within && !(key == id_root || fe_starts(key, id_root + "/")) {
+        return plan_fail(p, "this is exported, and a module no open program loads may use it, so every occurrence cannot be known; declare a workspace (a `nazm.root` marker or `--source-root`) and every module under it is searched")
+    }
+    let files = strs_new()
+    walk_workspace(io, root, files)
+    let sorted = fe_sort_paths(files)
+    let given = strs_get(s.root, 0)
+    // Each compilation of the workspace, as a root over the open buffers: what files it holds, and how its occurrences group.
+    let held = strs_new()
+    let parts: Vec[Part] = vec_new()
+    let per_ids = strs_new()
+    let per_texts = strs_new()
+    let per_ss: Vec[Ints] = vec_new()
+    let per_es: Vec[Ints] = vec_new()
+    let mut holding = 0
+    let ps = strs_new()
+    let ts = strs_new()
+    overlay(io, s, strs_new(), strs_new(), ps, ts)
+    let involved = ints_new()
+    let mut compiled = 0
+    for i in 0..strs_len(sorted) {
+        let g = fx_check_over(strs_get(sorted, i), given, ps, ts, strs_get(s.library, 0), fe_host_os(), fe_host_arch(), io)
+        compiled += 1
+        // A root the reference cannot analyse is the one this port cannot either.
+        if fx_refusal(g) != "" { refuse(io, "a source root the reference refuses") }
+        if fe_load_failed(g) { refuse(io, "a workspace file that does not load") }
+        if !fx_carried(g) { refuse(io, fx_why(g)) }
+        let ids = module_ids(io, g)
+        vec_push(parts, part_of(io, g))
+        strs_push(held, str_join(ids, str_from_byte(1)))
+        let mut at = 0 - 1
+        for q in 0..strs_len(ids) {
+            if at < 0 && strs_get(ids, q) == key { at = q }
+        }
+        if at < 0 { continue }
+        if first_error(g) >= 0 { return plan_fail(p, "a program containing this has errors, so its uses are not all known") }
+        let abs_s = fx_module_base(g, at) + ds
+        let abs_e = fx_module_base(g, at) + de
+        let ge = entity_at(g, abs_s, abs_e)
+        if ge < 0 { return plan_fail(p, "refused: the declaration is no entity in a compilation that contains it") }
+        holding += 1
+        // The declaration, then the uses.
+        for u in 0..fx_ref_use_count(g, ge) + 1 {
+            let a = if u == 0 { fx_ref_decl_start(g, ge) } else { fx_ref_use_start(g, ge, u - 1) }
+            let b = if u == 0 { fx_ref_decl_end(g, ge) } else { fx_ref_use_end(g, ge, u - 1) }
+            if a < 0 { continue }
+            let um = fx_module_at(g, a)
+            if fe_starts(fx_module_name(g, um), "@") { return plan_fail(p, "this is the core prelude's, which the toolchain owns") }
+            let uid = strs_get(ids, um)
+            let mut slot = 0 - 1
+            for z in 0..strs_len(per_ids) {
+                if strs_get(per_ids, z) == uid { slot = z }
+            }
+            if slot < 0 {
+                strs_push(per_ids, uid)
+                strs_push(per_texts, fx_module_text(g, um))
+                vec_push(per_ss, ints_new())
+                vec_push(per_es, ints_new())
+                slot = strs_len(per_ids) - 1
+            }
+            if strs_get(per_texts, slot) != fx_module_text(g, um) { return plan_fail(p, "the document is not at the version asked about") }
+            let st = vec_get(per_ss, slot)
+            let en = vec_get(per_es, slot)
+            let ls = a - fx_module_base(g, um)
+            let le = b - fx_module_base(g, um)
+            let mut dup = false
+            for z in 0..ints_len(st) {
+                if ints_get(st, z) == ls && ints_get(en, z) == le { dup = true }
+            }
+            if !dup {
+                // A set kept in order.
+                let mut pos = ints_len(st)
+                while pos > 0 && (ints_get(st, pos - 1) > ls || (ints_get(st, pos - 1) == ls && ints_get(en, pos - 1) > le)) { pos -= 1 }
+                ints_push(st, 0)
+                ints_push(en, 0)
+                let mut w = ints_len(st) - 1
+                while w > pos {
+                    ints_set(st, w, ints_get(st, w - 1))
+                    ints_set(en, w, ints_get(en, w - 1))
+                    w -= 1
+                }
+                ints_set(st, pos, ls)
+                ints_set(en, pos, le)
+            }
+        }
+    }
+    if holding == 0 { return plan_fail(p, "refused: no compilation of the workspace contains it") }
+    // The files in path order, each with its edits.
+    let order = ints_new()
+    for z in 0..strs_len(per_ids) {
+        let mut at = ints_len(order)
+        while at > 0 && fe_path_before(strs_get(per_ids, z), strs_get(per_ids, ints_get(order, at - 1))) { at -= 1 }
+        ints_push(order, 0)
+        let mut w = ints_len(order) - 1
+        while w > at {
+            ints_set(order, w, ints_get(order, w - 1))
+            w -= 1
+        }
+        ints_set(order, at, z)
+    }
+    let many_ids = strs_new()
+    let many_texts = strs_new()
+    let e_id = strs_new()
+    let e_start = ints_new()
+    let e_end = ints_new()
+    let e_len = ints_new()
+    for r in 0..ints_len(order) {
+        let z = ints_get(order, r)
+        let text = strs_get(per_texts, z)
+        let st = vec_get(per_ss, z)
+        let en = vec_get(per_es, z)
+        let first = ints_len(p.starts)
+        for k in 0..ints_len(st) {
+            if str_slice(text, ints_get(st, k), ints_get(en, k)) != old { continue }
+            if ints_len(p.ends) > first && ints_get(p.ends, ints_len(p.ends) - 1) > ints_get(st, k) { return plan_fail(p, "refused: two occurrences overlap") }
+            ints_push(p.starts, ints_get(st, k))
+            ints_push(p.ends, ints_get(en, k))
+        }
+        // A file whose every occurrence is written under a re-export's alias has nothing to change, and is no part of the plan.
+        if ints_len(p.starts) == first { continue }
+        let n = ints_len(p.starts) - first
+        strs_push(many_ids, strs_get(per_ids, z))
+        strs_push(many_texts, apply_edits(text, p.starts, p.ends, first, n, new_name))
+        for k in 0..n {
+            strs_push(e_id, strs_get(per_ids, z))
+            ints_push(e_start, ints_get(p.starts, first + k))
+            ints_push(e_end, ints_get(p.ends, first + k))
+            ints_push(e_len, str_len(new_name))
+        }
+        strs_push(p.paths, strs_get(per_ids, z))
+        strs_push(p.texts, text)
+        ints_push(p.versions, open_version(io, s, strs_get(per_ids, z)))
+        ints_push(p.first, first)
+        ints_push(p.count, n)
+    }
+    // The candidate workspace: every compilation that holds an edited file, clean, with the same partition.
+    let aps = strs_new()
+    let ats = strs_new()
+    overlay(io, s, many_ids, many_texts, aps, ats)
+    for i in 0..strs_len(sorted) {
+        let ids = split_ids(strs_get(held, i))
+        let mut touches = false
+        for q in 0..strs_len(ids) {
+            for z in 0..strs_len(per_ids) {
+                if strs_get(ids, q) == strs_get(per_ids, z) { touches = true }
+            }
+        }
+        if !touches { continue }
+        let a = fx_check_over(strs_get(sorted, i), given, aps, ats, strs_get(s.library, 0), fe_host_os(), fe_host_arch(), io)
+        if fx_refusal(a) != "" { refuse(io, "a source root the reference refuses") }
+        if fe_load_failed(a) { refuse(io, "a candidate program that does not load") }
+        if !fx_carried(a) { refuse(io, fx_why(a)) }
+        if first_error(a) >= 0 { return plan_fail(p, "the renamed program would not check: " + strs_get(fx_diags(a).message, first_error(a))) }
+        if !same_strs(part_groups(vec_get(parts, i), e_id, e_start, e_end, e_len), part_groups(part_of(io, a), strs_new(), ints_new(), ints_new(), ints_new())) {
+            return plan_fail(p, "the renamed program would mean something else: a use would refer to a different definition")
+        }
+    }
+    p
+}
+
+fn split_ids(joined: Str) -> Strs {
+    let out = strs_new()
+    let mut from = 0
+    for i in 0..str_len(joined) + 1 {
+        if i == str_len(joined) || str_byte(joined, i) == 1 {
+            strs_push(out, str_slice(joined, from, i))
+            from = i + 1
+        }
+    }
+    out
+}
+
 // `textDocument/rename`: the validated plan as a versioned edit, or why there is none.
 fn rename(io: IoCap, s: Server, j: J, id: Str) -> Int {
     let p = j_get(j, 0, "params")
@@ -1006,76 +1434,36 @@ fn rename(io: IoCap, s: Server, j: J, id: Str) -> Int {
     if j_str(j, name) == old { return failure(io, id, "the new name is the current one") }
     let e = num(strs_get(info, 0))
     let m = num(strs_get(info, 1))
-    if m != 0 { refuse(io, "a rename that edits another file than the document") }
-    // The declaration and every use, in the declaring file, ordered.
-    let text = fx_module_text(f, m)
-    let base = fx_module_base(f, m)
-    let starts = ints_new()
-    let ends = ints_new()
-    ints_push(starts, num(strs_get(info, 2)))
-    ints_push(ends, num(strs_get(info, 3)))
-    for k in 0..fx_ref_use_count(f, e) {
-        let a = fx_ref_use_start(f, e, k)
-        if fx_module_at(f, a) != m { return failure(io, id, "refused: a use outside the declaring file") }
-        let mut at = ints_len(starts)
-        while at > 0 && (ints_get(starts, at - 1) > a - base || (ints_get(starts, at - 1) == a - base && ints_get(ends, at - 1) > fx_ref_use_end(f, e, k) - base)) { at -= 1 }
-        ints_push(starts, 0)
-        ints_push(ends, 0)
-        let mut q = ints_len(starts) - 1
-        while q > at {
-            ints_set(starts, q, ints_get(starts, q - 1))
-            ints_set(ends, q, ints_get(ends, q - 1))
-            q -= 1
-        }
-        ints_set(starts, at, a - base)
-        ints_set(ends, at, fx_ref_use_end(f, e, k) - base)
+    let ds = num(strs_get(info, 2))
+    let de = num(strs_get(info, 3))
+    let kind = fx_ref_kind(f, e)
+    let plan = if exported(f, kind, fx_module_base(f, m) + ds) {
+        workspace_plan(io, s, f, m, ds, de, old, j_str(j, name), workspace_root(io, s))
+    } else {
+        single_plan(io, s, f, e, m, ds, de, old, j_str(j, name))
     }
-    // Written under a name a re-export gave it, an occurrence keeps its spelling.
-    let e_start = ints_new()
-    let e_end = ints_new()
-    let e_len = ints_new()
-    for k in 0..ints_len(starts) {
-        if str_slice(text, ints_get(starts, k), ints_get(ends, k)) != old { continue }
-        if ints_len(e_end) > 0 && ints_get(e_end, ints_len(e_end) - 1) > ints_get(starts, k) { return failure(io, id, "refused: two occurrences overlap") }
-        ints_push(e_start, ints_get(starts, k))
-        ints_push(e_end, ints_get(ends, k))
-        ints_push(e_len, str_len(j_str(j, name)))
-    }
-    // The candidate program: the document with the edits, checked as the document is.
-    let parts = strs_new()
-    let mut at = 0
-    for k in 0..ints_len(e_start) {
-        strs_push(parts, str_slice(text, at, ints_get(e_start, k)))
-        strs_push(parts, j_str(j, name))
-        at = ints_get(e_end, k)
-    }
-    strs_push(parts, str_slice(text, at, str_len(text)))
-    let edited = str_join(parts, "")
-    let over_texts = strs_new()
-    for i in 0..strs_len(s.paths) { strs_push(over_texts, if i == cur(s) { edited } else { strs_get(s.texts, i) }) }
-    let g = fx_check_over(strs_get(s.paths, cur(s)), strs_get(s.root, 0), s.paths, over_texts, strs_get(s.library, 0), fe_host_os(), fe_host_arch(), io)
-    if fx_refusal(g) != "" { refuse(io, "a source root the reference refuses") }
-    if fe_load_failed(g) { refuse(io, "a candidate program that does not load") }
-    if !fx_carried(g) { refuse(io, fx_why(g)) }
-    if first_error(g) >= 0 {
-        return failure(io, id, "the renamed program would not check: " + strs_get(fx_diags(g).message, first_error(g)))
-    }
-    if !same_strs(partition(f, m, e_start, e_end, e_len), partition(g, 0 - 1, ints_new(), ints_new(), ints_new())) {
-        return failure(io, id, "the renamed program would mean something else: a use would refer to a different definition")
-    }
-    // `plan_is_current`: the text the plan was made from is the document's.
-    if strs_get(s.texts, cur(s)) != text { return respond_error(io, id, 0 - 32803, "the program changed while the rename was being planned") }
+    if strs_get(plan.why, 0) != "" { return failure(io, id, strs_get(plan.why, 0)) }
+    // `workspace_edit`: versioned changes only, and only for files that are open documents.
     if ints_get(s.flags, 0) == 0 {
         return respond_error(io, id, 0 - 32803, "this client does not accept versioned edits, so a rename could be applied to a" + spaces(14)
                 + "document that has since changed")
     }
-    let starts_of = line_starts(text)
-    let edits = strs_new()
-    for k in 0..ints_len(e_start) {
-        strs_push(edits, "{\"newText\":" + json_str(j_str(j, name)) + ",\"range\":" + range(text, starts_of, ints_get(e_start, k), ints_get(e_end, k)) + "}")
+    let changes = strs_new()
+    for r in 0..strs_len(plan.paths) {
+        if ints_get(plan.versions, r) < 0 {
+            return respond_error(io, id, 0 - 32803, strs_get(plan.paths, r) + " must change and is not open; a closed file's content cannot be made a" + spaces(18)
+                    + "condition of the edit, so open it and ask again")
+        }
+        let text = strs_get(plan.texts, r)
+        let starts_of = line_starts(text)
+        let edits = strs_new()
+        for k in 0..ints_get(plan.count, r) {
+            let at = ints_get(plan.first, r) + k
+            strs_push(edits, "{\"newText\":" + json_str(j_str(j, name)) + ",\"range\":" + range(text, starts_of, ints_get(plan.starts, at), ints_get(plan.ends, at)) + "}")
+        }
+        strs_push(changes, "{\"edits\":[" + str_join(edits, ",") + "],\"textDocument\":{\"uri\":" + json_str(uri_of(strs_get(plan.paths, r))) + ",\"version\":" + int_to_str(ints_get(plan.versions, r)) + "}}")
     }
-    respond(io, id, "{\"documentChanges\":[{\"edits\":[" + str_join(edits, ",") + "],\"textDocument\":{\"uri\":" + json_str(uri_of(strs_get(s.paths, cur(s))))
-            + ",\"version\":" + int_to_str(ints_get(s.versions, cur(s))) + "}}]}")
+    respond(io, id, "{\"documentChanges\":[" + str_join(changes, ",") + "]}")
 }
 
 fn spaces(n: Int) -> Str {

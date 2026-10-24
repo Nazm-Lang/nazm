@@ -95,6 +95,10 @@ def multi_session(path, named, text, uri, frame):
                 ask("textDocument/references", dict(at, context={"includeDeclaration": True}))
                 ask("textDocument/prepareCallHierarchy", at)
                 ask("textDocument/signatureHelp", at)
+            for line, character, word in names(t, 6):
+                at = {"textDocument": d, "position": {"line": line, "character": character}}
+                ask("textDocument/prepareRename", at)
+                ask("textDocument/rename", dict(at, newName="Zrenamed" if word[0].isupper() else "zz_renamed"))
         ask("workspace/symbol", {"query": ""})
         ask("workspace/symbol", {"query": "a"})
 
