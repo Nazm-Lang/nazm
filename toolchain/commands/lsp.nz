@@ -2239,7 +2239,7 @@ fn member_rows(f: Facts, site: Int, ty: Int, prefix: Str, provided: Ints, names:
     if site == 4 || site == 6 {
         let ns = strs_new()
         for k in 0..ck_record_arity(c, ty) { strs_push(ns, ck_record_field_name(c, ty, k)) }
-        let order = layout_order(ns, ck_record_c_layout(c, ty))
+        let order = layout_order(ns, !ck_is_tuple(c, ty) && ck_record_c_layout(c, ty))
         for r in 0..ints_len(order) {
             let k = ints_get(order, r)
             if !fe_starts(strs_get(ns, k), prefix) { continue }
