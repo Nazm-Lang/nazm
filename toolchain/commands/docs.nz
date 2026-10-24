@@ -11,7 +11,7 @@
 // sorted, or (without `--json`) the index's ids and titles and a section's exact text.
 //
 // The default root is the repository the reference binary was built from, which a port cannot
-// know: without `--root` the command says so and exits 6 (design D5). The reference classifies a
+// know: without `--root` the command reads the corpus it carries (`docsdata.nz`, R8 slice 12). The reference classifies a
 // heading's characters with Unicode tables (`char::is_alphanumeric`, `to_lowercase`); the port
 // knows ASCII and the punctuation the corpus's headings use (— · – → …) and refuses a heading
 // holding any other non-ASCII character rather than guess.
@@ -23,6 +23,7 @@ use "../../compiler/diag.nz"
 use "cli.nz"
 use "jsonin.nz"
 use "util.nz"
+use "docsdata.nz"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -1207,7 +1208,11 @@ fn load(io: IoCap, root: Str) -> Corp {
         let kind = ut_kind(io, full)
         let mut text = ""
         let mut ok = false
-        if kind == 0 {
+        if root == "" {
+            // No root named: the corpus this binary carries (`docsdata.nz`).
+            text = dd_text(path)
+            ok = true
+        } else if kind == 0 {
             let h = os_open_read(full)
             if os_status(h) >= 0 {
                 os_close(h)
@@ -1399,8 +1404,8 @@ pub fn docs_command(io: IoCap, c: Cli) -> Int {
     let has_state = cli_present(c, 3)
     let state = cli_value(c, 3)
     let json = cli_present(c, 4)
-    if !cli_present(c, 5) { refuse(io, "the repository this binary was built from (name one with `--root`)") }
-    let corp = load(io, cli_value(c, 5))
+    // Without `--root`, the corpus this binary carries: the Rust binary reads the checkout it was built from, which an archive lacks.
+    let corp = load(io, if cli_present(c, 5) { cli_value(c, 5) } else { "" })
     // ok[0]: an available answer; ok[1]: the corpus has problems.
     let ok = ints_new()
     ints_push(ok, 0)

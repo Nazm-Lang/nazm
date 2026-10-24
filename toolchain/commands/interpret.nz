@@ -38,7 +38,6 @@ pub fn ip_env_set(io: IoCap, name: Str) -> Bool {
 
 fn ip_library(io: IoCap) -> Str {
     let library = os_env_get("NAZM_LIBRARY")
-    if library == "" { ip_refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
     library
 }
 

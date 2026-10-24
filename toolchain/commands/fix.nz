@@ -360,7 +360,15 @@ pub fn fix_command(io: IoCap, c: Cli) -> Int {
     let apply = cli_present(c, 1)
     let json = cli_present(c, 2)
     let library = os_env_get("NAZM_LIBRARY")
-    if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
+    // A root the loader would not read whole: its own refusal (`N0205` with the system's reason),
+    // which `compiler/load.nz` does not give for a directory.
+    let st = bytes_new(32)
+    if os_stat(file, st) == 0 {
+        let ok = ints_new()
+        ints_push(ok, 1)
+        read_text(io, file, ok)
+        if ints_get(ok, 0) == 0 { refuse(io, "a root module that is not a readable UTF-8 file") }
+    }
     let prefix = fe_prefix(io, file)
     let first = checked(io, file, prefix, library, json)
     let e = collect(io, first, fe_names(first, prefix))
