@@ -257,8 +257,18 @@ def agent_messages(ref, repo, f, extra, env):
         msgs.append(ids.call('nazm.semantic_context', {'file': os.path.basename(f), 'byte_offset': int(b)}))
     msgs.append(ids.call('nazm.semantic_context', {'file': os.path.abspath(repo + '/' + f), 'byte_offset': 3}))
     for bad in [{}, {'file': 'x.nz'}, {'file': 1, 'byte_offset': 1}, {'file': 'x.nz', 'byte_offset': -1}, {'file': 'x.nz', 'byte_offset': 4294967296},
-                {'file': 'x.nz', 'byte_offset': 1, 'z': 2}, {'file': 'nope.nz', 'byte_offset': 1}]:
+                {'file': 'x.nz', 'byte_offset': 1, 'z': 2}, {'file': 'nope.nz', 'byte_offset': 1},
+                # Rust's float and Unicode `Debug` wording in `serde`'s errors.
+                {'file': 1.5, 'byte_offset': 1}, {'file': 1e3, 'byte_offset': 1}, {'file': 0.00001, 'byte_offset': 1}, {'file': 1.5e300, 'byte_offset': 1},
+                {'file': 1e16, 'byte_offset': 1}, {'file': -2.5, 'byte_offset': 1}, {'file': 18446744073709551616, 'byte_offset': 1},
+                {'file': 'x.nz', 'byte_offset': 'caf\u00e9'}, {'file': 'x.nz', 'byte_offset': 'e\u0301\U0001F600\u00a0\u200b'},
+                {'file': 'x.nz', 'byte_offset': 'tab\there \"q\" \\ \x01 \x7f'}, {'file': 'x.nz', 'byte_offset': 1.5}, {'file': 'x.nz', 'byte_offset': -1.0}]:
         msgs.append(ids.call('nazm.semantic_context', bad))
+    for bad in [{}, {'operation': 'rename'}, {'operation': 'nope'}, {'operation': 1.5}, {'operation': 'caf\u00e9'},
+                {'operation': 'rename', 'file': 'x.nz', 'byte_offset': 1, 'new_name': 'y', 'z': 1}, {'operation': 'rename', 'file': 'x.nz', 'byte_offset': 1.5, 'new_name': 'y'},
+                {'operation': 'diagnostic_fix', 'file': 'x.nz', 'byte_offset': 1, 'fix': 'e\u0301'}, {'operation': 'diagnostic_fix', 'file': 'x.nz', 'byte_offset': 1},
+                {'operation': 'rename', 'file': os.path.basename(f), 'byte_offset': 0, 'new_name': 'zz'}, {'operation': 'diagnostic_fix', 'file': os.path.basename(f), 'byte_offset': 0, 'fix': 0}]:
+        msgs.append(ids.call('nazm.semantic_patch', bad))
     msgs.append(ids.call('nazm.repository_map', {}))
     msgs.append(ids.call('nazm.repository_map', {'x': 1}))
     probe = start() + [{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "nazm.repository_map", "arguments": {}}}]
@@ -281,6 +291,29 @@ def agent_messages(ref, repo, f, extra, env):
                 {'seeds': ['a'], 'state': 's', 'max_entities': 1.5}, {'seeds': ['a'], 'state': 's', 'zz': 1}, {'seeds': None, 'state': 's'}]:
         msgs.append(ids.call('nazm.task_context', bad))
     return msgs
+
+
+def nodocs_messages():
+    ids = Ids()
+    return start() + [ids.call('nazm.docs_index', {}), ids.call('nazm.docs_index', {'document': 'spec'}), ids.call('nazm.docs_section', {'id': 'nope', 'state': 's'}),
+                      ids.call('nazm.repository_map', {}), ids.call('nazm.task_context', {'seeds': ['x'], 'state': 's'})]
+
+
+def nodocs_gen(ref, repo, f, prefix, env):
+    """`nodocs`'s messages and the reference's answers (started with no `--docs`), for a port run elsewhere; PREFIX.nodocs marks it."""
+    msgs = nodocs_messages()
+    open(prefix + '.in', 'w').write(''.join(json.dumps(m, separators=(',', ':')) + '\n' for m in msgs))
+    r, _ = session_patient(ref, f, [], msgs, repo, env)
+    open(prefix + '.ref', 'w').write('\n'.join(r) + '\n')
+    open(prefix + '.nodocs', 'w').write('')
+
+
+def nodocs(ref, port, repo, f, env):
+    """The documentation and repository tools of a server started with no `--docs`: the repository the binary was built from."""
+    msgs = nodocs_messages()
+    r, _ = session_patient(ref, f, [], msgs, repo, env)
+    p, perr = session_patient(port, f, [], msgs, repo, env)
+    return compare(r, p, perr, 'nodocs')
 
 
 def agent(ref, port, repo, f, extra, env):
@@ -322,6 +355,10 @@ def main():
         agent_gen(ref, repo, sys.argv[5], sys.argv[6], ['--docs', repo], env)
     elif mode == 'agent-cmp':
         print(agent_cmp(ref))
+    elif mode == 'nodocs-gen':
+        nodocs_gen(ref, repo, sys.argv[5], sys.argv[6], env)
+    elif mode == 'nodocs':
+        print(nodocs(ref, port, repo, sys.argv[5], env))
     elif mode == 'protocol':
         print(protocol(ref, port, repo, ['--docs', repo] + sys.argv[5:], env))
     else:
