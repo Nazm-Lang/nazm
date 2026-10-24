@@ -81,6 +81,20 @@ def main():
     elif mode == "hoverall":
         for line, character, _ in names(text, 60):
             ask("textDocument/hover", {"textDocument": doc, "position": {"line": line, "character": character}})
+    elif mode == "sig":
+        # Signature help at every byte inside parentheses, and just after each `(` and `,` (what an editor asks as a call is typed).
+        lines = text.split("\n")
+        asked = 0
+        for number, line in enumerate(lines):
+            for character in range(len(line) + 1):
+                before = line[:character]
+                if character > 0 and (line[character - 1] in "(,)" or (character % 5 == 0 and "(" in before)):
+                    ask("textDocument/signatureHelp", {"textDocument": doc, "position": {"line": number, "character": character}})
+                    asked += 1
+                    if asked >= 400:
+                        break
+            if asked >= 400:
+                break
     elif mode == "hier":
         # Prepare at each of forty names; then the calls into and out of each function the text declares, with an item built as the
         # server writes it (a client sends back what `prepare` answered: `data` is what binds it; version 1 and generation 1 are the

@@ -1844,6 +1844,275 @@ fn hier_rows(io: IoCap, s: Server, f: Facts, others: Ints, from: Ints, to: Ints,
     rows
 }
 
+// --- signature help (`signature.rs`, `help_at`) ------------------------------------------------------------
+
+// The byte offset a `TextDocumentPositionParams` request names in the open document, or -1 where it is not open or has no analysis.
+fn request_offset(io: IoCap, s: Server, j: J) -> Int {
+    let p = j_get(j, 0, "params")
+    let td = j_get(j, p, "textDocument")
+    let uri = j_get(j, td, "uri")
+    let pos = j_get(j, p, "position")
+    let line = j_get(j, pos, "line")
+    let ch = j_get(j, pos, "character")
+    if j_kind(j, uri) != 4 || !plain_uri(j_str(j, uri)) || !j_int_in(j, line, 0, 4294967295) || !j_int_in(j, ch, 0, 4294967295) {
+        refuse(io, "a request's parameters this port does not read as the reference does")
+    }
+    let path = path_of(j_str(j, uri))
+    let k = if path == "" { 0 - 1 } else { doc_named(io, s, path) }
+    if k < 0 || vec_len(s.facts) == 0 { return 0 - 1 }
+    let text = strs_get(s.texts, k)
+    offset(text, line_starts(text), j_int(j, line), j_int(j, ch))
+}
+
+// The index of the token starting at or after byte `at`.
+fn token_from(starts: Ints, at: Int) -> Int {
+    for i in 0..ints_len(starts) {
+        if ints_get(starts, i) >= at { return i }
+    }
+    ints_len(starts)
+}
+
+// The token index of the `)` closing the `(` at token `open`, or -1.
+fn closing(kinds: Ints, open: Int) -> Int {
+    let mut depth = 0
+    let mut i = open
+    while i < ints_len(kinds) {
+        let k = ints_get(kinds, i)
+        if k == k_lparen() || k == k_lbracket() || k == k_lbrace() { depth += 1 }
+        if k == k_rparen() || k == k_rbracket() || k == k_rbrace() {
+            depth -= 1
+            if depth == 0 { return i }
+        }
+        i += 1
+    }
+    0 - 1
+}
+
+// The nodes of the tree under `root` that are structs or tuples named `name`.
+fn nodes_named(t: Tree, root: Int, names: Strs) -> Ints {
+    let out = ints_new()
+    let stack = ints_new()
+    ints_push(stack, root)
+    while ints_len(stack) > 0 {
+        let n = ints_pop(stack)
+        let kind = sx_kind(t, n)
+        if kind == tk_struct() || kind == tk_tuple() || kind == tk_list() {
+            if kind == tk_struct() {
+                for i in 0..strs_len(names) {
+                    if sx_text(t, n) == strs_get(names, i) { ints_push(out, n) }
+                }
+            }
+            for i in 0..sx_count(t, n) { ints_push(stack, sx_kid(t, n, i)) }
+        }
+    }
+    out
+}
+
+// The layout order of `n` fields named `names` (declaration order): by name, unless `declared`.
+fn layout_order(names: Strs, declared: Bool) -> Ints {
+    let order = ints_new()
+    for i in 0..strs_len(names) {
+        let mut at = ints_len(order)
+        while !declared && at > 0 && fe_str_less(strs_get(names, i), strs_get(names, ints_get(order, at - 1))) { at -= 1 }
+        ints_push(order, 0)
+        let mut k = ints_len(order) - 1
+        while k > at {
+            ints_set(order, k, ints_get(order, k - 1))
+            k -= 1
+        }
+        ints_set(order, at, i)
+    }
+    order
+}
+
+// Signature help for a record or variant construction (`constructor_help`): its shape, the fields in the canonical order with their types, and the
+// field whose initialiser holds the offset.
+fn constructor_help(f: Facts, n: Int, at: Int) -> Str {
+    let c = fx_checker(f)
+    let t = fx_tree(f)
+    let variant_span = sx_field(t, n, "variant_span")
+    let mut head = ""
+    let names = strs_new()
+    let tys = strs_new()
+    let mut declared_index = ints_new()
+    if variant_span >= 0 {
+        // A variant is found by the name written after the type's.
+        let et = ck_variant_at(c, fx_start(f, variant_span), fx_end(f, variant_span))
+        let vi = ck_variant_index_at(c, fx_start(f, variant_span), fx_end(f, variant_span))
+        if et < 0 || vi < 0 { return "null" }
+        head = fx_show(f, et) + "." + ck_variant_name(c, et, vi)
+        for k in 0..ck_variant_arity(c, et, vi) {
+            strs_push(names, ck_payload_name(c, et, vi, k))
+            strs_push(tys, fx_show(f, ck_payload_ty(c, et, vi, k)))
+        }
+        declared_index = layout_order(names, false)
+    } else {
+        // A qualified construction's first identifier is its qualifier, which no construction is recorded at.
+        if sx_is_some(t, sx_field(t, n, "qualifier")) { return "null" }
+        let ty_span = sx_field(t, n, "ty_span")
+        let rt = ck_construction_at(c, fx_start(f, ty_span), fx_end(f, ty_span))
+        if rt < 0 { return "null" }
+        head = fx_show(f, rt)
+        for k in 0..ck_record_arity(c, rt) {
+            strs_push(names, ck_record_field_name(c, rt, k))
+            strs_push(tys, fx_show(f, ck_record_field_ty(c, rt, k)))
+        }
+        declared_index = layout_order(names, ck_record_c_layout(c, rt))
+    }
+    let mut text = head + "("
+    let marks = strs_new()
+    for r in 0..ints_len(declared_index) {
+        let k = ints_get(declared_index, r)
+        if r > 0 { text = text + ", " }
+        let st = str_len(text)
+        text = text + strs_get(names, k) + ": " + strs_get(tys, k)
+        strs_push(marks, "{\"label\":[" + int_to_str(column_of(text, line_starts(text), st)) + "," + int_to_str(column_of(text, line_starts(text), str_len(text))) + "]}")
+    }
+    text = text + ")"
+    // The initialiser the offset is in, by its label's recorded field.
+    let mut active = 0 - 1
+    let inits = sx_items(t, sx_field(t, n, "fields"))
+    let mut found = 0 - 1
+    for q in 0..ints_len(inits) {
+        let sp = sx_field(t, ints_get(inits, q), "span")
+        if found < 0 && fx_start(f, sp) <= at && at <= fx_end(f, sp) { found = ints_get(inits, q) }
+    }
+    if found >= 0 && sx_name(t, found, "name") != "" {
+        let ns = sx_field(t, found, "name_span")
+        let d = ck_init_at(c, fx_start(f, ns), fx_end(f, ns))
+        if d >= 0 {
+            for r in 0..ints_len(declared_index) {
+                if ints_get(declared_index, r) == d { active = r }
+            }
+        }
+    }
+    let a = if active >= 0 { "\"activeParameter\":" + int_to_str(active) + "," } else { "" }
+    let params = if active >= 0 { ",\"parameters\":[" + str_join(marks, ",") + "]" } else { "" }
+    "{" + a + "\"activeSignature\":0,\"signatures\":[{" + a + "\"label\":" + json_str(text) + params + "}]}"
+}
+
+fn signature_help(io: IoCap, s: Server, j: J) -> Str {
+    let at = request_offset(io, s, j)
+    if at < 0 { return "null" }
+    let f = vec_get(s.facts, 0)
+    let d = fx_diags(f)
+    // A recovered syntax answers nothing (`RecoveredSyntax`, and no call or construction is found in a tree that lost its parts).
+    for i in 0..dg_len(d) {
+        // A syntax error, or an attribute the vocabulary does not have: the checker's calls are not recorded.
+        if (ints_get(d.file, i) >= 0 && dg_code(d, i) != "N0205") || dg_code(d, i) == "N0619" || dg_code(d, i) == "N0627" { return "null" }
+    }
+    let c = fx_checker(f)
+    let t = fx_tree(f)
+    let text = fx_module_text(f, 0)
+    let kinds = ints_new()
+    let sts = ints_new()
+    let ens = ints_new()
+    let texts = strs_new()
+    lex_all(text, kinds, sts, ens, texts, dg_new())
+    let root = fx_module_program(f, 0)
+    let calls = strs_new()
+    strs_push(calls, "Call")
+    strs_push(calls, "Spawn")
+    let built = strs_new()
+    strs_push(built, "Construct")
+    strs_push(built, "Variant")
+    // The innermost argument list holding the offset: the one whose `(` is latest.
+    let mut best = 0 - 1
+    let mut best_open = 0 - 1
+    let mut best_close = 0 - 1
+    let call_nodes = nodes_named(t, root, calls)
+    // The short forms `Some(x)`, `Ok(x)`, `Err(e)` are variant nodes with no variant written: calls to the grammar, which no checked call is recorded for.
+    let built_all = nodes_named(t, root, built)
+    for q in 0..ints_len(built_all) {
+        let n = ints_get(built_all, q)
+        let vs = sx_field(t, n, "variant_span")
+        if vs >= 0 && sx_field(t, n, "ty_span") >= 0 && fx_start(f, vs) == fx_start(f, sx_field(t, n, "ty_span")) { ints_push(call_nodes, n) }
+    }
+    for q in 0..ints_len(call_nodes) {
+        let n = ints_get(call_nodes, q)
+        let mut callee = sx_field(t, n, "callee_span")
+        if callee < 0 { callee = sx_field(t, n, "ty_span") }
+        if callee < 0 { continue }
+        let from = token_from(sts, fx_end(f, callee))
+        let mut open = from
+        if open < ints_len(kinds) && ints_get(kinds, open) == k_lbracket() {
+            let end = closing(kinds, open)
+            if end < 0 { continue }
+            open = end + 1
+        }
+        if open >= ints_len(kinds) || ints_get(kinds, open) != k_lparen() { continue }
+        let close = closing(kinds, open)
+        if close < 0 { continue }
+        if ints_get(ens, open) <= at && at <= ints_get(sts, close) && ints_get(sts, open) > best_open {
+            best = n
+            best_open = ints_get(sts, open)
+            best_close = close
+        }
+    }
+    let built_nodes = built_all
+    let mut cons = 0 - 1
+    let mut cons_open = 0 - 1
+    let mut cons_close = 0 - 1
+    for q in 0..ints_len(built_nodes) {
+        let n = ints_get(built_nodes, q)
+        let sp = sx_field(t, n, "span")
+        if sp < 0 || sx_field(t, n, "ty_span") < 0 { continue }
+        let vs = sx_field(t, n, "variant_span")
+        if vs >= 0 && fx_start(f, vs) == fx_start(f, sx_field(t, n, "ty_span")) { continue }
+        // The parentheses of its initialisers, inside the construction.
+        let mut o = token_from(sts, fx_start(f, sp))
+        while o < ints_len(kinds) && ints_get(sts, o) < fx_end(f, sp) && ints_get(kinds, o) != k_lparen() { o += 1 }
+        if o >= ints_len(kinds) || ints_get(sts, o) >= fx_end(f, sp) { continue }
+        let close = closing(kinds, o)
+        if close < 0 { continue }
+        if ints_get(ens, o) <= at && at <= ints_get(sts, close) && ints_get(ens, o) > cons_open {
+            cons = n
+            cons_open = ints_get(ens, o)
+            cons_close = close
+        }
+    }
+    // A construction whose `(` comes after the call's callee is the innermost (`help_at`).
+    if cons >= 0 && (best < 0 || cons_open > fx_start(f, sx_field(t, best, "callee_span"))) { return constructor_help(f, cons, at) }
+    if best < 0 { return "null" }
+    if sx_field(t, best, "callee_span") < 0 { return "null" }
+    // A qualified call's first identifier is its qualifier, which no checked call is recorded at.
+    let qual = sx_field(t, best, "qualifier")
+    if qual >= 0 && sx_is_some(t, qual) { return "null" }
+    let callee = sx_field(t, best, "callee_span")
+    let site = ck_site_at(c, fx_start(f, callee), fx_end(f, callee))
+    if site < 0 { return "null" }
+    let lab = ck_site_label(c, site)
+    if strs_len(lab) == 0 { return "null" }
+    // Which argument: the argument list's own separators that end at or before the offset.
+    let mut active = 0
+    let mut depth = 0
+    let mut k = token_from(sts, best_open) + 1
+    while k < best_close {
+        let kind = ints_get(kinds, k)
+        if kind == k_lparen() || kind == k_lbracket() || kind == k_lbrace() { depth += 1 }
+        if kind == k_rparen() || kind == k_rbracket() || kind == k_rbrace() { depth -= 1 }
+        if kind == k_comma() && depth == 0 && ints_get(ens, k) <= at { active += 1 }
+        k += 1
+    }
+    let n = (strs_len(lab) - 1) / 2
+    if active >= n && n > 0 { return "null" }
+    let shown = strs_get(lab, 0)
+    let params = strs_new()
+    for i in 0..n {
+        strs_push(params, "{\"label\":[" + int_to_str(column_of(shown, line_starts(shown), parse_number(strs_get(lab, 1 + 2 * i)))) + ","
+                + int_to_str(column_of(shown, line_starts(shown), parse_number(strs_get(lab, 2 + 2 * i)))) + "]}")
+    }
+    let a2 = if active < n { "\"activeParameter\":" + int_to_str(active) + "," } else { "" }
+    "{" + a2 + "\"activeSignature\":0,\"signatures\":[{" + a2 + "\"label\":" + json_str(shown)
+            + ",\"parameters\":[" + str_join(params, ",") + "]}]}"
+}
+
+fn parse_number(s: Str) -> Int {
+    let mut n = 0
+    for i in 0..str_len(s) { n = n * 10 + str_byte(s, i) - 48 }
+    n
+}
+
 fn request(io: IoCap, s: Server, j: J, method: Str, id: Str) -> Int {
     if method == "textDocument/hover" { return respond(io, id, hover(io, s, j)) }
     if method == "textDocument/definition" { return respond(io, id, definition(io, s, j)) }
@@ -1855,6 +2124,7 @@ fn request(io: IoCap, s: Server, j: J, method: Str, id: Str) -> Int {
     if method == "textDocument/prepareCallHierarchy" { return respond(io, id, prepare_hierarchy(io, s, j)) }
     if method == "callHierarchy/incomingCalls" { return respond(io, id, incoming_calls(io, s, j)) }
     if method == "callHierarchy/outgoingCalls" { return respond(io, id, outgoing_calls(io, s, j)) }
+    if method == "textDocument/signatureHelp" { return respond(io, id, signature_help(io, s, j)) }
     if method == "textDocument/codeAction" { return respond(io, id, code_actions(io, s, j)) }
     if method == "textDocument/semanticTokens/full" { return respond(io, id, semantic_tokens(io, s, j)) }
     if implemented(method) { refuse(io, "`" + method + "`") }
