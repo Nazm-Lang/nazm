@@ -97,7 +97,6 @@ pub fn ci_checked(io: IoCap, file: Str, rooted: Bool, given: Str) -> Facts { ci_
 // `program`: the root checked as a program (one with a `main`), as `nazm check` checks it.
 pub fn ci_checked_as(io: IoCap, file: Str, rooted: Bool, given: Str, program: Bool) -> Facts {
     let library = os_env_get("NAZM_LIBRARY")
-    if library == "" { ci_refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
     let given_prefix = if rooted { fe_prefix(io, given) } else { "" }
     let prefix = fe_prefix(io, file)
     let at = if rooted { given_prefix + given } else { "" }
@@ -335,7 +334,7 @@ fn ci_stage(io: IoCap, command: Str) -> Str {
         if ut_kind(io, named) != 0 { sr_fail(io, "nazm: `" + command + "` runs nazm-pipeline: `NAZM_PIPELINE` names `" + named + "`, which is not a file", 4) }
         return named
     }
-    let dir = os_env_get("NAZM_LIBEXEC")
+    let dir = ut_libexec(io)
     if dir == "" { sr_fail(io, "nazm: `" + command + "` runs nazm-pipeline: set `NAZM_PIPELINE`, or `NAZM_LIBEXEC` to the directory holding it", 4) }
     let p = ut_join(dir, "nazm-pipeline")
     if ut_kind(io, p) != 0 { sr_fail(io, "nazm: `" + command + "` runs nazm-pipeline: it is not installed at `" + p + "`", 4) }
