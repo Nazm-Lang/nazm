@@ -365,6 +365,32 @@ fn s_r2() -> Int { 10 }
 fn s_r3() -> Int { 11 }
 fn s_r4() -> Int { 12 }
 fn s_item_kind() -> Int { 13 }
+// A completion probe (N26): the offset of the cursor plus one, 0 for none or taken; whether the statement holding the hole is still being read; the site found (1 a member, 2 a call, 3 a
+// payload) and its spans; and the variant a payload list belongs to while its `(` is read.
+fn s_hole() -> Int { 16 }
+fn s_hopen() -> Int { 17 }
+fn s_hkind() -> Int { 18 }
+fn s_ha() -> Int { 19 }
+fn s_hb() -> Int { 20 }
+fn s_fv() -> Int { 21 }
+
+fn hole_on(p: Px) -> Bool { g(p, s_hole()) != 0 }
+fn hole_off(p: Px) -> Int { g(p, s_hole()) - 1 }
+// Whether token `i` ends exactly at the probe's hole.
+fn ends_at_hole(p: Px, i: Int) -> Bool { hole_on(p) && i >= 0 && i < ints_len(p.ends) && ints_get(p.ends, i) == hole_off(p) }
+fn ident_at(p: Px, i: Int) -> Bool { kat(p, i) == k_ident() }
+fn contract_word_at(p: Px, i: Int) -> Bool { kat(p, i) == k_ident() && (tat(p, i) == "requires" || tat(p, i) == "ensures") }
+// The zero-width span at the hole.
+fn hole_span(p: Px) -> Int { point(p.t, hole_off(p)) }
+// Take the hole: it is found once, and the statement holding it is now being read.
+fn take_hole(p: Px, kind: Int, a: Int, b: Int) -> Int {
+    sv(p, s_hole(), 0);
+    sv(p, s_hkind(), kind);
+    sv(p, s_ha(), a);
+    sv(p, s_hb(), b);
+    setf(p, s_hopen(), true);
+    0
+}
 
 fn g(p: Px, slot: Int) -> Int { ints_get(p.st, slot) }
 fn sv(p: Px, slot: Int, v: Int) -> Int { ints_set(p.st, slot, v); 0 }
@@ -374,7 +400,7 @@ fn setf(p: Px, slot: Int, b: Bool) -> Int { if b { ints_set(p.st, slot, 1); } el
 pub fn sx_parser(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, src: Str, t: Tree, d: Diags) -> Px {
     let st = ints_new();
     let mut i = 0;
-    while i < 16 { ints_push(st, 0); i = i + 1; }
+    while i < 24 { ints_push(st, 0); i = i + 1; }
     Px(kinds: kinds, starts: starts, ends: ends, texts: texts, src: src, st: st, t: t, d: d)
 }
 
@@ -566,6 +592,8 @@ fn expect(p: Px, k: Int, context: Str) -> Int {
         bump(p);
         return s;
     }
+    // A probe's unfinished statement: the `;` or `)` its hole left unwritten (N26).
+    if flag(p, s_hopen()) && (k == k_semi() || k == k_rparen()) { return point(p.t, sat(p, pos(p))); }
     // A line break stands for a statement's `;` (R1, 5b.19), as the block's `}` does.
     if k == k_semi() {
         if line_break_before(p) || at(p, k_rbrace()) { return point(p.t, previous_end(p)); }
@@ -2227,7 +2255,11 @@ fn bracket_is_type_args(p: Px, open: Int) -> Bool {
     }
     let next = kat(p, i + 1);
     if next == k_lparen() { return true; }
-    if next == k_dot() { return kat(p, i + 2) == k_ident() && kat(p, i + 3) == k_lparen(); }
+    if next == k_dot() {
+        // At a completion hole, `Maybe[Int].` and `Maybe[Int].So` are an applied enum's variant being written.
+        if ends_at_hole(p, i + 1) || (ident_at(p, i + 2) && ends_at_hole(p, i + 2)) { return true; }
+        return kat(p, i + 2) == k_ident() && kat(p, i + 3) == k_lparen();
+    }
     false
 }
 
@@ -2392,6 +2424,8 @@ fn block_items(p: Px, deepest: Ints) -> Int {
     while at(p, k_rbrace()) == false && at(p, k_eof()) == false {
         let start = pos(p);
         let parsed = statement(p, deepest);
+        // A probe's hole ends with the statement holding it.
+        setf(p, s_hopen(), false);
         let pk = g(p, s_item_kind());
         if parsed >= 0 {
             if pk == 1 { ints_push(statements, parsed); }
@@ -2516,7 +2550,7 @@ fn statement(p: Px, deepest: Ints) -> Int {
         sv(p, s_item_kind(), 2);
         return e;
     }
-    if block_like || line_break_before(p) { return stmt(p, "Expr", e); }
+    if block_like || flag(p, s_hopen()) || line_break_before(p) { return stmt(p, "Expr", e); }
     if report(p, "N0100", peek_span(p), found_msg(p, "expected `;` or `}` after this expression", pos(p)), "",
             "an expression with no `;` after it is the block's value, so it must be last") {
         let at_end = sx_e(t, expr_span(t, e));
@@ -3090,10 +3124,19 @@ fn spawn_stmt(p: Px) -> Int {
 
 // `( field: value, … )`: the list, with the `)` in r1 and the deepest initialiser in r2.
 fn field_inits(p: Px) -> Int {
+    let fv = g(p, s_fv());
+    sv(p, s_fv(), 0);
+    let open = pos(p);
     if expect(p, k_lparen(), "to start the fields") < 0 { return 0 - 1; }
+    // `E.V(` with the cursor right after the `(` and no label: a probe's hole.
+    let mut empty = false;
+    if fv != 0 && ends_at_hole(p, open) && label_at(p, pos(p)) == false {
+        take_hole(p, 3, fv - 1, 0);
+        empty = true;
+    }
     let fields = ints_new();
     let mut deepest = 0;
-    while at(p, k_rparen()) == false && at(p, k_eof()) == false {
+    while empty == false && at(p, k_rparen()) == false && at(p, k_eof()) == false {
         let start = pos(p);
         let fi = field_init(p);
         if fi >= 0 {
@@ -3209,6 +3252,7 @@ fn variant_construction(p: Px, qualifier: Int, ty: Str, ty_span: Int, type_args:
     let variant_span = peek_span(p);
     let vi = advance(p);
     if kat(p, vi) != k_ident() { return 0 - 1; }
+    sv(p, s_fv(), variant_span + 1);
     let fields = field_inits(p);
     if fields < 0 { return 0 - 1; }
     let close = g(p, s_r1());
@@ -3218,19 +3262,28 @@ fn variant_construction(p: Px, qualifier: Int, ty: Str, ty_span: Int, type_args:
 
 fn match_arm(p: Px) -> Int {
     let t = p.t;
+    let holed = hole_on(p);
     let pattern = pattern(p);
     if pattern < 0 { return 0 - 1; }
+    // A probe's hole in this pattern, with no `=>` written yet: the arm has no body to read, and is given a zero-width `0` so the pattern can be checked.
+    let hole_arm = holed && hole_on(p) == false && at(p, k_fatarrow()) == false;
     let mut guard = sx_none(t);
     let mut end = sx_e(t, pattern_span(t, pattern));
-    if eat(p, k_if()) {
+    if hole_arm == false && eat(p, k_if()) {
         let gd = expr(p);
         if gd < 0 { return 0 - 1; }
         guard = mk_some(t, gd);
         end = sx_e(t, expr_span(t, gd));
     }
-    if expect(p, k_fatarrow(), "between a pattern and its arm") < 0 { return 0 - 1; }
-    let body = expr(p);
-    if body < 0 { return 0 - 1; }
+    let mut body = 0 - 1;
+    if hole_arm {
+        body = int_expr(t, "0", point(t, end));
+    } else {
+        if expect(p, k_fatarrow(), "between a pattern and its arm") < 0 { return 0 - 1; }
+        body = expr(p);
+        if body < 0 { return 0 - 1; }
+    }
+    sv(p, s_r1(), if hole_arm { 1 } else { 0 });
     arm_node(t, pattern, guard, body, join(t, pattern_span(t, pattern), expr_span(t, body)))
 }
 
@@ -3382,6 +3435,7 @@ fn variant_pattern(p: Px) -> Int {
     let mut fields = empty_list(t);
     let mut close = variant_span;
     if at(p, k_lparen()) {
+        sv(p, s_fv(), variant_span + 1);
         fields = pattern_fields(p);
         if fields < 0 { return 0 - 1; }
         close = g(p, s_r1());
@@ -3399,7 +3453,9 @@ fn match_expr(p: Px, start: Int) -> Int {
     while at(p, k_rbrace()) == false && at(p, k_eof()) == false {
         let astart = pos(p);
         let a = match_arm(p);
+        let mut hole_arm = false;
         if a >= 0 {
+            hole_arm = g(p, s_r1()) == 1;
             ints_push(arms, a);
             deepest = imax(deepest, child(p));
         } else {
@@ -3407,7 +3463,7 @@ fn match_expr(p: Px, start: Int) -> Int {
         }
         // A line break separates two arms as it ends a statement (R1.5 4.6; 5b.19): an arm whose
         // line ends needs no `,` before the next.
-        if eat(p, k_comma()) == false && line_break_before(p) == false { break; }
+        if eat(p, k_comma()) == false && (hole_arm && at(p, k_rbrace()) == false) == false && line_break_before(p) == false { break; }
     }
     let close = expect(p, k_rbrace(), "to close the arms");
     if close < 0 { return 0 - 1; }
@@ -3418,9 +3474,18 @@ fn match_expr(p: Px, start: Int) -> Int {
 // `( field: pattern, … )`: the list, with the `)` in r1.
 fn pattern_fields(p: Px) -> Int {
     let t = p.t;
+    let fv = g(p, s_fv());
+    sv(p, s_fv(), 0);
+    let open = pos(p);
     if expect(p, k_lparen(), "to start the payload") < 0 { return 0 - 1; }
+    // `E.V(` in a pattern, with the cursor right after the `(` and no label.
+    let mut empty = false;
+    if fv != 0 && ends_at_hole(p, open) && label_at(p, pos(p)) == false {
+        take_hole(p, 3, fv - 1, 1);
+        empty = true;
+    }
     let fields = ints_new();
-    while at(p, k_rparen()) == false && at(p, k_eof()) == false {
+    while empty == false && at(p, k_rparen()) == false && at(p, k_eof()) == false {
         let name_span = peek_span(p);
         // A payload pattern by position (R1.5, D4).
         if label_at(p, pos(p)) == false {
@@ -3559,6 +3624,17 @@ fn projections(p: Px, base: Int) -> Int {
             continue;
         }
         if at(p, k_dot()) == false { break; }
+        // `receiver.` with the cursor right after the `.` and no name: a probe's hole, an empty member name the checker looks for on the receiver's type. A contract word after it begins the next
+        // clause, not a member's name.
+        if hole_on(p) && ends_at_hole(p, pos(p)) && (ident_at(p, pos(p) + 1) == false || contract_word_at(p, pos(p) + 1)) {
+            depth = depth + 1;
+            let hs = hole_span(p);
+            advance(p);
+            take_hole(p, 1, hs, 0);
+            if built(p, depth) == false { return 0 - 1; }
+            out = field_expr(t, out, "", hs, join(t, expr_span(t, out), hs));
+            continue;
+        }
         advance(p);
         let name_span = peek_span(p);
         if line_break_before(p) {
@@ -3649,6 +3725,14 @@ fn ident_primary(p: Px, name0: Str, span0: Int) -> Int {
     if at(p, k_lbracket()) && bracket_is_type_args(p, pos(p)) {
         let a = type_args(p);
         if a < 0 { return 0 - 1; }
+        // `Maybe[Int].` with the cursor right after the `.`: the empty variant name of an applied enum's construction.
+        if hole_on(p) && at(p, k_dot()) && ends_at_hole(p, pos(p)) && ident_at(p, pos(p) + 1) == false {
+            let vs = hole_span(p);
+            advance(p);
+            take_hole(p, 1, vs, 0);
+            if built(p, 1) == false { return 0 - 1; }
+            return variant_node(t, qualifier, name, span, a, "", vs, empty_list(t), join(t, span, vs));
+        }
         let applies = at(p, k_lparen()) || (at(p, k_dot()) && kat(p, pos(p) + 1) == k_ident() && kat(p, pos(p) + 2) == k_lparen());
         if applies == false {
             report(p, "N0100", peek_span(p), found_msg(p, str_concat(str_concat("expected `(` after the type arguments of `", name), "`"), pos(p)), "",
@@ -3662,7 +3746,8 @@ fn ident_primary(p: Px, name0: Str, span0: Int) -> Int {
     // `Shape.Circle(2)` (R1.5, D4): a capitalised name and a capitalised variant are a variant with
     // its payload by position, not a method call.
     let unlabelled = variant && kat(p, i + 3) != k_rparen() && label_at(p, i + 3) == false
-            && (capitalised(name) && capitalised(tat(p, i + 1))) == false;
+            && (capitalised(name) && capitalised(tat(p, i + 1))) == false
+            && (hole_on(p) && ends_at_hole(p, i + 2)) == false;
     if unlabelled {
         if targs >= 0 {
             report(p, "N0100", span, str_concat(str_concat("type arguments cannot be written on `", name), "` before a method call"), "",
@@ -3680,6 +3765,15 @@ fn ident_primary(p: Px, name0: Str, span0: Int) -> Int {
     if variant { return variant_construction(p, qualifier, name, span, targs); }
     let constructing = at(p, k_lparen()) && kat(p, i + 1) == k_ident() && kat(p, i + 2) == k_colon();
     if constructing { return construction(p, qualifier, name, span, targs); }
+    // `Name(` with the cursor right after the `(` and no label: a probe's hole. The grammar reads a `(` without labels as a call, and so does this; what `Name` is, the checker decides.
+    if hole_on(p) && at(p, k_lparen()) && ends_at_hole(p, pos(p)) {
+        bump(p);
+        take_hole(p, 2, span, 0);
+        let hclose = expect(p, k_rparen(), "to close the argument list");
+        if hclose < 0 { return 0 - 1; }
+        if built(p, 1) == false { return 0 - 1; }
+        return call_node(t, qualifier, name, span, targs, ints_new(), join(t, span, hclose));
+    }
     if at(p, k_lparen()) && line_break_before(p) == false {
         bump(p);
         let args = ints_new();
@@ -4211,6 +4305,55 @@ fn hole(p: Px, text: Str, from: Int, braces: Int) -> Int {
 
 // Lex and parse `src`: the `Program` node, with every diagnostic — the lexer's first, then the
 // parser's — in `d`.
+// A completion probe's parse (N26): the file with a hole at byte `hole` where the grammar has one, the site it found in the program's `hole`.
+pub fn sx_parse_source_at(src: Str, t: Tree, d: Diags, hole: Int) -> Int {
+    let kinds = ints_new();
+    let starts = ints_new();
+    let ends = ints_new();
+    let texts = strs_new();
+    lex_all(src, kinds, starts, ends, texts, d);
+    // A `..` with the cursor between its dots is two dots: a member chain missing a name.
+    let mut i = 0;
+    while i < ints_len(kinds) {
+        if ints_get(kinds, i) == k_dotdot() && ints_get(starts, i) + 1 == hole {
+            let s0 = ints_get(starts, i);
+            let e0 = ints_get(ends, i);
+            let tail = ints_len(kinds);
+            ints_push(kinds, 0); ints_push(starts, 0); ints_push(ends, 0); strs_push(texts, "");
+            let mut j = tail;
+            while j > i + 1 {
+                ints_set(kinds, j, ints_get(kinds, j - 1));
+                ints_set(starts, j, ints_get(starts, j - 1));
+                ints_set(ends, j, ints_get(ends, j - 1));
+                strs_set(texts, j, strs_get(texts, j - 1));
+                j = j - 1;
+            }
+            ints_set(kinds, i, k_dot());
+            ints_set(ends, i, s0 + 1);
+            strs_set(texts, i, ".");
+            ints_set(kinds, i + 1, k_dot());
+            ints_set(starts, i + 1, s0 + 1);
+            ints_set(ends, i + 1, e0);
+            strs_set(texts, i + 1, ".");
+            i = ints_len(kinds);
+        }
+        i = i + 1;
+    }
+    let p = sx_parser(kinds, starts, ends, texts, src, t, d);
+    sv(p, s_hole(), hole + 1);
+    let pr = new_prog();
+    sx_parse_items(p, pr);
+    let program = sx_program(t, pr);
+    if g(p, s_hkind()) != 0 {
+        let f = fs();
+        fa(f, "kind", sx_atom(t, int_to_str(g(p, s_hkind()))));
+        fa(f, "a", g(p, s_ha()));
+        fa(f, "pattern", sx_bool(t, g(p, s_hb()) == 1));
+        sx_set(t, program, "hole", mk_some(t, mk_struct(t, "HoleSite", f)));
+    }
+    program
+}
+
 pub fn sx_parse_source(src: Str, t: Tree, d: Diags) -> Int {
     let kinds = ints_new();
     let starts = ints_new();

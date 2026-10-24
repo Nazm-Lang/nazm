@@ -214,6 +214,26 @@ def main():
             for character in sorted({0, width // 2, width}):
                 at = {"line": line, "character": character}
                 ask("textDocument/codeAction", {"textDocument": doc, "range": {"start": at, "end": at}, "context": {"diagnostics": [], "only": ["quickfix"]}})
+    elif mode == "complete":
+        # Completion at each of thirty names, in the middle of the identifier and at its end, and at the start of ten.
+        lines = text.split("\n")
+        for line, character, word in names(text, 30):
+            ask("textDocument/completion", {"textDocument": doc, "position": {"line": line, "character": character}})
+            width = utf16(word)
+            # The identifier's end: the middle `names` gives, plus what remains of it.
+            end = character + (width - max(1, width // 2))
+            ask("textDocument/completion", {"textDocument": doc, "position": {"line": line, "character": end}})
+    elif mode == "holes":
+        # Completion right after each of up to twenty `.` and ten `(` (the hole a probe anchors), spread over the file.
+        found = []
+        for number, line in enumerate(text.split("\n")):
+            for m in re.finditer(r"[.(]", line):
+                found.append((number, utf16(line[: m.end()]), m.group(0)))
+        for kind, wanted in (("." , 20), ("(", 10)):
+            of = [x for x in found if x[2] == kind]
+            step = max(1, len(of) // wanted)
+            for number, character, _ in of[::step][:wanted]:
+                ask("textDocument/completion", {"textDocument": doc, "position": {"line": number, "character": character}})
     elif mode == "tokens":
         ask("textDocument/semanticTokens/full", {"textDocument": doc})
     elif mode in ("syms", "symsflat"):
