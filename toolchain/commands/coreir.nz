@@ -385,6 +385,20 @@ fn ci_stage(io: IoCap, command: Str) -> Str {
 // command reports a lowering the validator rejects: the program was checked, so this is the
 // compiler's.
 pub fn ci_staged(io: IoCap, proc: ProcessCap, sp: SpawnCap, command: Str, doc: Str, args: Strs) -> Str {
+    let r = ci_staged_or(io, proc, sp, command, doc, args)
+    if r.expanding {
+        let mut n = 0
+        for line in text_split(r.err, nl()) { if ut_starts(line, "error[") { n += 1 } }
+        eprint(r.err + "nazm: " + int_to_str(n) + " error" + ut_plural(n) + nl())
+        exit_with(1)
+    }
+    r.out
+}
+
+pub struct CiStaged { out: Str, err: Str, expanding: Bool }
+
+// As `ci_staged`, but a program with polymorphic recursion (`N0357`, the pipeline's status 3) is answered, not reported.
+pub fn ci_staged_or(io: IoCap, proc: ProcessCap, sp: SpawnCap, command: Str, doc: Str, args: Strs) -> CiStaged {
     let pipeline = ci_stage(io, command)
     let limit = sr_check_stage(io, pipeline, "nazm-pipeline")
     let tmp = os_env_get("TMPDIR")
@@ -400,12 +414,13 @@ pub fn ci_staged(io: IoCap, proc: ProcessCap, sp: SpawnCap, command: Str, doc: S
     let r = sr_stage_run(io, proc, sp, pipeline, limit, full)
     sr_remove(io, work)
     if !r.started { sr_fail(io, "nazm: nazm-pipeline did not start: " + r.err, 4) }
+    if r.status == 3 { return CiStaged(out: "", err: r.err, expanding: true) }
     if r.status != 0 {
         // What the Rust command words as a diagnostic of its own (`N0357` and the like) is the
         // pipeline's refusal here, by name: not carried.
         ci_refuse(io, "a program the pipeline does not lower (status " + int_to_str(r.status) + "): " + ut_trim_end(r.err))
     }
-    r.out
+    CiStaged(out: r.out, err: "", expanding: false)
 }
 
 // `mir`'s compact form from its indented one: `nazm_mir::print` writes the same text with no line
