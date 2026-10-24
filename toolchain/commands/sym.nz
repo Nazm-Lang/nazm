@@ -187,18 +187,38 @@ pub fn symbols_of(f: Facts, m: Int, details: Bool) -> Sy {
         let at = sy_add(y, 3, ck_enum_name(c, e), fx_start(f, span), fx_end(f, span), ck_enum_name_start(c, e) - base, ck_enum_name_end(c, e) - base, "", false, 0 - 1, e)
         let et = fx_enum_type(f, e)
         let variants = sx_items(t, sx_field(t, node, "variants"))
-        if et < 0 || ck_variant_count(c, et) != ints_len(variants) {
-            sy_fail(y, "an enum whose variants the facts do not publish")
+        if et < 0 { sy_fail(y, "an enum whose variants the facts do not publish")
             continue
         }
-        for v in 0..ints_len(variants) {
-            let vn = ints_get(variants, v)
+        // A variant written twice is declared once, by the first: the facts' variants are found among the written ones by their names.
+        for v in 0..ck_variant_count(c, et) {
+            let mut vn = 0 - 1
+            if ck_variant_count(c, et) == ints_len(variants) { vn = ints_get(variants, v) } else {
+                for q in 0..ints_len(variants) {
+                    if vn < 0 && sx_name(t, ints_get(variants, q), "name") == ck_variant_name(c, et, v) { vn = ints_get(variants, q) }
+                }
+            }
+            if vn < 0 {
+                sy_fail(y, "an enum whose variants the facts do not publish")
+                continue
+            }
             let vs = sx_field(t, vn, "span")
             let vns = sx_field(t, vn, "name_span")
-            let payload = sx_items(t, sx_field(t, vn, "fields"))
-            if ck_variant_arity(c, et, v) != ints_len(payload) {
-                sy_fail(y, "a variant whose payload the facts do not publish")
-                continue
+            let written = sx_items(t, sx_field(t, vn, "fields"))
+            let payload = ints_new()
+            if ck_variant_arity(c, et, v) == ints_len(written) { for q in 0..ints_len(written) { ints_push(payload, ints_get(written, q)) } } else {
+                for k in 0..ck_variant_arity(c, et, v) {
+                    let mut pn = 0 - 1
+                    for q in 0..ints_len(written) {
+                        if pn < 0 && sx_name(t, ints_get(written, q), "name") == ck_payload_name(c, et, v, k) { pn = ints_get(written, q) }
+                    }
+                    if pn < 0 {
+                        sy_fail(y, "a variant whose payload the facts do not publish")
+                        continue
+                    }
+                    ints_push(payload, pn)
+                }
+                if ints_len(payload) != ck_variant_arity(c, et, v) { continue }
             }
             let listed = strs_new()
             for k in 0..ints_len(payload) { strs_push(listed, ck_payload_name(c, et, v, k) + ": " + fx_show(f, fx_payload_ty(f, et, v, k))) }

@@ -857,6 +857,13 @@ fn rename(io: IoCap, s: Server, j: J, id: Str) -> Int {
     let r = rn_plan(io, docs_of(s), cur(s), st, ints_get(span, 1), j_str(j, name))
     if rn_why(r) != "" { refuse(io, rn_why(r)) }
     if rn_code(r) != "" { return failure(io, id, rn_msg(r)) }
+    // `plan_is_current`: every file the plan edits is, now, the text it was computed from: the open document's text, or the disk's. A file the loader ended with a line break
+    // it did not have is not.
+    for q in 0..rn_file_count(r) {
+        let at = open_as(io, docs_of(s), rn_module_identity(io, rn_file_path(r, q)))
+        let now = if at >= 0 { strs_get(s.texts, at) } else { read_file(rn_file_path(r, q)) }
+        if now != rn_file_text(r, q) { return respond_error(io, id, 0 - 32803, "the program changed while the rename was being planned") }
+    }
     // `workspace_edit`: versioned changes only, and only for files that are open documents.
     if ints_get(s.flags, 0) == 0 {
         return respond_error(io, id, 0 - 32803, "this client does not accept versioned edits, so a rename could be applied to a" + spaces(14)
@@ -1018,13 +1025,30 @@ fn symbols_of(io: IoCap, f: Facts, m: Int, details: Bool) -> Sy {
         let at = sy_add(y, 3, ck_enum_name(c, e), fx_start(f, span), fx_end(f, span), ck_enum_name_start(c, e) - base, ck_enum_name_end(c, e) - base, "", false, 0 - 1)
         let et = fx_enum_type(f, e)
         let variants = sx_items(t, sx_field(t, node, "variants"))
-        if et < 0 || ck_variant_count(c, et) != ints_len(variants) { refuse(io, "an enum whose variants the facts do not publish") }
-        for v in 0..ints_len(variants) {
-            let vn = ints_get(variants, v)
+        if et < 0 { refuse(io, "an enum whose variants the facts do not publish") }
+        // A variant written twice is declared once, by the first: the facts' variants are found among the written ones by their names.
+        for v in 0..ck_variant_count(c, et) {
+            let mut vn = 0 - 1
+            if ck_variant_count(c, et) == ints_len(variants) { vn = ints_get(variants, v) } else {
+                for q in 0..ints_len(variants) {
+                    if vn < 0 && sx_name(t, ints_get(variants, q), "name") == ck_variant_name(c, et, v) { vn = ints_get(variants, q) }
+                }
+            }
+            if vn < 0 { refuse(io, "an enum whose variants the facts do not publish") }
             let vs = sx_field(t, vn, "span")
             let vns = sx_field(t, vn, "name_span")
-            let payload = sx_items(t, sx_field(t, vn, "fields"))
-            if ck_variant_arity(c, et, v) != ints_len(payload) { refuse(io, "a variant whose payload the facts do not publish") }
+            let written = sx_items(t, sx_field(t, vn, "fields"))
+            let payload = ints_new()
+            if ck_variant_arity(c, et, v) == ints_len(written) { for q in 0..ints_len(written) { ints_push(payload, ints_get(written, q)) } } else {
+                for k in 0..ck_variant_arity(c, et, v) {
+                    let mut pn = 0 - 1
+                    for q in 0..ints_len(written) {
+                        if pn < 0 && sx_name(t, ints_get(written, q), "name") == ck_payload_name(c, et, v, k) { pn = ints_get(written, q) }
+                    }
+                    if pn < 0 { refuse(io, "a variant whose payload the facts do not publish") }
+                    ints_push(payload, pn)
+                }
+            }
             let listed = strs_new()
             for k in 0..ints_len(payload) { strs_push(listed, ck_payload_name(c, et, v, k) + ": " + fx_show(f, fx_payload_ty(f, et, v, k))) }
             let vname = ck_variant_name(c, et, v)
@@ -1852,8 +1876,8 @@ fn signature_help(io: IoCap, s: Server, j: J) -> Str {
     let d = fx_diags(f)
     // A recovered syntax answers nothing (`RecoveredSyntax`, and no call or construction is found in a tree that lost its parts).
     for i in 0..dg_len(d) {
-        // A syntax error, or an attribute the vocabulary does not have: the checker's calls are not recorded.
-        if (ints_get(d.file, i) >= 0 && dg_code(d, i) != "N0205") || dg_code(d, i) == "N0619" || dg_code(d, i) == "N0627" { return "null" }
+        // A syntax error, or an attribute the vocabulary does not have (its function is left out): no call is recorded for what used it.
+        if (ints_get(d.file, i) >= 0 && dg_code(d, i) != "N0205") || (dg_code(d, i) == "N0619" && ut_contains_text(strs_get(d.message, i), "is not an attribute Nazm has")) { return "null" }
     }
     let c = fx_checker(f)
     let t = fx_tree(f)

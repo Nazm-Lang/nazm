@@ -23,13 +23,21 @@ pub struct Config {
     os: Str,
     arch: Str,
     target: Str,
+    // The profiles in force (`--profile`, and each package manifest's): what `profile = "…"` asks.
+    profiles: Strs,
 }
 
 pub fn cf_host(os: Str, arch: Str) -> Config {
     let mut target = cf_cat3(arch, "-unknown-", os);
     if os == "macos" { target = str_concat(arch, "-apple-darwin"); }
     if os == "linux" { target = str_concat(arch, "-unknown-linux-gnu"); }
-    Config(os: os, arch: arch, target: target)
+    Config(os: os, arch: arch, target: target, profiles: strs_new())
+}
+
+// The same, with the profiles in force.
+pub fn cf_host_profiles(os: Str, arch: Str, profiles: Strs) -> Config {
+    let k = cf_host(os, arch);
+    Config(os: k.os, arch: k.arch, target: k.target, profiles: profiles)
 }
 
 // The compilation's working state: its tree, its modules' programs and their offsets, the
@@ -597,7 +605,17 @@ fn holds(c: Cf, x: Int) -> Int {
         if key == "os" { return truth(host_os(c) == value); }
         if key == "arch" { return truth(host_arch(c) == value); }
         if key == "target" { return truth(host_target(c) == value); }
-        if key == "feature" || key == "profile" { return 0; }
+        if key == "feature" { return 0; }
+        if key == "profile" {
+            let k = c.cfg;
+            let mut held = false;
+            let mut i = 0;
+            while i < strs_len(k.profiles) {
+                if strs_get(k.profiles, i) == value { held = true; }
+                i = i + 1;
+            }
+            return truth(held);
+        }
         return not_a_condition(c, span, cf_cat3("`", key, "` is not something a condition can ask about"));
     }
     if v == "Call" {

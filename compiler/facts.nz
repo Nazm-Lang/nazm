@@ -109,7 +109,16 @@ pub fn fx_check_service(path: Str, source_root: Str, library: Str, os: Str, arch
     check_as(path, source_root, strs_new(), strs_new(), library, os, arch, false, true, io)
 }
 
+// The same as `fx_check_in`, with the profiles in force (`check --profile`): what an `@cfg(profile = "…")` asks.
+pub fn fx_check_profiles(path: Str, source_root: Str, library: Str, os: Str, arch: Str, profiles: Strs, io: IoCap) -> Facts {
+    check_with(path, source_root, strs_new(), strs_new(), library, os, arch, true, false, profiles, io)
+}
+
 fn check_as(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os: Str, arch: Str, program: Bool, partial: Bool, io: IoCap) -> Facts {
+    check_with(path, given, paths, texts, library, os, arch, program, partial, strs_new(), io)
+}
+
+fn check_with(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os: Str, arch: Str, program: Bool, partial: Bool, profiles: Strs, io: IoCap) -> Facts {
     let f = facts_new();
     let d = f.d;
     // The source root, as `root::decide` finds it: the first manifest upward whose source root holds
@@ -189,7 +198,7 @@ fn check_as(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os: S
     // Every attribute held to the vocabulary and every declaration whose `@cfg` does not hold for
     // the host dropped (`attributes::configure`, design D19), before anything resolves a name; its
     // refusals count as the parser's do.
-    let unsure = cf_configure(t, f.programs, f.bases, d, cf_host(os, arch));
+    let unsure = cf_configure(t, f.programs, f.bases, d, cf_host_profiles(os, arch, profiles));
     let parse_failed = dg_len(d) > loader_errors;
     // The checker (`sema.nz`), where it carries the whole compilation (design D13); where it
     // stops, nothing of it is published. After a syntax error it checks what did parse, as the
