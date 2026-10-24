@@ -133,7 +133,7 @@ pub fn pp_run(io: IoCap, c: Cli, what: Str) -> Int {
     let prefix = fe_prefix(io, root)
     let given = if given_set { fe_prefix(io, cli_value(c, 5)) + cli_value(c, 5) } else { "" }
     let path = prefix + root
-    let f = fx_check_module_in(path, given, library, fe_host_os(), fe_host_arch(), io)
+    let f = fx_check_service(path, given, library, fe_host_os(), fe_host_arch(), io)
     // The file, among those the root's compilation loaded — by identity.
     let want = fe_canonical(io, fe_prefix(io, file) + file)
     let is_root = want != "" && want == fe_canonical(io, path)
@@ -179,7 +179,6 @@ pub fn pp_run(io: IoCap, c: Cli, what: Str) -> Int {
     if rename {
         let at = rn_name_at(disk, byte)
         if ints_get(at, 0) == 0 - 2 { refuse(io, "a position in a document that does not lex") }
-        if rn_unreliable(f) { refuse(io, "a rename in a compilation whose errors leave the facts' index unlike the reference's") }
         let new_name = cli_value(c, 3)
         if ints_get(at, 0) < 0 {
             finish(io, unavailable("no_entity"), json, 1)

@@ -12,7 +12,10 @@ import sys
 
 path = sys.argv[1]
 limit = int(sys.argv[2]) if len(sys.argv) > 2 else 8
-data = open(path, 'rb').read()
+try:
+    data = open(path, 'rb').read()
+except OSError:
+    sys.exit(0)  # a directory, or unreadable: there is no position in it
 text = data.decode('utf-8', errors='replace')
 # Offsets are bytes: a map from character index to byte offset.
 byte_at = []

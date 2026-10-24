@@ -418,20 +418,11 @@ fn refresh(io: IoCap, s: Server) -> Int {
     for i in 0..dg_len(d) {
         if dg_severity(d, i) == "error" && dg_code(d, i) != "N0204" && file_at(d, i, bases) == 0 { strs_push(out, diagnostic_json(d, i, held, starts)) }
     }
-    // The checker's warnings are kept beside its errors (`Ck.w`) and published with them, as the
-    // service chains `nazm_core::warnings` after the errors; after a syntax error they are not
-    // carried.
+    // The checker's warnings are kept beside its errors (`Ck.w`) and published with them, as the service chains `nazm_core::warnings` after
+    // the errors, after a syntax error too.
     let w = fx_checker(f).w
-    // A parser's (or the attributes') diagnostic is the one whose file its stage named.
-    let mut syntax = false
-    for i in 0..dg_len(d) {
-        if ints_get(d.file, i) >= 0 { syntax = true }
-    }
     for i in 0..dg_len(w) {
-        if file_at(w, i, bases) == 0 {
-            if syntax { refuse(io, "a warning beside a syntax error") }
-            strs_push(out, diagnostic_json(w, i, held, starts))
-        }
+        if file_at(w, i, bases) == 0 { strs_push(out, diagnostic_json(w, i, held, starts)) }
     }
     vec_push(s.facts, f)
     publish(io, path, int_to_str(ints_get(s.versions, 0)), out)
@@ -526,34 +517,46 @@ fn effect_set(mask: Int) -> Str {
 
 // What hover shows of a call to function `i` (`Signature::of_function`, rendered): `fn NAME(a: T,
 // …) -> R`, then its declared effects after ` ! `, or, where it declares none, a line of the
-// effects its body requires. Refused for a method, a closure, a generic or foreign function, a
-// built-in and a call through a value, whose signatures the facts do not spell.
+// effects its body requires (`fn_label`); refused for a built-in and a call through a value, which have none.
 fn call_label(io: IoCap, f: Facts, i: Int) -> Str {
     let c = fx_checker(f)
     if i < 0 { refuse(io, "hover of a call to a built-in or through a value") }
-    if ck_fn_closure(c, i) || ck_fn_method(c, i) || ck_fn_generic(c, i) || ck_fn_foreign(c, i) != "" {
-        refuse(io, "hover of a call to a method, closure, generic or foreign function")
-    }
-    let name = ck_fn_name(c, i)
-    for k in 0..str_len(name) {
-        if str_byte(name, k) == 47 { refuse(io, "hover of a call to an impl's method") }
-    }
-    let t = fx_tree(f)
-    let params = sx_items(t, sx_field(t, ck_fn_node(c, i), "params"))
-    let tys = ck_fn_params(c, i)
-    if ints_len(params) != strs_len(tys) { refuse(io, "hover of a call whose parameters the facts do not name") }
-    let shown = strs_new()
-    for k in 0..ints_len(params) {
-        let p = sx_name(t, ints_get(params, k), "name")
-        if p == "" { refuse(io, "hover of a call whose parameters the facts do not name") }
-        strs_push(shown, p + ": " + strs_get(tys, k))
-    }
-    let sig = "fn " + name + "(" + str_join(shown, ", ") + ") -> " + ck_fn_ret(c, i)
-    let declared = ck_fn_declared(c, i)
-    if declared >= 0 { return sig + " ! " + effect_set(declared) }
+    let sig = fn_label(io, f, i)
+    if ck_fn_foreign(c, i) != "" || ck_fn_declared(c, i) >= 0 { return sig }
     let required = ck_fn_required(c, i)
-    if required < 0 { refuse(io, "hover of a call whose required effects the facts do not know") }
+    if required < 0 { return sig }
     sig + nl() + "inferred effects: " + effect_set(required)
+}
+
+// Whether the mention at `at` is inside a function other than the one that declares binding `b`: a closure's.
+fn captured_at(f: Facts, b: Int, at: Int) -> Bool {
+    let c = fx_checker(f)
+    let t = fx_tree(f)
+    let mut inner = 0 - 1
+    let mut width = 0
+    for i in 0..ck_fn_count(c) {
+        let node = ck_fn_node(c, i)
+        if node < 0 || ck_fn_module(c, i) != 0 { continue }
+        let sp = sx_field(t, node, "span")
+        let s = fx_start(f, sp)
+        let e = fx_end(f, sp)
+        if s <= at && at < e && (inner < 0 || e - s < width) {
+            inner = i
+            width = e - s
+        }
+    }
+    inner >= 0 && inner != ck_binding_fn(c, b)
+}
+
+// Whether byte `at` of the document is inside one of its `use` items.
+fn in_use_item(f: Facts, at: Int) -> Bool {
+    let t = fx_tree(f)
+    let imps = sx_items(t, sx_field(t, fx_module_program(f, 0), "imports"))
+    for k in 0..ints_len(imps) {
+        let sp = sx_field(t, ints_get(imps, k), "span")
+        if fx_start(f, sp) <= at && at < fx_end(f, sp) { return true }
+    }
+    false
 }
 
 fn hover(io: IoCap, s: Server, j: J) -> Str {
@@ -571,8 +574,10 @@ fn hover(io: IoCap, s: Server, j: J) -> Str {
         return "{\"contents\":{\"kind\":\"plaintext\",\"value\":" + json_str(shown) + "},\"range\":" + range(text, line_starts(text), st, en) + "}"
     }
     let b = ck_binding_at(c, st, en)
-    // A built-in called, where no local is named: the reference shows nothing.
-    if b < 0 && site >= 0 && ck_site_builtin(c, site) >= 0 { return "null" }
+    // A refused capture is mentioned through a slot nothing declares: the reference shows nothing.
+    if b >= 0 && ck_refused_capture_at(c, st, en) { return "null" }
+    // A built-in called, where no local is named: the reference shows nothing; nor does a trait's method.
+    if b < 0 && site >= 0 && (ck_site_builtin(c, site) >= 0 || ck_site_trait_method(c, site) >= 0) { return "null" }
     if b < 0 && site >= 0 { refuse(io, "hover of a call through a value") }
     if b < 0 {
         // After a `.` and not called, a name is a field or a variant: no local, no callee.
@@ -587,10 +592,20 @@ fn hover(io: IoCap, s: Server, j: J) -> Str {
         // A parameter is no use of itself where it is declared: the reference shows nothing there.
         if e >= 0 && fx_ref_kind(f, e) == "local" && fx_ref_decl_start(f, e) == st && fx_ref_decl_end(f, e) == en { return "null" }
         if e >= 0 && fx_ref_kind(f, e) == "local" { refuse(io, "hover of a local the facts publish no binding for") }
+        // A function named in an import list is a use of it, and the checker's record of what a name calls covers that use.
+        if e >= 0 && fx_ref_kind(f, e) == "function" && fx_ref_decl_start(f, e) >= 0 && in_use_item(f, st) {
+            for i in 0..ck_fn_count(c) {
+                if ck_fn_name_start(c, i) == fx_ref_decl_start(f, e) && !ck_fn_closure(c, i) {
+                    let shown = call_label(io, f, i)
+                    return "{\"contents\":{\"kind\":\"plaintext\",\"value\":" + json_str(shown) + "},\"range\":" + range(text, line_starts(text), st, en) + "}"
+                }
+            }
+        }
         return "null"
     }
     let ty = fx_show(f, ck_binding_ty(c, b))
-    let shown = (if ck_binding_mutable(c, b) { "mut " } else { "" }) + ck_binding_name(c, b) + ": " + ty
+    // Seen from a closure the binding is its capture slot, which is not mutable.
+    let shown = (if ck_binding_mutable(c, b) && !captured_at(f, b, st) { "mut " } else { "" }) + ck_binding_name(c, b) + ": " + ty
     "{\"contents\":{\"kind\":\"plaintext\",\"value\":" + json_str(shown) + "},\"range\":" + range(text, line_starts(text), st, en) + "}"
 }
 
@@ -625,7 +640,6 @@ fn loc_json(io: IoCap, f: Facts, m: Int, s: Int, e: Int) -> Str {
 }
 
 fn definition(io: IoCap, s: Server, j: J) -> Str {
-    if vec_len(s.facts) > 0 && unreliable(vec_get(s.facts, 0)) { return definition_failing(io, s, j) }
     let span = locate(io, s, j)
     let st = ints_get(span, 0)
     if st < 0 { return "null" }
@@ -655,11 +669,8 @@ fn references(io: IoCap, s: Server, j: J) -> Str {
     let st = ints_get(span, 0)
     if st < 0 { return "null" }
     let f = vec_get(s.facts, 0)
-    if unreliable(f) { refuse(io, "references in a compilation whose errors leave the facts' index unlike the reference's") }
     let e = entity_at(f, st, ints_get(span, 1))
     if e < 0 { return "null" }
-    // The facts record a trait's method as used in its own default methods' bodies, where the reference does not.
-    if fx_ref_kind(f, e) == "trait method" { refuse(io, "the references of a trait's method") }
     // The uses in the files an editor can open, and the declaration where asked for and there is one.
     let ms = ints_new()
     let ss = ints_new()
@@ -701,45 +712,6 @@ fn references(io: IoCap, s: Server, j: J) -> Str {
         strs_push(out, loc_json(io, f, ints_get(ms, i), ints_get(ss, i), ints_get(es, i)))
     }
     "[" + str_join(out, ",") + "]"
-}
-
-fn definition_failing(io: IoCap, s: Server, j: J) -> Str {
-    let span = locate(io, s, j)
-    let st = ints_get(span, 0)
-    if st < 0 { return "null" }
-    let en = ints_get(span, 1)
-    let text = strs_get(s.texts, 0)
-    let f = vec_get(s.facts, 0)
-    let c = fx_checker(f)
-    let name = str_slice(text, st, en)
-    let b = ck_binding_at(c, st, en)
-    if b < 0 {
-        // What the checker recorded the name refers to: a function called or used as a value, a
-        // record built, a variant named — declared in its module's file, or in the standard
-        // library's or the prelude's, which have no file to open. Anything else (a type in a
-        // signature, a constant, a field) is not indexed by the facts.
-        // A built-in called has no declaration to go to.
-        let site = ck_site_at(c, st, en)
-        if site >= 0 && ck_site_builtin(c, site) >= 0 { return "null" }
-        let mut at = fx_declaration_at(f, 0, st, en)
-        // A variant is recorded at its whole path, `Enum.Variant`.
-        if ints_len(at) == 0 && st > 1 && str_byte(text, st - 1) == 46 {
-            let mut q = st - 1
-            while q > 0 && ident_byte(str_byte(text, q - 1)) { q -= 1 }
-            if q < st - 1 { at = fx_declaration_at(f, 0, q, en) }
-        }
-        if ints_len(at) == 0 { refuse(io, "definition of what the facts index no declaration for") }
-        let m = ints_get(at, 0)
-        let mname = fx_module_name(f, m)
-        if fe_starts(mname, "@") { return "null" }
-        if !fe_starts(mname, "/") { refuse(io, "definition in a module this port does not name by its path") }
-        let mtext = fx_module_text(f, m)
-        return "{\"range\":" + range(mtext, line_starts(mtext), ints_get(at, 1), ints_get(at, 2)) + ",\"uri\":" + json_str(uri_of(mname)) + "}"
-    }
-    let ds = ck_binding_start(c, b)
-    let de = ck_binding_end(c, b)
-    if ds < 0 || de > str_len(text) { refuse(io, "definition of a binding declared elsewhere") }
-    "{\"range\":" + range(text, line_starts(text), ds, de) + ",\"uri\":" + json_str(uri_of(strs_get(s.paths, 0))) + "}"
 }
 
 // --- rename (`rename.rs`) ---------------------------------------------------------------------------------
@@ -809,17 +781,6 @@ fn renameable(io: IoCap, s: Server, f: Facts, st: Int, en: Int, out: Strs) -> St
     ""
 }
 
-// Whether the facts' reference index may differ from the reference's for this compilation: a parser stage
-// reported, or a diagnostic of a kind after which the checker leaves out what the reference still records (an
-// item it refuses to declare, a closure it does not check, a trait it does not know).
-fn unreliable(f: Facts) -> Bool {
-    let d = fx_diags(f)
-    for i in 0..dg_len(d) {
-        if ints_get(d.file, i) >= 0 { return true }
-    }
-    false
-}
-
 // The first diagnostic of a module's analysis (the program's missing `main` is no part of it), or -1.
 fn first_error(f: Facts) -> Int {
     let d = fx_diags(f)
@@ -840,7 +801,6 @@ fn prepare_rename(io: IoCap, s: Server, j: J) -> Str {
     let st = ints_get(span, 0)
     if st < 0 { return "null" }
     let f = vec_get(s.facts, 0)
-    if unreliable(f) { refuse(io, "a rename in a compilation whose errors leave the facts' index unlike the reference's") }
     let info = strs_new()
     if renameable(io, s, f, st, ints_get(span, 1), info) != "" { return "null" }
     let text = strs_get(s.texts, 0)
@@ -983,7 +943,6 @@ fn rename(io: IoCap, s: Server, j: J, id: Str) -> Int {
     if st < 0 && ints_get(span, 1) == 0 - 2 { return respond_error(io, id, 0 - 32803, "the document is not open") }
     if st < 0 { return failure(io, id, "nothing a program declared is named here") }
     let f = vec_get(s.facts, 0)
-    if unreliable(f) { refuse(io, "a rename in a compilation whose errors leave the facts' index unlike the reference's") }
     let info = strs_new()
     let why = renameable(io, s, f, st, ints_get(span, 1), info)
     if why != "" { return failure(io, id, why) }
@@ -1132,7 +1091,7 @@ fn sy_kids(y: Sy, parent: Int) -> Ints {
 fn fn_label(io: IoCap, f: Facts, i: Int) -> Str {
     let c = fx_checker(f)
     let t = fx_tree(f)
-    if ck_fn_foreign(c, i) != "" { refuse(io, "a foreign function's signature") }
+    let foreign = ck_fn_foreign(c, i)
     let node = ck_fn_node(c, i)
     let params = sx_items(t, sx_field(t, node, "params"))
     let tys = ck_fn_params(c, i)
@@ -1146,19 +1105,19 @@ fn fn_label(io: IoCap, f: Facts, i: Int) -> Str {
         if p == "" { refuse(io, "a function whose parameters the facts do not name") }
         strs_push(shown, p + ": " + strs_get(tys, k + implicit))
     }
-    let mut sig = "fn " + ck_fn_name(c, i)
+    let mut sig = (if foreign != "" { "extern \"C\" fn " } else { "fn " }) + ck_fn_name(c, i)
     let tps = sx_items(t, sx_field(t, node, "type_params"))
     if ints_len(tps) > 0 {
         let names = strs_new()
         for k in 0..ints_len(tps) {
             let tp = ints_get(tps, k)
-            if sx_text(t, sx_field(t, tp, "effect")) == "true" { refuse(io, "a function with an effect parameter") }
             let req = sx_field(t, tp, "requires")
             strs_push(names, sx_name(t, tp, "name") + (if sx_is_some(t, req) && sx_name(t, sx_unwrap(t, req), "name") == "Equality" { ": Equality" } else { "" }))
         }
         sig = sig + "[" + str_join(names, ", ") + "]"
     }
     sig = sig + "(" + str_join(shown, ", ") + ") -> " + ck_fn_ret(c, i)
+    if foreign != "" { return sig + " = \"" + foreign + "\"" }
     let declared = ck_fn_declared(c, i)
     if declared >= 0 { sig = sig + " ! " + effect_set(declared) }
     sig
@@ -1188,7 +1147,8 @@ fn symbols_of(io: IoCap, f: Facts, m: Int, details: Bool) -> Sy {
         let at = sy_add(y, 2, ck_record_name(c, r), fx_start(f, span), fx_end(f, span), ck_record_name_start(c, r) - base, ck_record_name_end(c, r) - base, "", false, 0 - 1)
         let rt = fx_record_type(f, r)
         let fields = sx_items(t, sx_field(t, node, "fields"))
-        if rt < 0 || ck_record_arity(c, rt) != ints_len(fields) { refuse(io, "a record whose fields the facts do not publish") }
+        // An opaque C handle (`extern "C" struct Box;`) has one hidden field the facts give and the text does not write: no symbol.
+        if rt < 0 || (ck_record_arity(c, rt) != ints_len(fields) && !(ints_len(fields) == 0 && ck_record_arity(c, rt) == 1)) { refuse(io, "a record whose fields the facts do not publish") }
         for k in 0..ints_len(fields) {
             let fd = ints_get(fields, k)
             let fs = sx_field(t, fd, "span")
@@ -1265,16 +1225,6 @@ fn sy_flat(y: Sy, i: Int, container: Str, has_container: Bool, uri: Str, text: S
     0
 }
 
-// Whether a parser or the attributes reported (a stage that named the file): what the checker declares after
-// is then not the text's items.
-fn parse_failed(f: Facts) -> Bool {
-    let d = fx_diags(f)
-    for i in 0..dg_len(d) {
-        if ints_get(d.file, i) >= 0 { return true }
-    }
-    false
-}
-
 fn document_symbols(io: IoCap, s: Server, j: J) -> Str {
     let p = j_get(j, 0, "params")
     let td = j_get(j, p, "textDocument")
@@ -1284,7 +1234,6 @@ fn document_symbols(io: IoCap, s: Server, j: J) -> Str {
     let k = if path == "" { 0 - 1 } else { doc_named(io, s, path) }
     if k < 0 || vec_len(s.facts) == 0 { return "null" }
     let f = vec_get(s.facts, 0)
-    if parse_failed(f) { refuse(io, "the symbols of a document the parser read with recovery") }
     let y = symbols_of(io, f, 0, true)
     let text = fx_module_text(f, 0)
     let starts = line_starts(text)
@@ -1306,7 +1255,6 @@ fn workspace_symbols(io: IoCap, s: Server, j: J) -> Str {
     if j_kind(j, q) != 4 { refuse(io, "a `workspace/symbol` request without a query") }
     if vec_len(s.facts) == 0 { return "[]" }
     let f = vec_get(s.facts, 0)
-    if parse_failed(f) { refuse(io, "the symbols of a document the parser read with recovery") }
     let query = j_str(j, q)
     // One row per symbol: a sortable key, then the response object.
     let rows = strs_new()

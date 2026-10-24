@@ -735,7 +735,7 @@ pub fn context_command(io: IoCap, c: Cli) -> Int {
     let prefix = fe_prefix(io, root)
     let given_set = cli_present(c, 4)
     let given = if given_set { fe_prefix(io, cli_value(c, 4)) + cli_value(c, 4) } else { "" }
-    let f = fx_check_module_in(prefix + root, given, library, fe_host_os(), fe_host_arch(), io)
+    let f = fx_check_service(prefix + root, given, library, fe_host_os(), fe_host_arch(), io)
     let r = ctx_packet(io, f, prefix + root, file, byte)
     if r.why != "" { refuse(io, r.why) }
     if json {

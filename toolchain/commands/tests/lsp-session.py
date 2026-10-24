@@ -78,6 +78,9 @@ def main():
     if mode == "hover":
         for line, character in [(0, 4), (1, 8), (2, 9), (3, 12), (5, 6), (8, 10), (13, 16)]:
             ask("textDocument/hover", {"textDocument": doc, "position": {"line": line, "character": character}})
+    elif mode == "hoverall":
+        for line, character, _ in names(text, 60):
+            ask("textDocument/hover", {"textDocument": doc, "position": {"line": line, "character": character}})
     elif mode in ("syms", "symsflat"):
         ask("textDocument/documentSymbol", {"textDocument": doc})
         ask("workspace/symbol", {"query": ""})

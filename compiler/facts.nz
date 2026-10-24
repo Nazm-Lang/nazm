@@ -82,28 +82,34 @@ fn give_up(f: Facts, why: Str) -> Facts {
 // `main`), the standard modules and the core prelude read from `library`, `@cfg` asked of `os`
 // and `arch` as Rust's `std::env::consts` names them ("" for unknown: a condition on either then
 // stops the checker).
-pub fn fx_check(path: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts { check_as(path, "", strs_new(), strs_new(), library, os, arch, true, io) }
+pub fn fx_check(path: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts { check_as(path, "", strs_new(), strs_new(), library, os, arch, true, false, io) }
 
 // The same, with the source root given (`check --source-root`, `root::decide`'s `given`): "" to
 // decide it as `fx_check` does.
 pub fn fx_check_in(path: Str, source_root: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts {
-    check_as(path, source_root, strs_new(), strs_new(), library, os, arch, true, io)
+    check_as(path, source_root, strs_new(), strs_new(), library, os, arch, true, false, io)
 }
 
 // The same, where the files at `paths` have the texts `texts` instead of what is on disk: the
 // language server's documents not yet saved (`lsp`). A standard module is always the library's.
 pub fn fx_check_over(path: Str, source_root: Str, paths: Strs, texts: Strs, library: Str, os: Str, arch: Str, io: IoCap) -> Facts {
-    check_as(path, source_root, paths, texts, library, os, arch, true, io)
+    check_as(path, source_root, paths, texts, library, os, arch, true, true, io)
 }
 
 // The same compilation as a module (`Entry::Absent`), as `nazm doc` checks one: whether anything
 // can run is not asked, so a root without `main` is no error.
-pub fn fx_check_module(path: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts { check_as(path, "", strs_new(), strs_new(), library, os, arch, false, io) }
+pub fn fx_check_module(path: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts { check_as(path, "", strs_new(), strs_new(), library, os, arch, false, false, io) }
 pub fn fx_check_module_in(path: Str, source_root: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts {
-    check_as(path, source_root, strs_new(), strs_new(), library, os, arch, false, io)
+    check_as(path, source_root, strs_new(), strs_new(), library, os, arch, false, false, io)
 }
 
-fn check_as(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os: Str, arch: Str, program: Bool, io: IoCap) -> Facts {
+// The same compilation as the language service analyses it: a module, over what was loaded when the loader reported errors (an import it
+// could not resolve is no edge), so the checker's own diagnostics follow the loader's.
+pub fn fx_check_service(path: Str, source_root: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts {
+    check_as(path, source_root, strs_new(), strs_new(), library, os, arch, false, true, io)
+}
+
+fn check_as(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os: Str, arch: Str, program: Bool, partial: Bool, io: IoCap) -> Facts {
     let f = facts_new();
     let d = f.d;
     // The source root, as `root::decide` finds it: the first manifest upward whose source root holds
@@ -143,8 +149,10 @@ fn check_as(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os: S
         strs_push(f.keys, module_key(loaded, i, source_root, packages));
         i = i + 1;
     }
-    // A compilation that could not be loaded reports the loader's diagnostics and nothing else.
-    if dg_len(d) > 0 { return f; }
+    // A compilation that could not be loaded reports the loader's diagnostics and nothing else — but for the language server's, which
+    // analyses what was loaded (`partial`: an import the loader did not resolve is no edge).
+    if dg_len(d) > 0 && partial == false { return f; }
+    let loader_errors = dg_len(d);
     let t = f.t;
     let mut root_program = 0 - 1;
     // The module graph as the loader resolved it: each module's imports, in source order, by
@@ -177,12 +185,12 @@ fn check_as(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os: S
         dg_append_in(d, own, ld_base(loaded, i), i);
         i = i + 1;
     }
-    let syntax_failed = dg_len(d) > 0;
+    let syntax_failed = dg_len(d) > loader_errors;
     // Every attribute held to the vocabulary and every declaration whose `@cfg` does not hold for
     // the host dropped (`attributes::configure`, design D19), before anything resolves a name; its
     // refusals count as the parser's do.
     let unsure = cf_configure(t, f.programs, f.bases, d, cf_host(os, arch));
-    let parse_failed = dg_len(d) > 0;
+    let parse_failed = dg_len(d) > loader_errors;
     // The checker (`sema.nz`), where it carries the whole compilation (design D13); where it
     // stops, nothing of it is published. After a syntax error it checks what did parse, as the
     // reference does.

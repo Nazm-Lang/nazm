@@ -197,17 +197,6 @@ fn first_error(f: Facts) -> Int {
     0 - 1
 }
 
-// Whether the facts' reference index may differ from the reference's for this compilation: a parser stage
-// reported, or a diagnostic of a kind after which the checker leaves out what the reference still records (an
-// item it refuses to declare, a closure it does not check, a trait it does not know).
-fn unreliable(f: Facts) -> Bool {
-    let d = fx_diags(f)
-    for i in 0..dg_len(d) {
-        if ints_get(d.file, i) >= 0 { return true }
-    }
-    false
-}
-
 fn num(s: Str) -> Int {
     let mut n = 0
     for i in 0..str_len(s) { n = n * 10 + str_byte(s, i) - 48 }
@@ -307,7 +296,6 @@ pub fn rn_name_at(text: Str, at: Int) -> Ints {
     out
 }
 
-pub fn rn_unreliable(f: Facts) -> Bool { unreliable(f) }
 pub fn rn_first_error(f: Facts) -> Int { first_error(f) }
 
 // Whether the entity at the name `st..en` of the document (module 0 of `f`, the file `path`) may be renamed, as `renameable`
