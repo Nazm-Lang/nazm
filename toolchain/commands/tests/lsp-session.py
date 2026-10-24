@@ -81,6 +81,29 @@ def main():
     elif mode == "hoverall":
         for line, character, _ in names(text, 60):
             ask("textDocument/hover", {"textDocument": doc, "position": {"line": line, "character": character}})
+    elif mode == "hier":
+        # Prepare at each of forty names; then the calls into and out of each function the text declares, with an item built as the
+        # server writes it (a client sends back what `prepare` answered: `data` is what binds it; version 1 and generation 1 are the
+        # document as opened). A stale generation and a position that declares nothing are asked once each.
+        for line, character, _ in names(text, 40):
+            ask("textDocument/prepareCallHierarchy", {"textDocument": doc, "position": {"line": line, "character": character}})
+        raw = text.encode("utf-8")
+        zero = {"line": 0, "character": 0}
+        found = [m for m in re.finditer(rb"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)", raw)][:30]
+        for number, m in enumerate(found):
+            start, end = m.start(1), m.end(1)
+            for generation in ([1, 2] if number == 0 else [1]):
+                item = {"name": m.group(1).decode(), "kind": 12, "uri": uri, "range": {"start": zero, "end": zero},
+                        "selectionRange": {"start": zero, "end": zero},
+                        "data": {"root": named, "version": 1, "generation": generation, "file": named, "start": start, "end": end}}
+                ask("callHierarchy/incomingCalls", {"item": item})
+                ask("callHierarchy/outgoingCalls", {"item": item})
+        if found:
+            item = {"name": "x", "kind": 12, "uri": uri, "range": {"start": zero, "end": zero}, "selectionRange": {"start": zero, "end": zero},
+                    "data": {"root": named, "version": 1, "generation": 1, "file": named, "start": 0, "end": 1}}
+            ask("callHierarchy/incomingCalls", {"item": item})
+            item["data"] = None
+            ask("callHierarchy/outgoingCalls", {"item": item})
     elif mode == "actions":
         lines = text.split("\n")
         # The whole document, then each line's start, middle and end: whatever a fix is attached to.
