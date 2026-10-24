@@ -15046,8 +15046,7 @@ pub fn ck_site_label(c: Ck, site: Int) -> Strs {
         let mut k = 0;
         while k < n {
             let t = if first >= 0 { ints_get(c.sip, first + k) } else { 0 - 1 };
-            if t >= 0 { strs_push(shown, show(c, t)); }
-            else {
+            if t >= 0 { strs_push(shown, show(c, t)); } else {
                 if ints_get(tpe, k) == 1 { strs_push(shown, cat3(strs_get(tpn, k), ": ", "Equality")); } else { strs_push(shown, strs_get(tpn, k)); }
             }
             k = k + 1;
