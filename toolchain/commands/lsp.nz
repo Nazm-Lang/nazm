@@ -598,8 +598,23 @@ fn hover(io: IoCap, s: Server, j: J) -> Str {
         return "{\"contents\":{\"kind\":\"plaintext\",\"value\":" + json_str(shown) + "},\"range\":" + range(text, line_starts(text), st, en) + "}"
     }
     let b = ck_binding_at(c, st, en)
-    // A refused capture is mentioned through a slot nothing declares: the reference shows nothing.
-    if b >= 0 && ck_refused_capture_at(c, st, en) { return "null" }
+    // A refused capture is mentioned through the slot the captured binding has in its own function, which the reference reads in the closure's locals: what is in that
+    // slot there (a local of the closure, or the copy of something it did capture), or nothing.
+    if b >= 0 && ck_refused_capture_at(c, st, en) {
+        let slot = ck_refused_slot(c, st, en)
+        let table = ck_local_table(c, ck_refused_fn(c, st, en))
+        if slot < 0 || slot >= ints_len(table) { return "null" }
+        let ent = ints_get(table, slot)
+        let shown = if ent >= 0 {
+            (if ck_binding_mutable(c, ent) { "mut " } else { "" }) + ck_binding_name(c, ent) + ": " + fx_show(f, ck_binding_ty(c, ent))
+        } else {
+            let held = ck_capture_binding(c, 0 - 2 - ent)
+            ck_binding_name(c, held) + ": " + fx_show(f, ck_binding_ty(c, held))
+        }
+        return "{\"contents\":{\"kind\":\"plaintext\",\"value\":" + json_str(shown) + "},\"range\":" + range(text, line_starts(text), st, en) + "}"
+    }
+    // A binding of a body no declared function holds (the method of an impl the checker refused) is no local of the reference's.
+    if b >= 0 && ck_binding_fn(c, b) < 0 { return "null" }
     // A built-in called, where no local is named: the reference shows nothing; nor does a trait's method.
     if b < 0 && site >= 0 && (ck_site_builtin(c, site) >= 0 || ck_site_trait_method(c, site) >= 0) { return "null" }
     if b < 0 && site >= 0 { refuse(io, "hover of a call through a value") }
@@ -1349,6 +1364,11 @@ fn token_class(f: Facts, st: Int, en: Int) -> Ints {
             let b = ck_ref_binding(c, e)
             let params = if b >= 0 { ck_fn_param_count(c, ck_binding_fn(c, b)) } else { 0 }
             ty = if b >= 0 && ck_binding_slot(c, b) < params { 4 } else { 5 }
+            // A refused capture is the slot its binding has in the function declaring it, in the closure.
+            if b < 0 && ck_refused_capture_at(c, st, en) {
+                let slot = ck_refused_slot(c, st, en)
+                ty = if slot >= 0 && slot < ck_fn_param_count(c, ck_refused_fn(c, st, en)) { 4 } else { 5 }
+            }
         }
         if kind == "record" { ty = 1 }
         if kind == "enum" { ty = 2 }
