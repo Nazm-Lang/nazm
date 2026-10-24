@@ -717,10 +717,10 @@ pub fn early_errors(f: Facts) -> Int {
     for i in 0..dg_len(own) {
         if dg_code(own, i) == "N0204" { n0204 += 1 }
     }
-    // The loader's own are neither (a module not found has its own rule, a package import that cannot be resolved none).
+    // A package import the loader cannot resolve is no recovery (a module not found is: it leaves a compilation incomplete).
     let mut loader = 0
     for i in 0..dg_len(d) {
-        if dg_code(d, i) == "N0205" || dg_code(d, i) == "N0508" { loader += 1 }
+        if dg_code(d, i) == "N0508" { loader += 1 }
     }
     dg_len(d) - (dg_len(own) - n0204) - loader
 }

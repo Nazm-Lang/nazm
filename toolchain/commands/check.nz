@@ -236,6 +236,29 @@ fn undeclared_features(io: IoCap, p: Packages, features: Strs) -> Int {
     0
 }
 
+// The profiles in force, sorted, each once (`configuration`).
+fn profiles_sorted(xs: Strs) -> Strs {
+    let out = strs_new()
+    for i in 0..strs_len(xs) {
+        let x = strs_get(xs, i)
+        let mut seen = false
+        for k in 0..strs_len(out) {
+            if strs_get(out, k) == x { seen = true }
+        }
+        if seen { continue }
+        let mut at = strs_len(out)
+        while at > 0 && fe_str_less(x, strs_get(out, at - 1)) { at -= 1 }
+        strs_push(out, "")
+        let mut q = strs_len(out) - 1
+        while q > at {
+            strs_set(out, q, strs_get(out, q - 1))
+            q -= 1
+        }
+        strs_set(out, at, x)
+    }
+    out
+}
+
 // `checking::library` (N74): each module of a library package's source root checked as a module,
 // with what it imports, each error reported once however many modules reach it.
 fn check_library(io: IoCap, modules: Strs, library: Str, json: Bool) -> Int {
@@ -402,7 +425,7 @@ pub fn check_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int {
     if report && !no_cache { refuse(io, "`--cache-report` with the check cache") }
     if !entry && exists(io, file) && !readable_text(io, file) { refuse(io, "a root module that is not a readable UTF-8 file") }
 
-    let f = fx_check_in(abs, if cli_present(c, 2) { given_prefix + given } else { "" }, library, fe_host_os(), fe_host_arch(), io)
+    let f = fx_check_profiles(abs, if cli_present(c, 2) { given_prefix + given } else { "" }, library, fe_host_os(), fe_host_arch(), profiles_sorted(in_force), io)
     // `root::decide`'s refusal: a manifest that is not one, a marker that is not empty, a given root
     // that is not a directory.
     if fx_refusal(f) != "" {
@@ -449,12 +472,6 @@ pub fn check_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int {
         exit_with(5)
     }
     if !fx_carried(f) { refuse(io, fx_why(f)) }
-    // `--profile general` holds no rule, but `@cfg(profile = …)` sees it: not carried there.
-    if cli_present(c, 7) {
-        for m in 0..fx_modules(f) {
-            if contains(fx_module_text(f, m), "@cfg") { refuse(io, "`--profile` where a module asks `@cfg`") }
-        }
-    }
     if strs_len(in_force) > 0 || profile_report {
         // The report names a file as the loader did; `locked` is whether the package was held to its lockfile.
         pf_enforce(io, proc, sp, f, abs, names, in_force, locked || (packaged && pf_lock_ok(io, packages)), profile_report)
