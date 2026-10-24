@@ -126,7 +126,7 @@ pub fn sd_prelude() -> Str {
     strs_push(l, "    None,");
     strs_push(l, "    Some(value: T),");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_args() -> Str {
@@ -716,7 +716,7 @@ fn sd_m_args() -> Str {
     strs_push(l, "    }");
     strs_push(l, "    f\"{str_join(out, \"\\n\")}\\n\"");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_audit() -> Str {
@@ -777,7 +777,7 @@ fn sd_m_audit() -> Str {
     strs_push(l, "    }");
     strs_push(l, "    0");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_binary() -> Str {
@@ -1108,7 +1108,7 @@ fn sd_m_binary() -> Str {
     strs_push(l, "    let b = binary_get_bytes(r)?;");
     strs_push(l, "    Result[Str, Str].Ok(value: bytes_to_str(b))");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_bitset() -> Str {
@@ -1247,7 +1247,7 @@ fn sd_m_bitset() -> Str {
     strs_push(l, "    for w in 0..n { if word(a, w) != word(b, w) { same = false; } }");
     strs_push(l, "    same");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_blake3() -> Str {
@@ -1515,7 +1515,7 @@ fn sd_m_blake3() -> Str {
     strs_push(l, "    }");
     strs_push(l, "    bytes_to_str(out)");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_bytebuf() -> Str {
@@ -1751,7 +1751,7 @@ fn sd_m_bytebuf() -> Str {
     strs_push(l, "    bytes_copy(out, bytes_slice(storage(b), 0, bytebuf_len(b)));");
     strs_push(l, "    out");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_chan() -> Str {
@@ -1824,7 +1824,7 @@ fn sd_m_chan() -> Str {
     strs_push(l, "    while open { open = chan_recv_of(c, out); }");
     strs_push(l, "    out");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_config() -> Str {
@@ -2046,7 +2046,7 @@ fn sd_m_config() -> Str {
     strs_push(l, "pub fn config_from_env[T](io: IoCap, prefix: Str, schema: Str, decode: fn(Str) -> Result[T, Str] ! {}) -> Result[T, Str] ! { io } {");
     strs_push(l, "    config_load(io, \"\", prefix, schema, decode)");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_deque() -> Str {
@@ -2166,7 +2166,7 @@ fn sd_m_deque() -> Str {
     strs_push(l, "        vec_get(d.ring, deque_slot(d, i))");
     strs_push(l, "    }");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_dist() -> Str {
@@ -2343,7 +2343,7 @@ fn sd_m_dist() -> Str {
     strs_push(l, "    }");
     strs_push(l, "    Result[Msg, Str].Err(error: str_concat(str_concat(str_concat(\"no answer after \", int_to_str(attempts)), \" tries: \"), last))");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_env() -> Str {
@@ -2369,7 +2369,7 @@ fn sd_m_env() -> Str {
     strs_push(l, "    }");
     strs_push(l, "    out");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_error() -> Str {
@@ -2431,7 +2431,7 @@ fn sd_m_error() -> Str {
     strs_push(l, "        Result.Err(error: e) => Result[T, Error].Err(error: error_from_io(e)),");
     strs_push(l, "    }");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_file() -> Str {
@@ -3054,7 +3054,7 @@ fn sd_m_file() -> Str {
     strs_push(l, "fn line_end(s: Str, start: Int, end: Int) -> Str ! {} {");
     strs_push(l, "    if end > start && str_byte(s, end - 1) == 13 { str_slice(s, start, end - 1) } else { str_slice(s, start, end) }");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_fmt() -> Str {
@@ -3125,7 +3125,7 @@ fn sd_m_fmt() -> Str {
     strs_push(l, "    while i < ints_len(xs) { strs_push(parts, int_to_str(ints_get(xs, i))); i = i + 1; }");
     strs_push(l, "    str_join(parts, sep)");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_fs() -> Str {
@@ -3187,7 +3187,7 @@ fn sd_m_fs() -> Str {
     strs_push(l, "    }");
     strs_push(l, "    Result[Str, Str].Ok(value: made)");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_hal() -> Str {
@@ -3331,7 +3331,7 @@ fn sd_m_hal() -> Str {
     strs_push(l, "    }");
     strs_push(l, "    t.ticks() - start");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_hash() -> Str {
@@ -3456,7 +3456,7 @@ fn sd_m_hash() -> Str {
     strs_push(l, "    fn hash(self: Str) -> UInt64 ! {} { hash_bytes(self) }");
     strs_push(l, "    fn same(self: Str, other: Str) -> Bool ! {} { self == other }");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_hashmap() -> Str {
@@ -3764,7 +3764,7 @@ fn sd_m_hashmap() -> Str {
     strs_push(l, "    let c = vec_get(m.values, a).compare(vec_get(m.values, b));");
     strs_push(l, "    c > 0 || (c == 0 && vec_get(m.keys, a).compare(vec_get(m.keys, b)) < 0)");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_hashset() -> Str {
@@ -3819,7 +3819,7 @@ fn sd_m_hashset() -> Str {
     strs_push(l, "pub fn hashset_items[K: Hash](s: HashSet[K]) -> Vec[K] ! {} {");
     strs_push(l, "    hashmap_keys(s.map)");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_http() -> Str {
@@ -5581,7 +5581,7 @@ fn sd_m_http() -> Str {
     strs_push(l, "pub fn http_get(net: NetCap, url: Str, o: ClientOptions) -> Result[Response, HttpError] ! { io } {");
     strs_push(l, "    http_fetch(net, \"GET\", url, \"\", o)");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_io() -> Str {
@@ -5725,7 +5725,7 @@ fn sd_m_io() -> Str {
     strs_push(l, "    }");
     strs_push(l, "    Result[Option[Str], IoError].Ok(value: Option[Str].Some(value: line))");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_ioerror() -> Str {
@@ -5889,7 +5889,7 @@ fn sd_m_ioerror() -> Str {
     strs_push(l, "pub fn io_error_from_errno(errno: Int) -> IoError ! {} {");
     strs_push(l, "    io_error_from(0 - errno)");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_json() -> Str {
@@ -6463,7 +6463,7 @@ fn sd_m_json() -> Str {
     strs_push(l, "        Result[JsonDoc, Str].Ok(value: json_with_root(doc, root))");
     strs_push(l, "    }");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_linalg() -> Str {
@@ -6556,7 +6556,7 @@ fn sd_m_linalg() -> Str {
     strs_push(l, "    let t = mat3_transpose(b);");
     strs_push(l, "    mat3(mat3_apply(t, a.r0), mat3_apply(t, a.r1), mat3_apply(t, a.r2))");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_log() -> Str {
@@ -6719,7 +6719,7 @@ fn sd_m_log() -> Str {
     strs_push(l, "    while i < strs_len(fields) { strs_push(all, strs_get(fields, i)); i = i + 1; }");
     strs_push(l, "    log_at(out, l, LogLevel.Info(), \"span\", all)");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_map() -> Str {
@@ -6844,7 +6844,7 @@ fn sd_m_map() -> Str {
     strs_push(l, "    while i < vec_len(m.entries) { vec_push(out, vec_get(m.entries, i).value); i = i + 1; }");
     strs_push(l, "    out");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_metrics() -> Str {
@@ -7280,7 +7280,7 @@ fn sd_m_metrics() -> Str {
     strs_push(l, "pub fn metrics_content_type() -> Str ! {} {");
     strs_push(l, "    \"text/plain; version=0.0.4; charset=utf-8\"");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_net() -> Str {
@@ -7483,7 +7483,7 @@ fn sd_m_net() -> Str {
     strs_push(l, "    }");
     strs_push(l, "    Result[Strs, IoError].Ok(value: all)");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_num() -> Str {
@@ -7548,7 +7548,7 @@ fn sd_m_num() -> Str {
     strs_push(l, "    while y != 0 { let r = x % y; x = y; y = r; }");
     strs_push(l, "    x");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_option() -> Str {
@@ -7581,7 +7581,7 @@ fn sd_m_option() -> Str {
     strs_push(l, "        Option.None() => fallback,");
     strs_push(l, "    }");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_ordmap() -> Str {
@@ -8034,7 +8034,7 @@ fn sd_m_ordmap() -> Str {
     strs_push(l, "pub fn ordmap_range[K: Ord, V](m: OrdMap[K, V], lo: K, hi: K) -> Vec[OrdEntry[K, V]] ! {} {");
     strs_push(l, "    entries_of(m, walk(m, true, lo, hi))");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_path() -> Str {
@@ -8121,7 +8121,7 @@ fn sd_m_path() -> Str {
     strs_push(l, "    let body = str_join(kept, \"/\");");
     strs_push(l, "    if absolute { str_concat(\"/\", body) } else { if str_len(body) == 0 { \".\" } else { body } }");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_process() -> Str {
@@ -8302,7 +8302,7 @@ fn sd_m_process() -> Str {
     strs_push(l, "pub fn process_peak_memory(c: Child) -> Result[Int, IoError] ! { io } {");
     strs_push(l, "    io_result(os_child_rusage(c.handle))");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_random() -> Str {
@@ -8404,7 +8404,7 @@ fn sd_m_random() -> Str {
     strs_push(l, "    let n = os_random_bytes(b);");
     strs_push(l, "    bytes_read_le[UInt64](b, 0)");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_regex() -> Str {
@@ -9540,7 +9540,7 @@ fn sd_m_regex() -> Str {
     strs_push(l, "const U_NO: Str = \"fI15022cjL5lO5dO2e56gP6H8nH9bbLJbdJ9p00buL03569g6Fb90wMbRcELtMTbl90beK3eA9U71Eb09b7E%lG5wgHbCc13H1kLQb43bjK7P6b78cB4M5f012F2bDc08bK1U2cB4d87O7b96kA5l0UeU9bA3dG6e6JlRJbk51nE8#7I!JKs$66yUMzb9JCJdCOfkE8%1bQ1213cCbC1E&2C\";");
     strs_push(l, "// General_Category=Pc: 6 ranges.");
     strs_push(l, "const U_PC: Str = \"cV0h&V1J0bxoU1O2hF0\";");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_result() -> Str {
@@ -9590,7 +9590,7 @@ fn sd_m_result() -> Str {
     strs_push(l, "        Result.Err(error: e) => Option[E].Some(value: e),");
     strs_push(l, "    }");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_seq() -> Str {
@@ -9766,7 +9766,7 @@ fn sd_m_seq() -> Str {
     strs_push(l, "    while ok && i < vec_len(xs) { ok = test(vec_get(xs, i)); i = i + 1; }");
     strs_push(l, "    ok");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_sha256() -> Str {
@@ -9940,7 +9940,7 @@ fn sd_m_sha256() -> Str {
     strs_push(l, "    }");
     strs_push(l, "    bytes_to_str(out)");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_show() -> Str {
@@ -9989,7 +9989,7 @@ fn sd_m_show() -> Str {
     strs_push(l, "    }");
     strs_push(l, "    out");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_sort() -> Str {
@@ -10173,7 +10173,7 @@ fn sd_m_sort() -> Str {
     strs_push(l, "    }");
     strs_push(l, "    r == 1");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_test() -> Str {
@@ -10264,7 +10264,7 @@ fn sd_m_test() -> Str {
     strs_push(l, "    }");
     strs_push(l, "    Result[Int, Str].Ok(value: cases)");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_text() -> Str {
@@ -10589,7 +10589,7 @@ fn sd_m_text() -> Str {
     strs_push(l, "    }");
     strs_push(l, "    if r == 2 { 0 } else { r }");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_time() -> Str {
@@ -11035,7 +11035,7 @@ fn sd_m_time() -> Str {
     strs_push(l, "    }");
     strs_push(l, "    str_join(parts, \"\")");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_tls() -> Str {
@@ -11372,7 +11372,7 @@ fn sd_m_tls() -> Str {
     strs_push(l, "pub fn tls_peer(t: TlsStream) -> Str ! { io } {");
     strs_push(l, "    tls_fact(t.session, 2)");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
 
 fn sd_m_toml() -> Str {
@@ -12410,5 +12410,5 @@ fn sd_m_toml() -> Str {
     strs_push(l, "        encode_inline(t)");
     strs_push(l, "    }");
     strs_push(l, "}");
-    str_join(l, str_from_byte(10)) + str_from_byte(10)
+    str_concat(str_join(l, str_from_byte(10)), str_from_byte(10))
 }
