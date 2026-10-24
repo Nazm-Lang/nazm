@@ -21292,11 +21292,15 @@ killers = [{ package = "xtask", bin = "xtask", name = "host_run::tests::the_marg
 
 [[mutation]]
 name = "r6-host-run-second-stage"
-why = "a second host stage starts while one runs"
+why = "a third host stage starts while two run"
 file = "xtask/src/host_run.rs"
-find = """    if lock.try_lock().is_err() {"""
-replace = """    if false && lock.try_lock().is_err() {"""
-killers = [{ package = "xtask", test = "host_run", name = "a_second_stage_is_refused_while_one_runs" }]
+find = """    let Some(_lock) = held else {
+        return Err(Refusal::AnotherStage);
+    };"""
+replace = """    let Some(_lock) = held.or_else(|| fs::File::open(dir.join(SLOTS[0])).ok()) else {
+        return Err(Refusal::AnotherStage);
+    };"""
+killers = [{ package = "xtask", test = "host_run", name = "a_third_stage_is_refused_while_two_run" }]
 
 [[mutation]]
 name = "r6-host-run-withdrawal-marker"
