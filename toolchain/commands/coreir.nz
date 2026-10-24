@@ -157,9 +157,15 @@ pub fn ci_checked_as(io: IoCap, file: Str, rooted: Bool, given: Str, program: Bo
         eprint(str_join(out, ""))
         exit_with(if missing { 3 } else { 1 })
     }
-    let n = dg_len(d)
+    // The checker's warnings (reported when there is no error) are no failure here.
+    let mut n = 0
+    for i in 0..dg_len(d) {
+        if dg_severity(d, i) == "error" { n += 1 }
+    }
     if n > 0 {
-        for i in 0..n { strs_push(out, dg_render(d, i, names, texts, bases)) }
+        for i in 0..dg_len(d) {
+            if dg_severity(d, i) == "error" { strs_push(out, dg_render(d, i, names, texts, bases)) }
+        }
         eprint(str_join(out, "") + "nazm: " + int_to_str(n) + " error" + ut_plural(n) + nl())
         exit_with(1)
     }
