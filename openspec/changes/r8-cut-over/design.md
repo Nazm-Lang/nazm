@@ -886,6 +886,53 @@ on the macOS host, one `host-run` at a time, heap limit 2G.
   per form, the trivial `fn b() -> Int { 1 }` for 1000 iterations on each side — the one place a timing was taken. It was found by a `total_ns` that
   differed, replaced by a function that does not build, and no run of a `@bench` function that builds remains in the scripts.
 
+## Slice 11 — R5's refusals (design, 2026-10-24)
+
+Task 11.1: no refusal that a user meets in the Nazm `nazm` where the Rust one answers, but the deferred targets (question 1). The tool that counts is
+`toolchain/commands/tests/refusals.sh` (contained, 8 at a time, or on the host): it runs both programs on every input and every command, counts a status 6 from
+the Nazm side as a refusal with its reason, and prints `CMD: A agree, D differ, R refused`. The inputs are the tracked programs of the example, compatibility,
+conformance, code-generator, refusal, transfer and front-end corpora and (`REFUSALS_RS=1`) the Rust suites' own programs, 2865 in all; the language server's scripted
+sessions (`lsp-gen.sh`, Python, on the host) and `patch`'s cases (`patch-gen.sh`) are written beforehand.
+
+### S11.1 What was closed, and how
+
+- **The index after errors.** The facts' reference index no longer has gates for `N0203`, `N0305`, `N0334`, `N0386`, `N0610`, `N0101` (R2 records as the reference does).
+  `fx_check_service` is the compilation as the service analyses it: a module, over what the loader loaded when it reported errors (an import it could not resolve is no edge).
+- **`check --profile`**: all 15 profiles over R2's facts, the pipeline's profile facts and loop bounds; `@cfg(profile = "…")` holds for the profiles in force.
+- **`contract`**: the profile, the contract's facts, `--interface`, `--accounts` (keccak256), `--upgrade-check`, `--txs` (the interpreter through a call session).
+- **The language server**: semantic tokens, code actions, call hierarchy, signature help (calls and constructions), several open documents (each analysed against the
+  buffers, published in the order of identity paths; references from every compilation holding the file; workspace symbols across them), rename of an exported name across
+  a declared workspace (N89) and rename over several documents. R2 records, for these, the written type names (`ck_written_type_at`), a call's instantiation as
+  the types that existed when it was made (`ck_site_label`, `subst_found`), the binding a local entity is (`ck_ref_binding`, `ck_binding_slot`).
+- **`patch`**: a file other than the root (the file's own compilation, as the service opens it), a workspace rename (one engine in `rename.nz`, over the open documents, shared with the
+  language server), a local declared in a closure; the MCP `nazm.semantic_patch` in any file of the compilation.
+- **`snapshot`, `diagnostics`, `context`**: a function defined twice (the one kept has a solution that holds nothing, so the provenance digest is the reference's), a package import the
+  loader cannot resolve (no syntax recovery), an enum with a variant or a payload field written twice.
+- **Found and fixed while comparing**: a plan's text is the loader's (a file without a final line break gets one), so the reference answers a rename of such a file with
+  "the program changed while the rename was being planned"; the method of a plain impl of what is no trait, and a function that redefines a built-in, are read for their signature only.
+
+### S11.3 What is compared, and what still differs
+
+`refusals.sh` over 2865 inputs (and `patch-cases.txt`, 2870 cases), contained, 2026-10-24. check, fix, resolve, snapshot, diagnostics, patch: 0 differ, 0 refused. `lsp-*` (12 scripted modes, 2846
+inputs each): actions 2840/6, flat 2845/1, hier 2846/0, hover 2846/0, hoverall 2842/4, multi 2817/5, nav 2845/1, plain 2846/0, sig 2842/4, syms 2846/0, symsflat 2846/0, tokens 2845/1 (agree/differ), in 13
+programs: a hover or token on a local of a closure whose capture the checker refuses, or of a generic impl of a trait that does not load (`closures-014`, `closures-046`, `generic_impls-003`,
+`generic_impls-009`, `selfhost-225` and seven more of the Rust suites). `obligations`, `explain-flow`, `explain-cost`: 5 programs differ (`patterns-001`, `flow_v3-015`, `native_units-032`); `explain-cost`
+refuses 3 (`N0357`/`N0358`). These are open items, not intended differences.
+
+### S11.2 What stays refused, and why
+
+- `contract --evm` and `--wasm`: deferred targets (question 1).
+- **Completion** (`textDocument/completion`, including after `.` and `(`): needs a scope trace the checker does not record (the frames, each binding's visible-from byte, what it
+  hides) and the parser's probe hole (`nazm_core::probe`); a hand-back to R2, task 11.1's remainder.
+- **A program with polymorphic recursion** (`N0357`) in `mir`, `lir`, `explain-cost`, `contract` and `check --profile`: the reference's instance planner reports it with the call that
+  expands; the Nazm pipeline's lowering reports its instance bound (`N0358`) instead, and the emitter's own check (`refuse_expansion`, used by `build`) is not in the pipeline.
+- `check --cache-report` without `--no-cache`: the check cache is not carried (R5), so there are no counts to report; every other form of `check` answers.
+- `accel`'s run (hand-back 10.2): the providers' C programs, the interpreter per element and a report made of the machine's timings.
+- A manifest the package reader does not read (`[features]`, `[registry]`, `heap-limit`, a registry dependency, an array of tables): `compiler/package.nz`'s `unsupported`.
+- A document named by two spellings of one path (a link), an MCP argument error whose `serde` wording needs Rust's float or Unicode `Debug` formatting, and `repo` and the MCP
+  documentation tools with no repository named (the reference was built from one; a port cannot know).
+- A hover on a local of a method whose impl the reference drops for a generic reason (`generic_impls-009`): one input of the sample.
+
 ## Slice 13 — the harness remainder in Nazm (design, 2026-10-20)
 
 R7's 6.2 and 6.3: the contained runner, `host-run`, the mutation campaign runner, `bench` and

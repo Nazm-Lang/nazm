@@ -139,13 +139,15 @@
       number); `contract` 18/0/985. **Refused:** `contract --evm` and `--wasm` (deferred targets, open question 1) and every contract that loads (the `web3`
       profile is slice 11's, and R2 publishes no contract facts); `accel`'s run (the providers and the interpreter's reference answer: hand-back 10.2 below);
       `bench`'s `@cfg` of a feature, package or profile. **Intended difference:** a `bench` row's numbers are the clock's, compared by shape only.
-- [ ] 10.2 (hand-back, not started) `accel`'s run in Nazm: the provider host programs written out and run, the interpreter called per element, the `nazm.accel/3`
+- [ ] 10.2 (hand-back, not started; `contract` closed in slice 11) `accel`'s run in Nazm: the provider host programs written out and run, the interpreter called per element, the `nazm.accel/3`
       report. `contract` (`--interface`, `--txs`, `--accounts`, `--upgrade-check`) once slice 11 carries the `web3` and `accounts` profiles and R2 publishes a
       contract's facts
 
 ## 11. Slice 11 — R5's refusals
-- [ ] 11.1 `check`, `lsp`, `patch`, `references`, `resolve`, `fix`, the MCP server: every refusal
-      `design.md` lists, with R2's hand-backs
+- [ ] 11.1 (not closed: completion, `N0357` in the pipeline, `check --cache-report`, manifest forms; S11.2) `check`, `lsp`, `patch`, `references`, `resolve`, `fix`, the MCP server: every refusal
+      `design.md` lists, with R2's hand-backs. Closed but for what `design.md` S11.2 lists and leaves open (completion, `N0357` in the pipeline, `check --cache-report`, manifest forms, the
+      deferred targets). Evidence: `refusals.sh` over 2865 inputs (the corpora and the Rust suites' programs): check, fix, resolve, snapshot, diagnostics 2865/0/0, patch 2870/0/0,
+      `lsp-*` 12 modes 2846 inputs each, 13 differ in all (listed in S11.3), 0 refused but `lsp` completion; profiles 12826/0/26 (N0357)
 
 ## 12. Slice 12 — a `nazm` that needs no `NAZM_LIBRARY`
 - [ ] 12.1 The standard library and the documentation corpus carried or installed; the archive

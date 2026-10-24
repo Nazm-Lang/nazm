@@ -13,6 +13,7 @@ root=$1
 out=$2
 shift 2
 cd "$here/../../.."
+export OUT="$out" ROOT="$root" HERE="$here"
 find examples tests/compat/v1 compiler/conformance toolchain/codegen/tests/programs crates/nazm-cli/tests/refusals \
     crates/nazm-cli/tests/transfers toolchain/frontend-tests/inputs/check toolchain/frontend-tests/inputs/modules -name '*.nz' | LC_ALL=C sort -u |
     {
@@ -20,11 +21,11 @@ find examples tests/compat/v1 compiler/conformance toolchain/codegen/tests/progr
         # The Rust suites' own programs, every LSP_EVERY-th (REFUSALS_RS=1, as refusals.sh reads them).
         [ -z "${REFUSALS_RS:-}" ] || find toolchain/frontend-tests/inputs/rs -name '*.nz' | LC_ALL=C sort -u | awk -v n="${LSP_EVERY:-1}" 'NR % n == 0'
     } |
-    while IFS= read -r f; do
+    xargs -P "${LSP_JOBS:-8}" -I{} bash -c '
+        f=$1; shift
         for m in "$@"; do
-            mkdir -p "$out/$m"
+            mkdir -p "$OUT/$m"
             arg=$m
             [ "$m" = plain ] && arg=
-            LSP_AS="$PWD=$root" python3 -I "$here/lsp-session.py" "$PWD/$f" $arg > "$out/$m/$(echo "$f" | tr '/' '_').bin" 2> /dev/null || rm -f "$out/$m/$(echo "$f" | tr '/' '_').bin"
-        done
-    done
+            LSP_AS="$PWD=$ROOT" python3 -I "$HERE/lsp-session.py" "$PWD/$f" $arg > "$OUT/$m/$(echo "$f" | tr / _).bin" 2> /dev/null || rm -f "$OUT/$m/$(echo "$f" | tr / _).bin"
+        done' _ {} "$@"
