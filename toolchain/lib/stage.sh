@@ -15,7 +15,7 @@
 #     runtime enforces on itself, `docs/user/spec.md`, *A bounded heap*);
 #   - it runs inside `cargo xtask contained ...` (`NAZM_CONTAINED=1` and a cgroup memory ceiling,
 #     both of which the runner provides and this file only reads), or on a macOS host through
-#     `cargo xtask host-run`, one program at a time (so `stage_jobs` answers 1 there), under a
+#     `cargo xtask host-run`, at most two programs at once (so `stage_jobs` answers 2 there), under a
 #     deadline, with its peak resident memory appended to `STAGE_PEAKS` and the program's own
 #     status passed through (124 past the deadline, 126 for output over the runner's cap);
 #   - anywhere else the script refuses to start.
@@ -79,9 +79,9 @@ stage_init() {
     export STAGE_HEAP STAGE_MODE STAGE_RUN
 }
 
-# `stage_jobs N`: how many programs may run at once: N contained, 1 on a host (one at a time).
+# `stage_jobs N`: how many programs may run at once: N contained, at most 2 on a host.
 stage_jobs() {
-    if [ "$STAGE_MODE" = host ]; then echo 1; else echo "$1"; fi
+    if [ "$STAGE_MODE" = host ]; then [ "$1" -lt 2 ] && echo "$1" || echo 2; else echo "$1"; fi
 }
 
 # `stage_build NAZM SOURCE ARGS...`: `nazm build` with the heap limit.
