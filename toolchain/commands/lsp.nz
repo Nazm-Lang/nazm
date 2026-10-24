@@ -40,6 +40,7 @@ use "../../compiler/facts.nz"
 use "cli.nz"
 use "front.nz"
 use "jsonin.nz"
+use "util.nz"
 
 fn nl() -> Str { str_from_byte(10) }
 fn crlf() -> Str { str_from_byte(13) + str_from_byte(10) }
@@ -393,6 +394,8 @@ fn publish(io: IoCap, path: Str, version: Str, diagnostics: Strs) -> Int {
 // `refresh`: every open document analysed again and its diagnostics published — its own file's
 // errors, then its warnings (`own_diagnostics`).
 fn refresh(io: IoCap, s: Server) -> Int {
+    // The service's generation: bumped by every refresh (`LanguageService::refresh`).
+    ints_set(s.flags, 2, ints_get(s.flags, 2) + 1)
     while vec_len(s.facts) > 0 { vec_pop(s.facts) }
     if strs_len(s.paths) > 1 { refuse(io, "more than one open document (the reference publishes them in a hash map's order)") }
     if strs_len(s.paths) == 0 { return 0 }
@@ -439,7 +442,6 @@ fn name_at(io: IoCap, text: Str, at: Int) -> Ints {
     let texts = strs_new()
     let d = dg_new()
     lex_all(text, kinds, starts, ends, texts, d)
-    if dg_len(d) > 0 { refuse(io, "a position in a document that does not lex") }
     let out = ints_new()
     for k in 0..ints_len(kinds) {
         if ints_get(starts, k) <= at && at < ints_get(ends, k) {
@@ -1621,6 +1623,227 @@ fn code_actions(io: IoCap, s: Server, j: J) -> Str {
     "[" + str_join(out, ",") + "]"
 }
 
+// --- call hierarchy (`hierarchy.rs`) ----------------------------------------------------------------------
+
+// `Path::canonicalize`, or where the file is not there its directory's with its name (`service::identity`).
+fn identity_of(io: IoCap, path: Str) -> Str {
+    let c = fe_canonical(io, path)
+    if c != "" { return c }
+    let norm = pk_normalise(path)
+    let dir = fe_canonical(io, ut_parent(norm))
+    if dir == "" { return norm }
+    if dir == "/" { return "/" + ut_file_name(norm) }
+    dir + "/" + ut_file_name(norm)
+}
+
+// Whether function `g` is a source function an editor can open (`function_symbol` and its file).
+fn hier_ok(f: Facts, g: Int) -> Bool {
+    let c = fx_checker(f)
+    if ck_fn_closure(c, g) || ck_fn_node(c, g) < 0 { return false }
+    module_file(f, ck_fn_module(c, g))
+}
+
+// Function `g` as a call hierarchy item, bound to the compilation of the open document at its version and the current generation.
+fn hier_item(io: IoCap, s: Server, f: Facts, g: Int) -> Str {
+    let c = fx_checker(f)
+    let t = fx_tree(f)
+    let m = ck_fn_module(c, g)
+    let base = fx_module_base(f, m)
+    let mtext = fx_module_text(f, m)
+    let mstarts = line_starts(mtext)
+    let span = sx_field(t, ck_fn_node(c, g), "span")
+    let ns = ck_fn_name_start(c, g) - base
+    let ne = ck_fn_name_end(c, g) - base
+    let name = pk_normalise(fx_module_name(f, m))
+    "{\"data\":{\"end\":" + int_to_str(ne) + ",\"file\":" + json_str(identity_of(io, name)) + ",\"generation\":" + int_to_str(ints_get(s.flags, 2))
+            + ",\"root\":" + json_str(identity_of(io, strs_get(s.paths, 0))) + ",\"start\":" + int_to_str(ns) + ",\"version\":" + int_to_str(ints_get(s.versions, 0))
+            + "},\"detail\":" + json_str(fn_label(io, f, g)) + ",\"kind\":12,\"name\":" + json_str(ck_fn_name(c, g)) + ",\"range\":"
+            + range(mtext, mstarts, fx_start(f, span), fx_end(f, span)) + ",\"selectionRange\":" + range(mtext, mstarts, ns, ne) + ",\"uri\":" + json_str(uri_of(name)) + "}"
+}
+
+fn prepare_hierarchy(io: IoCap, s: Server, j: J) -> Str {
+    let span = locate(io, s, j)
+    let st = ints_get(span, 0)
+    if st < 0 { return "null" }
+    let f = vec_get(s.facts, 0)
+    let e = entity_at(f, st, ints_get(span, 1))
+    if e < 0 || fx_ref_kind(f, e) != "function" { return "null" }
+    let g = ck_ref_function(fx_checker(f), e)
+    if g < 0 || !hier_ok(f, g) { return "null" }
+    "[" + hier_item(io, s, f, g) + "]"
+}
+
+// Whether function `a` goes before `b`: by the file it is declared in, then where its name is, then its name.
+fn hier_before(f: Facts, a: Int, b: Int) -> Bool {
+    let c = fx_checker(f)
+    let ma = ck_fn_module(c, a)
+    let mb = ck_fn_module(c, b)
+    if ma != mb {
+        let pa = pk_normalise(fx_module_name(f, ma))
+        let pb = pk_normalise(fx_module_name(f, mb))
+        if pa != pb { return fe_path_before(pa, pb) }
+    }
+    let na = ck_fn_name_start(c, a) - fx_module_base(f, ma)
+    let nb = ck_fn_name_start(c, b) - fx_module_base(f, mb)
+    if na != nb { return na < nb }
+    fe_str_less(ck_fn_name(c, a), ck_fn_name(c, b))
+}
+
+// The `fromRanges` of the calls `from..to` (absolute, in module `m`): in source order, each once.
+fn hier_ranges(f: Facts, m: Int, from: Ints, to: Ints) -> Str {
+    let base = fx_module_base(f, m)
+    let text = fx_module_text(f, m)
+    let starts = line_starts(text)
+    let order = ints_new()
+    for i in 0..ints_len(from) {
+        let mut at = ints_len(order)
+        while at > 0 && (ints_get(from, i) < ints_get(from, ints_get(order, at - 1))
+                || (ints_get(from, i) == ints_get(from, ints_get(order, at - 1)) && ints_get(to, i) < ints_get(to, ints_get(order, at - 1)))) { at -= 1 }
+        ints_push(order, 0)
+        let mut k = ints_len(order) - 1
+        while k > at {
+            ints_set(order, k, ints_get(order, k - 1))
+            k -= 1
+        }
+        ints_set(order, at, i)
+    }
+    let out = strs_new()
+    let mut last = 0 - 1
+    for r in 0..ints_len(order) {
+        let i = ints_get(order, r)
+        if last >= 0 && ints_get(from, last) == ints_get(from, i) && ints_get(to, last) == ints_get(to, i) { continue }
+        strs_push(out, range(text, starts, ints_get(from, i) - base, ints_get(to, i) - base))
+        last = i
+    }
+    "[" + str_join(out, ",") + "]"
+}
+
+// The function an item's `data` binds, in the current analysis, or -1 (`bound`): refused where the request is not shaped as the reference reads it.
+fn hier_bound(io: IoCap, s: Server, j: J) -> Int {
+    let p = j_get(j, 0, "params")
+    let item = j_get(j, p, "item")
+    if j_kind(j, item) != 6 || j_kind(j, j_get(j, item, "name")) != 4 || !j_int_in(j, j_get(j, item, "kind"), 0, 4294967295) || j_kind(j, j_get(j, item, "uri")) != 4
+            || j_kind(j, j_get(j, item, "range")) != 6 || j_kind(j, j_get(j, item, "selectionRange")) != 6 {
+        refuse(io, "a request's parameters this port does not read as the reference does")
+    }
+    let d = j_get(j, item, "data")
+    if j_kind(j, d) != 6 { return 0 - 1 }
+    let root = j_get(j, d, "root")
+    let file = j_get(j, d, "file")
+    let version = j_get(j, d, "version")
+    let generation = j_get(j, d, "generation")
+    let start = j_get(j, d, "start")
+    let end = j_get(j, d, "end")
+    if j_kind(j, root) != 4 || j_kind(j, file) != 4 || !j_int_in(j, version, 0 - 2147483648, 2147483647) || !j_int_in(j, generation, 0, 2147483647)
+            || !j_int_in(j, start, 0, 2147483647) || !j_int_in(j, end, 0, 2147483647) || j_get(j, d, "root") < 0 { return 0 - 1 }
+    if j_int(j, generation) != ints_get(s.flags, 2) { return 0 - 1 }
+    if strs_len(s.paths) == 0 || vec_len(s.facts) == 0 { return 0 - 1 }
+    if identity_of(io, strs_get(s.paths, 0)) != j_str(j, root) { return 0 - 1 }
+    if ints_get(s.versions, 0) != j_int(j, version) { return 0 - 1 }
+    let f = vec_get(s.facts, 0)
+    let c = fx_checker(f)
+    let mut m = 0 - 1
+    for k in 0..fx_modules(f) {
+        if m < 0 && fe_starts(fx_module_name(f, k), "/") && identity_of(io, pk_normalise(fx_module_name(f, k))) == j_str(j, file) { m = k }
+    }
+    if m < 0 { return 0 - 1 }
+    let base = fx_module_base(f, m)
+    for g in 0..ck_fn_count(c) {
+        if ck_fn_module(c, g) == m && !ck_fn_closure(c, g) && ck_fn_name_start(c, g) - base == j_int(j, start) && ck_fn_name_end(c, g) - base == j_int(j, end) { return g }
+    }
+    0 - 1
+}
+
+fn incoming_calls(io: IoCap, s: Server, j: J) -> Str {
+    let target = hier_bound(io, s, j)
+    if target < 0 { return "null" }
+    let f = vec_get(s.facts, 0)
+    let c = fx_checker(f)
+    let callers = ints_new()
+    let cfrom = ints_new()
+    let cto = ints_new()
+    for q in 0..ck_fn_count(c) {
+        if !hier_ok(f, q) { continue }
+        for k in 0..fx_call_count(f, q) {
+            if fx_call_kind(f, q, k) == "function" && fx_call_function(f, q, k) == target {
+                ints_push(callers, q)
+                ints_push(cfrom, fx_call_start(f, q, k))
+                ints_push(cto, fx_call_end(f, q, k))
+            }
+        }
+    }
+    let rows = hier_rows(io, s, f, callers, cfrom, cto, "from", false)
+    "[" + str_join(rows, ",") + "]"
+}
+
+fn outgoing_calls(io: IoCap, s: Server, j: J) -> Str {
+    let caller = hier_bound(io, s, j)
+    if caller < 0 { return "null" }
+    let f = vec_get(s.facts, 0)
+    let c = fx_checker(f)
+    let callees = ints_new()
+    let cfrom = ints_new()
+    let cto = ints_new()
+    for k in 0..fx_call_count(f, caller) {
+        if fx_call_kind(f, caller, k) == "function" {
+            let h = fx_call_function(f, caller, k)
+            if h >= 0 && hier_ok(f, h) {
+                ints_push(callees, h)
+                ints_push(cfrom, fx_call_start(f, caller, k))
+                ints_push(cto, fx_call_end(f, caller, k))
+            }
+        }
+    }
+    let rows = hier_rows(io, s, f, callees, cfrom, cto, "to", true)
+    "[" + str_join(rows, ",") + "]"
+}
+
+// One row per distinct function of `others`, in the reference's order: the item and the ranges of its calls (`from` the callers' files, or
+// the calling function's own for `outgoing`).
+fn hier_rows(io: IoCap, s: Server, f: Facts, others: Ints, from: Ints, to: Ints, key: Str, outgoing: Bool) -> Strs {
+    let c = fx_checker(f)
+    let distinct = ints_new()
+    for i in 0..ints_len(others) {
+        let g = ints_get(others, i)
+        let mut seen = false
+        for k in 0..ints_len(distinct) {
+            if ints_get(distinct, k) == g { seen = true }
+        }
+        if !seen { ints_push(distinct, g) }
+    }
+    let order = ints_new()
+    for i in 0..ints_len(distinct) {
+        let g = ints_get(distinct, i)
+        let mut at = ints_len(order)
+        while at > 0 && hier_before(f, g, ints_get(order, at - 1)) { at -= 1 }
+        ints_push(order, 0)
+        let mut k = ints_len(order) - 1
+        while k > at {
+            ints_set(order, k, ints_get(order, k - 1))
+            k -= 1
+        }
+        ints_set(order, at, g)
+    }
+    let rows = strs_new()
+    for r in 0..ints_len(order) {
+        let g = ints_get(order, r)
+        let sa = ints_new()
+        let sb = ints_new()
+        for i in 0..ints_len(others) {
+            if ints_get(others, i) == g {
+                ints_push(sa, ints_get(from, i))
+                ints_push(sb, ints_get(to, i))
+            }
+        }
+        // The calls are in the caller's file: the function itself for incoming, the item's own for outgoing.
+        let m = if outgoing { fx_module_at(f, ints_get(sa, 0)) } else { ck_fn_module(c, g) }
+        let item = hier_item(io, s, f, g)
+        let ranges = hier_ranges(f, m, sa, sb)
+        if outgoing { strs_push(rows, "{\"fromRanges\":" + ranges + ",\"" + key + "\":" + item + "}") } else { strs_push(rows, "{\"" + key + "\":" + item + ",\"fromRanges\":" + ranges + "}") }
+    }
+    rows
+}
+
 fn request(io: IoCap, s: Server, j: J, method: Str, id: Str) -> Int {
     if method == "textDocument/hover" { return respond(io, id, hover(io, s, j)) }
     if method == "textDocument/definition" { return respond(io, id, definition(io, s, j)) }
@@ -1629,6 +1852,9 @@ fn request(io: IoCap, s: Server, j: J, method: Str, id: Str) -> Int {
     if method == "textDocument/rename" { return rename(io, s, j, id) }
     if method == "textDocument/documentSymbol" { return respond(io, id, document_symbols(io, s, j)) }
     if method == "workspace/symbol" { return respond(io, id, workspace_symbols(io, s, j)) }
+    if method == "textDocument/prepareCallHierarchy" { return respond(io, id, prepare_hierarchy(io, s, j)) }
+    if method == "callHierarchy/incomingCalls" { return respond(io, id, incoming_calls(io, s, j)) }
+    if method == "callHierarchy/outgoingCalls" { return respond(io, id, outgoing_calls(io, s, j)) }
     if method == "textDocument/codeAction" { return respond(io, id, code_actions(io, s, j)) }
     if method == "textDocument/semanticTokens/full" { return respond(io, id, semantic_tokens(io, s, j)) }
     if implemented(method) { refuse(io, "`" + method + "`") }
@@ -1667,6 +1893,7 @@ pub fn lsp_command(io: IoCap, c: Cli) -> Int {
     let caps = j_get(j0, j_get(j0, 0, "params"), "capabilities")
     ints_push(flags, if j_kind(j0, j_get(j0, j_get(j0, j_get(j0, caps, "workspace"), "workspaceEdit"), "documentChanges")) == 1 { 1 } else { 0 })
     ints_push(flags, if j_kind(j0, j_get(j0, j_get(j0, j_get(j0, caps, "textDocument"), "documentSymbol"), "hierarchicalDocumentSymbolSupport")) == 1 { 1 } else { 0 })
+    ints_push(flags, 0)
     let s = Server(paths: strs_new(), versions: ints_new(), texts: strs_new(), facts: vec_new[Facts](), library: libs, root: roots, flags: flags)
     while true {
         let body = read_message(io, h)
