@@ -137,11 +137,12 @@
       `args` 88 agree, 0 differ, 34 refused (122 command lines); `bench` 41/0/3 (no benchmark run: nothing here builds a `@bench` function), `shape` 21/0/0
       (the row and the harness line, on their own); `accel` 1709/0/0 (`--print-kernel` byte for byte, the refusals of an ineligible function, the inputs and their
       number); `contract` 18/0/985. **Refused:** `contract --evm` and `--wasm` (deferred targets, open question 1) and every contract that loads (the `web3`
-      profile is slice 11's, and R2 publishes no contract facts); `accel`'s run (the providers and the interpreter's reference answer: hand-back 10.2 below);
+      profile is slice 11's, and R2 publishes no contract facts); `accel`'s run (closed by 10.2 below);
       `bench`'s `@cfg` of a feature, package or profile. **Intended difference:** a `bench` row's numbers are the clock's, compared by shape only.
-- [ ] 10.2 (hand-back, not started; `contract` closed in slice 11) `accel`'s run in Nazm: the provider host programs written out and run, the interpreter called per element, the `nazm.accel/3`
-      report. `contract` (`--interface`, `--txs`, `--accounts`, `--upgrade-check`) once slice 11 carries the `web3` and `accounts` profiles and R2 publishes a
-      contract's facts
+- [x] 10.2 (slice 11d) `accel`'s run in Nazm: failure sites recorded, the embedded C host written out and compiled by the platform's `clang`, run, the interpreter called per element, the fold,
+      the `nazm.accel/3` report (design S10.2). `tests/accel-run.sh`: `cpu` 178, `zip` 178, `reduce` 178, `opts` 267, `auto` 89, `opencl` 89, `errors` 397 agree; 0 differ, 0 refused. **Intended
+      difference:** every measured time (`timings_ms`, a transfer's and the fold's `ms`) masked in both outputs, shape compared only. **Refused:** the CPU provider on a Windows host.
+      (`contract`'s `--interface`, `--txs`, `--accounts` and `--upgrade-check` closed in slice 11.)
 
 ## 11. Slice 11 — R5's refusals
 - [ ] 11.1 (not closed: `N0357` in the pipeline, `check --cache-report`, manifest forms; S11.2) `check`, `lsp`, `patch`, `references`, `resolve`, `fix`, the MCP server: every refusal
