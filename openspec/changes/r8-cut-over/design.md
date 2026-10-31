@@ -913,17 +913,15 @@ sessions (`lsp-gen.sh`, Python, on the host) and `patch`'s cases (`patch-gen.sh`
 
 ### S11.3 What is compared, and what still differs
 
-`refusals.sh` over 2865 inputs (and `patch-cases.txt`, 2870 cases), contained, 2026-10-24. check, fix, resolve, snapshot, diagnostics, patch: 0 differ, 0 refused. `lsp-*` (12 scripted modes, 2846
-inputs each): actions 2840/6, flat 2845/1, hier 2846/0, hover 2846/0, hoverall 2842/4, multi 2817/5, nav 2845/1, plain 2846/0, sig 2842/4, syms 2846/0, symsflat 2846/0, tokens 2845/1 (agree/differ), in 13
-programs: a hover or token on a local of a closure whose capture the checker refuses, or of a generic impl of a trait that does not load (`closures-014`, `closures-046`, `generic_impls-003`,
-`generic_impls-009`, `selfhost-225` and seven more of the Rust suites). `obligations`, `explain-flow`, `explain-cost`: 5 programs differ (`patterns-001`, `flow_v3-015`, `native_units-032`); `explain-cost`
-refuses 3 (`N0357`/`N0358`). These are open items, not intended differences.
+`refusals.sh` over 2865 inputs (and `patch-cases.txt`, 2870 cases), contained, 2026-10-24. check, fix, resolve, snapshot, diagnostics, patch: 0 differ, 0 refused. `lsp-*` (14 scripted modes,
+2846 inputs each, `multi` 2822), contained, after slice 11c: every mode 0 differ, 0 refused (completion included: `complete`, `holes`). The last differences closed: a code action is offered only while the
+open text is the text the loader gave the file (a file without a final line break has none, as the reference's plan is stale at once); an unresolved package import (`N0508`) is no syntax
+error for signature help or completion, as `N0205` is not; the `for#item` the parser makes for a `for` pattern, and the qualifier of a method call's receiver (`m::T.f(x)`), are read as the reference's
+tree reads them. `obligations`, `explain-flow`, `explain-cost`: 5 programs differ (`patterns-001`, `flow_v3-015`, `native_units-032`); `explain-cost` refuses 3 (`N0357`/`N0358`). These are open items, not intended differences.
 
 ### S11.2 What stays refused, and why
 
 - `contract --evm` and `--wasm`: deferred targets (question 1).
-- **Completion** (`textDocument/completion`, including after `.` and `(`): needs a scope trace the checker does not record (the frames, each binding's visible-from byte, what it
-  hides) and the parser's probe hole (`nazm_core::probe`); a hand-back to R2, task 11.1's remainder.
 - **A program with polymorphic recursion** (`N0357`) in `mir`, `lir`, `explain-cost`, `contract` and `check --profile`: the reference's instance planner reports it with the call that
   expands; the Nazm pipeline's lowering reports its instance bound (`N0358`) instead, and the emitter's own check (`refuse_expansion`, used by `build`) is not in the pipeline.
 - `check --cache-report` without `--no-cache`: the check cache is not carried (R5), so there are no counts to report; every other form of `check` answers.
