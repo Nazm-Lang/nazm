@@ -1514,6 +1514,8 @@ fn code_actions(io: IoCap, s: Server, j: J) -> Str {
             let fe = ints_get(d.fix_end, ff + q)
             if fs < 0 || fe < fs || fe > str_len(held) || fx_module_at(f, fs) != 0 { continue }
             if ints_get(s.flags, 0) == 0 { continue }
+            // A plan is current only while the file it edits is open with the text it was planned over: the loader gave a file without a final line break one, so the plan is stale at once.
+            if text != held { continue }
             let automatic = strs_get(d.fix_applicability, ff + q) == "automatic"
             let desc = strs_get(d.fix_description, ff + q)
             let title = if automatic { "Fix " + dg_code(d, i) + ": " + desc } else {
@@ -1889,6 +1891,9 @@ fn constructor_help(f: Facts, n: Int, at: Int) -> Str {
     "{" + a + "\"activeSignature\":0,\"signatures\":[{" + a + "\"label\":" + json_str(text) + params + "}]}"
 }
 
+// The loader's errors about an import (not found, a package it does not have): no syntax error of the reference's analysis.
+fn loader_code(code: Str) -> Bool { code == "N0205" || code == "N0508" }
+
 fn signature_help(io: IoCap, s: Server, j: J) -> Str {
     let at = request_offset(io, s, j)
     if at < 0 { return "null" }
@@ -1897,7 +1902,7 @@ fn signature_help(io: IoCap, s: Server, j: J) -> Str {
     // A recovered syntax answers nothing (`RecoveredSyntax`, and no call or construction is found in a tree that lost its parts).
     for i in 0..dg_len(d) {
         // A syntax error, or an attribute the vocabulary does not have (its function is left out): no call is recorded for what used it.
-        if (ints_get(d.file, i) >= 0 && dg_code(d, i) != "N0205") || (dg_code(d, i) == "N0619" && ut_contains_text(strs_get(d.message, i), "is not an attribute Nazm has")) { return "null" }
+        if (ints_get(d.file, i) >= 0 && !loader_code(dg_code(d, i))) || (dg_code(d, i) == "N0619" && ut_contains_text(strs_get(d.message, i), "is not an attribute Nazm has")) { return "null" }
     }
     let c = fx_checker(f)
     let t = fx_tree(f)
@@ -2026,7 +2031,7 @@ fn syntax_diags(f: Facts) -> Ints {
     let out = ints_new()
     let bases = fe_bases(f)
     for i in ck_syntax_diag_from(c)..ck_syntax_diag_to(c) {
-        if dg_code(d, i) == "N0205" { continue }
+        if loader_code(dg_code(d, i)) { continue }
         ints_push(out, file_at(d, i, bases))
         ints_push(out, ints_get(d.start, i))
         ints_push(out, ints_get(d.end, i))
@@ -2150,9 +2155,18 @@ fn ident_role(f: Facts, st: Int, en: Int, kinds: Ints, sts: Ints, owner: Ints) -
         for i in 0..sx_count(t, n) { ints_push(stack, sx_kid(t, n, i)) }
         if kind != tk_struct() { continue }
         let name = sx_text(t, n)
-        if name == "Var" {
+        // (The `for` loop's pattern is matched against a `for#item` the parser makes: no name written there, so no value to complete.)
+        if name == "Var" && sx_name(t, n, "name") != "for#item" {
             let sp = sx_field(t, n, "span")
             if sp >= 0 && fx_start(f, sp) <= st && en <= fx_end(f, sp) { role = 1 }
+        }
+        // A method call on a qualified name (`m::Shape.area(x)`): the qualifier is the receiver's name, written as a value.
+        if name == "MethodCall" {
+            let q = sx_field(t, n, "qualifier")
+            if q >= 0 && sx_is_some(t, q) {
+                let qs = sx_field(t, sx_unwrap(t, q), "span")
+                if at_span(f, qs, st, en) { role = 1 }
+            }
         }
         if name == "Place" {
             let ns = sx_field(t, n, "name_span")
