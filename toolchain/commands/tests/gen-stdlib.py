@@ -45,4 +45,4 @@ out += ['    ""', '}', '']
 out += ['pub fn sd_prelude() -> Str {', *body('library/core/prelude.nz'), '}', '']
 for n in names:
     out += ['fn sd_m_' + n + '() -> Str {', *body('library/std/' + n + '.nz'), '}', '']
-sys.stdout.write('\n'.join(out))
+sys.stdout.buffer.write('\n'.join(out).encode('utf-8'))
