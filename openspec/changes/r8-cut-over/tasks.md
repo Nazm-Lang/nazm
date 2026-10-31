@@ -145,8 +145,8 @@
       (`contract`'s `--interface`, `--txs`, `--accounts` and `--upgrade-check` closed in slice 11.)
 
 ## 11. Slice 11 — R5's refusals
-- [ ] 11.1 (not closed: `N0357` in the pipeline, `check --cache-report`, manifest forms; S11.2) `check`, `lsp`, `patch`, `references`, `resolve`, `fix`, the MCP server: every refusal
-      `design.md` lists, with R2's hand-backs. Closed but for what `design.md` S11.2 lists and leaves open (`N0357` in the pipeline, `check --cache-report`, manifest forms, the
+- [ ] 11.1 (not closed. Closed in slice 11b/11d: `N0357` in the pipeline (`expanding-instances.nz` agrees in mir, lir, explain-cost, contract, check --profile), MCP argument wording and no-`--docs` sessions, manifest `heap-limit` and unenabled `[features]`. Completion closed in slice 11c. Left: `check --cache-report` without `--no-cache` stays refused until the check cache is ported; `[registry]`, registry dependencies and `default`/dependency features stay refused (solver, N90); S11.2) `check`, `lsp`, `patch`, `references`, `resolve`, `fix`, the MCP server: every refusal
+      `design.md` lists, with R2's hand-backs. Closed but for what `design.md` S11.2 lists and leaves open (`check --cache-report`, registry manifests and dependency features, the
       deferred targets). Evidence: `refusals.sh` over 2865 inputs (the corpora and the Rust suites' programs): check, fix, resolve, snapshot, diagnostics 2865/0/0, patch 2870/0/0,
       `lsp-*` 14 modes (with `complete` and `holes`: completion closed) 2846 inputs each (multi 2822), 0 differ, 0 refused; profiles 12826/0/26 (N0357)
 
