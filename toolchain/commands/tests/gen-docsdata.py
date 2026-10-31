@@ -37,4 +37,4 @@ for i, p in enumerate(paths):
     out += ['fn dd_doc' + str(i) + '() -> Str {', '    let l = strs_new()']
     out += ['    strs_push(l, ' + literal(x) + ')' for x in lines]
     out += ['    str_join(l, str_from_byte(10))' + (' + str_from_byte(10)' if final == '' else ''), '}', '']
-sys.stdout.write('\n'.join(out))
+sys.stdout.buffer.write('\n'.join(out).encode('utf-8'))
