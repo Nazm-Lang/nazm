@@ -828,12 +828,27 @@ tree, any other from the Core IR object's `at`) — and the OpenCL C source, gen
 `--print-kernel` prints it, byte for byte. Then the inputs as the kernel's type (`i64`, `f32` and `f64` as Rust's `from_str` reads them: a
 token that does not read is the reference's sentence), the element ceiling, the number of inputs the kernel takes and their lengths.
 
-What it does not carry (status 6, counted by the comparison, never an agreement): what then **runs** the kernel — the provider's host program
-(OpenCL on the GPU, or C compiled by the platform's `clang` and run on a pool of threads, from `accel_host.c`/`accel_cpu.c`), the interpreter's
-answer for every element and the `nazm.accel/3` report with its timings. Those need the C programs written out and run and the interpreter called
-on a named function once per element; neither exists in Nazm yet, and the report is mostly the machine's (device, timings, transfers), not
-the language's. The 0.11.0 cut-over loses `nazm accel`'s run until it is ported (a hand-back, `tasks.md` 10.2). An input holding text that is not
-ASCII is refused too (Unicode white space separates Rust's words).
+**The run (slice 11d, task 10.2)** is carried: after the inputs are read as the kernel's type, `accel.nz` records the failure sites of the generated source
+(code, message and Core IR place of each checked operation: `N0400` for an overflow, `N0401` for a division by zero), calls the interpreter once per element
+(`interp/entry.nz`'s session: `cx_open`, `cx_call`, the float calls added in slice 11b) for the reference answer unless `--no-check`, writes the kernel and the
+inputs (each element little-endian, the kernel's width) into a scratch directory, writes out the embedded C host (`accelc.nz`: the OpenCL host or the CPU provider's) and has the platform's `clang`
+compile it with the reference's flags, runs it, reads its one JSON line and the results, folds them in index order (`add` checked as `ints_sum`, `min`, `max`; a float
+sum rounded to `Float32` at each step for a `Float32` kernel), holds them to the interpreter's (bit for bit, every NaN alike; or the same failing element and code), and prints the `nazm.accel/3`
+line with its keys in the reference's order (`serde_json`'s sorted one), the kernel's identity (blake3 over the cache's framing of the source, device, driver and host text) and, for a failure, the
+diagnostic at the operation's place with `at element N`. `auto` tries the OpenCL provider first and falls back to the CPU provider as the reference does, with its message and `provider.reason`;
+where the GPU ran it the CPU provider runs it too (`cross_check`). A provider that cannot run on the machine (no OpenCL off macOS, no GPU, no `fp64`) is refused as the reference refuses it.
+
+- **Intended difference, shape compared only:** every measured time: `timings_ms.build` and `.run`, and the `ms` of a transfer and of the fold. `accel-run.sh` replaces each by `N` in both
+  outputs before comparing and never records or asserts a value. Nothing else is masked: the identity, device, driver, thread count, checksum, fold, reference verdict, statuses and
+  both streams are compared byte for byte.
+- **Still refused:** the CPU provider on a Windows host (its link libraries are not carried, and Wine is not a verification: Windows is not claimed). The OpenCL provider is macOS's, as in the reference.
+- **Written differently:** the Nazm side's scratch directory is `os_mkdtemp`'s, not `nazm-accel-`'s; no output names it.
+
+**Evidence (slice 11d, 2026-10-25, `toolchain/commands/tests/accel-run.sh`, the macOS host, one `host-run` per case, two lanes, the Nazm `nazm` against the Rust one):**
+tiny inputs (at most ten numbers) over the 89 functions of `tests/accel`, results, refusals, statuses and both streams byte for byte, the measured times masked in both:
+`cpu` 178 agree / 0 differ / 0 refused (ints and floats, with inf, NaN, `-nan`, 2^24+1 and an `Int` overflow), `zip` 178/0/0, `reduce` 178/0/0 (`add` of the ints, `max` of the floats), `opts` 267/0/0
+(`--scalar`, `--no-check --reduce min`, an empty input under `--reduce max`), `auto` 89/0/0 (the GPU provider here, the CPU cross-check), `opencl` 89/0/0, `errors` 397/0/0 (a bad input, two and three
+inputs, an input that cannot be read, no such function). `ACCEL_ALL_OPS=1` adds `min` and `max` of the ints, `add` of the floats and the float runs of `auto` and `opencl` (a sample of three files, 54 cases, 0 differ).
 
 ### S10.3 `contract`
 
@@ -860,7 +875,7 @@ function-and-kind pairs are kernels the reference prints, 136 refused) and the f
 
 - **Intended differences, not counted:** (1) the numbers of a `bench` row (`total_ns`, `ns_per_iteration`) are the clock's and are not compared, nor taken;
   (2) none other.
-- **Refused, not intended differences:** `bench` an `@cfg` of a feature, package or profile in a file; `accel` a run; `contract` `--evm`,
+- **Refused, not intended differences:** `bench` an `@cfg` of a feature, package or profile in a file; `accel` the CPU provider on a Windows host (the run is carried since slice 11d); `contract` `--evm`,
   `--wasm` and every program that loads (S10.3).
 
 ### Slice 10 — the evidence
@@ -928,11 +943,21 @@ patch tool's, and a session with no `--docs`) agree. `pf_enforce` now holds a pr
 ### S11.2 What stays refused, and why
 
 - `contract --evm` and `--wasm`: deferred targets (question 1).
-- **A program with polymorphic recursion** (`N0357`) in `mir`, `lir`, `explain-cost`, `contract` and `check --profile`: the reference's instance planner reports it with the call that
-  expands; the Nazm pipeline's lowering reports its instance bound (`N0358`) instead, and the emitter's own check (`refuse_expansion`, used by `build`) is not in the pipeline.
-- `check --cache-report` without `--no-cache`: the check cache is not carried (R5), so there are no counts to report; every other form of `check` answers.
-- `accel`'s run (hand-back 10.2): the providers' C programs, the interpreter per element and a report made of the machine's timings.
-- A manifest the package reader does not read (`[features]`, `[registry]`, `heap-limit`, a registry dependency, an array of tables): `compiler/package.nz`'s `unsupported`.
+- **Polymorphic recursion** (`N0357`) is closed (slice 11b): `toolchain/pipeline/expand.nz` is `instance.rs`'s expanding-cycle rule over Core IR (nodes are a function's type
+  parameters, a call adds an edge from each parameter its type argument mentions, expanding when it is more than the parameter; a closure's calls are its function's; one
+  diagnostic per cycle). The pipeline renders it (status 3) and `ci_staged` writes it with `nazm: N errors`; the profile path treats it as the reference does, as MIR facts that were
+  not computed (`the program's call graph was not computed`, `contract facts were not computed`). One input (`expanding-instances.nz`) agrees in `mir`, `lir`, `explain-cost`,
+  `contract` (all forms) and `check --profile` (with and without `--profile-report`).
+- `check --cache-report` without `--no-cache`: stays refused. The report's counts (`reused`, `missed`, `rejected`, `declined`, `stored`) are the check cache's own state, which the Nazm
+  `nazm` does not keep (R5: the cache is not carried); a count made up for a fresh cache would be wrong for every later run. Closing it is the cache's port, not a report.
+- **Manifests** (slice 11b): `heap-limit` (validated as `heap_size` does; the build refuses a package that sets one: the build's heap limit is its own flag) and a `[features]`
+  table that no `default` enables (validated; `--features` naming a declared feature is refused, as `@cfg(feature ...)` is not evaluated) are read. Still refused: `[registry]` and
+  registry dependencies (the registry solver, N90), a dependency's `features` and a `default` feature (both enable features), an array of tables.
+- **MCP** (slice 11b): the float and Unicode `Debug` wording of `serde`'s argument errors is written (floats as the reference prints them, up to 15 significant digits; the characters
+  of the common scripts as they are and the rest as `\u{..}`; any other character stays refused); the repository tools with no `--docs` read the repository the standard library
+  (`NAZM_LIBRARY`) sits in, where the reference reads the one it was built from. `mcp-compare.py` tests the patch tool's argument errors and the no-`--docs` session
+  (`agent.sh mcp-gen` writes it; `mcp-serve` runs it without `--docs`).
+- `accel`'s run (hand-back 10.2): closed in slice 11d (S10.2). What stays refused is the CPU provider on a Windows host.
 - A document named by two spellings of one path (a link), an MCP argument error whose `serde` wording needs Rust's float or Unicode `Debug` formatting, and `repo` and the MCP
   documentation tools with no repository named (the reference was built from one; a port cannot know).
 - A hover on a local of a method whose impl the reference drops for a generic reason (`generic_impls-009`): one input of the sample.
