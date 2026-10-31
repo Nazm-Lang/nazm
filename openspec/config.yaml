@@ -15,7 +15,9 @@ context: |
   never restates the language specification. Changes to language or toolchain behaviour archive
   with --skip-specs: their normative text lives in the authorities. openspec/specs/ holds only
   repository-process capabilities.
-  Heavy work runs only through `cargo xtask contained`; nothing is pushed, tagged or published.
+  Heavy work runs only through `cargo xtask contained`. An agent may push a branch and open a
+  pull request; `main` only with a green `nazm-gate` receipt for that commit (the copyright
+  holder's decision, 2026-10-25). Nothing is ever tagged or published by an agent.
   Use OpenSpec with DO_NOT_TRACK=1 (no telemetry).
 
 rules:
