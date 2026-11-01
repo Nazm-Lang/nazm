@@ -1,0 +1,115 @@
+// A tar header, read as `copy_out_bounded` in `xtask/src/contained.rs` reads it (S13.3): the
+// `docker cp NAME:PATH -` stream's first 512-byte block states the entry's type and size before any
+// of its bytes follow, so a symbolic link, a directory, a device node, an oversized file or a
+// PAX-extended archive is refused while its content is still inside the container.
+//
+// ustar only: name, mode, size (octal, 12 bytes at 124), typeflag (at 156), magic `ustar` (at 257).
+
+use "@std/text";
+use "workloads.nz";
+
+fn at_str(h: Bytes, lo: Int, hi: Int) -> Str ! {} {
+    bytes_to_str(bytes_slice(h, lo, hi))
+}
+
+/// `u64::from_str_radix(digits, 8)`: the value, or `0 - 1` when `digits` is empty or has a non-octal byte.
+fn octal(digits: Str) -> Int ! {} {
+    if str_len(digits) == 0 || str_len(digits) > 20 {
+        return 0 - 1;
+    }
+    let mut v = 0;
+    let mut i = 0;
+    while i < str_len(digits) {
+        let b = str_byte(digits, i);
+        if b < 48 || b > 55 {
+            return 0 - 1;
+        }
+        v = v * 8 + (b - 48);
+        i = i + 1;
+    }
+    v
+}
+
+/// `s` without the NUL and space bytes at either end (`trim_matches`).
+fn trim_nul_space(s: Str) -> Str ! {} {
+    let mut lo = 0;
+    let mut hi = str_len(s);
+    while lo < hi && (str_byte(s, lo) == 0 || str_byte(s, lo) == 32) {
+        lo = lo + 1;
+    }
+    while hi > lo && (str_byte(s, hi - 1) == 0 || str_byte(s, hi - 1) == 32) {
+        hi = hi - 1;
+    }
+    str_slice(s, lo, hi)
+}
+
+/// The size a 512-byte header states for a regular file `inside` the container, within `max` bytes,
+/// or why it is refused.
+pub fn tar_size(header: Bytes, inside: Str, max: Int) -> Result[Int, Str] ! {} {
+    if at_str(header, 257, 262) != "ustar" {
+        return Result[Int, Str].Err(error: "not a tar stream");
+    }
+    let t = Int(bytes_get(header, 156));
+    if t == 50 {
+        return Result[Int, Str].Err(error: f"{inside} is a symlink");
+    }
+    if t == 53 {
+        return Result[Int, Str].Err(error: f"{inside} is a directory");
+    }
+    if t == 120 || t == 103 {
+        return Result[Int, Str].Err(error: f"{inside}: the archive is PAX-extended, which this path does not read");
+    }
+    if t != 48 && t != 0 {
+        return Result[Int, Str].Err(error: f"{inside} is not a regular file (tar entry type '{str_from_byte(t)}')");
+    }
+    // A size with the high bit set is base-256 encoded: only sizes too large for the octal field.
+    if Int(bytes_get(header, 124)) >= 128 {
+        return Result[Int, Str].Err(error: f"{inside}: size is base-256 encoded, vastly over the {max}-byte transfer budget");
+    }
+    let digits = trim_nul_space(at_str(header, 124, 136));
+    let size = octal(digits);
+    if size < 0 {
+        return Result[Int, Str].Err(error: f"{inside}: unreadable tar size field {debug_quote(digits)}");
+    }
+    if size > max {
+        return Result[Int, Str].Err(error: f"{inside}: the archive header declares {size} bytes, over the {max}-byte transfer budget");
+    }
+    Result[Int, Str].Ok(value: size)
+}
+
+/// A ustar header for a regular file named `name` of `size` bytes: what a test feeds `tar_size`.
+pub fn tar_header(name: Str, kind: Int, size: Int) -> Bytes ! {} {
+    let h = bytes_new(512);
+    let mut i = 0;
+    while i < str_len(name) && i < 100 {
+        bytes_set(h, i, UInt8(str_byte(name, i)));
+        i = i + 1;
+    }
+    let digits = text_pad_left(octal_text(size), 11, "0");
+    i = 0;
+    while i < 11 {
+        bytes_set(h, 124 + i, UInt8(str_byte(digits, i)));
+        i = i + 1;
+    }
+    bytes_set(h, 156, UInt8(kind));
+    let magic = "ustar";
+    i = 0;
+    while i < 5 {
+        bytes_set(h, 257 + i, UInt8(str_byte(magic, i)));
+        i = i + 1;
+    }
+    h
+}
+
+fn octal_text(n: Int) -> Str ! {} {
+    if n == 0 {
+        return "0";
+    }
+    let mut out = "";
+    let mut v = n;
+    while v > 0 {
+        out = f"{v % 8}{out}";
+        v = v / 8;
+    }
+    out
+}

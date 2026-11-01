@@ -1,0 +1,427 @@
+// `nzx contained`'s table (S13.3): the port of `xtask/src/commands/contained.rs` and of
+// `run_argv` in `xtask/src/contained.rs` — the profiles, the bounds, each workload's script, deadline,
+// cache namespace and export policy, and the `docker run` argument list, element for element with
+// the reference (`xtask contained --print-argv` and `nzx contained --print-argv` print the same
+// lines; `tests/contained_argv.sh` diffs them for every workload and profile).
+//
+// Everything here is pure: what a workload needs from the machine (the commit, the image's
+// platform, the cache volume's name) is passed in by `contained.nz`, which reads it.
+//
+// Until tasks 13.4 to 13.6 land the new campaign runner, fuzzer and benchmark program, the scripts
+// of `mutate`, `fuzz` and `bench` are the reference's own (they run `xtask` and `fuzz/run.sh` inside
+// the container): the runner does not care what its script runs (S13.3).
+
+use "@std/text";
+
+pub const IMAGE: Str = "nazm-contained:1.98.1";
+/// The same image built for `linux/amd64` (Gate 3): on an Apple-silicon host it runs under emulation.
+pub const IMAGE_AMD64: Str = "nazm-contained-amd64:1.98.1";
+
+/// The label every contained run's container carries from creation; ownership is the label, never the name.
+pub const RUN_OWNER: Str = "nazm.owner=nazm-contained-runner";
+pub const SUPERVISOR_PID: Str = "nazm.supervisor-pid";
+pub const SUPERVISOR_HOST: Str = "nazm.supervisor-host";
+
+/// The label every harness-owned cache volume carries.
+pub const CACHE_OWNER: Str = "nazm.owner=nazm-verification-harness";
+/// A volume over this many MiB is emptied at the start of the next workload that mounts it.
+pub const CACHE_MAX_MIB: Int = 16384;
+
+/// How much of the machine one workload may use (N14.1): the CPU quota, the Cargo job count, the
+/// libtest thread count, and the test binaries run at once (`tests` only).
+pub struct Profile {
+    name: Str,
+    milli_cpus: Int,
+    cargo_jobs: Int,
+    test_threads: Int,
+    test_workers: Int,
+}
+
+fn profile(name: Str, milli: Int, jobs: Int, threads: Int, workers: Int) -> Profile ! {} {
+    Profile(name: name, milli_cpus: milli, cargo_jobs: jobs, test_threads: threads, test_workers: workers)
+}
+
+pub fn p1() -> Profile ! {} {
+    profile("p1", 1000, 1, 1, 1)
+}
+
+pub fn p4t4() -> Profile ! {} {
+    profile("p4t4", 4000, 4, 4, 1)
+}
+
+/// Every profile a workload may be run under, in the reference's order.
+pub fn profile_all() -> Strs ! {} {
+    let out = strs_new();
+    for n in text_split("p1 p4t4 p8t8 p4w1t4 p4w2t2 p4w3t2 p4w4t1 p4w2t4", " ") {
+        strs_push(out, n);
+    }
+    out
+}
+
+pub fn profile_by_name(name: Str) -> Option[Profile] ! {} {
+    if name == "p1" { return Option[Profile].Some(value: p1()); }
+    if name == "p4t4" { return Option[Profile].Some(value: p4t4()); }
+    if name == "p8t8" { return Option[Profile].Some(value: profile("p8t8", 8000, 8, 8, 1)); }
+    if name == "p4w1t4" { return Option[Profile].Some(value: profile("p4w1t4", 4000, 4, 4, 1)); }
+    if name == "p4w2t2" { return Option[Profile].Some(value: profile("p4w2t2", 4000, 4, 2, 2)); }
+    if name == "p4w3t2" { return Option[Profile].Some(value: profile("p4w3t2", 4000, 4, 2, 3)); }
+    if name == "p4w4t1" { return Option[Profile].Some(value: profile("p4w4t1", 4000, 4, 1, 4)); }
+    if name == "p4w2t4" { return Option[Profile].Some(value: profile("p4w2t4", 4000, 4, 4, 2)); }
+    Option[Profile].None()
+}
+
+/// The profile a workload runs under when `--profile` is not given (N14.1).
+pub fn default_profile(workload: Str) -> Profile ! {} {
+    if workload == "tests" || workload == "selfhost" || workload == "fuzz" {
+        return p4t4();
+    }
+    p1()
+}
+
+/// What may be copied out when a workload succeeds: the manifest's path inside the container, the
+/// directory validated artefacts are moved into, exactly the names permitted, and the most any one may be.
+pub struct Export {
+    manifest: Str,
+    dest: Str,
+    allowed: Strs,
+    max_bytes: Int,
+}
+
+/// Every limit the runner imposes (defaults as the reference's `Bounds::default`).
+pub struct Bounds {
+    memory_mb: Int,
+    milli_cpus: Int,
+    profile: Profile,
+    pids: Int,
+    storage_gb: Int,
+    scratch_mb: Int,
+    fsize_bytes: Int,
+    deadline_secs: Int,
+    output_cap: Int,
+    has_export: Bool,
+    export: Export,
+    has_cache: Bool,
+    cache: Str,
+}
+
+pub fn no_export() -> Export ! {} {
+    Export(manifest: "", dest: "", allowed: strs_new(), max_bytes: 0)
+}
+
+pub fn bounds_default() -> Bounds ! {} {
+    Bounds(memory_mb: 4096, milli_cpus: 1000, profile: p1(), pids: 512, storage_gb: 8, scratch_mb: 512, fsize_bytes: 536870912, deadline_secs: 3600, output_cap: 4194304, has_export: false, export: no_export(), has_cache: false, cache: "")
+}
+
+/// `bounds` under `p`: the profile and its CPU quota.
+pub fn bounds_with_profile(b: Bounds, p: Profile) -> Bounds ! {} {
+    Bounds(memory_mb: b.memory_mb, milli_cpus: p.milli_cpus, profile: p, pids: b.pids, storage_gb: b.storage_gb, scratch_mb: b.scratch_mb, fsize_bytes: b.fsize_bytes, deadline_secs: b.deadline_secs, output_cap: b.output_cap, has_export: b.has_export, export: b.export, has_cache: b.has_cache, cache: b.cache)
+}
+
+pub fn bounds_with_deadline(b: Bounds, secs: Int) -> Bounds ! {} {
+    Bounds(memory_mb: b.memory_mb, milli_cpus: b.milli_cpus, profile: b.profile, pids: b.pids, storage_gb: b.storage_gb, scratch_mb: b.scratch_mb, fsize_bytes: b.fsize_bytes, deadline_secs: secs, output_cap: b.output_cap, has_export: b.has_export, export: b.export, has_cache: b.has_cache, cache: b.cache)
+}
+
+pub fn bounds_with_export(b: Bounds, e: Export) -> Bounds ! {} {
+    Bounds(memory_mb: b.memory_mb, milli_cpus: b.milli_cpus, profile: b.profile, pids: b.pids, storage_gb: b.storage_gb, scratch_mb: b.scratch_mb, fsize_bytes: b.fsize_bytes, deadline_secs: b.deadline_secs, output_cap: b.output_cap, has_export: true, export: e, has_cache: b.has_cache, cache: b.cache)
+}
+
+pub fn bounds_with_cache(b: Bounds, volume: Str) -> Bounds ! {} {
+    Bounds(memory_mb: b.memory_mb, milli_cpus: b.milli_cpus, profile: b.profile, pids: b.pids, storage_gb: b.storage_gb, scratch_mb: b.scratch_mb, fsize_bytes: b.fsize_bytes, deadline_secs: b.deadline_secs, output_cap: b.output_cap, has_export: b.has_export, export: b.export, has_cache: true, cache: volume)
+}
+
+/// Which cache a workload builds in, if any (`""` for none): two namespaces, never one.
+pub fn cache_namespace(workload: Str) -> Str ! {} {
+    if workload == "mutate" { return "mutate"; }
+    if workload == "tests" || workload == "selfhost" || workload == "bootstrap" || workload == "selfbuild" {
+        return "src";
+    }
+    ""
+}
+
+/// `sh -c`, not `sh -lc`: a login shell re-reads `/etc/profile` and drops the image's PATH.
+pub fn shell(cmd: Str) -> Strs ! {} {
+    let out = strs_new();
+    strs_push(out, "sh");
+    strs_push(out, "-c");
+    strs_push(out, f"cd /src && {cmd}");
+    out
+}
+
+/// A contained `cargo test` over `scope`, with the profile's job and thread counts.
+pub fn cargo_test(what: Str, p: Profile) -> Str ! {} {
+    f"cargo test --locked {what} --jobs {p.cargo_jobs} -- --test-threads {p.test_threads}"
+}
+
+/// The parallelism a contained campaign passes to its runner.
+pub fn mutate_parallelism(p: Profile) -> Str ! {} {
+    f"--cargo-jobs {p.cargo_jobs} --test-threads {p.test_threads}"
+}
+
+/// `argv`, with the cache's size bound checked first when a cache is mounted: over `CACHE_MAX_MIB`,
+/// the volume is emptied before the workload starts.
+pub fn guarded(argv: Strs, cached: Bool) -> Strs ! {} {
+    let out = strs_new();
+    for a in argv {
+        strs_push(out, a);
+    }
+    if cached && strs_len(argv) >= 3 && strs_get(argv, 0) == "sh" && strs_get(argv, 1) == "-c" {
+        let max = int_to_str(CACHE_MAX_MIB);
+        let head = r#"s=$(du -sm /work/target 2>/dev/null | cut -f1); if [ "${s:-0}" -gt "#;
+        let mid = r#" ]; then echo "contained: the verification cache is ${s} MiB, over "#;
+        let tail = r#"; emptied" >&2; find /work/target -mindepth 1 -maxdepth 1 -exec rm -rf {} +; fi; "#;
+        let parts = strs_new();
+        strs_push(parts, head);
+        strs_push(parts, max);
+        strs_push(parts, mid);
+        strs_push(parts, max);
+        strs_push(parts, tail);
+        strs_push(parts, strs_get(argv, 2));
+        let all = strs_new();
+        strs_push(all, strs_get(argv, 0));
+        strs_push(all, strs_get(argv, 1));
+        strs_push(all, str_join(parts, ""));
+        return all;
+    }
+    out
+}
+
+/// `{:.3}` of `milli / 1000`.
+fn cpus(milli: Int) -> Str ! {} {
+    f"{milli / 1000}.{text_pad_left(int_to_str(milli % 1000), 3, "0")}"
+}
+
+fn push2(a: Strs, x: Str, y: Str) -> Int ! {} {
+    strs_push(a, x);
+    strs_push(a, y);
+    0
+}
+
+/// The `docker` arguments a contained run is started with: every isolation property in one place.
+/// `container` is the run's name, `pid` and `host` the supervisor's, `image` and `amd64` the image
+/// this run uses.
+pub fn run_argv(repo: Str, container: Str, argv: Strs, b: Bounds, pid: Int, host: Str, image: Str, amd64: Bool) -> Strs ! {} {
+    let a = strs_new();
+    // `--rm` only when nothing has to be copied out: a removed container has no files.
+    strs_push(a, "run");
+    if !b.has_export {
+        strs_push(a, "--rm");
+    }
+    push2(a, "--name", container);
+    push2(a, "--label", RUN_OWNER);
+    push2(a, "--label", f"{SUPERVISOR_PID}={pid}");
+    push2(a, "--label", f"{SUPERVISOR_HOST}={host}");
+    push2(a, "--memory", f"{b.memory_mb}m");
+    // Equal to --memory: a cap that can be exceeded by swapping is not a cap.
+    push2(a, "--memory-swap", f"{b.memory_mb}m");
+    push2(a, "--cpus", cpus(b.milli_cpus));
+    push2(a, "--pids-limit", int_to_str(b.pids));
+    push2(a, "--storage-opt", f"size={b.storage_gb}G");
+    push2(a, "--ulimit", f"fsize={b.fsize_bytes}");
+    push2(a, "--tmpfs", f"/scratch:rw,exec,size={b.scratch_mb}m");
+    // Reaps orphans, so a detached grandchild cannot accumulate against the pid limit.
+    strs_push(a, "--init");
+    // No network, ever (N34).
+    push2(a, "--network", "none");
+    push2(a, "--log-driver", "none");
+    push2(a, "--mount", f"type=bind,source={repo},target=/src,readonly");
+    if b.has_cache {
+        push2(a, "--mount", f"type=volume,source={b.cache},target=/work/target");
+    }
+    // The only place a real ceiling applies, so the only place this is set.
+    push2(a, "--env", "NAZM_CONTAINED=1");
+    push2(a, "--env", f"NAZM_PROFILE={b.profile.name}");
+    push2(a, "--env", f"NAZM_CARGO_JOBS={b.profile.cargo_jobs}");
+    push2(a, "--env", f"NAZM_TEST_THREADS={b.profile.test_threads}");
+    push2(a, "--env", "CARGO_TARGET_DIR=/work/target");
+    if amd64 {
+        push2(a, "--platform", "linux/amd64");
+    }
+    strs_push(a, image);
+    for g in guarded(argv, b.has_cache) {
+        strs_push(a, g);
+    }
+    a
+}
+
+/// What `argv` must never carry (S13.3): the flags that would weaken a ceiling or reach the host.
+pub fn never_present() -> Strs ! {} {
+    let out = strs_new();
+    for n in text_split("--privileged --cap-add --device --pid --ipc --userns -v --volume /var/run/docker.sock", " ") {
+        strs_push(out, n);
+    }
+    out
+}
+
+/// The first never-present flag that `argv` carries before the image (`""` for none): the
+/// elements after the image are the workload's own script.
+pub fn forbidden_in(argv: Strs, image: Str) -> Str ! {} {
+    let bad = never_present();
+    for a in argv {
+        if a == image {
+            return "";
+        }
+        for n in bad {
+            if a == n || text_contains(a, "docker.sock") {
+                return a;
+            }
+        }
+    }
+    ""
+}
+
+// --- the scripts ---------------------------------------------------------------------------------
+
+pub fn script_selfhost(p: Profile) -> Str ! {} {
+    cargo_test("-p nazm-cli --test selfhost", p)
+}
+
+/// The reference front end is **built here**, not taken from the image.
+pub fn script_bootstrap(j: Int) -> Str ! {} {
+    f"cargo build --locked -p nazm-cli --jobs {j} && sh compiler/bootstrap.sh /work/bootstrap"
+}
+
+/// `settings` is each argument of `selfbuild`, a space before it.
+pub fn script_selfbuild(j: Int, settings: Str) -> Str ! {} {
+    f"cargo build --locked -p nazm-cli --jobs {j} && bash toolchain/selfbuild/selfbuild.sh /work/selfbuild{settings}"
+}
+
+pub fn script_tests(p: Profile) -> Str ! {} {
+    let j = p.cargo_jobs;
+    let suite = if p.test_workers > 1 || p.name == "p4w1t4" {
+        f"cargo build --locked -q -p xtask --jobs {j} && /work/target/debug/xtask workspace-tests --jobs {j} --workers {p.test_workers} --test-threads {p.test_threads} --shape {p.name}"
+    } else {
+        cargo_test("--workspace", p)
+    };
+    f"{suite}; s=$?; echo \"contained: memory peak $(cat /sys/fs/cgroup/memory.peak 2>/dev/null) bytes\" >&2; exit $s"
+}
+
+/// `identity` is the three variables the supervisor establishes, each followed by a space.
+pub fn script_release(identity: Str) -> Str ! {} {
+    f"{identity}sh scripts/release-candidate.sh && mkdir -p /work/rc && cp /work/target/release-candidate/MANIFEST.txt /work/rc/ && cp /work/target/release-candidate/PROVENANCE.txt /work/rc/ && tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@0 -czf /work/rc/nazm-release-candidate.tar.gz -C /work/target/release-candidate . && cd /work/rc && for f in nazm-release-candidate.tar.gz MANIFEST.txt PROVENANCE.txt; do printf '%s %s\\n' \"$f\" \"$(wc -c < $f | tr -d ' ')\"; done > EXPORTS && cat EXPORTS"
+}
+
+/// `commit` is `""` or ` --source-commit HASH`, `budget` is `""` or ` --budget-secs 2400`,
+/// `passed` is the validated options, each with a space before it.
+pub fn script_mutate(j: Int, deadline: Int, par: Str, commit: Str, budget: Str, passed: Str) -> Str ! {} {
+    f"rm -rf /work/mut && mkdir -p /work/mut /work/campaigns && tar -C /src -cf - --exclude=./target --exclude=./.git --exclude=.nazm . | tar -C /work/mut -xmf - && cd /work/mut && export CARGO_TARGET_DIR=/work/target && cargo build -q -p xtask --jobs {j} && exec timeout -s TERM -k 15 {deadline} /work/target/debug/xtask mutate --reset-derived-caches --disposable-target --export-journal --campaign-dir /work/campaigns --resume-from /src/target/mutation-campaigns {par}{commit}{budget}{passed}"
+}
+
+pub fn bench_manifest(saving: Bool) -> Str ! {} {
+    if saving {
+        return BENCH_MANIFEST_SAVE;
+    }
+    BENCH_MANIFEST_CHECK
+}
+
+pub fn script_bench(mode: Str, manifest: Str) -> Str ! {} {
+    f"mkdir -p /work/benchout && cp /src/bench/*.json /work/benchout/ 2>/dev/null; export NAZM_BENCH_DIR=/work/benchout; cargo build --release --locked -p nazm-cli --jobs 1 >/dev/null && cargo run -q -p xtask -- bench --runs 5 {mode} && if find /work/benchout -name '*.json' -size +1M | grep -q .; then echo 'bench: an artefact exceeded 1 MiB; refusing to export' >&2; exit 3; fi && {manifest}"
+}
+
+/// `targets` is the target names, space-separated.
+pub fn script_fuzz(j: Int, seconds: Int, targets: Str) -> Str ! {} {
+    f"CARGO_BUILD_JOBS={j} sh /src/fuzz/run.sh {seconds} {targets}; s=$?; : > /work/fuzzout/EXPORTS; for f in fuzz-min.tar report.txt; do [ -f /work/fuzzout/$f ] && echo \"$f $(wc -c < /work/fuzzout/$f)\" >> /work/fuzzout/EXPORTS; done; exit $s"
+}
+
+pub fn script_archive(j: Int, triple: Str, name: Str) -> Str ! {} {
+    f"mkdir -p /work/archiveout && cargo build --release --locked -p nazm-cli --jobs {j} && sh /src/scripts/host-archive.sh {triple} /work/target/release/nazm /work/archiveout && echo \"{name} $(wc -c < /work/archiveout/{name})\" > /work/archiveout/EXPORTS"
+}
+
+/// The options `contained mutate` passes through, validated and quoted: rebuilt from a closed list
+/// rather than forwarded, each value restricted to the characters a mutation name, a test path or a
+/// number uses, and single-quoted as well.
+pub fn mutate_passthrough(args: Strs) -> Result[Str, Str] ! {} {
+    let with_value = text_split("--only --strategy --budget-secs --verify-killer --killer", " ");
+    let switches = text_split("--plan --resume --verify-killers", " ");
+    let out = strs_new();
+    let mut i = 0;
+    while i < strs_len(args) {
+        let a = strs_get(args, i);
+        let mut is_switch = false;
+        for s in switches {
+            if s == a {
+                is_switch = true;
+            }
+        }
+        let mut takes_value = false;
+        for w in with_value {
+            if w == a {
+                takes_value = true;
+            }
+        }
+        if is_switch {
+            strs_push(out, f" {a}");
+            i = i + 1;
+        } else {
+            if takes_value {
+                if i + 1 >= strs_len(args) {
+                    return Result[Str, Str].Err(error: f"{a} needs a value");
+                }
+                let v = strs_get(args, i + 1);
+                if !safe_value(v) {
+                    return Result[Str, Str].Err(error: f"{a} {debug_quote(v)}: only letters, digits and - _ : = . are accepted");
+                }
+                strs_push(out, f" {a} '{v}'");
+                i = i + 2;
+            } else {
+                return Result[Str, Str].Err(error: f"mutate: unknown option {a}");
+            }
+        }
+    }
+    Result[Str, Str].Ok(value: str_join(out, ""))
+}
+
+fn safe_value(v: Str) -> Bool ! {} {
+    if str_len(v) == 0 {
+        return false;
+    }
+    let mut i = 0;
+    while i < str_len(v) {
+        let b = str_byte(v, i);
+        let ok = (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 45 || b == 95 || b == 58 || b == 61 || b == 46;
+        if !ok {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+/// Rust's `{:?}` of a string, for the ASCII a refusal quotes.
+pub fn debug_quote(s: Str) -> Str ! {} {
+    let escaped = text_replace(text_replace(s, "\\", "\\\\"), "\"", "\\\"");
+    f"\"{escaped}\""
+}
+
+/// `selfbuild`'s settings: `stages=N` and `backend=nazm|llvm`, each with a space before it, or the
+/// first argument that is neither.
+pub fn selfbuild_settings(args: Strs) -> Result[Str, Str] ! {} {
+    let out = strs_new();
+    let mut i = 1;
+    while i < strs_len(args) {
+        let a = strs_get(args, i);
+        let mut ok = a == "backend=nazm" || a == "backend=llvm";
+        if text_starts_with(a, "stages=") && str_len(a) > 7 {
+            let mut digits = true;
+            let mut k = 7;
+            while k < str_len(a) {
+                let b = str_byte(a, k);
+                if b < 48 || b > 57 {
+                    digits = false;
+                }
+                k = k + 1;
+            }
+            if digits {
+                ok = true;
+            }
+        }
+        if !ok {
+            return Result[Str, Str].Err(error: f"contained: selfbuild takes only `stages=N` and `backend=nazm|llvm`, not {debug_quote(a)}");
+        }
+        strs_push(out, f" {a}");
+        i = i + 1;
+    }
+    Result[Str, Str].Ok(value: str_join(out, ""))
+}
+
+const BENCH_MANIFEST_SAVE: Str = r#"slug=$(uname -sm | tr 'A-Z ' 'a-z-' | tr -c 'a-z0-9-' '-' | sed 's/-*$//');                    : > /work/benchout/EXPORTS;                    for f in record.json baseline-$slug.json; do                      [ -f /work/benchout/$f ] && echo "$f $(wc -c < /work/benchout/$f)" >> /work/benchout/EXPORTS;                    done"#;
+const BENCH_MANIFEST_CHECK: Str = r#": > /work/benchout/EXPORTS;                    [ -f /work/benchout/record.json ] && echo "record.json $(wc -c < /work/benchout/record.json)" >> /work/benchout/EXPORTS"#;
