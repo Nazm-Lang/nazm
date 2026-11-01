@@ -273,6 +273,7 @@ fn heap_size(raw: Str, why: Strs) -> Int {
     let mut v = 0;
     i = 0;
     while i < str_len(body) { v = v * 10 + (str_byte(body, i) - 48); i = i + 1; }
+    if unit > 1 && v > 9000000000000000000 / unit { return 0 - 2; }
     let bytes = v * unit;
     if v > 1099511627776 || bytes < 65536 || bytes > 1099511627776 {
         if v > 1099511627776 && unit > 1 { return 0 - 2; }

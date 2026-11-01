@@ -4341,7 +4341,10 @@ pub fn sx_parse_source_at(src: Str, t: Tree, d: Diags, hole: Int) -> Int {
             let s0 = ints_get(starts, i);
             let e0 = ints_get(ends, i);
             let tail = ints_len(kinds);
-            ints_push(kinds, 0); ints_push(starts, 0); ints_push(ends, 0); strs_push(texts, "");
+            ints_push(kinds, 0);
+            ints_push(starts, 0);
+            ints_push(ends, 0);
+            strs_push(texts, "");
             let mut j = tail;
             while j > i + 1 {
                 ints_set(kinds, j, ints_get(kinds, j - 1));
