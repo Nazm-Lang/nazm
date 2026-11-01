@@ -1110,6 +1110,26 @@ operating-system error is worded by Nazm's `io_error_show`.
   a container never overlap by construction (the Rust runner relies on `host-run`'s `docker ps`
   alone), and two `nzx contained` never run at once.
 
+**S13.3 as built (2026-11-01), the differences from the text above, all logged in `docs/internal/decisions-log.md`:**
+(1) the reference's `xtask contained` gained the hidden `--print-argv` (after the options, before the
+workload; the pid is fixed at 1; `docker image inspect` and, for `bench` and `archive`, `docker run --rm ...
+uname -sm` are the only calls to the daemon; no directory and no volume is made): the `docker run` arguments one
+element a line on standard output, and `plan: NAME deadline=… memory=… export=…` on standard error, which both
+runners print and `tests/contained_argv.sh` diffs; `probe` prints the six cases' plans separated by `--`;
+(2) the table is `nzx/workloads.nz` (pure: profiles, bounds, scripts, `run_argv`, the option checks), not data
+read from a file, and until 13.4 to 13.6 the scripts of `mutate`, `fuzz` and `bench` are the reference's own;
+(3) the host-run lock is **both** slots of `host-run`'s state directory (`lock`, `lock-2`: the reference has two
+since 2026-10-22), taken for the whole life of every `nzx contained` except `--print-argv`; refusal
+`nzx: refused [host-stage-running]: …`, status 1; (4) the container's two streams are spooled to files in a scratch
+directory (kept to the 4 MiB cap, counted beyond it) and copied out as bytes, where the reference prints them
+lossily as UTF-8; (5) the host name in the labels is `hostname`, as the reference, not `uname -n`; (6) the
+tar header is parsed by `nzx/tar.nz` and the stream read by `supervise.nz`: the manifest and each artefact are
+written to the staging file a chunk at a time, so no artefact is held whole; a Rust `{:?}` of a string is
+`debug_quote`'s (ASCII only); (7) the tests are `tests/contained_argv.sh` (both runners, every workload), `tests/
+contained_self.nz` (the pure parts, interpreted) and `tests/contained_run.nz` (the supervisor against the real
+daemon, interpreted by the seed, run only with the container turn held): not a Nazm-built test program started on
+the host.
+
 ### S13.4 The mutation campaign runner
 
 - **Which entries.** One catalogue, `xtask/mutations/mutations.toml`. An entry whose `file` is under

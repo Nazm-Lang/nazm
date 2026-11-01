@@ -160,10 +160,22 @@
       (`runner-unbounded`); `nzx host-run` byte for byte with `xtask/src/host_run.rs` (S13.2); its
       tests ported from `xtask/tests/host_run.rs`, run against both runners; `stage-run.sh` prefers
       `nzx`
-- [ ] 13.3 `nzx contained` (S13.3): the workload table, `run_argv` element for element with
-      `--print-argv` (and the seed's matching `--print-argv`), the volume key equal to Rust's,
+- [x] 13.3 `nzx contained` (S13.3), done 2026-11-01: the workload table, `run_argv` element for element with
+      `--print-argv` (and the seed's matching `--print-argv`, added: its only change), the volume key equal to Rust's,
       supervision, reaping, the tar export, the host-run lock; then `nzx contained probe` and
-      `nzx contained selfbuild` pass
+      `nzx contained selfbuild` pass. Measured: `tests/contained_argv.sh` 56 cases agree, 0 differ, 2036 argv
+      elements compared (every workload, the profiles, `--cache bench`, the probe's six, the refusals; the plans
+      that read the `linux/amd64` image refuse in both runners here, the image is not built: only `--platform
+      amd64 release` was compared); the volume names printed equal Rust's for `src`, `mutate` and `bench` on the real
+      image id and `Cargo.lock`, and `nzx contained cache list` equals `xtask contained cache list`;
+      `contained_self.nz` 11 of 11 (interpreted); `contained_run.nz` 7 of 7 (interpreted, against the daemon: pass,
+      fail(7), the export, six refusals, a symlink/directory/oversize/short file, a deadline, reaping by labels);
+      `nzx contained probe` 6 of 6 ok, survivors 0; `nzx contained --profile p8t8 selfbuild` passed (stages 1 to 3
+      byte-identical, 66 programs agree, 68 run as by the seed's; 848.6 s wall clock, not a measurement), survivors 0,
+      no new volume (the `src` volume the Rust runner named was found by the same key). Not run: the live runs of
+      `tests`, `selfhost`, `bootstrap`, `release`, `mutate` (journal collection, statuses 3), `bench`, `fuzz`, `archive`
+      (their plans are compared, their scripts are the reference's until 13.4 to 13.6), anything on `linux/amd64`,
+      `cache clear`, and the oversize/PAX tar paths of a real archive (only the header parser's units)
 - [ ] 13.4 The campaign runner (S13.4): `nazm-mutate session` (entry split, killer mapping,
       `unmapped`, the warm session, `use`-closure rebuilds, three tiers, `lib/procs.nz`, journal
       `nazm.mutation-campaign/2` under `target/mutation-campaigns-nz/`, resume, lock, `recover`,
