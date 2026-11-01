@@ -74,6 +74,13 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
         }
         _ => (None, args),
     };
+    // `--print-argv` (hidden, slice 13.3): print the `docker run` argument list the workload
+    // would start with, one element a line, and the plan beside it on standard error; start
+    // nothing. `nzx contained --print-argv` prints the same, and a test diffs the two.
+    let (print_argv, args) = match args.first().map(String::as_str) {
+        Some("--print-argv") => (true, args.get(1..).unwrap_or_default()),
+        _ => (false, args),
+    };
     let workload = args.first().map(String::as_str).unwrap_or_default();
     let profile = chosen.unwrap_or_else(|| default_profile(workload));
     bounds.profile = profile;
@@ -81,7 +88,11 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
     let j = profile.cargo_jobs;
 
     let (name, argv): (&str, Vec<String>) = match args.first().map(String::as_str) {
-        Some("probe") => return contained_probe(&repo),
+        Some("probe") => return contained_probe(&repo, print_argv),
+        Some("cache") if print_argv => {
+            eprintln!("contained: --print-argv takes a workload that runs a container");
+            return ExitCode::FAILURE;
+        }
         Some("cache") => return contained_cache(args.get(1).map(String::as_str)),
         Some("selfhost") => (
             "selfhost",
@@ -181,7 +192,7 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
                 // own cap, so a runaway cannot reach the host through this path.
                 max_bytes: 64 * 1024 * 1024,
             });
-            if let Err(e) = std::fs::create_dir_all(&dest) {
+            if let Err(e) = make_dest(&dest, print_argv) {
                 eprintln!("contained: cannot prepare {}: {e}", dest.display());
                 return ExitCode::FAILURE;
             }
@@ -409,7 +420,7 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
             // minimisation).
             bounds.deadline = Duration::from_secs(1800 + seconds * 2 * count);
             let dest = repo.join("target/fuzz");
-            if let Err(e) = std::fs::create_dir_all(&dest) {
+            if let Err(e) = make_dest(&dest, print_argv) {
                 eprintln!("contained: cannot make {}: {e}", dest.display());
                 return ExitCode::FAILURE;
             }
@@ -453,7 +464,7 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
                 }
             };
             let dest = repo.join("target/archives");
-            if let Err(e) = std::fs::create_dir_all(&dest) {
+            if let Err(e) = make_dest(&dest, print_argv) {
                 eprintln!("contained: cannot make {}: {e}", dest.display());
                 return ExitCode::FAILURE;
             }
@@ -496,7 +507,14 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
     // are judged on it (N32-H2). A benchmark, a release and an arbitrary `run` never share
     // it: their numbers and artefacts must not depend on what an earlier session left.
     if let Some(namespace) = contained::cache_namespace(name).or(explicit_cache) {
-        match contained::cache_ensure(&repo, namespace) {
+        let prepared = if print_argv {
+            // Named, not created: printing the plan changes nothing on the daemon.
+            contained::cache_fields(&repo)
+                .map(|f| contained::cache_volume(namespace, &contained::cache_key(&f)))
+        } else {
+            contained::cache_ensure(&repo, namespace)
+        };
+        match prepared {
             Ok(v) => bounds.cache = Some(v),
             Err(e) => {
                 eprintln!("contained: cannot prepare the verification cache: {e}");
@@ -512,6 +530,10 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
         eprintln!(
             "contained: linux/amd64 under emulation; the deadline is four times the native one"
         );
+    }
+    if print_argv {
+        print_plan(&repo, name, &borrowed, &bounds);
+        return ExitCode::SUCCESS;
     }
     eprintln!(
         "contained: {name} — {} MiB memory (swap equal), {:.1} CPU, {} pids, {} GiB disk, {} s deadline",
@@ -565,6 +587,46 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Create `dest` unless only the plan is being printed, which changes nothing on the host.
+fn make_dest(dest: &std::path::Path, print_argv: bool) -> std::io::Result<()> {
+    if print_argv {
+        Ok(())
+    } else {
+        std::fs::create_dir_all(dest)
+    }
+}
+
+/// `--print-argv`: the `docker run` argument list for `name` as the supervisor would pass it,
+/// one element a line on standard output (the pid is the fixed 1, the host this one's), and the
+/// plan the argument list does not carry on standard error: the deadline and the export policy.
+fn print_plan(repo: &std::path::Path, name: &str, argv: &[&str], b: &contained::Bounds) {
+    let host = contained::host_name();
+    for a in contained::run_argv(repo, &format!("nazm-{name}-1"), argv, b, 1, &host) {
+        println!("{a}");
+    }
+    let export = match &b.export {
+        None => "none".to_owned(),
+        Some(e) => format!(
+            "{} {} [{}] {}",
+            e.manifest,
+            e.dest.display(),
+            e.allowed.join(","),
+            e.max_bytes
+        ),
+    };
+    eprintln!(
+        "plan: {name} deadline={}s memory={}m cpus={} pids={} storage={}G scratch={}m fsize={} cap={} export={export}",
+        b.deadline.as_secs(),
+        b.memory_mb,
+        b.milli_cpus,
+        b.pids,
+        b.storage_gb,
+        b.scratch_mb,
+        b.fsize_bytes,
+        b.output_cap
+    );
 }
 
 /// The profile a workload runs under when `--profile` is not given. N14.1.
@@ -738,7 +800,7 @@ fn contained_cache(what: Option<&str>) -> ExitCode {
 
 /// Verifies that each limit is real on this daemon before anything depends on it. Every
 /// probe's own maximum is small, so it stays safe even if enforcement silently fails.
-fn contained_probe(repo: &std::path::Path) -> ExitCode {
+fn contained_probe(repo: &std::path::Path, print_argv: bool) -> ExitCode {
     use contained::{Bounds, Outcome};
     use std::time::Duration;
 
@@ -802,6 +864,14 @@ fn contained_probe(repo: &std::path::Path) -> ExitCode {
         ),
     ];
 
+    if print_argv {
+        for (name, argv, _, _) in &cases {
+            let borrowed: Vec<&str> = argv.iter().map(String::as_str).collect();
+            println!("--");
+            print_plan(repo, &format!("probe-{name}"), &borrowed, &tight);
+        }
+        return ExitCode::SUCCESS;
+    }
     let mut failures = 0;
     println!("contained probe — verifying each bound is real before anything relies on it\n");
     for (name, argv, want, proves) in cases {

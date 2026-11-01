@@ -205,7 +205,7 @@ pub fn args_problem(args: Strs) -> Str ! {} {
     }
 }
 
-fn state_dir(io: IoCap) -> Str ! { io } {
+pub fn state_dir(io: IoCap) -> Str ! { io } {
     match env_get(io, "NAZM_HOST_RUN_DIR") {
         Option.Some(value: d) => { return d; },
         Option.None() => {},
@@ -225,7 +225,7 @@ fn env_is_set(io: IoCap, name: Str) -> Bool ! { io } {
 }
 
 /// The spooled bytes of one stream.
-fn drain(io: IoCap, from: OsHandle, spool: Str, cap: Int, total: Chan[Int]) -> Int ! { io } {
+pub fn drain(io: IoCap, from: OsHandle, spool: Str, cap: Int, total: Chan[Int]) -> Int ! { io } {
     let target = match file_create(io, spool) {
         Result.Ok(value: f) => Option[File].Some(value: f),
         Result.Err(error: e) => Option[File].None(),
@@ -264,7 +264,7 @@ fn drain(io: IoCap, from: OsHandle, spool: Str, cap: Int, total: Chan[Int]) -> I
 }
 
 /// Whether the file at `path` holds `needle`, read in chunks.
-fn file_has(io: IoCap, path: Str, needle: Str) -> Bool ! { io } {
+pub fn file_has(io: IoCap, path: Str, needle: Str) -> Bool ! { io } {
     let f = match file_open(io, path) {
         Result.Ok(value: f) => f,
         Result.Err(error: e) => { return false; },
@@ -299,7 +299,7 @@ fn file_has(io: IoCap, path: Str, needle: Str) -> Bool ! { io } {
 }
 
 /// The first `n` bytes of the file at `path` onto `out`.
-fn copy_out(io: IoCap, path: Str, n: Int, out: File) -> Int ! { io } {
+pub fn copy_out(io: IoCap, path: Str, n: Int, out: File) -> Int ! { io } {
     let f = match file_open(io, path) {
         Result.Ok(value: f) => f,
         Result.Err(error: e) => { return 0; },
@@ -323,7 +323,7 @@ fn copy_out(io: IoCap, path: Str, n: Int, out: File) -> Int ! { io } {
     0
 }
 
-fn size_of(io: IoCap, path: Str) -> Int ! { io } {
+pub fn size_of(io: IoCap, path: Str) -> Int ! { io } {
     match file_metadata(io, path) {
         Result.Ok(value: m) => m.size,
         Result.Err(error: e) => 0,

@@ -15,6 +15,7 @@ use "@std/text";
 use "../lib/run.nz";
 use "image.nz";
 use "hostrun.nz";
+use "contained.nz";
 
 /// This executable's own path: `/proc/self/exe` where there is one, else the path `ps` reports for
 /// this process id, made canonical; `""` when it cannot be found. (Nazm has no `current_exe`, and
@@ -67,6 +68,26 @@ fn main(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Int 
             i = i + 1;
         }
         return host_run(h, rest);
+    }
+    if cmd == "contained" {
+        let rest = strs_new();
+        let mut i = 1;
+        while i < strs_len(args) {
+            strs_push(rest, strs_get(args, i));
+            i = i + 1;
+        }
+        // A plan only (`--print-argv`) starts nothing and takes no lock; everything else holds the
+        // host-run lock for the runner's whole life.
+        if !asks_print_argv(rest) {
+            match hold_host_lock(h) {
+                Result.Ok(value: n) => {},
+                Result.Err(error: r) => {
+                    eprintln(f"nzx: refused [{r.name}]: {r.why}");
+                    return 1;
+                },
+            };
+        }
+        return contained_main(h, rest);
     }
     eprintln(f"nzx: unknown command `{cmd}`");
     2
