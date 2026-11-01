@@ -263,7 +263,13 @@ fn heap_size(raw: Str, why: Strs) -> Int {
         while z < str_len(body) - 1 && str_byte(body, z) == 48 { z = z + 1; }
         body = str_slice(body, z, str_len(body));
         if str_len(body) > 20 { ok = false; }
-        if str_len(body) == 20 && body >= "18446744073709551616" { ok = false; }
+        if str_len(body) == 20 {
+            // not past `u64::MAX`: the first digit that differs from 18446744073709551615 decides
+            let max = "18446744073709551615";
+            let mut k = 0;
+            while k < 20 && str_byte(body, k) == str_byte(max, k) { k = k + 1; }
+            if k < 20 && str_byte(body, k) > str_byte(max, k) { ok = false; }
+        }
     }
     if ok == false {
         strs_push(why, pk_cat3("`", raw, "` is not a size: bytes, or a number with `K`, `M` or `G`"));
