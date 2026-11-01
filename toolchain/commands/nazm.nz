@@ -412,7 +412,7 @@ fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, tm: TimeCap, out
     if s == "comptime" { return comptime_command(io, out, tm, net, proc, rnd, c) }
     if s == "repl" { return repl_command(io, out, tm, net, proc, rnd, c) }
     if s == "bench" { return bench_command(io, proc, sp, v, c) }
-    if s == "accel" { return accel_command(io, c) }
+    if s == "accel" { return accel_command(io, out, tm, net, proc, sp, rnd, c) }
     if s == "contract" { return contract_command(io, out, tm, net, proc, sp, rnd, c) }
     check_command(io, proc, sp, c)
 }

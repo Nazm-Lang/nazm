@@ -1,0 +1,211 @@
+// Polymorphic recursion (`N0357`): `crates/nazm-mir/src/instance.rs`'s `expanding_cycles`, over Core IR.
+//
+// A generic function that reaches itself with a type argument LARGER than the parameter it came from (`grow[T]` calling
+// `grow[Vec[T]]`) needs a new instance for every one it has. Nodes are (function, type parameter); a call in `f` passing the
+// type `t` to `g`'s parameter `j` adds an edge from each parameter `i` of `f` that `t` mentions to `(g, j)`, expanding when `t`
+// is more than `$i` itself. An instance family is infinite exactly when a cycle holds an expanding edge: the call is named, once
+// per cycle. A closure's calls are its generic function's (L10): written over the function's parameters.
+
+use "cir.nz"
+use "types.nz"
+use "text.nz"
+use "@std/hashmap"
+use "@std/json"
+use "@std/text"
+
+/// Whether `t` mentions type parameter `$k` (not `$k0`).
+fn mentions_param(t: Str, k: Int) -> Bool ! {} {
+    let want = "$" + int_to_str(k)
+    let n = str_len(t)
+    let w = str_len(want)
+    let mut i = 0
+    while i + w <= n {
+        if str_slice(t, i, i + w) == want {
+            let after = i + w
+            if after >= n { return true }
+            let b = str_byte(t, after)
+            if b < 48 || b > 57 { return true }
+        }
+        i += 1
+    }
+    false
+}
+
+/// The nodes of a body under `n`, children first as they come, calling `visit` by collecting into the lists.
+fn closure_parents(c: Cir, n: Int, fi: Int, parent: Ints) ! {} {
+    let kind = json_kind(c.doc, n)
+    if kind == "array" {
+        for i in 0..count(c, n) { closure_parents(c, at(c, n, i), fi, parent) }
+        return
+    }
+    if kind != "object" { return }
+    if op(c, n) == "closure" {
+        let g = fn_index(c, sval(c, n, "function"))
+        if g >= 0 { ints_set(parent, g, fi) }
+    }
+    for i in 0..json_len(c.doc, n) {
+        match json_value_at(c.doc, n, i) {
+            Some(k) => {
+                let kk = json_kind(c.doc, k)
+                if kk == "object" || kk == "array" { closure_parents(c, k, fi, parent); }
+            },
+            None => {},
+        }
+    }
+}
+
+/// The edges of the parameter graph found in the body under `n`, which is function `owner`'s (a closure's, its generic function's).
+fn collect_edges(c: Cir, n: Int, owner: Int, base: Ints, efrom: Ints, eto: Ints, eexp: Ints, eat: Strs, ename: Strs) ! {} {
+    let kind = json_kind(c.doc, n)
+    if kind == "array" {
+        for i in 0..count(c, n) { collect_edges(c, at(c, n, i), owner, base, efrom, eto, eexp, eat, ename) }
+        return
+    }
+    if kind != "object" { return }
+    if op(c, n) == "call" {
+        let g = fn_index(c, sval(c, n, "callee"))
+        if g >= 0 && vec_get(c.fns, g).type_params > 0 {
+            let ta = kid(c, n, "type_args")
+            let params = vec_get(c.fns, owner).type_params
+            for j in 0..count(c, ta) {
+                let t = tof(c, at(c, ta, j))
+                if j < vec_get(c.fns, g).type_params {
+                    for p in 0..params {
+                        if mentions_param(t, p) {
+                            ints_push(efrom, ints_get(base, owner) + p)
+                            ints_push(eto, ints_get(base, g) + j)
+                            ints_push(eexp, if t == "$" + int_to_str(p) { 0 } else { 1 })
+                            strs_push(eat, sval(c, n, "at"))
+                            strs_push(ename, vec_get(c.fns, owner).name)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for i in 0..json_len(c.doc, n) {
+        match json_value_at(c.doc, n, i) {
+            Some(k) => {
+                let kk = json_kind(c.doc, k)
+                if kk == "object" || kk == "array" { collect_edges(c, k, owner, base, efrom, eto, eexp, eat, ename); }
+            },
+            None => {},
+        }
+    }
+}
+
+/// Whether node `to` reaches node `from` along the edges.
+fn reaches(efrom: Ints, eto: Ints, to: Int, from: Int, nodes: Int) -> Bool ! {} {
+    let seen: Ints = ints_new()
+    for i in 0..nodes { ints_push(seen, 0) }
+    let work = ints_new()
+    ints_push(work, to)
+    while ints_len(work) > 0 {
+        let x = ints_pop(work)
+        if x == from { return true }
+        if ints_get(seen, x) == 0 {
+            ints_set(seen, x, 1)
+            for e in 0..ints_len(efrom) {
+                if ints_get(efrom, e) == x { ints_push(work, ints_get(eto, e)) }
+            }
+        }
+    }
+    false
+}
+
+/// Each call that expands a cycle, one per cycle, in source order: `NAME` and the call's span, tab apart.
+pub fn expansions(c: Cir) -> Strs ! {} {
+    let out = strs_new()
+    let nf = vec_len(c.fns)
+    let base = ints_new()
+    let mut nodes = 0
+    for fi in 0..nf {
+        ints_push(base, nodes)
+        nodes += vec_get(c.fns, fi).type_params
+    }
+    if nodes == 0 { return out }
+    let parent = ints_new()
+    for fi in 0..nf { ints_push(parent, 0 - 1) }
+    for fi in 0..nf {
+        let f = vec_get(c.fns, fi)
+        if f.body >= 0 && f.type_params > 0 { closure_parents(c, f.body, fi, parent) }
+    }
+    let efrom = ints_new()
+    let eto = ints_new()
+    let eexp = ints_new()
+    let eat = strs_new()
+    let ename = strs_new()
+    for fi in 0..nf {
+        let f = vec_get(c.fns, fi)
+        if f.body >= 0 {
+            let mut owner = fi
+            let mut hops = 0
+            while ints_get(parent, owner) >= 0 && hops < nf {
+                owner = ints_get(parent, owner)
+                hops += 1
+            }
+            if vec_get(c.fns, owner).type_params > 0 { collect_edges(c, f.body, owner, base, efrom, eto, eexp, eat, ename) }
+        }
+    }
+    // Only expanding edges inside a cycle matter; one per strongly connected component.
+    let reported = ints_new()
+    let rep_at = strs_new()
+    let rep_name = strs_new()
+    for e in 0..ints_len(efrom) {
+        if ints_get(eexp, e) == 1 && reaches(efrom, eto, ints_get(eto, e), ints_get(efrom, e), nodes) {
+            let a = ints_get(efrom, e)
+            let mut known = false
+            for r in 0..ints_len(reported) {
+                let b = ints_get(reported, r)
+                if reaches(efrom, eto, a, b, nodes) && reaches(efrom, eto, b, a, nodes) { known = true }
+            }
+            if !known {
+                ints_push(reported, a)
+                strs_push(rep_at, strs_get(eat, e))
+                strs_push(rep_name, strs_get(ename, e))
+            }
+        }
+    }
+    for r in 0..ints_len(reported) { strs_push(out, strs_get(rep_name, r) + "\t" + strs_get(rep_at, r)) }
+    out
+}
+
+fn spaces_of(n: Int) -> Str ! {} {
+    let out = strs_new()
+    for i in 0..n { strs_push(out, " ") }
+    str_join(out, "")
+}
+
+/// The diagnostic `N0357` for a call at `at` (`MODULE:START..END`, END ignored: the callee's name is what is underlined) in `fname`.
+pub fn render_expansion(ms: MirSpans, fname: Str, at: Str) -> Str ! {} {
+    let lc = span_pos(ms, at)
+    let file = span_file_of(at)
+    let text = match hashmap_get(ms.sources, file) { Some(t) => t, None => "" }
+    let path = match hashmap_get(ms.paths, file) { Some(t) => t, None => file }
+    let rest = str_slice(at, str_len(file) + 1, str_len(at))
+    let dots = match text_find(rest, "..") { Some(i) => i, None => str_len(rest) }
+    let start = match text_parse_int(str_slice(rest, 0, dots)) { Ok(v) => v, Err(_) => 0 }
+    let line = if ints_len(lc) == 2 { ints_get(lc, 0) } else { 1 }
+    let col = if ints_len(lc) == 2 { ints_get(lc, 1) } else { 1 }
+    // The line's text, and the callee: up to the first `(` of the call.
+    let mut from = start
+    while from > 0 && str_byte(text, from - 1) != 10 { from -= 1 }
+    let mut to = start
+    while to < str_len(text) && str_byte(text, to) != 10 { to += 1 }
+    let shown = str_slice(text, from, to)
+    let mut stop = start
+    while stop < to && str_byte(text, stop) != 40 { stop += 1 }
+    while stop > start && str_byte(text, stop - 1) == 32 { stop -= 1 }
+    let mut width = 0
+    for i in start..stop { let b = str_byte(text, i); if b < 128 || b >= 192 { width += 1 } }
+    if width < 1 { width = 1 }
+    let msg = "`" + fname + "` reaches itself with a larger type argument here, so its native instances would never end"
+    let gutter = int_to_str(line)
+    let pad = spaces_of(str_len(gutter))
+    let nl = str_from_byte(10)
+    let carets = strs_new()
+    for i in 0..width { strs_push(carets, "^") }
+    "error[N0357]: " + msg + nl + "  --> " + path + ":" + int_to_str(line) + ":" + int_to_str(col) + nl
+        + pad + " |" + nl + gutter + " | " + shown + nl + pad + " | " + spaces_of(col - 1) + str_join(carets, "") + " " + msg + nl
+        + pad + " = help: `nazm build` generates one native function per list of type arguments, and this call makes each instance need a new one. `nazm run` runs it: it does not specialise" + nl
+}

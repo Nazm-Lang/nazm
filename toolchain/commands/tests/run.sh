@@ -1406,6 +1406,9 @@ part_mcp() {
   export NAZM_REF="$ref" NAZM_PORT="$port" R5_ROOT="$root" R5_MREF="$mref" R5_MPORT="$mport" R5_WORK="$work"
   (cd "$root" && python3 -I "$root/toolchain/commands/tests/mcp-compare.py" protocol "$mref" "$mport" "$root") > "$work/mres-protocol" 2>&1 || true
   echo "  protocol: $(head -1 "$work/mres-protocol")"
+  (cd "$root" && python3 -I "$root/toolchain/commands/tests/mcp-compare.py" nodocs "$mref" "$mport" "$root" examples/max.nz) > "$work/mres-nodocs" 2>&1 || true
+  echo "  no --docs: $(head -1 "$work/mres-nodocs")"
+  [ "$(head -1 "$work/mres-nodocs")" = agree ] || status=1
   # The command line: every line of tests/args/mcp.txt, both servers started with it and an empty input.
   cn=0 ca=0
   while IFS= read -r line; do

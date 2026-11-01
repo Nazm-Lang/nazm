@@ -402,6 +402,8 @@ pub struct Ck {
     mtrm: Smap,
     // The reference index, built when first asked for (`ck_ref_count`).
     rix: Rix,
+    // What the checker recorded of its scopes and environments, for what may be written where (`ck_visible`).
+    sc: Trace,
     // What Core IR reads of a name that is a constant (`const_use`, `static_cell`): its value, by
     // the name's span — an index into `uk`, `ui`, `us` (its kind and value, as `kint` and `kstr`
     // hold them) — and of a conversion (`NumericFact::Convert`), by the callee's span: an index
@@ -525,12 +527,64 @@ pub struct Graph {
     ifirst: Ints,
     icount: Ints,
     itarget: Ints,
+    // A completion probe's compilation (N26): [1, callee start + 1 (0 for none)], or [0, 0].
+    probe: Ints,
+    // The range of the compilation's diagnostics the parser and the attribute vocabulary made (`Analysis::syntax_errors`): [from, to).
+    synd: Ints,
+}
+
+// The scopes and environments as the checker built them (N19, `nazm_sema::scope::ScopeTrace`): frames (module, span, parent, function, whether the body parsed) with the bindings
+// each defined (the byte each is visible from, the binding it hides, whether it duplicates one of its frame), the type parameters over a declaration's span with what they hide,
+// and, per module, the functions and types it may name.
+pub struct Trace {
+    fm: Ints,
+    fs: Ints,
+    fe: Ints,
+    fp: Ints,
+    ff: Ints,
+    fc: Ints,
+    open: Ints,
+    bf: Ints,
+    bb: Ints,
+    bv: Ints,
+    bs: Ints,
+    bh: Ints,
+    bd: Ints,
+    tm: Ints,
+    ts: Ints,
+    te: Ints,
+    pn: Strs,
+    po: Ints,
+    phk: Ints,
+    phi: Ints,
+    phn: Strs,
+    mm: Ints,
+    mn: Strs,
+    mk: Ints,
+    mi: Ints,
+    // The names the module's environments refused, while it is checked: functions, then types.
+    rf: Strs,
+    rt: Strs,
+    // The type a field read (`mfo`) was made on, and the type a member name that did not resolve was looked for on (`mun`), by the name's span (N21).
+    mfo: Smap,
+    mun: Smap,
+    sd: Ints,
+}
+
+fn sc_new() -> Trace {
+    Trace(fm: ints_new(), fs: ints_new(), fe: ints_new(), fp: ints_new(), ff: ints_new(), fc: ints_new(), open: ints_new(), bf: ints_new(), bb: ints_new(), bv: ints_new(),
+            bs: ints_new(), bh: ints_new(), bd: ints_new(), tm: ints_new(), ts: ints_new(), te: ints_new(), pn: strs_new(), po: ints_new(), phk: ints_new(), phi: ints_new(),
+            phn: strs_new(), mm: ints_new(), mn: strs_new(), mk: ints_new(), mi: ints_new(), rf: strs_new(), rt: strs_new(), mfo: sm_new(), mun: sm_new(), sd: ints_new())
 }
 
 pub fn ck_graph() -> Graph {
     let g = Graph(standard: ints_new(), first: ints_new(), count: ints_new(), target: ints_new(), syntax: ints_new(), ifirst: ints_new(),
-            icount: ints_new(), itarget: ints_new());
+            icount: ints_new(), itarget: ints_new(), probe: ints_new(), synd: ints_new());
     ints_push(g.syntax, 0);
+    ints_push(g.probe, 0);
+    ints_push(g.probe, 0);
+    ints_push(g.synd, 0);
+    ints_push(g.synd, 0);
     g
 }
 
@@ -538,6 +592,20 @@ pub fn ck_graph() -> Graph {
 // published after the parser's diagnostics, without the missing `main` — a function that failed to
 // parse was never registered — and without warnings, which are published only where there is
 // no error (`analyse`, `check_map_with_warnings`).
+// The compilation is a completion probe's, its hole in a call of the callee written at byte `callee` (-1 for none).
+pub fn ck_graph_probe(g: Graph, callee: Int) -> Int {
+    ints_set(g.probe, 0, 1);
+    ints_set(g.probe, 1, callee + 1);
+    0
+}
+
+// The compilation's diagnostics from index `from` up to `to` are the parser's and the attribute vocabulary's.
+pub fn ck_graph_diags(g: Graph, from: Int, to: Int) -> Int {
+    ints_set(g.synd, 0, from);
+    ints_set(g.synd, 1, to);
+    0
+}
+
 pub fn ck_graph_syntax_error(g: Graph) -> Int {
     ints_set(g.syntax, 0, 1);
     0
@@ -622,7 +690,10 @@ fn s_quiet() -> Int { 24 }
 // Whether the binding the last `lookup_var` reached was a capture the checker refused (N0386): the reference attributes its mentions to a slot of the
 // closure that nothing declares.
 fn s_refused() -> Int { 25 }
-fn s_slots() -> Int { 26 }
+// A completion probe's compilation (N26): whether it is one, and the start (plus one) of the callee its hole is in, if the hole is in a call.
+fn s_probe() -> Int { 26 }
+fn s_pcallee() -> Int { 27 }
+fn s_slots() -> Int { 28 }
 
 fn prelude(c: Ck) -> Int { gs(c, s_prelude()) }
 
@@ -1594,7 +1665,7 @@ fn new_ck(t: Tree) -> Ck {
             stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new(), epown: ints_new(), epnm: strs_new(),
             sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new(), fnreq: ints_new(), fnrs: Reasons(fnid: ints_new(), effect: ints_new(), start: ints_new(), end: ints_new(), source: ints_new(), which: ints_new()), bds: ints_new(), bde: ints_new(),
             bmut: ints_new(), mlit: sm_new(), mfld: sm_new(), mfldty: sm_new(), ipend: ints_new(), rlog: ints_new(), elog: ints_new(), mvty: sm_new(), mvix: sm_new(),
-            minit: sm_new(), mfini: sm_new(), mcref: sm_new(), mtrm: sm_new(), rix: rix_new(), mconst: sm_new(), mrefu: sm_new(), rzb: ints_new(), rzf: ints_new(), uk: ints_new(), ui: ints_new(), us: strs_new(), mconv: sm_new(), cvto: ints_new(),
+            minit: sm_new(), mfini: sm_new(), mcref: sm_new(), mtrm: sm_new(), rix: rix_new(), sc: sc_new(), mconst: sm_new(), mrefu: sm_new(), rzb: ints_new(), rzf: ints_new(), uk: ints_new(), ui: ints_new(), us: strs_new(), mconv: sm_new(), cvto: ints_new(),
             cvmode: strs_new(), cvres: ints_new(), sargf: ints_new(), sipf: ints_new(), sip: ints_new(), sargc: ints_new(), sargs: ints_new(), sret: ints_new());
     let mut i = 0;
     while i < s_slots() {
@@ -1740,6 +1811,10 @@ pub fn ck_check(t: Tree, programs: Ints, bases: Ints, names: Strs, graph: Graph)
     }
     ss(c, s_prelude(), count - 1);
     ss(c, s_syntax(), ints_get(graph.syntax, 0));
+    ss(c, s_probe(), ints_get(graph.probe, 0));
+    ss(c, s_pcallee(), ints_get(graph.probe, 1));
+    ints_push(c.sc.sd, ints_get(graph.synd, 0));
+    ints_push(c.sc.sd, ints_get(graph.synd, 1));
     i = 0;
     while i < count {
         refuse_unsupported_items(c, i);
@@ -2643,6 +2718,7 @@ fn type_environment(c: Ck, m: Int, report: Bool) -> Int {
         ints_pop(c.ttys);
     }
     while strs_len(c.taliases) > 0 { strs_pop(c.taliases); }
+    while strs_len(c.sc.rt) > 0 { strs_pop(c.sc.rt); }
     let mut i = 0;
     while i < strs_len(c.rname) {
         if ints_get(c.rmod, i) == m && strs_find(c.tnames, strs_get(c.rname, i)) < 0 {
@@ -2693,6 +2769,7 @@ fn type_environment(c: Ck, m: Int, report: Bool) -> Int {
                     // The prelude's standard modules (R1.5, D9) yield, silently.
                 } else {
                     if own >= 0 {
+                        strs_push(c.sc.rt, name);
                         // The prelude's names are reserved rather than colliding at an import: no
                         // `use` was written, and the rule is about the declaration (N0363).
                         if on == prelude(c) && report {
@@ -2712,6 +2789,7 @@ fn type_environment(c: Ck, m: Int, report: Bool) -> Int {
                             if on == prelude(c) {
                                 set_type_name(c, name, t);
                             } else {
+                                strs_push(c.sc.rt, name);
                                 if report {
                                     dg_error(c.d, "N0207", ints_get(c.dats, d), ints_get(c.date, d),
                                             cat3("the type `", name, "` is exported by two imported modules"), "",
@@ -5049,6 +5127,7 @@ fn check_unit(c: Ck, m: Int) -> Int {
     }
     environment(c, m);
     type_environment(c, m, false);
+    if m == 0 { trace_module(c, m); }
     const_environment(c, m);
     trait_scope(c, m);
     let p = ints_get(c.mprog, m);
@@ -5198,6 +5277,7 @@ fn insert_sorted(xs: Ints, v: Int) -> Int {
 // that already names something here refused (N0209) — and plainly where a plain `use` named it,
 // an export this module also defines (N0208) or another import brought in (N0207) refused.
 fn environment(c: Ck, m: Int) -> Int {
+    while strs_len(c.sc.rf) > 0 { strs_pop(c.sc.rf); }
     while strs_len(c.envname) > 0 {
         strs_pop(c.envname);
         ints_pop(c.envfn);
@@ -5272,12 +5352,14 @@ fn environment(c: Ck, m: Int) -> Int {
                     // The prelude's standard modules (R1.5, D9) yield, silently.
                 } else {
                     if own >= 0 {
+                        strs_push(c.sc.rf, name);
                         dg_error(c.d, "N0208", ints_get(c.dats, d), ints_get(c.date, d), cat3("this import brings in `", name, "`, which this module defines"), "",
                                 "an imported name and a local one are not ranked: rename one of them, or stop exporting the other");
                         sec_at(c, ints_get(c.fnns, own), ints_get(c.fnne, own), "defined here");
                         sec_at(c, ints_get(c.fnns, f), ints_get(c.fnne, f), "and exported here");
                     } else {
                         if first >= 0 {
+                            strs_push(c.sc.rf, name);
                             dg_error(c.d, "N0207", ints_get(c.dats, d), ints_get(c.date, d), cat3("`", name, "` is exported by two imported modules"), "",
                                     "there is no way to write which one is meant, so the ambiguity is refused where it is created rather than where it is used");
                             sec_at(c, ints_get(bstarts, first), ints_get(bends, first), "also brought in here");
@@ -5318,6 +5400,11 @@ fn check_function(c: Ck, f: Int) -> Int {
                 q = q + 1;
             }
             signature_type(c, fld(c, f, "return_type"));
+            // A body of no declared function: a scope the reference opens all the same, which no name is visible from.
+            ss(c, s_fn(), 0 - 1);
+            open_scope(c);
+            trace_span(c, fld(c, f, "span"));
+            close_scope(c);
             return 0;
         }
     }
@@ -5330,6 +5417,10 @@ fn check_function(c: Ck, f: Int) -> Int {
             q = q + 1;
         }
         signature_type(c, fld(c, f, "return_type"));
+        ss(c, s_fn(), 0 - 1);
+        open_scope(c);
+        trace_span(c, fld(c, f, "span"));
+        close_scope(c);
         return 0;
     }
     ss(c, s_fn(), id);
@@ -5359,6 +5450,8 @@ fn check_function(c: Ck, f: Int) -> Int {
         }
     }
     open_scope(c);
+    trace_span(c, fld(c, f, "span"));
+    if id >= 0 { trace_type_scope(c, fld(c, f, "span"), tps); }
     let params = kids(c, f, "params");
     // Its parameters are its first bindings (provenance reads them by position).
     if id >= 0 {
@@ -5374,6 +5467,7 @@ fn check_function(c: Ck, f: Int) -> Int {
         }
         define(c, pn, ty, false, 0 - 1, 0 - 1);
         declared_at(c, fld(c, p, "name_span"));
+        trace_visible(c, spe(c, fld(c, p, "name_span")));
         i = i + 1;
     }
     let rt = fld(c, f, "return_type");
@@ -5384,6 +5478,7 @@ fn check_function(c: Ck, f: Int) -> Int {
     // A body that failed to parse: anything said about statements never built would be about
     // the parser's guess, not the program.
     if some(c, f, "body") == false {
+        if some(c, f, "foreign") == false { trace_incomplete(c); }
         close_scope(c);
         return 0;
     }
@@ -5452,6 +5547,7 @@ fn assignable(c: Ck, got: Int, want: Int) -> Bool {
 fn open_scope(c: Ck) -> Int {
     ints_push(c.frames, strs_len(c.sname));
     ints_push(c.fjoin, 0);
+    trace_open(c);
     0
 }
 
@@ -5459,10 +5555,67 @@ fn open_scope(c: Ck) -> Int {
 fn open_joined_scope(c: Ck) -> Int {
     ints_push(c.frames, strs_len(c.sname));
     ints_push(c.fjoin, 1);
+    trace_open(c);
+    0
+}
+
+// A scope the checker has just pushed (the span follows, `trace_span`): the module and function it is in, and the scope outside it.
+fn trace_open(c: Ck) -> Int {
+    let t = c.sc;
+    let n = ints_len(t.open);
+    ints_push(t.fm, gs(c, s_module()));
+    ints_push(t.fs, 0);
+    ints_push(t.fe, 0);
+    ints_push(t.fp, if n > 0 { ints_get(t.open, n - 1) } else { 0 - 1 });
+    ints_push(t.ff, gs(c, s_fn()));
+    ints_push(t.fc, 1);
+    ints_push(t.open, ints_len(t.fm) - 1);
+    0
+}
+
+// The span of the scope just opened.
+fn trace_span(c: Ck, span: Int) -> Int {
+    let t = c.sc;
+    let n = ints_len(t.open);
+    if n == 0 { return 0; }
+    ints_set(t.fs, ints_get(t.open, n - 1), sps(c, span));
+    ints_set(t.fe, ints_get(t.open, n - 1), spe(c, span));
+    0
+}
+
+// The innermost open scope is a function whose body did not parse.
+fn trace_incomplete(c: Ck) -> Int {
+    let t = c.sc;
+    let n = ints_len(t.open);
+    if n > 0 { ints_set(t.fc, ints_get(t.open, n - 1), 0); }
+    0
+}
+
+// The byte from which the binding just made is visible.
+fn trace_visible(c: Ck, at: Int) -> Int {
+    let t = c.sc;
+    let n = ints_len(t.bb);
+    if n > 0 && ints_get(t.bb, n - 1) == last_binding(c) { ints_set(t.bv, n - 1, at); }
+    0
+}
+
+// A binding made in the innermost scope, with what the checker's own lookup found under its name (the binding it hides) and whether the scope's frames already hold the name.
+fn trace_bind(c: Ck, name: Str) -> Int {
+    let t = c.sc;
+    let n = ints_len(t.open);
+    if n == 0 || gs(c, s_fn()) < 0 { return 0; }
+    let found = lookup(c, name);
+    ints_push(t.bf, ints_get(t.open, n - 1));
+    ints_push(t.bb, ints_len(c.bfn));
+    ints_push(t.bv, 0);
+    ints_push(t.bs, if found >= 0 { ints_get(c.sbid, found) } else { 0 - 1 });
+    ints_push(t.bh, gs(c, s_fn()));
+    ints_push(t.bd, if defined_here(c, name) { 1 } else { 0 });
     0
 }
 
 fn close_scope(c: Ck) -> Int {
+    if ints_len(c.sc.open) > 0 { ints_pop(c.sc.open); }
     let start = ints_pop(c.frames);
     ints_pop(c.fjoin);
     while strs_len(c.sname) > start {
@@ -5478,6 +5631,7 @@ fn close_scope(c: Ck) -> Int {
 
 // A binding; `ds` and `de` where its name is declared, or -1 for a parameter.
 fn define(c: Ck, name: Str, ty: Int, mutable: Bool, ds: Int, de: Int) -> Int {
+    trace_bind(c, name);
     strs_push(c.sname, name);
     ints_push(c.sty, ty);
     if mutable { ints_push(c.smut, 1); } else { ints_push(c.smut, 0); }
@@ -5691,6 +5845,7 @@ fn check_block(c: Ck, b: Int, expected: Int) -> Int {
     } else {
         open_scope(c);
     }
+    trace_span(c, fld(c, b, "span"));
     let completion = check_block_inner(c, b, expected);
     close_scope(c);
     completion
@@ -5815,6 +5970,7 @@ fn check_let(c: Ck, l: Int) -> Int {
                 "Nazm allows shadowing in a nested scope but not in the same one, so a later mention of a name is never ambiguous");
     }
     define(c, name, ty, flag(c, l, "mutable"), sps(c, ns), spe(c, ns));
+    trace_visible(c, spe(c, fld(c, l, "span")));
     sm_put(c.mvar, sps(c, ns), spe(c, ns), last_binding(c));
     0
 }
@@ -5959,8 +6115,10 @@ fn check_for(c: Ck, f: Int) -> Int {
     ss(c, s_loop(), gs(c, s_loop()) + 1);
     let body = fld(c, f, "body");
     open_scope(c);
+    trace_span(c, fld(c, body, "span"));
     let ns = fld(c, f, "name_span");
     define(c, fname_of(c, f, "name"), element, false, sps(c, ns), spe(c, ns));
+    trace_visible(c, sps(c, fld(c, body, "span")));
     sm_put(c.mvar, sps(c, ns), spe(c, ns), last_binding(c));
     // Its last line's value is discarded, as a `while` body's is (R1, 5b.19).
     ss(c, s_discard(), 1);
@@ -6148,6 +6306,17 @@ fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
         return t;
     }
     if k == "Field" {
+        // `State.Rea` while `State.Ready(…)` is being written: `State` is no value, but the module's types name it as an enum, and a tool completing the name needs which (N21).
+        let fbase = fld(c, e, "base");
+        if kind_of(c, fbase) == "Var" {
+            let q = fname_of(c, fbase, "name");
+            let qt = strs_find(c.tnames, q);
+            if lookup(c, q) < 0 && strs_find(c.tsn, q) < 0 && qt >= 0 && probing_refused(c, q) == false {
+                let et = ints_get(c.ttys, qt);
+                let fns = fld(c, e, "name_span");
+                if is_enum(c, et) && ints_get(c.enp, ta(c, et)) == 0 { sm_put(c.sc.mun, sps(c, fns), spe(c, fns), et); }
+            }
+        }
         let bt = value_type(c, fld(c, e, "base"), none());
         // Only C reads what a handle points to (N85).
         if is_opaque(c, bt) {
@@ -6436,6 +6605,7 @@ fn check_closure(c: Ck, e: Int, expected: Int) -> Int {
     ints_push(c.cfid, id);
     ints_push(c.cfbound, strs_len(c.sname));
     open_scope(c);
+    trace_span(c, fld(c, e, "span"));
     ints_set(c.fnpb, id, ints_len(c.bfn));
     i = 0;
     while i < ints_len(params) {
@@ -6446,6 +6616,7 @@ fn check_closure(c: Ck, e: Int, expected: Int) -> Int {
         }
         define(c, pn, ints_get(ptys, i), false, 0 - 1, 0 - 1);
         declared_at(c, fld(c, p, "name_span"));
+        trace_visible(c, spe(c, fld(c, p, "name_span")));
         i = i + 1;
     }
     let body = fld(c, e, "body");
@@ -6515,13 +6686,22 @@ fn check_contracts(c: Ck, f: Int, declared: Int) -> Int {
         let ensures = sx_text(c.t, fld(c, ct, "kind")) == "Ensures";
         if ensures {
             open_scope(c);
+            trace_span(c, fld(c, ct, "span"));
             if result < 0 {
                 let ks = fld(c, ct, "keyword_span");
                 define(c, "result", declared, false, sps(c, ks), spe(c, ks));
+                trace_visible(c, spe(c, ks));
                 result = last_binding(c);
                 ints_push(c.crfn, gs(c, s_fn()));
                 ints_push(c.crb, result);
             } else {
+                // Defined again in this scope, the same binding.
+                let before = ints_len(c.sc.bb);
+                trace_bind(c, "result");
+                if ints_len(c.sc.bb) > before {
+                    ints_set(c.sc.bb, before, result);
+                    ints_set(c.sc.bv, before, spe(c, fld(c, ct, "keyword_span")));
+                }
                 strs_push(c.sname, "result");
                 ints_push(c.sty, declared);
                 ints_push(c.smut, 0);
@@ -7530,6 +7710,7 @@ fn check_call(c: Ck, e: Int, expected: Int, unwanted: Bool) -> Int {
                 if is_cap_name(callee) { forged(c, callee, cs); } else { err(c, "N0201", cs, cat3("`", callee, "` is not a function"), ""); }
             }
         }
+        if gs(c, s_pcallee()) == sps(c, cs) + 1 && qualified == false { called_record(c, callee, cs, targs); }
         let mut i = 0;
         while i < ints_len(args) {
             check_expr(c, ints_get(args, i), none());
@@ -7675,6 +7856,12 @@ fn check_spawn(c: Ck, s: Int) -> Int {
                 ints_push(c.rix.eus, sps(c, cs));
                 ints_push(c.rix.eue, spe(c, cs));
                 ints_push(c.rix.eui, target);
+                // The reference's `calls` has it too, filed under no function's body: hover reads it.
+                let keep = gs(c, s_fn());
+                ss(c, s_fn(), 0 - 1);
+                record_site(c, cs, target);
+                ints_set(c.sspawn, ints_len(c.sspawn) - 1, 2);
+                ss(c, s_fn(), keep);
             }
         }
         let mut i = 0;
@@ -8955,6 +9142,7 @@ fn check_variant(c: Ck, ty: Str, ty_span: Int, targs: Int, variant: Str, variant
         }
         let mut help = "";
         if strs_len(known) > 0 { help = str_concat("its variants are ", quoted(known)); }
+        sm_put(c.sc.mun, sps(c, variant_span), spe(c, variant_span), t);
         err(c, "N0341", variant_span, cat5("`", show(c, t), "` has no variant `", variant, "`"), help);
         sec_at(c, ints_get(c.ens, e), ints_get(c.ene, e), "declared here");
         check_rest(c, inits, pre);
@@ -9046,6 +9234,7 @@ fn check_projection(c: Ck, base: Int, name: Str, name_span: Int) -> Int {
     let f = record_field(c, base, name);
     if f < 0 {
         let r = ta(c, base);
+        sm_put(c.sc.mun, sps(c, name_span), spe(c, name_span), base);
         err(c, "N0333", name_span, cat5("`", show(c, base), "` has no field `", name, "`"),
                 "a field is looked for on the type of the value it is read from, and nowhere else");
         sec_at(c, ints_get(c.rns, r), ints_get(c.rne, r), "declared here");
@@ -9054,6 +9243,7 @@ fn check_projection(c: Ck, base: Int, name: Str, name_span: Int) -> Int {
     let ft = field_ty_in(c, base, f);
     sm_put(c.mfld, sps(c, name_span), spe(c, name_span), f);
     sm_put(c.mfldty, sps(c, name_span), spe(c, name_span), ft);
+    sm_put(c.sc.mfo, sps(c, name_span), spe(c, name_span), base);
     ft
 }
 
@@ -9554,6 +9744,7 @@ fn check_match(c: Ck, m: Int, expected: Int) -> Int {
         // written in: a name bound there already is refused as `let x` twice is.
         let joined = i == 0 && (source == "Let" || source == "LetElse");
         if joined { open_joined_scope(c); } else { open_scope(c); }
+        trace_span(c, fld(c, arm, "span"));
         let binds = no_binds();
         let before = dg_len(c.d);
         while strs_len(c.pan) > 0 {
@@ -9579,6 +9770,7 @@ fn check_match(c: Ck, m: Int, expected: Int) -> Int {
                                 "Nazm allows shadowing in a nested scope but not in the same one, so a later mention of a name is never ambiguous");
                     } else {
                         define(c, name, ints_get(binds.tys, k), false, ints_get(binds.starts, k), ints_get(binds.ends, k));
+                        trace_visible(c, ints_get(binds.ends, k));
                         sm_put(c.mvar, ints_get(binds.starts, k), ints_get(binds.ends, k), last_binding(c));
                     }
                 }
@@ -9986,6 +10178,7 @@ fn check_variant_pattern(c: Ck, v: Int, ty: Int, scrutinee: Int, binds: Binds) -
         }
         let mut help = "";
         if strs_len(known) > 0 { help = str_concat("its variants are ", quoted(known)); }
+        sm_put(c.sc.mun, sps(c, fld(c, v, "variant_span")), spe(c, fld(c, v, "variant_span")), ty);
         err(c, "N0341", fld(c, v, "variant_span"), cat5("`", show(c, ty), "` has no variant `", variant, "`"), help);
         sec_at(c, ints_get(c.ens, e), ints_get(c.ene, e), "declared here");
         return wild(c);
@@ -11486,8 +11679,9 @@ fn held_caps(c: Ck) -> Int {
 
 // A resolved call, filed under the function whose body holds it (`record_site`).
 fn record_site(c: Ck, at: Int, target: Int) -> Int {
+    // A body of no declared function (the method of an impl the checker refused) still has its calls recorded, as the reference records `calls` by span, but is no
+    // function's: its sites hold -1 for their function, which no per-function walk meets.
     let f = gs(c, s_fn());
-    if f < 0 { return 0; }
     sm_put(c.msite, sps(c, at), spe(c, at), ints_len(c.sfn));
     ints_push(c.stm, 0 - 1);
     ints_push(c.starg, 0 - 1);
@@ -11515,7 +11709,6 @@ fn record_site(c: Ck, at: Int, target: Int) -> Int {
 // A call through a function value (`Callee::Indirect`): what it may do is its type's.
 fn record_indirect_site(c: Ck, at: Int, t: Int) -> Int {
     let f = gs(c, s_fn());
-    if f < 0 { return 0; }
     sm_put(c.msite, sps(c, at), spe(c, at), ints_len(c.sfn));
     ints_push(c.stm, 0 - 1);
     ints_push(c.starg, 0 - 1);
@@ -16600,8 +16793,14 @@ fn ix_build(c: Ck) -> Int {
     while i < ints_len(vars.ks) {
         let rz = sm_get(c.mrefu, ints_get(vars.ks, i), ints_get(vars.ke, i));
         if rz >= 0 {
-            // A refused capture is mentioned through a slot of the closure that nothing declares.
-            ix_use(at, live, bref + rz, ints_get(vars.ks, i), ints_get(vars.ke, i));
+            // A refused capture is mentioned through the slot the captured binding has in its own function, in the closure: the entity that slot is there (a local of
+            // the closure, or what the closure's copy is of), or, where the closure has no such slot, one that nothing declares.
+            let held = refused_binding(c, rz);
+            if held >= 0 {
+                ix_use(at, live, bloc + held, ints_get(vars.ks, i), ints_get(vars.ke, i));
+            } else {
+                ix_use(at, live, bref + rz, ints_get(vars.ks, i), ints_get(vars.ke, i));
+            }
         } else {
             if ints_get(c.bfn, ints_get(vars.kv, i)) >= 0 { ix_use(at, live, bloc + ints_get(vars.kv, i), ints_get(vars.ks, i), ints_get(vars.ke, i)); }
         }
@@ -16879,6 +17078,439 @@ pub fn ck_ref_function(c: Ck, i: Int) -> Int {
     if ints_get(c.rix.k, i) != 1 { return 0 - 1; }
     ints_get(c.rix.og, i)
 }
+// --- what may be written where (`nazm_sema::scope`, N19) ---------------------------------------------------------
+
+fn trace_builtin_types() -> Strs {
+    words_of("Int Bool Str Ints Strs Chan IoCap SpawnCap ForeignCap VouchCap TimeCap MmioCap OutCap NetCap RandomCap ProcessCap Int8 Int16 Int32 UInt8 UInt16 UInt32 UInt64 Float32 Float64 Bytes Text OsHandle Atomic Int128 UInt128 Select")
+}
+
+fn words_of(s: Str) -> Strs {
+    let out = strs_new();
+    let mut from = 0;
+    let mut i = 0;
+    while i <= str_len(s) {
+        if i == str_len(s) || str_byte(s, i) == 32 {
+            strs_push(out, str_slice(s, from, i));
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// A row of the module's environment, unless the name was refused. Kinds: 0 a built-in function (`id` its index), 1 a function, 2 a user type (a type), 3 a built-in type, 4 `Vec`.
+fn trace_row(c: Ck, m: Int, name: Str, kind: Int, id: Int) -> Int {
+    let t = c.sc;
+    if kind <= 1 && strs_find(t.rf, name) >= 0 { return 0; }
+    if kind == 2 && strs_find(t.rt, name) >= 0 { return 0; }
+    // A name given again replaces what it meant before, as a map's insert does (a function of this name replaces the built-in's).
+    if kind <= 1 {
+        let mut i = 0;
+        while i < ints_len(t.mm) {
+            if ints_get(t.mm, i) == m && ints_get(t.mk, i) <= 1 && strs_get(t.mn, i) == name {
+                ints_set(t.mk, i, kind);
+                ints_set(t.mi, i, id);
+                return 0;
+            }
+            i = i + 1;
+        }
+    }
+    ints_push(t.mm, m);
+    strs_push(t.mn, name);
+    ints_push(t.mk, kind);
+    ints_push(t.mi, id);
+    0
+}
+
+// What the type name `name` means in this module's types, for a type parameter hiding it: (kind, id, builtin name).
+fn trace_hides(c: Ck, name: Str, hk: Ints, hi: Ints, hn: Strs) -> Int {
+    if name == "Vec" {
+        ints_push(hk, 1);
+        ints_push(hi, 0);
+        strs_push(hn, "");
+        return 0;
+    }
+    if strs_find(trace_builtin_types(), name) >= 0 {
+        ints_push(hk, 2);
+        ints_push(hi, 0);
+        strs_push(hn, name);
+        return 0;
+    }
+    let at = strs_find(c.tnames, name);
+    if at >= 0 {
+        ints_push(hk, 3);
+        ints_push(hi, ints_get(c.ttys, at));
+        strs_push(hn, "");
+        return 0;
+    }
+    ints_push(hk, 0);
+    ints_push(hi, 0);
+    strs_push(hn, "");
+    0
+}
+
+// A declaration's type parameters over its span, each with the type name it hides.
+fn trace_type_scope(c: Ck, span: Int, params: Ints) -> Int {
+    if ints_len(params) == 0 { return 0; }
+    let t = c.sc;
+    let at = ints_len(t.tm);
+    ints_push(t.tm, gs(c, s_module()));
+    ints_push(t.ts, sps(c, span));
+    ints_push(t.te, spe(c, span));
+    let mut k = 0;
+    while k < ints_len(params) {
+        let name = fname_of(c, ints_get(params, k), "name");
+        strs_push(t.pn, name);
+        ints_push(t.po, at);
+        trace_hides(c, name, t.phk, t.phi, t.phn);
+        k = k + 1;
+    }
+    0
+}
+
+// What module `m` may name: the built-ins, its own functions, its imports' exports (each under every alias, and plain), its types and the built-in types, less the names refused; and
+// the type parameters of its records and enums.
+fn trace_module(c: Ck, m: Int) -> Int {
+    let t = c.sc;
+    ints_push(t.mm, m);
+    strs_push(t.mn, "");
+    ints_push(t.mk, 9);
+    ints_push(t.mi, 0);
+    let mut i = 0;
+    while i < strs_len(c.bname) {
+        trace_row(c, m, strs_get(c.bname, i), 0, i);
+        i = i + 1;
+    }
+    i = 0;
+    while i < strs_len(c.fnname) {
+        if ints_get(c.fnmod, i) == m && ints_get(c.fnmeth, i) == 0 && ints_get(c.fnclos, i) < 0 && defined_fn(c, m, strs_get(c.fnname, i)) == i {
+            trace_row(c, m, strs_get(c.fnname, i), 1, i);
+        }
+        i = i + 1;
+    }
+    i = 0;
+    while i < strs_len(c.alname) {
+        let ofns = ints_new();
+        let onames = strs_new();
+        offered_fns(c, ints_get(c.almod, i), ofns, onames);
+        let mut j = 0;
+        while j < ints_len(ofns) {
+            trace_row(c, m, cat3(strs_get(c.alname, i), "::", strs_get(onames, j)), 1, ints_get(ofns, j));
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    i = 0;
+    while i < strs_len(c.envname) {
+        trace_row(c, m, strs_get(c.envname, i), 1, ints_get(c.envfn, i));
+        i = i + 1;
+    }
+    // `println` and `eprintln` are names of `print` and `eprint`: a scope offers them as written.
+    let n = ints_len(t.mm);
+    i = 0;
+    while i < n {
+        if ints_get(t.mm, i) == m && ints_get(t.mk, i) == 0 {
+            if strs_get(t.mn, i) == "print" { trace_row(c, m, "println", 0, ints_get(t.mi, i)); }
+            if strs_get(t.mn, i) == "eprint" { trace_row(c, m, "eprintln", 0, ints_get(t.mi, i)); }
+        }
+        i = i + 1;
+    }
+    i = 0;
+    while i < strs_len(c.tnames) {
+        trace_row(c, m, strs_get(c.tnames, i), 2, ints_get(c.ttys, i));
+        i = i + 1;
+    }
+    let bts = trace_builtin_types();
+    i = 0;
+    while i < strs_len(bts) {
+        trace_row(c, m, strs_get(bts, i), 3, i);
+        i = i + 1;
+    }
+    trace_row(c, m, "Vec", 4, 0);
+    let p = ints_get(c.mprog, m);
+    let rs = kids(c, p, "records");
+    i = 0;
+    while i < ints_len(rs) {
+        trace_type_scope(c, fld(c, ints_get(rs, i), "span"), kids(c, ints_get(rs, i), "type_params"));
+        i = i + 1;
+    }
+    let es = kids(c, p, "enums");
+    i = 0;
+    while i < ints_len(es) {
+        trace_type_scope(c, fld(c, ints_get(es, i), "span"), kids(c, ints_get(es, i), "type_params"));
+        i = i + 1;
+    }
+    0
+}
+
+// The slot binding `bid` has in its function's locals.
+fn trace_slot(c: Ck, bid: Int) -> Int {
+    let table = ck_local_table(c, ints_get(c.bfn, bid));
+    let mut i = 0;
+    while i < ints_len(table) {
+        if ints_get(table, i) == bid { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// What may be written at byte `offset` of the root file (module 0): rows, the first `ok`, or `error|BodyDidNotParse`, `error|NotADeclaredFunction` or `error|ModuleNotChecked`; then each
+// local as `value|name|binding`, each function as `call|name|kind|id`, each type as `type|name|kind|id` (kinds as `trace_row`'s, 5 a type parameter, id its row), the values by name
+// and then slot, the others by name — `visible_at`.
+pub fn ck_visible(c: Ck, offset: Int) -> Strs {
+    let t = c.sc;
+    let out = strs_new();
+    let mut checked = false;
+    let mut i = 0;
+    while i < ints_len(t.mm) {
+        if ints_get(t.mm, i) == 0 && ints_get(t.mk, i) == 9 { checked = true; }
+        i = i + 1;
+    }
+    if checked == false {
+        strs_push(out, "error|ModuleNotChecked");
+        return out;
+    }
+    // The innermost scope holding the position, and the chain outwards.
+    let mut best = 0 - 1;
+    i = 0;
+    while i < ints_len(t.fm) {
+        if ints_get(t.fm, i) == 0 && ints_get(t.fs, i) <= offset && offset < ints_get(t.fe, i) {
+            if best < 0 || ints_get(t.fs, i) > ints_get(t.fs, best) || (ints_get(t.fs, i) == ints_get(t.fs, best) && ints_get(t.fe, i) <= ints_get(t.fe, best)) { best = i; }
+        }
+        i = i + 1;
+    }
+    let chain = ints_new();
+    let mut at = best;
+    while at >= 0 {
+        ints_push(chain, at);
+        at = ints_get(t.fp, at);
+    }
+    if ints_len(chain) > 0 {
+        let outer = ints_get(chain, ints_len(chain) - 1);
+        if ints_get(t.ff, outer) < 0 {
+            strs_push(out, "error|NotADeclaredFunction");
+            return out;
+        }
+        if ints_get(t.fc, outer) == 0 {
+            strs_push(out, "error|BodyDidNotParse");
+            return out;
+        }
+    }
+    strs_push(out, "ok");
+    // The bindings visible here, and what they hide: the checker's own answer, as (function, slot).
+    let vis = ints_new();
+    i = 0;
+    while i < ints_len(t.bb) {
+        if index_of(chain, ints_get(t.bf, i)) >= 0 && ints_get(t.bv, i) <= offset { ints_push(vis, i); }
+        i = i + 1;
+    }
+    let hf = ints_new();
+    let hs = ints_new();
+    i = 0;
+    while i < ints_len(vis) {
+        let v = ints_get(vis, i);
+        if ints_get(t.bs, v) >= 0 {
+            ints_push(hf, ints_get(t.bh, v));
+            ints_push(hs, trace_slot(c, ints_get(t.bs, v)));
+        }
+        if ints_get(t.bd, v) == 1 {
+            ints_push(hf, ints_get(t.bh, v));
+            ints_push(hs, trace_slot(c, ints_get(t.bb, v)));
+        }
+        i = i + 1;
+    }
+    let mut keys = strs_new();
+    let mut rows = strs_new();
+    i = 0;
+    while i < ints_len(vis) {
+        let v = ints_get(vis, i);
+        let slot = trace_slot(c, ints_get(t.bb, v));
+        let mut hidden = false;
+        let mut k = 0;
+        while k < ints_len(hf) {
+            if ints_get(hf, k) == ints_get(t.bh, v) && ints_get(hs, k) == slot { hidden = true; }
+            k = k + 1;
+        }
+        if hidden == false {
+            let name = strs_get(c.bnm, ints_get(t.bb, v));
+            strs_push(keys, cat4(name, str_from_byte(1), pad8(ints_get(t.bh, v)), pad8(slot)));
+            strs_push(rows, cat3("value|", name, str_concat("|", int_to_str(ints_get(t.bb, v)))));
+        }
+        i = i + 1;
+    }
+    sort_rows(keys, rows);
+    i = 0;
+    while i < strs_len(rows) {
+        strs_push(out, strs_get(rows, i));
+        i = i + 1;
+    }
+    // Functions.
+    keys = strs_new();
+    rows = strs_new();
+    i = 0;
+    while i < ints_len(t.mm) {
+        if ints_get(t.mm, i) == 0 && ints_get(t.mk, i) <= 1 {
+            strs_push(keys, strs_get(t.mn, i));
+            strs_push(rows, cat4("call|", strs_get(t.mn, i), str_concat("|", int_to_str(ints_get(t.mk, i))), str_concat("|", int_to_str(ints_get(t.mi, i)))));
+        }
+        i = i + 1;
+    }
+    sort_rows(keys, rows);
+    i = 0;
+    while i < strs_len(rows) {
+        strs_push(out, strs_get(rows, i));
+        i = i + 1;
+    }
+    // Types: the type parameters in scope here, and the module's types less those they hide.
+    keys = strs_new();
+    rows = strs_new();
+    let hk = ints_new();
+    let hi = ints_new();
+    let hn = strs_new();
+    i = 0;
+    while i < ints_len(t.po) {
+        let sc = ints_get(t.po, i);
+        if ints_get(t.tm, sc) == 0 && ints_get(t.ts, sc) <= offset && offset < ints_get(t.te, sc) {
+            strs_push(keys, strs_get(t.pn, i));
+            strs_push(rows, cat4("type|", strs_get(t.pn, i), "|5|", int_to_str(i)));
+            ints_push(hk, ints_get(t.phk, i));
+            ints_push(hi, ints_get(t.phi, i));
+            strs_push(hn, strs_get(t.phn, i));
+        }
+        i = i + 1;
+    }
+    i = 0;
+    while i < ints_len(t.mm) {
+        let kind = ints_get(t.mk, i);
+        if ints_get(t.mm, i) == 0 && kind >= 2 && kind <= 4 {
+            let mut hidden = false;
+            let mut k = 0;
+            while k < ints_len(hk) {
+                let h = ints_get(hk, k);
+                // What a parameter hides: `Vec`, a built-in type by name, or a user type.
+                if h == 1 && kind == 4 { hidden = true; }
+                if h == 2 && kind == 3 && strs_get(hn, k) == strs_get(t.mn, i) { hidden = true; }
+                if h == 3 && kind == 2 && ints_get(hi, k) == ints_get(t.mi, i) { hidden = true; }
+                k = k + 1;
+            }
+            if hidden == false {
+                strs_push(keys, strs_get(t.mn, i));
+                strs_push(rows, cat4("type|", strs_get(t.mn, i), str_concat("|", int_to_str(kind)), str_concat("|", int_to_str(ints_get(t.mi, i)))));
+            }
+        }
+        i = i + 1;
+    }
+    sort_rows(keys, rows);
+    i = 0;
+    while i < strs_len(rows) {
+        strs_push(out, strs_get(rows, i));
+        i = i + 1;
+    }
+    out
+}
+
+fn pad8(n: Int) -> Str {
+    let s = int_to_str(n);
+    let mut out = s;
+    while str_len(out) < 8 { out = str_concat("0", out); }
+    out
+}
+
+// `rows` stably sorted by `keys` (bytewise), both in step.
+fn sort_rows(keys: Strs, rows: Strs) -> Int {
+    let mut i = 1;
+    while i < strs_len(keys) {
+        let k = strs_get(keys, i);
+        let r = strs_get(rows, i);
+        let mut j = i;
+        while j > 0 && str_less(k, strs_get(keys, j - 1)) {
+            strs_set(keys, j, strs_get(keys, j - 1));
+            strs_set(rows, j, strs_get(rows, j - 1));
+            j = j - 1;
+        }
+        strs_set(keys, j, k);
+        strs_set(rows, j, r);
+        i = i + 1;
+    }
+    0
+}
+
+// The locals of function `fnid`, in the order the reference allocates their slots: its own bindings and the copies a closure takes of what it captures, merged by when each was
+// made (a capture comes after the bindings that existed when its copy was made). An entry is a binding, or `-2 - k` for capture `k`.
+pub fn ck_local_table(c: Ck, fnid: Int) -> Ints {
+    index_bindings(c);
+    let out = ints_new();
+    if fnid < 0 || fnid >= strs_len(c.fnname) { return out; }
+    let nb = ints_get(c.fbc, fnid);
+    let nc = ints_get(c.fcc, fnid);
+    let bf = ints_get(c.fbf, fnid);
+    let cf = ints_get(c.fcf, fnid);
+    let mut i = 0;
+    let mut k = 0;
+    while i < nb || k < nc {
+        if k < nc && (i >= nb || ints_get(c.capat, ints_get(c.fcl, cf + k)) <= ints_get(c.fbl, bf + i)) {
+            ints_push(out, 0 - 2 - ints_get(c.fcl, cf + k));
+            k = k + 1;
+        } else {
+            ints_push(out, ints_get(c.fbl, bf + i));
+            i = i + 1;
+        }
+    }
+    out
+}
+// The closure a refused capture's mention (`ck_refused_capture_at`) is in, and the slot the reference names for it: that of the captured binding in the function declaring it, which the
+// reference looks up in the closure's own locals (a capture it refused has no copy there).
+// The binding the slot a refused capture `g` names is in the closure's locals: its own, or the one a capture there is a copy of; -1 where the closure has no such slot.
+fn refused_binding(c: Ck, g: Int) -> Int {
+    let bid = ints_get(c.rzb, g);
+    let own = ck_local_table(c, ints_get(c.bfn, bid));
+    let mut slot = 0 - 1;
+    let mut i = 0;
+    while i < ints_len(own) {
+        if ints_get(own, i) == bid { slot = i; }
+        i = i + 1;
+    }
+    let table = ck_local_table(c, ints_get(c.rzf, g));
+    if slot < 0 || slot >= ints_len(table) { return 0 - 1; }
+    let ent = ints_get(table, slot);
+    if ent >= 0 { return ent; }
+    ints_get(c.capbd, 0 - 2 - ent)
+}
+// What the field read whose name is written at `s..e` was made on (a record type), and what a member name that did not resolve was looked for on (a record or an enum type); -1 for none.
+pub fn ck_syntax_diag_from(c: Ck) -> Int { if ints_len(c.sc.sd) == 0 { return 0; } ints_get(c.sc.sd, 0) }
+pub fn ck_syntax_diag_to(c: Ck) -> Int { if ints_len(c.sc.sd) == 0 { return 0; } ints_get(c.sc.sd, 1) }
+pub fn ck_field_on_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.sc.mfo, s, e) }
+pub fn ck_unresolved_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.sc.mun, s, e) }
+// Whether this is a completion probe's compilation, and `name` a type its module's environment refused (the reference reads such a name as no type then).
+fn probing_refused(c: Ck, name: Str) -> Bool { gs(c, s_probe()) == 1 && strs_find(c.sc.rt, name) >= 0 }
+
+// `Name(` at a probe's hole with no function `Name`: which record the module's types name by it, read and applied as a construction's head is, so a generic record with no type
+// arguments written names no instance and nothing is recorded (`called_record`).
+fn called_record(c: Ck, name: Str, at: Int, targs: Int) -> Int {
+    if probing_refused(c, name) || strs_find(c.tsn, name) >= 0 { return 0; }
+    let def = quiet_type(c, name, at);
+    if is_record(c, def) == false { return 0; }
+    let t = applied(c, def, targs, at);
+    if t >= 0 { sm_put(c.mcons, sps(c, at), spe(c, at), t); }
+    0
+}
+pub fn ck_refused_fn(c: Ck, s: Int, e: Int) -> Int {
+    let g = sm_get(c.mrefu, s, e);
+    if g < 0 { return 0 - 1; }
+    ints_get(c.rzf, g)
+}
+pub fn ck_refused_slot(c: Ck, s: Int, e: Int) -> Int {
+    let g = sm_get(c.mrefu, s, e);
+    if g < 0 { return 0 - 1; }
+    let bid = ints_get(c.rzb, g);
+    let table = ck_local_table(c, ints_get(c.bfn, bid));
+    let mut i = 0;
+    while i < ints_len(table) {
+        if ints_get(table, i) == bid { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
 pub fn ck_binding_slot(c: Ck, b: Int) -> Int {
     let f = ints_get(c.bfn, b);
     let mut n = 0;
@@ -16915,7 +17547,7 @@ fn cg_build(c: Ck) -> Int {
     i = 0;
     while i < ints_len(c.sfn) {
         let g = ints_get(c.sfn, i);
-        ints_set(r.cgc, g, ints_get(r.cgc, g) + 1);
+        if g >= 0 { ints_set(r.cgc, g, ints_get(r.cgc, g) + 1); }
         i = i + 1;
     }
     let mut off = 0;
@@ -16934,8 +17566,10 @@ fn cg_build(c: Ck) -> Int {
     i = 0;
     while i < ints_len(c.sfn) {
         let g = ints_get(c.sfn, i);
-        ints_set(r.cgl, ints_get(r.cgf, g) + ints_get(r.cgc, g), i);
-        ints_set(r.cgc, g, ints_get(r.cgc, g) + 1);
+        if g >= 0 {
+            ints_set(r.cgl, ints_get(r.cgf, g) + ints_get(r.cgc, g), i);
+            ints_set(r.cgc, g, ints_get(r.cgc, g) + 1);
+        }
         i = i + 1;
     }
     0
@@ -16952,6 +17586,8 @@ pub fn ck_call_site(c: Ck, i: Int, k: Int) -> Int { ints_get(c.rix.cgl, ints_get
 pub fn ck_site_start(c: Ck, site: Int) -> Int { ints_get(c.sstart, site) }
 pub fn ck_site_end(c: Ck, site: Int) -> Int { ints_get(c.send, site) }
 pub fn ck_site_spawned(c: Ck, site: Int) -> Bool { ints_get(c.sspawn, site) == 1 }
+// A call the reference resolved and then refused (a generic `spawn`): its callee is recorded, but no checked call.
+pub fn ck_site_unchecked(c: Ck, site: Int) -> Bool { ints_get(c.sspawn, site) == 2 }
 
 // --- provenance summaries (R5 hand-back; `FnDef::provenance`, N38) ----------------------------
 //

@@ -582,7 +582,8 @@ pub fn pf_mir(io: IoCap, proc: ProcessCap, sp: SpawnCap, f: Facts, file: Str) ->
     let args = strs_new()
     strs_push(args, "profile-facts")
     strs_push(args, "@CORE@")
-    ci_staged(io, proc, sp, "profile", doc, args)
+    let r = ci_staged_or(io, proc, sp, "profile", doc, args)
+    if r.expanding { "@none" } else { r.out }
 }
 
 /// Whether the package the compilation is in verifies against its lockfile (`verify_locked`); what the port cannot say it refuses.
@@ -599,20 +600,23 @@ pub fn pf_enforce(io: IoCap, proc: ProcessCap, sp: SpawnCap, f: Facts, file: Str
     let mut strict = false
     for p in profiles { if p != "general" { strict = true } }
     if !strict && !report { return 0 }
-    if dg_len(fx_diags(f)) > 0 { return 0 }
-    let needs = pf_needs_cost(profiles)
-    let mir = if needs { pf_mir(io, proc, sp, f, file) } else { "" }
+    // The checker's warnings do not stop the profiles: the reference holds a warned program to them first.
+    for i in 0..dg_len(fx_diags(f)) { if dg_severity(fx_diags(f), i) != "warning" { return 0 } }
+    let wants = pf_needs_cost(profiles)
+    let mir = if wants { pf_mir(io, proc, sp, f, file) } else { "" }
+    // Polymorphic recursion (`N0357`): no MIR facts, as the reference's `lower` fails there.
+    let needs = wants && mir != "@none"
     // A contract's unguarded writes (`unsigned_writes`): only where the module is one.
     let mut unsigned = strs_new()
     let mut wants_contract = false
     for p in profiles { for r in pf_rules_of(p) { if r == 13 { wants_contract = true } } }
-    if wants_contract {
+    if wants_contract && mir != "@none" {
         let raw = fx_core_document_with_sources(f)
         if raw == "" { pf_refuse(io, "a program whose Core IR the front end does not carry") }
         let ct = ct_of_text(f, ci_unprefix_paths(io, raw, file))
         if ct.why == "" { unsigned = ct_unsigned(ct) }
     }
-    let v = pf_evaluate(io, f, profiles, locked, mir, needs, unsigned, true)
+    let v = pf_evaluate(io, f, profiles, locked, mir, needs, unsigned, mir != "@none")
     if report { print(pf_report(f, names, v, if needs { pf_bounds(f, names, mir) } else { "" }) + pf_nl()) }
     if pv_accepted(v) { return 0 }
     let d = dg_new()
