@@ -1047,6 +1047,19 @@ with `nazm build --heap-limit 16M`).
 `stage-run.sh` uses `target/nzx/nzx host-run` when it exists and `cargo xtask host-run` otherwise,
 until slice 19 removes the second.
 
+**S13.2 as built (2026-11-01), the differences from the text above, all logged in `docs/internal/decisions-log.md`:**
+(1) the stage's two streams are spooled to files in the state directory and copied out in chunks (a 256 MiB
+heap cannot hold two 192 MiB buffers); (2) the image is read in 1 MiB chunks with a 4096-byte carry;
+(3) the runner finds its own image with `/proc/self/exe` or `ps -p PID -o comm=` (there is no `arg(0)` of
+the program's name; `test.nz` does the same), the check runs before anything else, and the refusal reads
+`nzx: refused [runner-unbounded]: WHY`, status 1; (4) the lock slots are the reference's two (`lock`,
+`lock-2`, since 2026-10-22), not one; (5) the tests are `toolchain/harness/nzx/tests/host_run.sh` (a script
+running every case of `xtask/tests/host_run.rs` against both runners, plus three new ones) and
+`tests/host_run_self.nz` (the reference's unit tests and the image check, interpreted), not a Nazm test
+program, which on the host would be a third Nazm-built process; (6) a stage that leaves a process holding
+its pipes is ended with its group after 5 s; (7) the usage line says `nzx host-run`, and an
+operating-system error is worded by Nazm's `io_error_show`.
+
 ### S13.3 `nzx contained [--platform amd64] [--profile P] [--cache bench] WORKLOAD` — the port of `contained.rs`
 
 - **Workloads:** every one the Rust runner has — `probe`, `cache [list|clear]`, `tests`, `selfhost`,

@@ -156,7 +156,7 @@
 
 ## 13. Slice 13 — the harness remainder (`r7-harness` 6.2, 6.3)
 - [x] 13.1 Design (Opus): `design.md`, *Slice 13*, S13.1–S13.8; questions 5 and 6 open
-- [ ] 13.2 `toolchain/harness/build.sh` (`target/nzx/`); `nzx`'s self-check of its own image
+- [ ] 13.2 (part done 2026-11-01: `build.sh`, `nzx host-run`, its self-check, its tests and `stage-run.sh` are in; the host runs were measured: `tests/host_run.sh both` 37 agree, 0 differ, 2 skipped (19 cases on nzx, 18 on xtask; `not-macos` skipped on macOS), `host_run.sh compare` 21 agree, 0 differ, `host_run_self.nz` 14 of 14 interpreted; left: a contained run of `host_run_self.nz` natively, and `build.sh` for `nazm-fuzz`/`nazm-bench` with 13.5/13.6) `toolchain/harness/build.sh` (`target/nzx/`); `nzx`'s self-check of its own image
       (`runner-unbounded`); `nzx host-run` byte for byte with `xtask/src/host_run.rs` (S13.2); its
       tests ported from `xtask/tests/host_run.rs`, run against both runners; `stage-run.sh` prefers
       `nzx`
