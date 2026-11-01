@@ -1,0 +1,181 @@
+// `nzx host-run`'s pure parts, tested as `xtask/src/host_run.rs`'s `#[cfg(test)]` module tests
+// theirs (S13.2): the heap limit read from an image, the `time -l` report, the withdrawal
+// conditions, the statuses, the argument ranges — and the runner's check of its own image
+// (question 5), which the end-to-end script cannot run without starting an unbounded runner.
+//
+//     nazm test --interpret-only toolchain/harness/nzx/tests/host_run_self.nz
+//
+// (interpreted: no Nazm-built program runs on the host).
+
+use "@std/file";
+use "@std/text";
+use "../../lib/run.nz";
+use "../../lib/scratch.nz";
+use "../image.nz";
+use "../hostrun.nz";
+
+fn image(limit: Str, symbol: Bool) -> Str ! {} {
+    let sym = if symbol { "_nz.heap_malloc\0" } else { "" };
+    f"\0junk\0{sym}nazm: error[N0406]: out of memory: the heap limit of {limit} bytes is reached\n"
+}
+
+/// What `heap_limit_of` says of `text` as an image file: the limit in digits, or `refused NAME`
+/// and, after a colon, the refusal's words.
+fn outcome(h: Caps, text: Str) -> Str ! { io } {
+    let v = h.v;
+    let d = scratch_new(h);
+    scratch_write(h, d, "img", text);
+    let s = image_scan(h.io, str_vouch(f"{d}/img"));
+    scratch_remove(h, d);
+    match s {
+        Result.Ok(value: scan) => match limit_of(scan) {
+            Result.Ok(value: l) => l,
+            Result.Err(error: r) => f"refused {r.name}: {r.why}",
+        },
+        Result.Err(error: e) => f"unreadable: {e}",
+    }
+}
+
+/// What `runner_verdict` says of `text` as the runner's own image: `ok` or the refusal's name.
+fn runner_outcome(h: Caps, text: Str) -> Str ! { io } {
+    let v = h.v;
+    let d = scratch_new(h);
+    scratch_write(h, d, "img", text);
+    let s = image_scan(h.io, str_vouch(f"{d}/img"));
+    scratch_remove(h, d);
+    match s {
+        Result.Ok(value: scan) => match runner_verdict(scan) {
+            Result.Ok(value: n) => "ok",
+            Result.Err(error: r) => r.name,
+        },
+        Result.Err(error: e) => f"unreadable: {e}",
+    }
+}
+
+fn expect(got: Str, want: Str) -> Result[Int, Str] ! {} {
+    check_that(got == want, f"wanted `{want}`, got `{got}`")
+}
+
+fn starts(got: Str, want: Str) -> Result[Int, Str] ! {} {
+    check_that(text_starts_with(got, want), f"wanted a start `{want}`, got `{got}`")
+}
+
+@test
+fn a_limit_is_read_from_the_programs_own_message(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io } {
+    let h = caps(io, p, sp, v, t);
+    expect(outcome(h, image("4194304", true)), "4194304")?;
+    expect(outcome(h, image("2147483648", true)), "2147483648")?;
+    expect(outcome(h, image("0004194304", true)), "4194304")?;
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_program_without_the_counted_heap_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io } {
+    let h = caps(io, p, sp, v, t);
+    starts(outcome(h, image("4194304", false)), "refused no-counted-heap:")
+}
+
+@test
+fn a_program_that_names_no_limit_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io } {
+    let h = caps(io, p, sp, v, t);
+    starts(outcome(h, "nz.heap_malloc and nothing else"), "refused no-heap-limit:")
+}
+
+@test
+fn a_limit_over_two_gib_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io } {
+    let h = caps(io, p, sp, v, t);
+    starts(outcome(h, image("2147483649", true)), "refused heap-limit-too-large: its heap limit is 2147483649 bytes, over the 2 GiB (2147483648)")?;
+    // A number past a `u64` is not a limit at all (`parse::<u64>` fails): none is named.
+    starts(outcome(h, image("18446744073709551616", true)), "refused no-heap-limit:")?;
+    starts(outcome(h, image("18446744073709551615", true)), "refused heap-limit-too-large: its heap limit is 18446744073709551615 bytes")
+}
+
+@test
+fn two_different_limits_are_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io } {
+    let h = caps(io, p, sp, v, t);
+    expect(outcome(h, f"{image("1048576", true)}{image("2097152", true)}"), "refused ambiguous-heap-limit: the executable names several heap limits: [1048576, 2097152]")?;
+    // The same limit twice is one limit.
+    expect(outcome(h, f"{image("1048576", true)}{image("1048576", true)}"), "1048576")
+}
+
+@test
+fn a_limit_across_a_chunk_boundary_is_found(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io } {
+    let h = caps(io, p, sp, v, t);
+    // 1 MiB chunks: the message starts a few bytes before the first chunk ends.
+    let pad = bytes_to_str(bytes_new(1048576 - 30));
+    expect(outcome(h, f"{pad}nz.heap_malloc the heap limit of 4194304 bytes is reached"), "4194304")
+}
+
+@test
+fn the_instruction_count_is_read_from_the_time_report() -> Result[Int, Str] ! {} {
+    let r = "  1.00 real\n   123456 instructions retired\n  99 maximum resident set size\n";
+    check_that(parse_instructions(r) == 123456, "instructions")?;
+    check_that(parse_instructions("no counter here\n") == 0 - 1, "no counter")
+}
+
+@test
+fn the_peak_is_read_from_the_time_report() -> Result[Int, Str] ! {} {
+    let t = "        0.00 real         0.00 user         0.00 sys\n   1802240  maximum resident set size\n";
+    check_that(parse_peak_rss(t) == 1802240, "peak")?;
+    check_that(parse_peak_rss("nothing") == 0 - 1, "no peak")
+}
+
+@test
+fn a_peak_past_the_limit_and_margin_withdraws_the_rule() -> Result[Int, Str] ! {} {
+    let l = 1048576;
+    check_that(str_len(withdrawal(l, MARGIN, l + MARGIN, false, 0)) == 0, "at the margin")?;
+    check_that(str_len(withdrawal(l, MARGIN, l + MARGIN + 1, false, 0)) > 0, "past the margin")?;
+    check_that(str_len(withdrawal(l, MARGIN, 0 - 1, false, 0)) > 0, "unreadable")
+}
+
+@test
+fn an_n0406_that_did_not_stop_the_program_withdraws_the_rule() -> Result[Int, Str] ! {} {
+    let l = 1048576;
+    check_that(str_len(withdrawal(l, MARGIN, 1, true, 2)) == 0, "status 2")?;
+    expect(withdrawal(l, MARGIN, 1, true, 0), "an N0406 was written but the program did not stop with status 2 (it ended Some(0))")?;
+    expect(withdrawal(l, MARGIN, 1, true, 0 - 1), "an N0406 was written but the program did not stop with status 2 (it ended None)")
+}
+
+@test
+fn the_programs_exit_status_is_passed_through() -> Result[Int, Str] ! {} {
+    check_that(exit_status(0, false) == 0, "0")?;
+    check_that(exit_status(2, false) == 2, "2")?;
+    check_that(exit_status(255, false) == 255, "255")?;
+    check_that(exit_status(0 - 1, false) == 125, "signalled")?;
+    check_that(exit_status(0, true) == 124, "deadline")?;
+    check_that(exit_status(3, true) == 124, "deadline over a status")
+}
+
+@test
+fn a_contained_workload_is_seen_in_docker_ps_output() -> Result[Int, Str] ! {} {
+    check_that(lists_container("0123abcd\n"), "listed")?;
+    check_that(!lists_container("\n  \n"), "blank")?;
+    check_that(!lists_container(""), "empty")
+}
+
+@test
+fn the_margin_may_only_be_tightened() -> Result[Int, Str] ! {} {
+    expect(args_problem(words("--margin-bytes 0 -- x")), "")?;
+    expect(args_problem(words("--margin-bytes 268435457 -- x")), "usage")?;
+    expect(args_problem(words("--deadline-secs 0 -- x")), "usage")?;
+    expect(args_problem(words("--deadline-secs 3601 -- x")), "usage")?;
+    expect(args_problem(words("--deadline-secs 3600 -- x")), "")?;
+    expect(args_problem(words("--max-output-mib 257 -- x")), "usage")?;
+    expect(args_problem(words("--max-output-mib 256 -- x")), "")?;
+    expect(args_problem(words("--bogus -- x")), "usage")?;
+    expect(args_problem(words("--report")), "usage")?;
+    expect(args_problem(words("--")), "usage")
+}
+
+@test
+fn the_runner_is_admitted_only_with_a_counted_heap_of_at_most_256_mib(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io } {
+    let h = caps(io, p, sp, v, t);
+    expect(runner_outcome(h, image("268435456", true)), "ok")?;
+    expect(runner_outcome(h, image("1048576", true)), "ok")?;
+    // Built without a heap limit: no counted heap, no message.
+    expect(runner_outcome(h, "just a program"), "runner-unbounded")?;
+    expect(runner_outcome(h, image("268435456", false)), "runner-unbounded")?;
+    expect(runner_outcome(h, image("268435457", true)), "runner-unbounded")?;
+    expect(runner_outcome(h, image("2147483648", true)), "runner-unbounded")?;
+    expect(runner_outcome(h, f"{image("1048576", true)}{image("2097152", true)}"), "runner-unbounded")
+}

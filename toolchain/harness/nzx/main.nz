@@ -1,0 +1,73 @@
+// `nzx` (S13.1): the harness's runner on the macOS host, in Nazm — what `cargo xtask host-run` is
+// to the Rust harness, and in slice 13's later tasks `cargo xtask contained`.
+//
+//   nzx host-run [--deadline-secs N] [--report FILE] [--max-output-mib N] -- EXECUTABLE [ARGS...]
+//
+// It is itself a Nazm-built process on the host, which the copyright holder accepted on
+// 2026-10-20 (question 5) on three conditions this file keeps: it is built with a counted heap of
+// at most 256 MiB, it checks its own image as its first act (`runner-unbounded`, status 1), and it
+// holds a host-run lock for its whole life (`host-run`'s slot, taken before the stage starts).
+
+use "@std/process";
+use "@std/file";
+use "@std/ioerror";
+use "@std/text";
+use "../lib/run.nz";
+use "image.nz";
+use "hostrun.nz";
+
+/// This executable's own path: `/proc/self/exe` where there is one, else the path `ps` reports for
+/// this process id, made canonical; `""` when it cannot be found. (Nazm has no `current_exe`, and
+/// `arg(0)` is the first argument, not the program's name: `test.nz`'s `tc_own_path` does the same.)
+fn own_path(h: Caps) -> Str ! { io, spawn } {
+    let v = h.v;
+    match file_canonical(h.io, "/proc/self/exe") {
+        Result.Ok(value: p) => { return p; },
+        Result.Err(error: e) => {},
+    };
+    let a = words("-p");
+    strs_push(a, int_to_str(process_id(h.io)));
+    strs_push(a, "-o");
+    strs_push(a, "comm=");
+    let r = run(h, "/bin/ps", a, "", env_here(h.io));
+    if r.code != 0 {
+        return "";
+    }
+    let said = text_trim(r.stdout);
+    if str_len(said) == 0 {
+        return "";
+    }
+    match file_canonical(h.io, str_vouch(said)) {
+        Result.Ok(value: p) => p,
+        Result.Err(error: e) => "",
+    }
+}
+
+fn main(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Int ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The first act: the runner's own image (question 5).
+    match runner_check(io, own_path(h)) {
+        Result.Ok(value: n) => {},
+        Result.Err(error: r) => {
+            eprintln(f"nzx: refused [{r.name}]: {r.why}");
+            return 1;
+        },
+    };
+    let args = process_args(io);
+    if strs_len(args) == 0 {
+        eprintln("usage: nzx host-run [--deadline-secs N] [--report FILE] [--max-output-mib N] -- EXECUTABLE [ARGS...]");
+        return 2;
+    }
+    let cmd = strs_get(args, 0);
+    if cmd == "host-run" {
+        let rest = strs_new();
+        let mut i = 1;
+        while i < strs_len(args) {
+            strs_push(rest, strs_get(args, i));
+            i = i + 1;
+        }
+        return host_run(h, rest);
+    }
+    eprintln(f"nzx: unknown command `{cmd}`");
+    2
+}
