@@ -1,8 +1,8 @@
 ## 0. The plan
 - [x] 0.1 The inventory, the slices in order with sizes and models, the open questions (`design.md`)
 - [x] 0.2 The copyright holder's answers to `design.md`'s four open questions (accepted 2026-10-20)
-- [ ] 0.3 The copyright holder's answers to questions 5 and 6 (`design.md`, *Open questions —
-      slices 7, 13 and 16*)
+- [x] 0.3 The copyright holder's answers to questions 5 and 6 (`design.md`, *Open questions —
+      slices 7, 13 and 16*): both recommendations accepted 2026-10-20 (`design.md` states it)
 
 ## 1. Slice 1 — R6 gap 1: the interpreter and `nazm-check` on the checkout's language
 - [x] 1.1 `toolchain/interp/{types,values,vm}.nz` and `toolchain/harness/check/supply.nz`: `List[T]`
