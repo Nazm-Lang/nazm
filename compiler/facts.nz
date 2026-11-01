@@ -111,14 +111,20 @@ pub fn fx_check_service(path: Str, source_root: Str, library: Str, os: Str, arch
 
 // The same as `fx_check_in`, with the profiles in force (`check --profile`): what an `@cfg(profile = "…")` asks.
 pub fn fx_check_profiles(path: Str, source_root: Str, library: Str, os: Str, arch: Str, profiles: Strs, io: IoCap) -> Facts {
-    check_with(path, source_root, strs_new(), strs_new(), library, os, arch, true, false, profiles, io)
+    check_with(path, source_root, strs_new(), strs_new(), library, os, arch, true, false, profiles, 0 - 1, io)
 }
 
 fn check_as(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os: Str, arch: Str, program: Bool, partial: Bool, io: IoCap) -> Facts {
-    check_with(path, given, paths, texts, library, os, arch, program, partial, strs_new(), io)
+    check_with(path, given, paths, texts, library, os, arch, program, partial, strs_new(), 0 - 1, io)
 }
 
-fn check_with(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os: Str, arch: Str, program: Bool, partial: Bool, profiles: Strs, io: IoCap) -> Facts {
+// The same as the language service analyses a document (`fx_check_over`), as a completion probe (N26): the root file parsed with a hole at byte `hole`, where the grammar has one there. The
+// hole found is `fx_hole_kind` (0 for none; 1 a member, 2 a call, 3 a payload) and `fx_hole_span`; the checker is told which callee the hole is in, if it is in a call.
+pub fn fx_check_probe(path: Str, source_root: Str, paths: Strs, texts: Strs, library: Str, os: Str, arch: Str, hole: Int, io: IoCap) -> Facts {
+    check_with(path, source_root, paths, texts, library, os, arch, true, true, strs_new(), hole, io)
+}
+
+fn check_with(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os: Str, arch: Str, program: Bool, partial: Bool, profiles: Strs, hole: Int, io: IoCap) -> Facts {
     let f = facts_new();
     let d = f.d;
     // The source root, as `root::decide` finds it: the first manifest upward whose source root holds
@@ -170,7 +176,8 @@ fn check_with(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os:
     i = 0;
     while i < ld_count(loaded) {
         let own = dg_new();
-        let program = sx_parse_source(ld_text(loaded, i), t, own);
+        let mut program = 0 - 1;
+        if i == 0 && hole >= 0 { program = sx_parse_source_at(ld_text(loaded, i), t, own, hole); } else { program = sx_parse_source(ld_text(loaded, i), t, own); }
         if i == 0 { root_program = program; }
         // A module that is not the program's own — a standard one, the prelude or a package's —
         // holds only the authority it is given (R1.5, D8).
@@ -200,11 +207,19 @@ fn check_with(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os:
     // refusals count as the parser's do.
     let unsure = cf_configure(t, f.programs, f.bases, d, cf_host_profiles(os, arch, profiles));
     let parse_failed = dg_len(d) > loader_errors;
+    ck_graph_diags(graph, loader_errors, dg_len(d));
     // The checker (`sema.nz`), where it carries the whole compilation (design D13); where it
     // stops, nothing of it is published. After a syntax error it checks what did parse, as the
     // reference does.
     if syntax_failed { ck_graph_syntax_error(graph); }
     if syntax_failed == false && parse_failed { ck_graph_attribute_error(graph); }
+    if hole >= 0 {
+        // A completion probe: which callee the hole is in, if it is in a call.
+        let site = sx_field(t, root_program, "hole");
+        let mut callee = 0 - 1;
+        if site >= 0 && sx_is_some(t, site) && sx_name(t, sx_unwrap(t, site), "kind") == "2" { callee = sx_s(t, sx_field(t, sx_unwrap(t, site), "a")); }
+        ck_graph_probe(graph, callee);
+    }
     let c = ck_check(t, f.programs, f.bases, f.names, graph);
     let mut stopped = ck_stopped(c);
     if unsure { stopped = "a condition on the host, which was not given"; }
@@ -236,6 +251,22 @@ fn check_with(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os:
     }
     done
 }
+
+// The completion hole a probe found in the root file: its kind (0 for none; 1 a member name, 2 a call's callee, 3 a variant's payload), the span it is about (a member's empty name, the callee,
+// the variant: module-local bytes), and for a payload whether it is a pattern's.
+pub fn fx_hole_kind(f: Facts) -> Int {
+    let t = f.t;
+    if ints_len(f.programs) == 0 { return 0; }
+    let site = sx_field(t, ints_get(f.programs, 0), "hole");
+    if site < 0 || sx_is_some(t, site) == false { return 0; }
+    let k = sx_name(t, sx_unwrap(t, site), "kind");
+    if k == "1" { return 1; }
+    if k == "2" { return 2; }
+    3
+}
+pub fn fx_hole_start(f: Facts) -> Int { sx_s(f.t, sx_field(f.t, sx_unwrap(f.t, sx_field(f.t, ints_get(f.programs, 0), "hole")), "a")) }
+pub fn fx_hole_end(f: Facts) -> Int { sx_e(f.t, sx_field(f.t, sx_unwrap(f.t, sx_field(f.t, ints_get(f.programs, 0), "hole")), "a")) }
+pub fn fx_hole_pattern(f: Facts) -> Bool { sx_name(f.t, sx_unwrap(f.t, sx_field(f.t, ints_get(f.programs, 0), "hole")), "pattern") == "true" }
 
 // Whether the front end carried the whole compilation: every answer below is then the reference's
 // — whether it fails (`fx_failed`), with which diagnostics, and what it defines. A compilation the

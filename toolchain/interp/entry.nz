@@ -398,6 +398,31 @@ fn cx_keep(c: Cx, v: V) -> Int {
 /// An `Int` value.
 pub fn cx_int(c: Cx, n: Int) -> Int { cx_keep(c, V.Int(v: n)) }
 
+/// A `Float32` (`kind` 11) or `Float64` (12) value.
+pub fn cx_float(c: Cx, kind: Int, x: Float64) -> Int { cx_keep(c, V.Flt(kind: kind, v: x)) }
+
+/// A returned value's `Int`, or `Float64` (a `Float32` held exactly), by what it is: the first as the second's flag `0`/`1`.
+pub fn cx_is_float(c: Cx, h: Int) -> Bool {
+    match vec_get(c.pool, h) {
+        V.Flt(kind: _, v: _) => true,
+        _ => false,
+    }
+}
+
+pub fn cx_int_of(c: Cx, h: Int) -> Int {
+    match vec_get(c.pool, h) {
+        V.Int(v: n) => n,
+        _ => 0,
+    }
+}
+
+pub fn cx_float_of(c: Cx, h: Int) -> Float64 {
+    match vec_get(c.pool, h) {
+        V.Flt(kind: _, v: x) => x,
+        _ => 0.0,
+    }
+}
+
 /// Call function `f` with the values `args` (each a reference the call takes of its own): 0 where it returned a value (`cx_result`), 1 where it failed
 /// (`cx_code`), 2 where it waited for another task, which a call here has none to wait for. The limits are reset for every call.
 pub fn cx_call(c: Cx, f: Int, args: Ints) -> Int {

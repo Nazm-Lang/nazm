@@ -161,40 +161,128 @@ fn unexpected(j: J, n: Int) -> Str {
     if k == 6 { return "map" }
     let t = j_str(j, n)
     if k == 4 {
-        // Rust's `Debug` of a string, for the plain ones.
+        // Rust's `Debug` of a string: the plain characters as they are, the others as `\u{..}`.
         let parts = strs_new()
-        for i in 0..str_len(t) {
+        let len = str_len(t)
+        let mut i = 0
+        while i < len {
             let b = str_byte(t, i)
-            if b >= 128 { return "" }
-            if b == 34 {
+            let mut cp = b
+            let mut size = 1
+            if b >= 240 { cp = b - 240; size = 4 } else if b >= 224 { cp = b - 224; size = 3 } else if b >= 192 { cp = b - 192; size = 2 }
+            for q in 1..size {
+                if i + q < len { cp = cp * 64 + (str_byte(t, i + q) - 128) }
+            }
+            i += size
+            if cp == 34 {
                 strs_push(parts, "\\\"")
-            } else if b == 92 {
+            } else if cp == 92 {
                 strs_push(parts, "\\\\")
-            } else if b == 10 {
+            } else if cp == 10 {
                 strs_push(parts, "\\n")
-            } else if b == 13 {
+            } else if cp == 13 {
                 strs_push(parts, "\\r")
-            } else if b == 9 {
+            } else if cp == 9 {
                 strs_push(parts, "\\t")
-            } else if b < 32 || b == 127 {
-                return ""
+            } else if cp == 0 {
+                strs_push(parts, "\\0")
+            } else if cp < 32 || cp == 127 || (cp >= 128 && cp <= 160) || cp == 173 || (cp >= 768 && cp <= 879) || (cp >= 8203 && cp <= 8207)
+                    || (cp >= 8232 && cp <= 8238) || (cp >= 8288 && cp <= 8303) || cp == 65279 || cp == 65039 || (cp >= 57344 && cp <= 63743) {
+                strs_push(parts, "\\u{" + hex_of(cp) + "}")
+            } else if cp < 128 || (cp >= 161 && cp <= 767) || (cp >= 880 && cp <= 1154) || (cp >= 1162 && cp <= 1327) || (cp >= 1488 && cp <= 1514) || (cp >= 1569 && cp <= 1610)
+                    || (cp >= 12354 && cp <= 12435) || (cp >= 12450 && cp <= 12538) || (cp >= 19968 && cp <= 40959) || (cp >= 44032 && cp <= 55203)
+                    || (cp >= 127744 && cp <= 128591) || (cp >= 128640 && cp <= 128709) || (cp >= 129296 && cp <= 129472) {
+                // Printable: written as it is.
+                strs_push(parts, str_slice(t, i - size, i))
             } else {
-                strs_push(parts, str_from_byte(b))
+                return ""
             }
         }
         return "string \"" + str_join(parts, "") + "\""
     }
     if is_integer(t) {
-        if str_len(t) > 19 { return "" }
-        return "integer `" + t + "`"
+        let neg = str_byte(t, 0) == 45
+        let digits = if neg { str_slice(t, 1, str_len(t)) } else { t }
+        let limit = if neg { "9223372036854775808" } else { "18446744073709551615" }
+        if str_len(digits) < 20 && (str_len(digits) < str_len(limit) || digits <= limit) { return "integer `" + t + "`" }
     }
-    // A float: one that Rust writes as it is written here, `digits.digits` with no trailing zero but `.0`.
-    if ut_contains(t, "e") || ut_contains(t, "E") { return "" }
-    let dot = ut_find(t, ".", 0)
-    if dot < 0 || str_len(t) > 16 { return "" }
-    let frac = str_slice(t, dot + 1, str_len(t))
-    if str_len(frac) > 1 && str_byte(frac, str_len(frac) - 1) == 48 { return "" }
-    "floating point `" + t + "`"
+    // A float, as the reference writes it (the shortest digits that read back, here those of at most 15 digits, which are the ones written).
+    let f = float_text(t)
+    if f == "" { return "" }
+    "floating point `" + f + "`"
+}
+
+// The words of a JSON number read as an `f64`, for one with at most 15 significant digits, else "".
+fn float_text(t: Str) -> Str {
+    let neg = str_len(t) > 0 && str_byte(t, 0) == 45
+    let mut i = if neg { 1 } else { 0 }
+    let digits = strs_new()
+    let mut exp10 = 0
+    let mut seen_dot = false
+    while i < str_len(t) {
+        let b = str_byte(t, i)
+        if is_digit(b) {
+            strs_push(digits, str_from_byte(b))
+            if seen_dot { exp10 -= 1 }
+        } else if b == 46 {
+            seen_dot = true
+        } else {
+            // The exponent.
+            let mut j = i + 1
+            let mut eneg = false
+            if j < str_len(t) && (str_byte(t, j) == 43 || str_byte(t, j) == 45) {
+                eneg = str_byte(t, j) == 45
+                j += 1
+            }
+            if str_len(t) - j > 4 { return "" }
+            let mut e = 0
+            while j < str_len(t) {
+                e = e * 10 + (str_byte(t, j) - 48)
+                j += 1
+            }
+            exp10 += if eneg { 0 - e } else { e }
+            i = str_len(t)
+        }
+        i += 1
+    }
+    let all = str_join(digits, "")
+    let mut lead = 0
+    while lead < str_len(all) && str_byte(all, lead) == 48 { lead += 1 }
+    let mut d = str_slice(all, lead, str_len(all))
+    while str_len(d) > 0 && str_byte(d, str_len(d) - 1) == 48 {
+        d = str_slice(d, 0, str_len(d) - 1)
+        exp10 += 1
+    }
+    let sign = if neg { "-" } else { "" }
+    if str_len(d) == 0 { return sign + "0.0" }
+    let length = str_len(d)
+    if length > 15 { return "" }
+    let kk = length + exp10
+    if kk > 309 || kk < 0 - 322 { return "" }
+    if exp10 >= 0 && kk <= 16 { return sign + d + str_repeat("0", exp10) + ".0" }
+    if kk > 0 && kk <= 16 { return sign + str_slice(d, 0, kk) + "." + str_slice(d, kk, length) }
+    if kk > 0 - 5 && kk <= 0 { return sign + "0." + str_repeat("0", 0 - kk) + d }
+    let ex = kk - 1
+    let mant = if length > 1 { str_slice(d, 0, 1) + "." + str_slice(d, 1, length) } else { d }
+    sign + mant + "e" + (if ex < 0 { "-" } else { "+" }) + int_to_str(if ex < 0 { 0 - ex } else { ex })
+}
+
+fn str_repeat(s: Str, n: Int) -> Str {
+    let out = strs_new()
+    for i in 0..n { strs_push(out, s) }
+    str_join(out, "")
+}
+
+fn hex_of(v: Int) -> Str {
+    let digits = "0123456789abcdef"
+    let mut x = v
+    let mut out = ""
+    if x == 0 { return "0" }
+    while x > 0 {
+        out = str_slice(digits, x % 16, x % 16 + 1) + out
+        x = x / 16
+    }
+    out
 }
 
 fn quoted(names: Strs) -> Str {
@@ -237,7 +325,7 @@ fn check_fields(j: J, obj: Int, names: Strs, kinds: Strs, required: Ints, skip: 
             if !small {
                 let u = unexpected(j, v)
                 if u == "" { return "?" }
-                if j_kind(j, v) == 3 && is_integer(t) { return "invalid value: " + u + ", expected u32" }
+                if ut_starts(u, "integer") { return "invalid value: " + u + ", expected u32" }
                 return "invalid type: " + u + ", expected u32"
             }
         }
@@ -257,7 +345,7 @@ fn check_tag(j: J, obj: Int, variants: Strs, why: Strs) -> Str {
     }
     if j_kind(j, at) != 4 {
         let u = unexpected(j, at)
-        if u == "" || j_kind(j, at) == 3 && !is_integer(j_str(j, at)) {
+        if u == "" {
             strs_push(why, "?")
         } else {
             strs_push(why, "invalid type: " + u + ", expected variant identifier")
@@ -787,6 +875,20 @@ fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap) -> Int {
     if ut_kind(io, root) != 0 {
         eprint("nazm-mcp: " + root + " is not a file" + nl())
         exit_with(2)
+    }
+    // No `--docs`: the reference names the repository it was built from; this port, the one the standard library (`NAZM_LIBRARY`) sits in.
+    if !has_docs {
+        let lib = os_env_get("NAZM_LIBRARY")
+        if lib != "" {
+            let mut end = str_len(lib)
+            while end > 1 && str_byte(lib, end - 1) == 47 { end -= 1 }
+            let mut cut = end
+            while cut > 0 && str_byte(lib, cut - 1) != 47 { cut -= 1 }
+            if cut > 1 {
+                docs = str_slice(lib, 0, cut - 1)
+                has_docs = true
+            }
+        }
     }
     let s = Server(root: root, source_root: source_root, has_source_root: has_source, docs: docs, has_docs: has_docs, exe: os_env_get("NAZM_EXE"))
     let h = os_stdin()

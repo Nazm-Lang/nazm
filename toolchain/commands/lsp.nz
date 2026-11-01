@@ -598,8 +598,23 @@ fn hover(io: IoCap, s: Server, j: J) -> Str {
         return "{\"contents\":{\"kind\":\"plaintext\",\"value\":" + json_str(shown) + "},\"range\":" + range(text, line_starts(text), st, en) + "}"
     }
     let b = ck_binding_at(c, st, en)
-    // A refused capture is mentioned through a slot nothing declares: the reference shows nothing.
-    if b >= 0 && ck_refused_capture_at(c, st, en) { return "null" }
+    // A refused capture is mentioned through the slot the captured binding has in its own function, which the reference reads in the closure's locals: what is in that
+    // slot there (a local of the closure, or the copy of something it did capture), or nothing.
+    if b >= 0 && ck_refused_capture_at(c, st, en) {
+        let slot = ck_refused_slot(c, st, en)
+        let table = ck_local_table(c, ck_refused_fn(c, st, en))
+        if slot < 0 || slot >= ints_len(table) { return "null" }
+        let ent = ints_get(table, slot)
+        let shown = if ent >= 0 {
+            (if ck_binding_mutable(c, ent) { "mut " } else { "" }) + ck_binding_name(c, ent) + ": " + fx_show(f, ck_binding_ty(c, ent))
+        } else {
+            let held = ck_capture_binding(c, 0 - 2 - ent)
+            ck_binding_name(c, held) + ": " + fx_show(f, ck_binding_ty(c, held))
+        }
+        return "{\"contents\":{\"kind\":\"plaintext\",\"value\":" + json_str(shown) + "},\"range\":" + range(text, line_starts(text), st, en) + "}"
+    }
+    // A binding of a body no declared function holds (the method of an impl the checker refused) is no local of the reference's.
+    if b >= 0 && ck_binding_fn(c, b) < 0 { return "null" }
     // A built-in called, where no local is named: the reference shows nothing; nor does a trait's method.
     if b < 0 && site >= 0 && (ck_site_builtin(c, site) >= 0 || ck_site_trait_method(c, site) >= 0) { return "null" }
     if b < 0 && site >= 0 { refuse(io, "hover of a call through a value") }
@@ -1349,6 +1364,11 @@ fn token_class(f: Facts, st: Int, en: Int) -> Ints {
             let b = ck_ref_binding(c, e)
             let params = if b >= 0 { ck_fn_param_count(c, ck_binding_fn(c, b)) } else { 0 }
             ty = if b >= 0 && ck_binding_slot(c, b) < params { 4 } else { 5 }
+            // A refused capture is the slot its binding has in the function declaring it, in the closure.
+            if b < 0 && ck_refused_capture_at(c, st, en) {
+                let slot = ck_refused_slot(c, st, en)
+                ty = if slot >= 0 && slot < ck_fn_param_count(c, ck_refused_fn(c, st, en)) { 4 } else { 5 }
+            }
         }
         if kind == "record" { ty = 1 }
         if kind == "enum" { ty = 2 }
@@ -1494,6 +1514,8 @@ fn code_actions(io: IoCap, s: Server, j: J) -> Str {
             let fe = ints_get(d.fix_end, ff + q)
             if fs < 0 || fe < fs || fe > str_len(held) || fx_module_at(f, fs) != 0 { continue }
             if ints_get(s.flags, 0) == 0 { continue }
+            // A plan is current only while the file it edits is open with the text it was planned over: the loader gave a file without a final line break one, so the plan is stale at once.
+            if text != held { continue }
             let automatic = strs_get(d.fix_applicability, ff + q) == "automatic"
             let desc = strs_get(d.fix_description, ff + q)
             let title = if automatic { "Fix " + dg_code(d, i) + ": " + desc } else {
@@ -1869,6 +1891,9 @@ fn constructor_help(f: Facts, n: Int, at: Int) -> Str {
     "{" + a + "\"activeSignature\":0,\"signatures\":[{" + a + "\"label\":" + json_str(text) + params + "}]}"
 }
 
+// The loader's errors about an import (not found, a package it does not have): no syntax error of the reference's analysis.
+fn loader_code(code: Str) -> Bool { code == "N0205" || code == "N0508" }
+
 fn signature_help(io: IoCap, s: Server, j: J) -> Str {
     let at = request_offset(io, s, j)
     if at < 0 { return "null" }
@@ -1877,7 +1902,7 @@ fn signature_help(io: IoCap, s: Server, j: J) -> Str {
     // A recovered syntax answers nothing (`RecoveredSyntax`, and no call or construction is found in a tree that lost its parts).
     for i in 0..dg_len(d) {
         // A syntax error, or an attribute the vocabulary does not have (its function is left out): no call is recorded for what used it.
-        if (ints_get(d.file, i) >= 0 && dg_code(d, i) != "N0205") || (dg_code(d, i) == "N0619" && ut_contains_text(strs_get(d.message, i), "is not an attribute Nazm has")) { return "null" }
+        if (ints_get(d.file, i) >= 0 && !loader_code(dg_code(d, i))) || (dg_code(d, i) == "N0619" && ut_contains_text(strs_get(d.message, i), "is not an attribute Nazm has")) { return "null" }
     }
     let c = fx_checker(f)
     let t = fx_tree(f)
@@ -1939,7 +1964,13 @@ fn signature_help(io: IoCap, s: Server, j: J) -> Str {
         if vs >= 0 && fx_start(f, vs) == fx_start(f, sx_field(t, n, "ty_span")) { continue }
         // The parentheses of its initialisers, inside the construction.
         let mut o = token_from(sts, fx_start(f, sp))
-        while o < ints_len(kinds) && ints_get(sts, o) < fx_end(f, sp) && ints_get(kinds, o) != k_lparen() { o += 1 }
+        // Not one inside the type arguments written before it (`Option[Vec[fn() -> Int]].None()`).
+        let mut brackets = 0
+        while o < ints_len(kinds) && ints_get(sts, o) < fx_end(f, sp) && (ints_get(kinds, o) != k_lparen() || brackets > 0) {
+            if ints_get(kinds, o) == k_lbracket() { brackets += 1 }
+            if ints_get(kinds, o) == k_rbracket() { brackets -= 1 }
+            o += 1
+        }
         if o >= ints_len(kinds) || ints_get(sts, o) >= fx_end(f, sp) { continue }
         let close = closing(kinds, o)
         if close < 0 { continue }
@@ -1958,7 +1989,7 @@ fn signature_help(io: IoCap, s: Server, j: J) -> Str {
     if qual >= 0 && sx_is_some(t, qual) { return "null" }
     let callee = sx_field(t, best, "callee_span")
     let site = ck_site_at(c, fx_start(f, callee), fx_end(f, callee))
-    if site < 0 { return "null" }
+    if site < 0 || ck_site_unchecked(c, site) { return "null" }
     let lab = ck_site_label(c, site)
     if strs_len(lab) == 0 { return "null" }
     // Which argument: the argument list's own separators that end at or before the offset.
@@ -1991,6 +2022,519 @@ fn parse_number(s: Str) -> Int {
     n
 }
 
+// --- completion (`completion.rs`, `structure.rs`, `incomplete.rs`) ------------------------------------------------------
+
+// The syntax errors of the document's compilation (`Analysis::syntax_errors`): as triples of the file, and where each is — the parser's, and an attribute the vocabulary does not have.
+fn syntax_diags(f: Facts) -> Ints {
+    let d = fx_diags(f)
+    let c = fx_checker(f)
+    let out = ints_new()
+    let bases = fe_bases(f)
+    for i in ck_syntax_diag_from(c)..ck_syntax_diag_to(c) {
+        if loader_code(dg_code(d, i)) { continue }
+        ints_push(out, file_at(d, i, bases))
+        ints_push(out, ints_get(d.start, i))
+        ints_push(out, ints_get(d.end, i))
+    }
+    out
+}
+
+// The bytes the document's parse recovered from (the reference's error nodes), as pairs: spans the parser kept under no node.
+fn recovered(f: Facts) -> Ints {
+    let t = fx_tree(f)
+    let out = ints_new()
+    for n in 0..fx_module_program(f, 0) {
+        if sx_kind(t, n) == tk_span() && (sx_text(t, n) == "recovered" || sx_text(t, n) == "recovered!") {
+            ints_push(out, sx_s(t, n))
+            ints_push(out, sx_e(t, n))
+            ints_push(out, if sx_text(t, n) == "recovered!" { 1 } else { 0 })
+        }
+    }
+    out
+}
+
+// Where the top-level item `n` ends in the concrete tree: its span, or, where its body was lost, up to the next item's start.
+fn item_end(f: Facts, n: Int) -> Int {
+    let t = fx_tree(f)
+    let sp = sx_field(t, n, "span")
+    let body = sx_field(t, n, "body")
+    if body < 0 || sx_is_some(t, body) { return fx_end(f, sp) }
+    let root = fx_module_program(f, 0)
+    let mut next = str_len(fx_module_text(f, 0))
+    for list in words("functions records enums traits impls consts imports") {
+        let items = items_of(t, root, list)
+        for k in 0..ints_len(items) {
+            let isp = sx_field(t, ints_get(items, k), "span")
+            if isp >= 0 && fx_start(f, isp) > fx_start(f, sp) && fx_start(f, isp) < next { next = fx_start(f, isp) }
+        }
+    }
+    next
+}
+
+// Whether the function holding `offset` of the document, if any, parsed without recovery: a recovered statement may have been a `let` the checker never saw.
+fn locals_are_complete(f: Facts, offset: Int) -> Bool {
+    let t = fx_tree(f)
+    let rec = recovered(f)
+    if ints_len(rec) == 0 { return true }
+    let fns = items_of(t, fx_module_program(f, 0), "functions")
+    for k in 0..ints_len(fns) {
+        let sp = sx_field(t, ints_get(fns, k), "span")
+        let fe = item_end(f, ints_get(fns, k))
+        if fx_start(f, sp) <= offset && offset < fe {
+            for q in 0..ints_len(rec) / 3 {
+                if ints_get(rec, 3 * q) >= fx_start(f, sp) && ints_get(rec, 3 * q) <= fe { return false }
+            }
+            return true
+        }
+    }
+    true
+}
+
+// Whether every file of the compilation parsed without recovery: a lost item would be missing from the environment the checker built.
+fn module_names_are_complete(f: Facts) -> Bool { ints_len(syntax_diags(f)) == 0 }
+
+// The structure rule (`structure::complete`): every file but the document parsed cleanly, and in the document every recovery is inside the body of a function other than the one holding `offset`.
+fn structure_complete(f: Facts, offset: Int) -> Bool {
+    let syn = syntax_diags(f)
+    if ints_len(syn) == 0 { return true }
+    for q in 0..ints_len(syn) / 3 {
+        if ints_get(syn, 3 * q) != 0 { return false }
+    }
+    let rec = recovered(f)
+    let t = fx_tree(f)
+    let root = fx_module_program(f, 0)
+    for q in 0..ints_len(rec) / 3 {
+        let at = ints_get(rec, 3 * q)
+        // A whole item or body lost is an error beside the block, never inside one.
+        if ints_get(rec, 3 * q + 2) == 1 { return false }
+        // Inside a top-level function (whose block the concrete tree has, though a recovered statement leaves the abstract one with none), away from the position.
+        let mut ok = false
+        let fns = items_of(t, root, "functions")
+        for k in 0..ints_len(fns) {
+            let n = ints_get(fns, k)
+            let sp = sx_field(t, n, "span")
+            if fx_start(f, sp) <= at && at <= item_end(f, n) && !sx_is_some(t, sx_field(t, n, "method_of")) {
+                let here = fx_start(f, sp) <= offset && offset <= item_end(f, n)
+                if !here { ok = true }
+            }
+        }
+        if !ok { return false }
+    }
+    true
+}
+
+// What the identifier at `st..en` is in the grammar, as the concrete tree's node around it says (`completion::context`, `structure`): 1 a value (a name used as one, the root of an assignment's place),
+// 2 the head of a call, 3 a written type, 4 a field after `.`, 5 a variant after `E.`, 6 a record construction's label, 7 a payload label; 0 nothing a completion answers. For a label, `owner` is the
+// construction or pattern; for 4 and 5, `site` the span node.
+fn ident_role(f: Facts, st: Int, en: Int, kinds: Ints, sts: Ints, owner: Ints) -> Int {
+    let t = fx_tree(f)
+    let root = fx_module_program(f, 0)
+    let mut role = 0
+    // The nodes under the program, and then under each item a false `@cfg` dropped (the concrete tree keeps them): items of the document's parse the program no longer holds.
+    let seen = ints_new()
+    for n in 0..root + 1 { ints_push(seen, 0) }
+    let stack = ints_new()
+    ints_push(stack, root)
+    let mut pass = 0
+    while pass < 2 {
+        if pass == 1 {
+            for n in 0..root + 1 {
+                if ints_get(seen, n) == 0 && sx_kind(t, n) == tk_struct() {
+                    let w = sx_text(t, n)
+                    if w == "Function" || w == "Record" || w == "Enum" || w == "Trait" || w == "ImplDecl" || w == "Const" { ints_push(stack, n) }
+                }
+            }
+        }
+        pass += 1
+        while ints_len(stack) > 0 {
+        let n = ints_pop(stack)
+        if n > root || ints_get(seen, n) == 1 { continue }
+        ints_set(seen, n, 1)
+        let kind = sx_kind(t, n)
+        if kind != tk_struct() && kind != tk_tuple() && kind != tk_list() { continue }
+        for i in 0..sx_count(t, n) { ints_push(stack, sx_kid(t, n, i)) }
+        if kind != tk_struct() { continue }
+        let name = sx_text(t, n)
+        // (The `for` loop's pattern is matched against a `for#item` the parser makes: no name written there, so no value to complete.)
+        if name == "Var" && sx_name(t, n, "name") != "for#item" {
+            let sp = sx_field(t, n, "span")
+            if sp >= 0 && fx_start(f, sp) <= st && en <= fx_end(f, sp) { role = 1 }
+        }
+        // A method call on a qualified name (`m::Shape.area(x)`): the qualifier is the receiver's name, written as a value.
+        if name == "MethodCall" {
+            let q = sx_field(t, n, "qualifier")
+            if q >= 0 && sx_is_some(t, q) {
+                let qs = sx_field(t, sx_unwrap(t, q), "span")
+                if at_span(f, qs, st, en) { role = 1 }
+            }
+        }
+        if name == "Place" {
+            let ns = sx_field(t, n, "name_span")
+            if at_span(f, ns, st, en) { role = 1 }
+        }
+        if name == "Call" {
+            let cs = sx_field(t, n, "callee_span")
+            if at_span(f, cs, st, en) { role = 2 }
+            let q = sx_field(t, n, "qualifier")
+            if q >= 0 && sx_is_some(t, q) {
+                let qs = sx_field(t, sx_unwrap(t, q), "span")
+                if at_span(f, qs, st, en) { role = 2 }
+            }
+        }
+        if name == "TypeName" {
+            let ns = sx_field(t, n, "name_span")
+            if ns >= 0 && at_span(f, ns, st, en) { role = 3 }
+            let q = sx_field(t, n, "qualifier")
+            if q >= 0 && sx_is_some(t, q) {
+                let qs = sx_field(t, sx_unwrap(t, q), "span")
+                if at_span(f, qs, st, en) { role = 3 }
+            }
+        }
+        if name == "Field" || name == "PlaceField" {
+            let ns = sx_field(t, n, "name_span")
+            if at_span(f, ns, st, en) { role = 4 }
+        }
+        // (`Variant` is also an enum's declared variant, which has no `variant_span`.)
+        if (name == "Variant" || name == "VariantPattern") && sx_field(t, n, "variant_span") >= 0 {
+            let ts = sx_field(t, n, "ty_span")
+            let vs = sx_field(t, n, "variant_span")
+            let shortf = ts >= 0 && vs >= 0 && fx_start(f, vs) == fx_start(f, ts)
+            if at_span(f, vs, st, en) {
+                if shortf {
+                    // `Some(x)` is a call to the grammar; `None` a name.
+                    let nx = token_from(sts, en)
+                    role = if name == "Variant" && nx < ints_len(kinds) && ints_get(kinds, nx) == k_lparen() { 2 } else { if name == "Variant" { 1 } else { 0 } }
+                } else {
+                    // Written without its payload's parentheses it is a projection to the concrete tree (`State.Ready`), anchored as a field is.
+                    let nx = token_from(sts, en)
+                    role = if name == "Variant" && !(nx < ints_len(kinds) && ints_get(kinds, nx) == k_lparen()) { 4 } else { 5 }
+                }
+            }
+            // Written without its parentheses (`State.Ready`) it is a projection whose base is a name: the type's name is a value to the concrete tree.
+            if name == "Variant" && !shortf && at_span(f, ts, st, en) {
+                let nx = token_from(sts, fx_end(f, vs) )
+                if !(nx < ints_len(kinds) && ints_get(kinds, nx) == k_lparen()) { role = 1 }
+            }
+            let inits = items_of(t, n, "fields")
+            for q in 0..ints_len(inits) {
+                let ns = sx_field(t, ints_get(inits, q), "name_span")
+                if ns >= 0 && at_span(f, ns, st, en) && sx_name(t, ints_get(inits, q), "name") != "" && !shortf {
+                    role = 7
+                    ints_push(owner, n)
+                }
+            }
+        }
+        if name == "Construct" {
+            let inits = items_of(t, n, "fields")
+            for q in 0..ints_len(inits) {
+                let ns = sx_field(t, ints_get(inits, q), "name_span")
+                if ns >= 0 && at_span(f, ns, st, en) {
+                    role = 6
+                    ints_push(owner, n)
+                }
+            }
+        }
+    }
+        }
+    role
+}
+
+// Whether span node `sp` (-1 for none) is `st..en` of the document.
+fn at_span(f: Facts, sp: Int, st: Int, en: Int) -> Bool { sp >= 0 && fx_start(f, sp) == st && fx_end(f, sp) == en }
+
+// The elements of list field `name` of `n`, none where it has no such field.
+fn items_of(t: Tree, n: Int, name: Str) -> Ints {
+    let l = sx_field(t, n, name)
+    if l < 0 { return ints_new() }
+    sx_items(t, l)
+}
+
+// The JSON of a completion's items (`CompletionItem`: `kind`, `detail`, the canonical order kept as `sortText`, an edit that replaces the identifier).
+fn completion_json(text: Str, st: Int, en: Int, names: Strs, kinds: Strs, details: Strs) -> Str {
+    let starts = line_starts(text)
+    let r = range(text, starts, st, en)
+    let items = strs_new()
+    for i in 0..strs_len(names) {
+        let kind = strs_get(kinds, i)
+        let code = if kind == "local" { 6 } else {
+            if kind == "function" || kind == "built-in function" { 3 } else {
+                if kind == "field" || kind == "payload field" { 5 } else {
+                    if kind == "variant" { 20 } else {
+                        if kind == "enum" { 13 } else { if kind == "type parameter" { 25 } else { 22 } }
+                    }
+                }
+            }
+        }
+        let detail = if strs_get(details, i) != "" { strs_get(details, i) } else { kind }
+        strs_push(items, "{\"detail\":" + json_str(detail) + ",\"kind\":" + int_to_str(code) + ",\"label\":" + json_str(strs_get(names, i)) + ",\"sortText\":\"" + pad6(i)
+                + "\",\"textEdit\":{\"newText\":" + json_str(strs_get(names, i)) + ",\"range\":" + r + "}}")
+    }
+    "{\"isIncomplete\":false,\"items\":[" + str_join(items, ",") + "]}"
+}
+
+fn pad6(n: Int) -> Str {
+    let t = int_to_str(n)
+    let mut z = ""
+    for i in 0..6 - str_len(t) { z = z + "0" }
+    z + t
+}
+
+// A member of a structure site: its name, its kind, and the label that shows it (`structure::candidates`).
+fn member_rows(f: Facts, site: Int, ty: Int, prefix: Str, provided: Ints, names: Strs, kinds: Strs, details: Strs) -> Int {
+    let c = fx_checker(f)
+    // site 4: fields of record `ty`; 5: variants of enum `ty`; 6: fields given a value in a construction of record `ty`; 7: payload fields of variant `ty` (the enum), `provided` holding its index.
+    if site == 4 || site == 6 {
+        let ns = strs_new()
+        for k in 0..ck_record_arity(c, ty) { strs_push(ns, ck_record_field_name(c, ty, k)) }
+        let order = layout_order(ns, !ck_is_tuple(c, ty) && ck_record_c_layout(c, ty))
+        for r in 0..ints_len(order) {
+            let k = ints_get(order, r)
+            if !fe_starts(strs_get(ns, k), prefix) { continue }
+            if site == 6 && index_in(provided, k) { continue }
+            strs_push(names, strs_get(ns, k))
+            strs_push(kinds, "field")
+            strs_push(details, strs_get(ns, k) + ": " + fx_show(f, ck_record_field_ty(c, ty, k)))
+        }
+        return 0
+    }
+    if site == 5 {
+        let ns = strs_new()
+        for v in 0..ck_variant_count(c, ty) { strs_push(ns, ck_variant_name(c, ty, v)) }
+        let order = layout_order(ns, false)
+        for r in 0..ints_len(order) {
+            let v = ints_get(order, r)
+            if !fe_starts(strs_get(ns, v), prefix) { continue }
+            let fields = strs_new()
+            for k in 0..ck_variant_arity(c, ty, v) { strs_push(fields, ck_payload_name(c, ty, v, k)) }
+            let po = layout_order(fields, false)
+            let parts = strs_new()
+            for q in 0..ints_len(po) {
+                let k = ints_get(po, q)
+                strs_push(parts, strs_get(fields, k) + ": " + fx_show(f, ck_payload_ty(c, ty, v, k)))
+            }
+            strs_push(names, strs_get(ns, v))
+            strs_push(kinds, "variant")
+            strs_push(details, strs_get(ns, v) + "(" + str_join(parts, ", ") + ")")
+        }
+        return 0
+    }
+    0
+}
+
+fn index_in(xs: Ints, v: Int) -> Bool {
+    for i in 0..ints_len(xs) {
+        if ints_get(xs, i) == v { return true }
+    }
+    false
+}
+
+// `textDocument/completion`: the identifier under the cursor, completed from what the checker recorded as written there — locals, functions or types by where the identifier stands, the fields,
+// variants and labels of what the checker found a structure site to be a member of — or `null` where there is no complete answer.
+fn completion(io: IoCap, s: Server, j: J) -> Str {
+    let at = request_offset(io, s, j)
+    if at < 0 { return "null" }
+    let f = vec_get(s.facts, cur(s))
+    let c = fx_checker(f)
+    let text = strs_get(s.texts, cur(s))
+    let span = name_at(io, text, at)
+    let st = ints_get(span, 0)
+    let en = ints_get(span, 1)
+    if st < 0 { return completion_hole(io, s, f, text, at) }
+    let kinds = ints_new()
+    let sts = ints_new()
+    let ens = ints_new()
+    let texts = strs_new()
+    lex_all(fx_module_text(f, 0), kinds, sts, ens, texts, dg_new())
+    let owner = ints_new()
+    let mut role = ident_role(f, st, en, kinds, sts, owner)
+    // An inherent impl's type is read as a trait's name and kept nowhere in the tree: the name right after `impl` is a written type.
+    if role == 0 {
+        let k = token_from(sts, st)
+        if k > 0 && ints_get(kinds, k - 1) == k_impl() { role = 3 }
+    }
+    let prefix = str_slice(text, st, if at < en { at } else { en })
+    let names = strs_new()
+    let ckinds = strs_new()
+    let details = strs_new()
+    if role == 1 || role == 2 || role == 3 {
+        if role == 1 && !locals_are_complete(f, st) { return "null" }
+        if role != 1 && !module_names_are_complete(f) { return "null" }
+        let rows = ck_visible(c, st)
+        if strs_get(rows, 0) != "ok" { return "null" }
+        for i in 1..strs_len(rows) {
+            let cols = split_bar(strs_get(rows, i))
+            let want = if role == 1 { "value" } else { if role == 2 { "call" } else { "type" } }
+            if strs_get(cols, 0) != want { continue }
+            let name = strs_get(cols, 1)
+            if !fe_starts(name, prefix) { continue }
+            if role == 1 {
+                let b = parse_number(strs_get(cols, 2))
+                strs_push(names, name)
+                strs_push(ckinds, "local")
+                strs_push(details, (if ck_binding_mutable(c, b) { "mut " } else { "" }) + ck_binding_name(c, b) + ": " + fx_show(f, ck_binding_ty(c, b)))
+            }
+            if role == 2 {
+                let kind = parse_number(strs_get(cols, 2))
+                strs_push(names, name)
+                if kind == 0 {
+                    strs_push(ckinds, "built-in function")
+                    strs_push(details, "")
+                } else {
+                    strs_push(ckinds, "function")
+                    strs_push(details, fn_label(io, f, parse_number(strs_get(cols, 3))))
+                }
+            }
+            if role == 3 {
+                let kind = parse_number(strs_get(cols, 2))
+                strs_push(names, name)
+                strs_push(details, "")
+                if kind == 2 { strs_push(ckinds, if ck_is_enum_type(c, parse_number(strs_get(cols, 3))) { "enum" } else { "record" }) }
+                if kind == 3 || kind == 4 { strs_push(ckinds, "built-in type") }
+                if kind == 5 { strs_push(ckinds, "type parameter") }
+            }
+        }
+        return completion_json(text, st, en, names, ckinds, details)
+    }
+    if role < 4 { return "null" }
+    // A structure site: complete before anchored.
+    if !structure_complete(f, st) { return "null" }
+    let provided = ints_new()
+    let mut site = 0
+    let mut ty = 0 - 1
+    if role == 4 {
+        let on = ck_field_on_at(c, st, en)
+        let un = ck_unresolved_at(c, st, en)
+        if on >= 0 { site = 4; ty = on }
+        if on < 0 && un >= 0 && ck_is_record_type(c, un) { site = 4; ty = un }
+        if on < 0 && un >= 0 && ck_is_enum_type(c, un) { site = 5; ty = un }
+    }
+    if role == 5 {
+        let vt = ck_variant_at(c, st, en)
+        let un = ck_unresolved_at(c, st, en)
+        if vt >= 0 { site = 5; ty = vt }
+        if vt < 0 && un >= 0 && ck_is_enum_type(c, un) { site = 5; ty = un }
+    }
+    if role == 6 || role == 7 {
+        let t = fx_tree(f)
+        let o = ints_get(owner, 0)
+        if role == 6 {
+            if sx_is_some(t, sx_field(t, o, "qualifier")) { return "null" }
+            let hs = sx_field(t, o, "ty_span")
+            let rt = ck_construction_at(c, fx_start(f, hs), fx_end(f, hs))
+            if rt >= 0 { site = 6; ty = rt }
+        } else {
+            let vs = sx_field(t, o, "variant_span")
+            let vt = ck_variant_at(c, fx_start(f, vs), fx_end(f, vs))
+            let vi = ck_variant_index_at(c, fx_start(f, vs), fx_end(f, vs))
+            if vt >= 0 && vi >= 0 { site = 7; ty = vt; ints_push(provided, vi) }
+        }
+        if site == 0 { return "null" }
+        // The labels the same construction or pattern gives elsewhere, by the field each was recorded as.
+        let inits = sx_items(t, sx_field(t, o, "fields"))
+        let others = ints_new()
+        for q in 0..ints_len(inits) {
+            let ns = sx_field(t, ints_get(inits, q), "name_span")
+            if ns < 0 || sx_name(t, ints_get(inits, q), "name") == "" { continue }
+            if fx_start(f, ns) == st && fx_end(f, ns) == en { continue }
+            let d = ck_init_at(c, fx_start(f, ns), fx_end(f, ns))
+            if d >= 0 { ints_push(others, d) }
+        }
+        if site == 7 {
+            // A payload label's fields, in the variant's order.
+            let vs = sx_field(t, o, "variant_span")
+            let vi = ck_variant_index_at(c, fx_start(f, vs), fx_end(f, vs))
+            let fields = strs_new()
+            for k in 0..ck_variant_arity(c, ty, vi) { strs_push(fields, ck_payload_name(c, ty, vi, k)) }
+            let po = layout_order(fields, false)
+            for r in 0..ints_len(po) {
+                let k = ints_get(po, r)
+                if !fe_starts(strs_get(fields, k), prefix) || index_in(others, k) { continue }
+                strs_push(names, strs_get(fields, k))
+                strs_push(ckinds, "payload field")
+                strs_push(details, strs_get(fields, k) + ": " + fx_show(f, ck_payload_ty(c, ty, vi, k)))
+            }
+            return completion_json(text, st, en, names, ckinds, details)
+        }
+        member_rows(f, 6, ty, prefix, others, names, ckinds, details)
+        return completion_json(text, st, en, names, ckinds, details)
+    }
+    if site == 0 { return "null" }
+    member_rows(f, site, ty, prefix, ints_new(), names, ckinds, details)
+    completion_json(text, st, en, names, ckinds, details)
+}
+
+// `s` split at `|`.
+fn split_bar(s: Str) -> Strs {
+    let out = strs_new()
+    let mut from = 0
+    for i in 0..str_len(s) + 1 {
+        if i == str_len(s) || str_byte(s, i) == 124 {
+            strs_push(out, str_slice(s, from, i))
+            from = i + 1
+        }
+    }
+    out
+}
+
+// Completion where nothing is written yet, right after a `.` or `(`: a probe of the document with a hole there.
+fn completion_hole(io: IoCap, s: Server, f: Facts, text: Str, at: Int) -> Str {
+    // The punctuation, as the token stream has it: a `.` or `(` ending at the cursor (a string or a comment holds no such token); a `..` is two dots, with the cursor between them or after.
+    let kinds = ints_new()
+    let sts = ints_new()
+    let ens = ints_new()
+    let texts = strs_new()
+    lex_all(fx_module_text(f, 0), kinds, sts, ens, texts, dg_new())
+    let mut punct = 0 - 1
+    for i in 0..ints_len(kinds) {
+        let k = ints_get(kinds, i)
+        if ints_get(ens, i) == at || (k == k_dotdot() && ints_get(sts, i) + 1 == at) { punct = if k == k_dotdot() { k_dot() } else { k }; break }
+    }
+    if punct != k_dot() && punct != k_lparen() { return "null" }
+    // The probe: the compilation's sources as the document's analysis loaded them, the root parsed with a hole at the cursor, and checked again; read for this one answer and dropped.
+    let path = strs_get(s.paths, cur(s))
+    let pf = fx_check_probe(path, strs_get(s.root, 0), s.paths, s.texts, strs_get(s.library, 0), fe_host_os(), fe_host_arch(), at, io)
+    if fx_refusal(pf) != "" { refuse(io, "a source root the reference refuses") }
+    if fe_load_failed(pf) { refuse(io, "a compilation that does not load") }
+    if !fx_carried(pf) { refuse(io, fx_why(pf)) }
+    let hk = fx_hole_kind(pf)
+    if hk == 0 { return "null" }
+    if !structure_complete(pf, at) { return "null" }
+    let c = fx_checker(pf)
+    let names = strs_new()
+    let ckinds = strs_new()
+    let details = strs_new()
+    let hs = fx_hole_start(pf)
+    let he = fx_hole_end(pf)
+    if hk == 1 {
+        let un = ck_unresolved_at(c, hs, he)
+        if un < 0 { return "null" }
+        if ck_is_record_type(c, un) { member_rows(pf, 4, un, "", ints_new(), names, ckinds, details) }
+        else { if ck_is_enum_type(c, un) { member_rows(pf, 5, un, "", ints_new(), names, ckinds, details) } else { return "null" } }
+    }
+    if hk == 2 {
+        // A function is what `Name(` calls: its arguments, not a record's labels.
+        if ck_site_at(c, hs, he) >= 0 { return "null" }
+        let rt = ck_construction_at(c, hs, he)
+        if rt < 0 { return "null" }
+        member_rows(pf, 6, rt, "", ints_new(), names, ckinds, details)
+    }
+    if hk == 3 {
+        let vt = ck_variant_at(c, hs, he)
+        let vi = ck_variant_index_at(c, hs, he)
+        if vt < 0 || vi < 0 { return "null" }
+        let fields = strs_new()
+        for k in 0..ck_variant_arity(c, vt, vi) { strs_push(fields, ck_payload_name(c, vt, vi, k)) }
+        let po = layout_order(fields, false)
+        for r in 0..ints_len(po) {
+            let k = ints_get(po, r)
+            strs_push(names, strs_get(fields, k))
+            strs_push(ckinds, "payload field")
+            strs_push(details, strs_get(fields, k) + ": " + fx_show(pf, ck_payload_ty(c, vt, vi, k)))
+        }
+    }
+    completion_json(text, at, at, names, ckinds, details)
+}
+
 fn request(io: IoCap, s: Server, j: J, method: Str, id: Str) -> Int {
     if method == "textDocument/hover" { return respond(io, id, hover(io, s, j)) }
     if method == "textDocument/definition" { return respond(io, id, definition(io, s, j)) }
@@ -2003,6 +2547,7 @@ fn request(io: IoCap, s: Server, j: J, method: Str, id: Str) -> Int {
     if method == "callHierarchy/incomingCalls" { return respond(io, id, incoming_calls(io, s, j)) }
     if method == "callHierarchy/outgoingCalls" { return respond(io, id, outgoing_calls(io, s, j)) }
     if method == "textDocument/signatureHelp" { return respond(io, id, signature_help(io, s, j)) }
+    if method == "textDocument/completion" { return respond(io, id, completion(io, s, j)) }
     if method == "textDocument/codeAction" { return respond(io, id, code_actions(io, s, j)) }
     if method == "textDocument/semanticTokens/full" { return respond(io, id, semantic_tokens(io, s, j)) }
     if implemented(method) { refuse(io, "`" + method + "`") }

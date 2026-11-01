@@ -191,8 +191,7 @@ for p in "${parts[@]}"; do
                         case_run "accel $f $name $kind" accel "$f" "$name" --input "$OUT/fx/$kind.txt" --print-kernel
                     done
                     case_run "accel $f $name zip" accel "$f" "$name" --input "$OUT/fx/ints.txt" --input "$OUT/fx/ints.txt" --print-kernel
-                    # What stops before a provider would run (the inputs and their number); one that gets as far runs the kernel
-                    # on this machine, which the port does not (refused, and not worth the reference's clang and GPU).
+                    # What stops before a provider would run (the inputs and their number); the run itself is `accel-run.sh`'s (slice 11d).
                     case_run "accel $f $name bad input" accel "$f" "$name" --input "$OUT/fx/bad.txt"
                     case_run "accel $f $name two inputs" accel "$f" "$name" --input "$OUT/fx/ints.txt" --input "$OUT/fx/shortints.txt"
                     case_run "accel $f $name three inputs" accel "$f" "$name" --input "$OUT/fx/ints.txt" --input "$OUT/fx/ints.txt" --input "$OUT/fx/ints.txt"

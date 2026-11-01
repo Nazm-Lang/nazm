@@ -180,7 +180,10 @@ for p in "${parts[@]}"; do
                 NAZM_REF="$REF" python3 -I "$ROOT/toolchain/commands/tests/mcp-compare.py" agent-gen "$MCP_REF" x "$ROOT" "$f" "$MCP_DIR/$k"
                 echo "$f" > "$MCP_DIR/$k.name"
                 k=$((k + 1))
-            done ;;
+            done
+            # One session of a server started with no `--docs`: the documentation and repository tools of the repository it was built from.
+            NAZM_REF="$REF" python3 -I "$ROOT/toolchain/commands/tests/mcp-compare.py" nodocs-gen "$MCP_REF" x "$ROOT" examples/max.nz "$MCP_DIR/$k"
+            echo examples/max.nz > "$MCP_DIR/$k.name" ;;
         mcp-serve)
             # Contained only (a host-run has no standard input): the Nazm `nazm-mcp`, asking the Nazm `nazm`, answers each `.in` of MCP_DIR into `.got`.
             [ "$STAGE_MODE" = contained ] || { echo "agent-compare: mcp-serve runs contained only (cargo xtask contained run '...')"; exit 2; }
@@ -197,7 +200,7 @@ for p in "${parts[@]}"; do
                 # The messages name the checkout the host generated them in once (the absolute-path call): here it is $ROOT. The runner gives
                 # the program its standard input from STAGE_STDIN (`< "$i"` on the command would be replaced by /dev/null: the hang of 2026-10-22).
                 sed "s#$(cat "$MCP_DIR/root")#$ROOT#g" "$i" > "$OUT/mcp/$n.in"
-                NAZM_EXE="$PORT" STAGE_STDIN="$OUT/mcp/$n.in" "$STAGE_RUN" "${AGENT_DEADLINE:-600}" "$OUT/bin/nazm-mcp" --root "$f" --docs "$ROOT" > "$OUT/mcp/$n.got" 2> "$OUT/mcp/$n.err" || true
+                NAZM_EXE="$PORT" STAGE_STDIN="$OUT/mcp/$n.in" "$STAGE_RUN" "${AGENT_DEADLINE:-600}" "$OUT/bin/nazm-mcp" --root "$f" $([ -f "${i%.in}.nodocs" ] || printf -- '--docs\n%s' "$ROOT") > "$OUT/mcp/$n.got" 2> "$OUT/mcp/$n.err" || true
                 printf 'GOT %s %s\n' "$n" "$(base64 < "$OUT/mcp/$n.got" | tr -d '\n')"
             done ;;
         mcp-cmp)
