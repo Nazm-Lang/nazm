@@ -1,0 +1,269 @@
+// The persistent verification target (S13.3; N32-H2): the port of the cache half of
+// `xtask/src/contained.rs`. The volume key is BLAKE3, length-prefixed, over the same fields in the
+// same order as the reference, so both runners name the same volumes and share them while they
+// overlap; two generations are kept per namespace; only a volume carrying the owner label is ever
+// listed, pruned or removed.
+
+use "@std/blake3";
+use "@std/bytebuf";
+use "@std/file";
+use "@std/ioerror";
+use "@std/text";
+use "@std/time";
+use "../lib/run.nz";
+use "../lib/scratch.nz";
+use "workloads.nz";
+
+/// Bumped when what a cache volume holds, or how it is laid out, changes.
+pub const CACHE_VERSION: Str = "1";
+/// How many compatibility generations are kept. A new key beyond this removes the oldest.
+pub const CACHE_GENERATIONS: Int = 2;
+
+/// Everything a build artefact in the target could depend on that Cargo's own fingerprints do not
+/// already cover: the toolchain and base image, the lockfile, the toolchain pin, the flags and the profile.
+pub struct CacheFields {
+    image: Str,
+    lockfile: Str,
+    toolchain: Str,
+    rustflags: Str,
+    profile: Str,
+}
+
+fn put_part(b: ByteBuf, part: Str) -> Int ! {} {
+    bytebuf_put_u64_le(b, UInt64(str_len(part)));
+    bytebuf_push_str(b, part);
+    0
+}
+
+/// The compatibility key: BLAKE3 over a domain tag, the cache version and every field,
+/// length-prefixed (a `u64` little-endian length, then the bytes). 64 hexadecimal digits.
+pub fn cache_key(f: CacheFields) -> Str ! {} {
+    let b = bytebuf_new();
+    put_part(b, "nazm.verification-cache");
+    put_part(b, CACHE_VERSION);
+    put_part(b, f.image);
+    put_part(b, f.lockfile);
+    put_part(b, f.toolchain);
+    put_part(b, f.rustflags);
+    put_part(b, f.profile);
+    blake3_hex(bytebuf_to_bytes(b))
+}
+
+/// The volume a namespace and key name.
+pub fn cache_volume(namespace: Str, key: Str) -> Str ! {} {
+    let k = if str_len(key) >= 16 { str_slice(key, 0, 16) } else { key };
+    f"nazm-verify-{namespace}-{k}"
+}
+
+/// A harness-owned volume, as listed.
+pub struct CacheVolume {
+    name: Str,
+    namespace: Str,
+    key: Str,
+    created: Int,
+}
+
+/// Which of `owned` to remove so that at most `CACHE_GENERATIONS` of `current`'s namespace remain,
+/// `current` always among them: the oldest others first. Another namespace's volumes are never
+/// counted or removed here.
+pub fn cache_prunable(owned: Vec[CacheVolume], current: Str, namespace: Str) -> Strs ! {} {
+    let others = vec_new[CacheVolume]();
+    for i in 0..vec_len(owned) {
+        let v = vec_get(owned, i);
+        if v.name != current && v.namespace == namespace {
+            vec_push(others, v);
+        }
+    }
+    // Newest first, then by name: a selection sort over the few there are.
+    let n = vec_len(others);
+    let sorted = vec_new[CacheVolume]();
+    let used = vec_new[Bool]();
+    for i in 0..n {
+        vec_push(used, false);
+    }
+    for round in 0..n {
+        let mut best = 0 - 1;
+        for i in 0..n {
+            if !vec_get(used, i) {
+                if best < 0 {
+                    best = i;
+                } else {
+                    let a = vec_get(others, i);
+                    let c = vec_get(others, best);
+                    if a.created > c.created || (a.created == c.created && text_compare(a.name, c.name) < 0) {
+                        best = i;
+                    }
+                }
+            }
+        }
+        vec_set(used, best, true);
+        vec_push(sorted, vec_get(others, best));
+    }
+    let out = strs_new();
+    let skip = CACHE_GENERATIONS - 1;
+    for i in 0..n {
+        if i >= skip {
+            strs_push(out, vec_get(sorted, i).name);
+        }
+    }
+    out
+}
+
+fn digest(h: Caps, repo: Str, name: Str) -> Result[Str, Str] ! { io } {
+    let v = h.v;
+    match file_read_all(h.io, str_vouch(f"{repo}/{name}")) {
+        Result.Ok(value: b) => Result[Str, Str].Ok(value: blake3_hex(b)),
+        Result.Err(error: e) => Result[Str, Str].Err(error: f"{name}: {rust_io_error(e)}"),
+    }
+}
+
+/// `split_whitespace().skip(1)` of `text`, joined with single spaces.
+fn after_first_word(text: Str) -> Str ! {} {
+    let flat = text_replace(text_replace(text_replace(text, "\t", " "), "\n", " "), "\r", " ");
+    let words = strs_new();
+    for w in text_split(flat, " ") {
+        if str_len(w) > 0 {
+            strs_push(words, w);
+        }
+    }
+    let rest = strs_new();
+    for i in 1..strs_len(words) {
+        strs_push(rest, strs_get(words, i));
+    }
+    str_join(rest, " ")
+}
+
+fn first_word(text: Str) -> Str ! {} {
+    let flat = text_replace(text_replace(text_replace(text, "\t", " "), "\n", " "), "\r", " ");
+    for w in text_split(flat, " ") {
+        if str_len(w) > 0 {
+            return w;
+        }
+    }
+    ""
+}
+
+/// This repository's fields, read now.
+pub fn cache_fields(h: Caps, repo: Str, image: Str) -> Result[CacheFields, Str] ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, "image");
+    strs_push(a, "inspect");
+    strs_push(a, image);
+    strs_push(a, "--format");
+    strs_push(a, "{{.Id}} {{json .Config.Env}}");
+    let r = run(h, "docker", a, "", env_here(h.io));
+    if r.code != 0 {
+        return Result[CacheFields, Str].Err(error: f"cannot inspect the image `{image}`");
+    }
+    let said = text_trim(r.stdout);
+    let lock = digest(h, repo, "Cargo.lock")?;
+    let tool = digest(h, repo, "rust-toolchain.toml")?;
+    Result[CacheFields, Str].Ok(value: CacheFields(
+        image: first_word(said),
+        lockfile: lock,
+        toolchain: tool,
+        rustflags: f"image env {after_first_word(said)}; no RUSTFLAGS passed",
+        profile: "dev and test, as Cargo.toml declares them"))
+}
+
+fn docker_quiet(h: Caps, args: Strs) -> Ran ! { io, spawn } {
+    run(h, "docker", args, "", env_here(h.io))
+}
+
+fn dargs(spec: Str) -> Strs ! {} {
+    words(spec)
+}
+
+/// Every harness-owned cache volume. A volume without the owner label is never listed.
+pub fn cache_list(h: Caps) -> Vec[CacheVolume] ! { io, spawn } {
+    let out = vec_new[CacheVolume]();
+    let a = dargs("volume ls -q");
+    strs_push(a, "--filter");
+    strs_push(a, f"label={CACHE_OWNER}");
+    let listed = docker_quiet(h, a);
+    for name in text_lines(listed.stdout) {
+        let b = dargs("volume inspect");
+        strs_push(b, name);
+        strs_push(b, "--format");
+        strs_push(b, "{{index .Labels \"nazm.compat\"}} {{index .Labels \"nazm.created\"}} {{index .Labels \"nazm.owner\"}} {{index .Labels \"nazm.namespace\"}}");
+        let r = docker_quiet(h, b);
+        let fields = strs_new();
+        for w in text_split(text_replace(text_replace(text_trim(r.stdout), "\t", " "), "\n", " "), " ") {
+            if str_len(w) > 0 {
+                strs_push(fields, w);
+            }
+        }
+        if r.code >= 0 && strs_len(fields) >= 3 {
+            let created = match text_parse_int(strs_get(fields, 1)) {
+                Result.Ok(value: n) => n,
+                Result.Err(error: e) => 0 - 1,
+            };
+            let owned = strs_get(fields, 2) == "nazm-verification-harness";
+            let ns = if strs_len(fields) >= 4 { strs_get(fields, 3) } else { "" };
+            if created >= 0 && owned {
+                vec_push(out, CacheVolume(name: name, namespace: ns, key: strs_get(fields, 0), created: created));
+            }
+        }
+    }
+    out
+}
+
+fn say(io: IoCap, s: Str) -> Int ! { io } {
+    file_write_str(file_stderr(io), f"{s}\n");
+    0
+}
+
+/// The volume for this repository's key, created with its labels if it does not exist, and older
+/// generations beyond the bound removed. The first mount of a new volume copies in the image's
+/// warmed `/work/target`, so a cold key starts from the image, not from nothing.
+pub fn cache_ensure(h: Caps, repo: Str, namespace: Str, image: Str) -> Result[Str, Str] ! { io, spawn } {
+    let fields = cache_fields(h, repo, image)?;
+    let key = cache_key(fields);
+    let name = cache_volume(namespace, key);
+    let probe = dargs("volume inspect");
+    strs_push(probe, name);
+    let exists = docker_quiet(h, probe).code == 0;
+    if !exists {
+        let created = time_wall(h.t).unix_nanos / 1000000000;
+        let a = dargs("volume create");
+        push_label(a, CACHE_OWNER);
+        push_label(a, f"nazm.compat={key}");
+        push_label(a, f"nazm.created={created}");
+        push_label(a, f"nazm.cache-version={CACHE_VERSION}");
+        push_label(a, f"nazm.namespace={namespace}");
+        strs_push(a, name);
+        let made = docker_quiet(h, a);
+        if made.code != 0 {
+            return Result[Str, Str].Err(error: text_trim(made.stderr));
+        }
+        say(h.io, f"contained: new verification cache {name} for compatibility key {key}");
+    }
+    for old in cache_prunable(cache_list(h), name, namespace) {
+        let rm = dargs("volume rm");
+        strs_push(rm, old);
+        docker_quiet(h, rm);
+        say(h.io, f"contained: removed the older verification cache {old}");
+    }
+    Result[Str, Str].Ok(value: name)
+}
+
+fn push_label(a: Strs, l: Str) -> Int ! {} {
+    strs_push(a, "--label");
+    strs_push(a, l);
+    0
+}
+
+/// Remove every harness-owned cache volume. The next workload is slower; nothing else changes.
+pub fn cache_clear(h: Caps) -> Strs ! { io, spawn } {
+    let gone = strs_new();
+    let all = cache_list(h);
+    for i in 0..vec_len(all) {
+        let v = vec_get(all, i);
+        let rm = dargs("volume rm");
+        strs_push(rm, v.name);
+        if docker_quiet(h, rm).code == 0 {
+            strs_push(gone, v.name);
+        }
+    }
+    gone
+}

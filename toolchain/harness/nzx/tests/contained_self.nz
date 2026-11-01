@@ -1,0 +1,226 @@
+// `nzx contained`'s pure parts, tested as `xtask/src/contained.rs`'s `#[cfg(test)]` module tests
+// theirs (S13.3): the cache key and volume names, pruning, the namespaces, the size guard, which
+// containers are stale, the tar header, the plan's refusals, and the argument list's isolation
+// flags. The end-to-end comparison with the reference is `contained_argv.sh`.
+//
+//     nazm test --interpret-only toolchain/harness/nzx/tests/contained_self.nz
+//
+// (interpreted: no Nazm-built program runs on the host).
+
+use "@std/text";
+use "../../lib/run.nz";
+use "../workloads.nz";
+use "../cache.nz";
+use "../tar.nz";
+use "../supervise.nz";
+
+fn expect(got: Str, want: Str) -> Result[Int, Str] ! {} {
+    check_that(got == want, f"wanted `{want}`, got `{got}`")
+}
+
+fn fields() -> CacheFields ! {} {
+    CacheFields(image: "sha256:image", lockfile: "lock", toolchain: "1.98.1", rustflags: "none", profile: "dev")
+}
+
+fn volume(name: Str, ns: Str, created: Int) -> CacheVolume ! {} {
+    CacheVolume(name: name, namespace: ns, key: name, created: created)
+}
+
+@test
+fn every_compatibility_field_changes_the_cache_key() -> Result[Int, Str] ! {} {
+    let base = cache_key(fields());
+    check_that(str_len(base) == 64, "64 hexadecimal digits")?;
+    check_that(base == cache_key(fields()), "stable")?;
+    let f = fields();
+    let changed = vec_new[CacheFields]();
+    vec_push(changed, CacheFields(image: f.image, lockfile: "lock2", toolchain: f.toolchain, rustflags: f.rustflags, profile: f.profile));
+    vec_push(changed, CacheFields(image: f.image, lockfile: f.lockfile, toolchain: "1.99.0", rustflags: f.rustflags, profile: f.profile));
+    vec_push(changed, CacheFields(image: "sha256:other", lockfile: f.lockfile, toolchain: f.toolchain, rustflags: f.rustflags, profile: f.profile));
+    vec_push(changed, CacheFields(image: f.image, lockfile: f.lockfile, toolchain: f.toolchain, rustflags: "-C target-cpu=native", profile: f.profile));
+    vec_push(changed, CacheFields(image: f.image, lockfile: f.lockfile, toolchain: f.toolchain, rustflags: f.rustflags, profile: "release"));
+    for i in 0..vec_len(changed) {
+        let k = cache_key(vec_get(changed, i));
+        check_that(k != base, f"field {i} changes the key")?;
+        check_that(cache_volume("src", k) != cache_volume("src", base), f"field {i} changes the volume")?;
+    }
+    // Length-prefixed: moving a byte between two fields is a different key.
+    let a = CacheFields(image: "ab", lockfile: "c", toolchain: f.toolchain, rustflags: f.rustflags, profile: f.profile);
+    let b = CacheFields(image: "a", lockfile: "bc", toolchain: f.toolchain, rustflags: f.rustflags, profile: f.profile);
+    check_that(cache_key(a) != cache_key(b), "length-prefixed")?;
+    check_that(text_starts_with(cache_volume("src", base), "nazm-verify-src-"), "volume name")?;
+    expect(cache_volume("src", base), f"nazm-verify-src-{str_slice(base, 0, 16)}")
+}
+
+@test
+fn pruning_keeps_the_current_generation_and_the_newest_other() -> Result[Int, Str] ! {} {
+    let owned = vec_new[CacheVolume]();
+    vec_push(owned, volume("a", "src", 1));
+    vec_push(owned, volume("b", "src", 3));
+    vec_push(owned, volume("c", "src", 2));
+    vec_push(owned, volume("current", "src", 0));
+    expect(str_join(cache_prunable(owned, "current", "src"), ","), "c,a")?;
+    let one = vec_new[CacheVolume]();
+    vec_push(one, volume("current", "src", 0));
+    check_that(strs_len(cache_prunable(one, "current", "src")) == 0, "nothing to prune")?;
+    vec_push(one, volume("b", "src", 3));
+    check_that(strs_len(cache_prunable(one, "current", "src")) == 0, "one other is kept")?;
+    // Another namespace's generations are its own.
+    vec_push(one, volume("m", "mutate", 9));
+    check_that(strs_len(cache_prunable(one, "current", "src")) == 0, "another namespace")
+}
+
+@test
+fn a_mutation_session_and_the_checkouts_workloads_never_share_a_target() -> Result[Int, Str] ! {} {
+    expect(cache_namespace("mutate"), "mutate")?;
+    for w in words("tests selfhost bootstrap selfbuild") {
+        expect(cache_namespace(w), "src")?;
+    }
+    for w in words("bench release run probe fuzz archive") {
+        expect(cache_namespace(w), "")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn the_size_bound_guards_a_mounted_cache_only() -> Result[Int, Str] ! {} {
+    let argv = shell("cargo test");
+    let g = guarded(argv, true);
+    let script = strs_get(g, 2);
+    check_that(text_contains(script, "du -sm /work/target"), "du")?;
+    check_that(text_ends_with(script, "cd /src && cargo test"), "ends with the script")?;
+    check_that(text_contains(script, "-gt 16384 ]"), "the bound")?;
+    expect(str_join(guarded(argv, false), "|"), str_join(argv, "|"))
+}
+
+@test
+fn only_a_dead_supervisors_own_containers_are_stale() -> Result[Int, Str] ! {} {
+    check_that(stale_pid("nazm-selfhost-4242", "4242", "here", "here", 1) == 4242, "a candidate")?;
+    check_that(stale_pid("nazm-probe-memory-77", "77", "here", "here", 1) == 77, "a hyphenated workload")?;
+    // This process's own, another host's, a label that disagrees, a name that is not ours.
+    check_that(stale_pid("nazm-selfhost-4242", "4242", "here", "here", 4242) < 0, "this supervisor")?;
+    check_that(stale_pid("nazm-selfhost-4242", "4242", "elsewhere", "here", 1) < 0, "another host")?;
+    check_that(stale_pid("nazm-selfhost-4242", "4243", "here", "here", 1) < 0, "label disagrees")?;
+    check_that(stale_pid("nazm-selfhost-04242", "04242", "here", "here", 1) < 0, "not canonical")?;
+    check_that(stale_pid("postgres-1", "1", "here", "here", 2) < 0, "not nazm-")?;
+    check_that(stale_pid("nazm-postgres-1", "1", "here", "here", 2) == 1, "named like ours: the owner label decides, not this")?;
+    check_that(stale_pid("nazm-Selfhost-9", "9", "here", "here", 1) < 0, "capital letters")?;
+    check_that(stale_pid("nazm--9", "9", "here", "here", 1) < 0, "empty workload")?;
+    check_that(stale_pid("nazm-selfhost-9", "9", "", "", 1) < 0, "unknown host: nothing is reaped")
+}
+
+fn header(kind: Int, size: Int) -> Bytes ! {} {
+    tar_header("EXPORTS", kind, size)
+}
+
+fn tar_says(h: Bytes, max: Int) -> Str ! {} {
+    match tar_size(h, "/work/x", max) {
+        Result.Ok(value: n) => f"{n}",
+        Result.Err(error: e) => e,
+    }
+}
+
+@test
+fn a_tar_header_states_what_may_be_copied() -> Result[Int, Str] ! {} {
+    expect(tar_says(header(48, 123), 4096), "123")?;
+    expect(tar_says(header(0, 0), 4096), "0")?;
+    expect(tar_says(header(50, 5), 4096), "/work/x is a symlink")?;
+    expect(tar_says(header(53, 0), 4096), "/work/x is a directory")?;
+    expect(tar_says(header(120, 5), 4096), "/work/x: the archive is PAX-extended, which this path does not read")?;
+    expect(tar_says(header(52, 5), 4096), "/work/x is not a regular file (tar entry type '4')")?;
+    expect(tar_says(header(48, 4097), 4096), "/work/x: the archive header declares 4097 bytes, over the 4096-byte transfer budget")?;
+    expect(tar_says(bytes_new(512), 4096), "not a tar stream")?;
+    let big = header(48, 5);
+    bytes_set(big, 124, UInt8(128));
+    expect(tar_says(big, 4096), "/work/x: size is base-256 encoded, vastly over the 4096-byte transfer budget")?;
+    let bad = header(48, 5);
+    bytes_set(bad, 124, UInt8(56));
+    expect(tar_says(bad, 4096), "/work/x: unreadable tar size field \"80000000005\"")
+}
+
+@test
+fn mutate_passes_only_a_closed_list_of_options() -> Result[Int, Str] ! {} {
+    let ok = match mutate_passthrough(words("--plan --only m1:x.y --resume")) {
+        Result.Ok(value: s) => s,
+        Result.Err(error: e) => e,
+    };
+    expect(ok, " --plan --only 'm1:x.y' --resume")?;
+    let unknown = match mutate_passthrough(words("--frob")) { Result.Ok(value: s) => s, Result.Err(error: e) => e };
+    expect(unknown, "mutate: unknown option --frob")?;
+    let missing = match mutate_passthrough(words("--only")) { Result.Ok(value: s) => s, Result.Err(error: e) => e };
+    expect(missing, "--only needs a value")?;
+    let unsafe = match mutate_passthrough(words("--only a;b")) { Result.Ok(value: s) => s, Result.Err(error: e) => e };
+    expect(unsafe, "--only \"a;b\": only letters, digits and - _ : = . are accepted")
+}
+
+@test
+fn selfbuild_takes_only_stages_and_backend() -> Result[Int, Str] ! {} {
+    let ok = match selfbuild_settings(words("selfbuild stages=3 backend=llvm")) { Result.Ok(value: s) => s, Result.Err(error: e) => e };
+    expect(ok, " stages=3 backend=llvm")?;
+    let bad = match selfbuild_settings(words("selfbuild stages=x")) { Result.Ok(value: s) => s, Result.Err(error: e) => e };
+    expect(bad, "contained: selfbuild takes only `stages=N` and `backend=nazm|llvm`, not \"stages=x\"")?;
+    let empty = match selfbuild_settings(words("selfbuild stages=")) { Result.Ok(value: s) => s, Result.Err(error: e) => e };
+    check_that(text_starts_with(empty, "contained: selfbuild takes only"), "empty stages")
+}
+
+@test
+fn the_defaults_are_the_calibrated_ones() -> Result[Int, Str] ! {} {
+    expect(default_profile("tests").name, "p4t4")?;
+    expect(default_profile("selfhost").name, "p4t4")?;
+    expect(default_profile("fuzz").name, "p4t4")?;
+    for w in words("mutate bootstrap selfbuild bench release probe run") {
+        expect(default_profile(w).name, "p1")?;
+    }
+    let p = match profile_by_name("p8t8") { Option.Some(value: x) => x, Option.None() => p1() };
+    check_that(p.milli_cpus == 8000 && p.cargo_jobs == 8 && p.test_threads == 8, "p8t8")?;
+    check_that(match profile_by_name("p6") { Option.Some(value: x) => false, Option.None() => true }, "p6 is not a profile")?;
+    expect(cargo_test("--workspace", p1()), "cargo test --locked --workspace --jobs 1 -- --test-threads 1")?;
+    expect(mutate_parallelism(p4t4()), "--cargo-jobs 4 --test-threads 4")
+}
+
+@test
+fn the_argument_list_carries_every_ceiling_and_none_of_the_forbidden_flags() -> Result[Int, Str] ! {} {
+    let b = bounds_default();
+    let a = run_argv("/repo", "nazm-selfhost-1", shell("true"), b, 1, "here", IMAGE, false);
+    expect(forbidden_in(a, IMAGE), "")?;
+    for f in words("--memory --memory-swap --cpus --pids-limit --storage-opt --ulimit --tmpfs --init --network --log-driver --mount --env") {
+        let mut found = false;
+        for x in a {
+            if x == f {
+                found = true;
+            }
+        }
+        check_that(found, f"{f} is present")?;
+    }
+    // `--memory-swap` equals `--memory`: a cap that swapping can exceed is not a cap.
+    let mut mem = "";
+    let mut swap = "";
+    for i in 0..strs_len(a) {
+        if strs_get(a, i) == "--memory" { mem = strs_get(a, i + 1); }
+        if strs_get(a, i) == "--memory-swap" { swap = strs_get(a, i + 1); }
+    }
+    expect(swap, mem)?;
+    // The checker the list is held to refuses what it should.
+    let bad = run_argv("/repo", "nazm-x-1", shell("true"), b, 1, "here", IMAGE, false);
+    strs_push(bad, "unused");
+    expect(forbidden_in(bad, IMAGE), "")?;
+    let before = strs_new();
+    strs_push(before, "run");
+    strs_push(before, "--privileged");
+    strs_push(before, IMAGE);
+    expect(forbidden_in(before, IMAGE), "--privileged")?;
+    let socket = strs_new();
+    strs_push(socket, "--mount");
+    strs_push(socket, "type=bind,source=/var/run/docker.sock,target=/x");
+    strs_push(socket, IMAGE);
+    expect(forbidden_in(socket, IMAGE), "type=bind,source=/var/run/docker.sock,target=/x")
+}
+
+@test
+fn the_artefact_is_exported_only_when_a_policy_names_it() -> Result[Int, Str] ! {} {
+    let b = bounds_default();
+    let plain = run_argv("/repo", "nazm-run-1", shell("true"), b, 1, "here", IMAGE, false);
+    expect(strs_get(plain, 1), "--rm")?;
+    let e = Export(manifest: "/work/rc/EXPORTS", dest: "/repo/target/x", allowed: words("a"), max_bytes: 10);
+    let kept = run_argv("/repo", "nazm-run-1", shell("true"), bounds_with_export(b, e), 1, "here", IMAGE, false);
+    expect(strs_get(kept, 1), "--name")
+}
