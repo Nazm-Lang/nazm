@@ -1,7 +1,7 @@
 #!/bin/sh
 # Writes toolchain/commands/accelc.nz on standard output: the two C host programs of `nazm accel`
 # (crates/nazm-cli/src/accel_host.c, accel_cpu.c, which accel.rs compiles into the Rust binary) as Nazm
-# string literals. run.sh checks that the committed file is this script's output.
+# string literals. Regenerate the committed file with this script whenever either C file changes; nothing checks it yet.
 #
 #   toolchain/commands/tests/gen-accelc.sh > toolchain/commands/accelc.nz
 

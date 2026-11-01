@@ -932,7 +932,7 @@ sessions (`lsp-gen.sh`, Python, on the host) and `patch`'s cases (`patch-gen.sh`
 2846 inputs each, `multi` 2822), contained, after slice 11c: every mode 0 differ, 0 refused (completion included: `complete`, `holes`). The last differences closed: a code action is offered only while the
 open text is the text the loader gave the file (a file without a final line break has none, as the reference's plan is stale at once); an unresolved package import (`N0508`) is no syntax
 error for signature help or completion, as `N0205` is not; the `for#item` the parser makes for a `for` pattern, and the qualifier of a method call's receiver (`m::T.f(x)`), are read as the reference's
-tree reads them. `obligations`, `explain-flow`, `explain-cost`: 5 programs differ (`patterns-001`, `flow_v3-015`, `native_units-032`); `explain-cost` refuses 3 (`N0357`/`N0358`). These are open items, not intended differences.
+tree reads them. `obligations`, `explain-flow`, `explain-cost`: 5 programs differ (`patterns-001`, `flow_v3-015`, `native_units-032`); `explain-cost` refuses 3 (`N0357`/`N0358`; counted before slice 11b closed `N0357`, not re-measured: S11.3 is the current account). These are open items, not intended differences.
 
 Slice 11b, contained, 2026-10-25, a sample of 152 inputs (every third of the main corpus and the five of the open items): `obligations`, `explain-cost`, `mir`, `lir`, `explain-flow`, `contract`
 (five forms), `check` and `check --profile` (`web3`, `accounts`, `embedded`, with and without the report) all agree, but: `lir` of `ffi_v2-012` (the reference refuses a C symbol defined twice, `N0383`, in
@@ -958,7 +958,7 @@ patch tool's, and a session with no `--docs`) agree. `pf_enforce` now holds a pr
   (`NAZM_LIBRARY`) sits in, where the reference reads the one it was built from. `mcp-compare.py` tests the patch tool's argument errors and the no-`--docs` session
   (`agent.sh mcp-gen` writes it; `mcp-serve` runs it without `--docs`).
 - `accel`'s run (hand-back 10.2): closed in slice 11d (S10.2). What stays refused is the CPU provider on a Windows host.
-- A document named by two spellings of one path (a link), an MCP argument error whose `serde` wording needs Rust's float or Unicode `Debug` formatting, and `repo` and the MCP
+- A document named by two spellings of one path (a link), an MCP argument error whose `serde` wording needs a character outside the common scripts' Unicode `Debug` formatting (the float wording and the common scripts are written, slice 11b), and `repo` and the MCP
   documentation tools with no repository named (the reference was built from one; a port cannot know).
 - A hover on a local of a method whose impl the reference drops for a generic reason (`generic_impls-009`): one input of the sample.
 ## Slice 12 — a `nazm` that needs no `NAZM_LIBRARY` (2026-10-24)
