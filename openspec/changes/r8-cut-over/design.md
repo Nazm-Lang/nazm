@@ -1283,6 +1283,8 @@ entries, and the `lint` alias. `contained` and `host-run` stay in `xtask`, uncha
 removes them and slice 20 names `nzx` in the runbook (the drafts of those runbook changes are this
 slice's last task).
 
+**S13.7 as built (2026-11-03):** the drafts are one document, `openspec/changes/r8-cut-over/runbook-draft-slices-19-20.md`: Part A (slice 19: command names, the host and contained sections, `mutate`/`fuzz`/`bench` as the Nazm tools with `*-seed` removed, Cargo in the image at `--profile p4t4` or less, what `xtask` keeps), Part B (slice 20: the runners as Nazm programs, question 5's accepted answer and question 6's, the stated shortfalls). Nothing is applied to `docs/internal/runbook.md`, which still names `cargo xtask contained`/`host-run`. The 13.4 follow-up (widen the catalogue's killer names, 89 of 94 whole-test) is task 13.8, not done.
+
 ### S13.8 Order inside the slice
 
 1. `nzx host-run` (the smallest; every later host step uses it) and its ported tests.
