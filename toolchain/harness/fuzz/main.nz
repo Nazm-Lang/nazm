@@ -1,0 +1,261 @@
+// `nazm-fuzz` (R8 slice 13, S13.5): coverage-guided fuzzing of the Nazm toolchain's own programs, and
+// R7's differential fuzzing, in Nazm — what `fuzz/run.sh` and the Rust `nazm-fuzz` do for the seed.
+// It runs inside the contained image only (the cgroup's memory ceiling is what makes fuzzing safe).
+//
+//   nazm-fuzz build TARGET [OPTIONS]        the target built with SanitizerCoverage, linked with libFuzzer
+//   nazm-fuzz run SECONDS [TARGET...] [OPTIONS]
+//                                           build and run each target (default: all five) for SECONDS,
+//                                           minimise what it kept, write the report
+//   nazm-fuzz diff COUNT SEED [OPTIONS]     COUNT generated programs, every leg compared
+//
+//   --src DIR     the checkout (read-only)                    default /src
+//   --nazm FILE   the `nazm` that builds the targets         default /work/target/debug/nazm
+//   --work DIR    where targets are built                    default /work/fuzz
+//   --out DIR     reports, corpora and artefacts             default /work/fuzzout
+//   --jobs N      parallel `clang` jobs while building       default 4
+//   --with-nazm-backend    (diff) a leg for `--backend nazm`; macOS only, so never in the container
+//
+// Files written under --out: `report.txt` (one `nazm.fuzz/1` line a target, then each crash's input, then
+// the differential line), `T/min/` (the minimised corpus: becomes `toolchain/harness/fuzz/corpus/T/` only by
+// a person's commit), `T/crashes/`, `T/hangs/`, `T/oom/`, `T/log.txt` (libFuzzer's), `fuzz-min.tar`.
+// Exit status: 0 nothing found, 1 a crash or a disagreement, 2 a refusal or a build that failed.
+
+use "@std/text"
+use "@std/file"
+use "@std/env"
+use "@std/process"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/procs.nz"
+use "plan.nz"
+use "diff.nz"
+
+struct Opts {
+    src: Str,
+    nazm: Str,
+    work: Str,
+    out: Str,
+    jobs: Int,
+    nazm_backend: Bool,
+    rest: Strs,
+}
+
+fn usage() -> Str ! {} {
+    "usage: nazm-fuzz build TARGET | run SECONDS [TARGET...] | diff COUNT SEED   [--src DIR] [--nazm FILE] [--work DIR] [--out DIR] [--jobs N] [--with-nazm-backend]"
+}
+
+fn parse_opts(args: Strs, from: Int) -> Result[Opts, Str] ! {} {
+    let rest = strs_new();
+    let mut src = "/src";
+    let mut nazm = "/work/target/debug/nazm";
+    let mut work = "/work/fuzz";
+    let mut out = "/work/fuzzout";
+    let mut jobs = 4;
+    let mut backend = false;
+    let mut i = from;
+    while i < strs_len(args) {
+        let a = strs_get(args, i);
+        if a == "--with-nazm-backend" {
+            backend = true;
+            i = i + 1;
+        } else if a == "--src" || a == "--nazm" || a == "--work" || a == "--out" || a == "--jobs" {
+            if i + 1 >= strs_len(args) {
+                return Result[Opts, Str].Err(error: f"{a} needs a value");
+            }
+            let v = strs_get(args, i + 1);
+            if a == "--src" {
+                src = v;
+            } else if a == "--nazm" {
+                nazm = v;
+            } else if a == "--work" {
+                work = v;
+            } else if a == "--out" {
+                out = v;
+            } else {
+                jobs = match text_parse_int(v) {
+                    Result.Ok(value: n) => n,
+                    Result.Err(error: e) => 0,
+                };
+                if jobs < 1 || jobs > 64 {
+                    return Result[Opts, Str].Err(error: f"--jobs {v}: 1 to 64");
+                }
+            }
+            i = i + 2;
+        } else if text_starts_with(a, "--") {
+            return Result[Opts, Str].Err(error: f"unknown option {a}");
+        } else {
+            strs_push(rest, a);
+            i = i + 1;
+        }
+    }
+    Result[Opts, Str].Ok(value: Opts(src: src, nazm: nazm, work: work, out: out, jobs: jobs, nazm_backend: backend, rest: rest))
+}
+
+/// Fuzzing only where a cgroup caps memory: `memory.max` is a number there; on a host it is absent or `max`.
+fn contained(h: Caps) -> Bool ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, "-c");
+    strs_push(a, "case $(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo none) in ''|*[!0-9]*|0) exit 1 ;; esac");
+    let r = run(h, "sh", a, "", env_here(h.io));
+    r.code == 0
+}
+
+/// `script` under `sh`, to its end or `ms`: its standard output, or `Err` naming how it failed.
+fn sh(h: Caps, script: Str, ms: Int) -> Result[Str, Str] ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, "-c");
+    strs_push(a, script);
+    let f = procs_run(h, "sh", a, "", env_here(h.io), ms);
+    if finished_ok(f) {
+        return Result[Str, Str].Ok(value: f.stdout);
+    }
+    let tail = if str_len(f.stderr) > 3000 { str_slice(f.stderr, str_len(f.stderr) - 3000, str_len(f.stderr)) } else { f.stderr };
+    Result[Str, Str].Err(error: f"{f.ended} (status {f.code}) {f.why}\n{tail}")
+}
+
+fn build_one(h: Caps, o: Opts, target: Str) -> Result[Int, Str] ! { io, spawn } {
+    sh(h, prepare_script(o.src, o.work), 600000)?;
+    eprintln(f"fuzz: building {target}");
+    sh(h, build_script(o.src, o.nazm, o.work, target, o.jobs), 3000000)?;
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn run_one(h: Caps, o: Opts, target: Str, seconds: Int) -> Result[Str, Str] ! { io, spawn } {
+    build_one(h, o, target)?;
+    let seeded = sh(h, seed_script(o.src, o.out, target), 600000)?;
+    eprintln(f"fuzz: {target}: {seconds} s, {text_trim(seeded)} seed files");
+    // libFuzzer's own deadline is the budget; the supervisor's is that and a grace for its last execution.
+    sh(h, run_script(o.src, o.work, o.out, target, seconds), (seconds + 120) * 1000)?;
+    let kept = sh(h, merge_script(o.src, o.work, o.out, target), (seconds + 600) * 1000)?;
+    let log = read_text(h, f"{o.out}/{target}/log.txt")?;
+    let stats = parse_log(log);
+    let found = parse_tally(sh(h, tally_script(o.out, target), 60000)?);
+    let kept_n = match text_parse_int(text_trim(kept)) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => 0,
+    };
+    let line = report_line(target, seconds, SEED, stats, kept_n, found);
+    let crashes = if found.crashes > 0 { sh(h, crashes_script(o.out, target), 60000)? } else { "" };
+    let text = if found.crashes > 0 { f"{line}\n{crashes}" } else { f"{line}\n" };
+    if stats.status != 0 && found.crashes == 0 {
+        return Result[Str, Str].Err(error: f"{target}: libFuzzer ended with status {stats.status} and left no artefact; see {o.out}/{target}/log.txt");
+    }
+    Result[Str, Str].Ok(value: f"{found.crashes}\n{text}")
+}
+
+fn main(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Int ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let args = process_args(io);
+    if strs_len(args) < 2 {
+        eprintln(usage());
+        return 2;
+    }
+    let cmd = strs_get(args, 0);
+    let o = match parse_opts(args, 1) {
+        Result.Ok(value: o) => o,
+        Result.Err(error: e) => { eprintln(f"nazm-fuzz: {e}"); return 2; },
+    };
+    if !contained(h) {
+        eprintln("nazm-fuzz: refusing to run with no memory ceiling; use `nzx contained fuzz`");
+        return 2;
+    }
+    if cmd == "build" {
+        if strs_len(o.rest) != 1 || !valid_target(strs_get(o.rest, 0)) {
+            eprintln(usage());
+            return 2;
+        }
+        return match build_one(h, o, strs_get(o.rest, 0)) {
+            Result.Ok(value: n) => 0,
+            Result.Err(error: e) => { eprintln(f"nazm-fuzz: {e}"); 2 },
+        };
+    }
+    if cmd == "run" {
+        if strs_len(o.rest) < 1 {
+            eprintln(usage());
+            return 2;
+        }
+        let seconds = match text_parse_int(strs_get(o.rest, 0)) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => 0 - 1,
+        };
+        if seconds < 1 || seconds > 86400 {
+            eprintln("nazm-fuzz: SECONDS is 1 to 86400");
+            return 2;
+        }
+        let mut targets = strs_new();
+        let mut i = 1;
+        while i < strs_len(o.rest) {
+            let t = strs_get(o.rest, i);
+            if !valid_target(t) {
+                eprintln(f"nazm-fuzz: unknown target {t}: {str_join(target_names(), " ")}");
+                return 2;
+            }
+            strs_push(targets, t);
+            i = i + 1;
+        }
+        if strs_len(targets) == 0 {
+            targets = target_names();
+        }
+        let report = strs_new();
+        let mut status = 0;
+        for t in targets {
+            match run_one(h, o, t, seconds) {
+                Result.Ok(value: text) => {
+                    let nl = find(text, "\n");
+                    let crashes = match text_parse_int(str_slice(text, 0, nl)) {
+                        Result.Ok(value: n) => n,
+                        Result.Err(error: e) => 0,
+                    };
+                    if crashes > 0 {
+                        status = 1;
+                    }
+                    let body = str_slice(text, nl + 1, str_len(text));
+                    print(body);
+                    strs_push(report, body);
+                },
+                Result.Err(error: e) => {
+                    eprintln(f"nazm-fuzz: {e}");
+                    return 2;
+                },
+            };
+        }
+        match write_at(h, f"{o.out}/report.txt", str_join(report, "")) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => { eprintln(f"nazm-fuzz: {e}"); return 2; },
+        };
+        match sh(h, tar_script(o.out), 600000) {
+            Result.Ok(value: s) => s,
+            Result.Err(error: e) => { eprintln(f"nazm-fuzz: {e}"); return 2; },
+        };
+        return status;
+    }
+    if cmd == "diff" {
+        if strs_len(o.rest) != 2 {
+            eprintln(usage());
+            return 2;
+        }
+        let count = match text_parse_int(strs_get(o.rest, 0)) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => 0 - 1,
+        };
+        let seed = match text_parse_int(strs_get(o.rest, 1)) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => 0 - 1,
+        };
+        if count < 1 || count > 100000 || seed < 0 {
+            eprintln("nazm-fuzz: COUNT is 1 to 100000 and SEED a non-negative integer");
+            return 2;
+        }
+        return match run_diff(h, count, seed, o.out, o.nazm_backend) {
+            Result.Ok(value: tally) => {
+                let line = tally_line(tally, seed, if o.nazm_backend { 4 } else { 3 });
+                println(line);
+                if tally.differ > 0 || tally.invalid > 0 { 1 } else { 0 }
+            },
+            Result.Err(error: e) => { eprintln(f"nazm-fuzz: {e}"); 2 },
+        };
+    }
+    eprintln(usage());
+    2
+}

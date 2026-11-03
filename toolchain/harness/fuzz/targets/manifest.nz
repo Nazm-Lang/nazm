@@ -1,0 +1,14 @@
+// Fuzz target `manifest` (S13.5): a package manifest and the TOML it is read from. The Rust target
+// is `nazm_package::Manifest::parse` and `VersionReq::parse` of every line.
+
+use "../../../../compiler/package.nz"
+use "../../../commands/toml.nz"
+use "common.nz"
+
+fn main(io: IoCap) -> Int {
+    let src = fz_input(io)
+    let m = pk_parse(src)
+    let t = tm_parse(src)
+    if pk_state(m) != 0 && !tm_ok(t) { return 1 }
+    0
+}

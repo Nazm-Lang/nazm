@@ -1,0 +1,40 @@
+// Fuzz target `lower` (S13.5): check, Core IR, MIR and the MIR validator — `compiler/` and
+// `toolchain/pipeline/`. The Rust target is `nazm_mir::lower` and `nazm_mir::verify` over a
+// checked program: MIR lowered from a program the checker accepts must verify. A program the
+// front end does not carry, or the pipeline refuses by name (`Err` from `lower_program`: outside
+// the native subset), is an ordinary input; a validator that rejects is a defect (status 70).
+
+use "@std/hash"
+use "@std/hashmap"
+use "@std/text"
+use "common.nz"
+use "../../../pipeline/cir.nz"
+use "../../../pipeline/types.nz"
+use "../../../pipeline/program.nz"
+use "../../../pipeline/verify.nz"
+use "../../../pipeline/expand.nz"
+
+fn main(io: IoCap) -> Int {
+    let src = fz_input(io)
+    let r = fz_check(io, src, true)
+    if !r.carried || r.errors > 0 { return 1 }
+    let c = match cir_read(r.doc) {
+        Ok(c) => c,
+        Err(e) => {
+            eprint("lower: the Core IR the front end wrote does not read: " + e + "\n")
+            return 70
+        },
+    }
+    if strs_len(expansions(c)) > 0 { return 1 }
+    let p = match lower_program(c) {
+        Ok(p) => p,
+        Err(e) => { return 1 },
+    }
+    let tt = table_build(c)
+    let errors = verify(p, tt)
+    if strs_len(errors) > 0 {
+        for e in errors { eprint("lower: MIR lowered from a checked program does not verify: " + e + "\n") }
+        return 70
+    }
+    0
+}
