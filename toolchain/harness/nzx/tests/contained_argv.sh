@@ -8,12 +8,13 @@
 # Each case runs both runners from the checkout's root and diffs standard output (the `docker run`
 # arguments, one a line) and standard error (the plan: deadline, bounds, export policy) and the
 # status. `--print-argv` starts no container, creates no volume and no directory; two cases
-# (`bench`, `archive`) and the probe's printing ask the image's platform with one `docker run --rm
+# (`bench-seed`, `archive`) and the probe's printing ask the image's platform with one `docker run --rm
 # ... uname -sm`, so the script takes the shared container turn first (`~/.cache/nazm-scripts/
 # contained-turn`) unless NZX_HAVE_TURN=1 says the caller holds it. It also asserts, on the nzx
 # side, that the isolation flags are present and the never-present list (`--privileged`, `--cap-add`,
 # `--device`, `--pid`, `--ipc`, `--userns`, `-v`, `--volume`, the Docker socket) is not, before the image.
-# `fuzz-seed` is the reference's `fuzz` (the Rust fuzzer over the seed), compared the same way.
+# `fuzz-seed` is the reference's `fuzz` (the Rust fuzzer over the seed), compared the same way; so is `bench-seed`
+# (`xtask bench` over the seed), the reference of `bench` (the Nazm benchmark, 13.6).
 # `mutate-seed` is the reference's `mutate` (the Rust campaign over the seed's entries): its cases run
 # `xtask contained mutate` against `nzx contained mutate-seed`, the workload's name normalised, and with a
 # `--only` the plans are element for element equal; with none the selection is the seed's entries by name
@@ -87,7 +88,7 @@ case_() {
     "$NZX" contained "${opts[@]+"${opts[@]}"}" --print-argv "$@" > "$work/n.out" 2> "$work/n.err0"
     local ns=$?
     # The unknown-workload message lists `mutate-seed` too, the one workload the reference does not have.
-    sed 's/ | mutate-seed//; s/ | fuzz-seed \[SECONDS\] \[TARGET...\]//' "$work/n.err0" > "$work/n.err"
+    sed 's/ | bench-seed//; s/ | mutate-seed//; s/ | fuzz-seed \[SECONDS\] \[TARGET...\]//' "$work/n.err0" > "$work/n.err"
     local why=""
     # A case that agrees by both refusing is no evidence: a plan must succeed, a refusal must say why.
     # Plans that read the amd64 image (its cache volume, its platform) refuse where it is not built.
@@ -131,14 +132,14 @@ case_seed() {
     done
     for a in "$@"; do
         xargs+=("$a")
-        if [ "$a" = mutate ]; then nargs+=(mutate-seed); elif [ "$a" = fuzz ]; then nargs+=(fuzz-seed); else nargs+=("$a"); fi
-        case $a in --only | --plan | --verify-killer | fuzz) explicit=1 ;; esac
+        if [ "$a" = mutate ]; then nargs+=(mutate-seed); elif [ "$a" = fuzz ]; then nargs+=(fuzz-seed); elif [ "$a" = bench ]; then nargs+=(bench-seed); else nargs+=("$a"); fi
+        case $a in --only | --plan | --verify-killer | fuzz | bench) explicit=1 ;; esac
     done
     "$XTASK" contained "${opts[@]+"${opts[@]}"}" --print-argv "${xargs[@]}" > "$work/x.out" 2> "$work/x.err"
     local xs=$?
-    "$NZX" contained "${opts[@]+"${opts[@]}"}" --print-argv "${nargs[@]}" 2> "$work/n.err0" | sed 's/mutate-seed/mutate/g; s/fuzz-seed/fuzz/g' > "$work/n.out"
+    "$NZX" contained "${opts[@]+"${opts[@]}"}" --print-argv "${nargs[@]}" 2> "$work/n.err0" | sed 's/mutate-seed/mutate/g; s/fuzz-seed/fuzz/g; s/bench-seed/bench/g' > "$work/n.out"
     local ns=${PIPESTATUS[0]}
-    sed 's/mutate-seed/mutate/g; s/fuzz-seed/fuzz/g' "$work/n.err0" > "$work/n.err"
+    sed 's/mutate-seed/mutate/g; s/fuzz-seed/fuzz/g; s/bench-seed/bench/g' "$work/n.err0" > "$work/n.err"
     local why=""
     [ "$xs" = 0 ] && [ "$ns" = 0 ] || why="status xtask $xs, nzx $ns"
     cmp -s "$work/x.err" "$work/n.err" || why="$why; stderr differs"
@@ -231,8 +232,6 @@ selfbuild stages|selfbuild stages=2
 selfbuild llvm|selfbuild stages=3 backend=llvm
 selfbuild nazm|selfbuild backend=nazm
 release|release
-bench|bench
-bench save|bench --save
 bench cache|--cache bench run true
 archive|archive
 run|run echo hi
@@ -240,7 +239,6 @@ run spaces|run echo   hi there
 run p8t8 cache|--profile p8t8 --cache bench run ls
 amd64 selfhost|--platform amd64 selfhost
 amd64 tests|--platform amd64 --profile p4t4 tests
-amd64 bench|--platform amd64 bench --save
 amd64 archive|--platform amd64 archive
 amd64 release|--platform amd64 release
 probe|probe
@@ -263,6 +261,8 @@ while IFS='|' read -r name args; do
     # shellcheck disable=SC2086
     case_seed "$name" $args
 done << 'SEED'
+bench-seed|bench
+bench-seed save|bench --save
 fuzz-seed|fuzz
 fuzz-seed 60|fuzz 60
 fuzz-seed targets|fuzz 60 front lower bogus
@@ -281,6 +281,8 @@ nzx_case "mutate (nazm)" "nazm-mutate session /work/mut~--seed /work/target/debu
 nzx_case "fuzz (nazm)" "nazm-fuzz run 300 ~--src /src --nazm \$NAZM~nazm-fuzz diff 600 121364944846963~cargo build -q --locked -p nazm-cli --bin nazm --jobs 4~build.sh nazm-fuzz" fuzz
 nzx_case "fuzz (nazm) targets" "nazm-fuzz run 60 front lower --src /src~nazm-fuzz diff 120 121364944846963" fuzz 60 front lower bogus
 nzx_case "fuzz (nazm) p1" "nazm-fuzz run 30 run --src /src~--jobs 1" --profile p1 fuzz 30 run
+nzx_case "bench (nazm)" "build.sh nazm-bench~/work/nzx/nazm-bench --runs 5 --check --src /src --nazm \$NAZM~cargo build --release --locked -p nazm-cli --jobs 1~NAZM_BENCH_DIR=/work/benchout~record.json" bench
+nzx_case "bench (nazm) save" "nazm-bench --runs 5 --save --src /src~baseline-\$slug.json" bench --save
 nzx_case "mutate (nazm) only resume" "--only 'a-b_c'~--resume~--strategy 'full'" mutate --only a-b_c --strategy full --resume
 nzx_case "mutate (nazm) verify" "--verify-killer 'abc.d'~--killer 'foo::bar'" mutate --verify-killer abc.d --killer foo::bar
 nzx_case "mutate (nazm) plan" "nazm-mutate plan /work/mut --only 'x1'" mutate --plan --only x1

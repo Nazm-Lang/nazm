@@ -1052,11 +1052,34 @@ fn compare(root: &Path, measurements: &[Measurement]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    let (lines, failed) = judge(&text, measurements);
+    for (to_stderr, line) in lines {
+        if to_stderr {
+            eprintln!("{line}");
+        } else {
+            println!("{line}");
+        }
+    }
+    if failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+/// What `--check` says about `measurements` against the baseline's text, as the lines it
+/// prints in the order it prints them (`true`: to standard error) and whether it fails.
+///
+/// Pure: no host check and no file. The Nazm port (`toolchain/harness/bench/check.nz`) is
+/// held to this function's verdicts on the fixed pairs in
+/// `toolchain/harness/bench/fixtures/pairs.txt` (S13.6).
+fn judge(text: &str, measurements: &[Measurement]) -> (Vec<(bool, String)>, bool) {
+    let mut lines: Vec<(bool, String)> = Vec::new();
     let mut regressions = Vec::new();
     let mut improvements = Vec::new();
     for m in measurements {
-        let Some(was) = baseline_median(&text, &m.program, m.stage) else {
-            println!("bench: {} is not in the baseline", m.key());
+        let Some(was) = baseline_median(text, &m.program, m.stage) else {
+            lines.push((false, format!("bench: {} is not in the baseline", m.key())));
             continue;
         };
         let now = m.median();
@@ -1096,30 +1119,39 @@ fn compare(root: &Path, measurements: &[Measurement]) -> ExitCode {
             .iter()
             .any(|m| m.program == program && m.stage == stage)
         {
-            println!("bench: {program}/{stage} is in the baseline and was not measured");
+            lines.push((
+                false,
+                format!("bench: {program}/{stage} is in the baseline and was not measured"),
+            ));
         }
     }
 
     for i in &improvements {
-        println!("faster: {i}");
+        lines.push((false, format!("faster: {i}")));
     }
     if regressions.is_empty() {
-        println!(
-            "\nbench: nothing slower than the baseline by more than {:.0}% and {FLOOR_MS:.0} ms",
-            TOLERANCE * 100.0
-        );
-        return ExitCode::SUCCESS;
+        lines.push((
+            false,
+            format!(
+                "\nbench: nothing slower than the baseline by more than {:.0}% and {FLOOR_MS:.0} ms",
+                TOLERANCE * 100.0
+            ),
+        ));
+        return (lines, false);
     }
     for r in &regressions {
-        eprintln!("slower: {r}");
+        lines.push((true, format!("slower: {r}")));
     }
-    eprintln!(
-        "\nbench: {} measurement(s) slower than the baseline by more than {:.0}% and \
-         {FLOOR_MS:.0} ms",
-        regressions.len(),
-        TOLERANCE * 100.0
-    );
-    ExitCode::FAILURE
+    lines.push((
+        true,
+        format!(
+            "\nbench: {} measurement(s) slower than the baseline by more than {:.0}% and \
+             {FLOOR_MS:.0} ms",
+            regressions.len(),
+            TOLERANCE * 100.0
+        ),
+    ));
+    (lines, true)
 }
 
 /// A string field from the baseline. A hand-rolled read rather than a JSON parser: the
@@ -1183,6 +1215,67 @@ mod tests {
         let v2 = "{\"program\": \"sieve\", \"stage\": \"native-O2\", \"min_ms\": 1.000, \"median_ms\": 2.500, \"p90_ms\": 3.000, \"max_ms\": 4.000, \"mad_ms\": 0.100, \"runs_ms\": [1.000, 2.500]}";
         for text in [v1, v2] {
             assert_eq!(baseline_median(text, "sieve", "native-O2"), Some(2.5));
+        }
+    }
+
+    /// `--check`'s verdicts on the fixed pairs the Nazm port is held to (S13.6): the pairs are
+    /// `toolchain/harness/bench/fixtures/pairs.txt`, the verdicts `pairs.verdict`. With
+    /// `NAZM_BLESS_BENCH_FIXTURES=1` this test writes the verdicts (they are this function's, never
+    /// the port's); without it, it requires the file to be what this function says now.
+    #[test]
+    #[allow(clippy::expect_used, clippy::panic)]
+    fn the_verdicts_on_the_fixed_pairs_are_the_ones_the_nazm_port_is_held_to() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../toolchain/harness/bench/fixtures");
+        let pairs = std::fs::read_to_string(dir.join("pairs.txt")).expect("pairs.txt");
+        let mut out = String::new();
+        let mut name = String::new();
+        let mut base: Vec<String> = Vec::new();
+        let mut now: Vec<Measurement> = Vec::new();
+        for line in pairs.lines() {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some(n) = line.strip_prefix("case ") {
+                n.clone_into(&mut name);
+                base.clear();
+                now.clear();
+            } else if let Some(b) = line.strip_prefix("base ") {
+                base.push(b.to_owned());
+            } else if let Some(n) = line.strip_prefix("now ") {
+                let mut w = n.split_whitespace();
+                let program = w.next().expect("program").to_owned();
+                let stage: &'static str =
+                    Box::leak(w.next().expect("stage").to_owned().into_boxed_str());
+                let runs = w
+                    .map(|us| Duration::from_micros(us.parse().expect("microseconds")))
+                    .collect();
+                now.push(Measurement {
+                    program,
+                    stage,
+                    runs,
+                });
+            } else if line == "end" {
+                let (lines, failed) = judge(&base.join("\n"), &now);
+                let _ = writeln!(out, "case {name}");
+                for (to_stderr, l) in lines {
+                    let _ = writeln!(
+                        out,
+                        "{}> {}",
+                        if to_stderr { 2 } else { 1 },
+                        l.replace('\n', "\\n")
+                    );
+                }
+                let _ = writeln!(out, "exit {}", u8::from(failed));
+            } else {
+                panic!("pairs.txt: {line}");
+            }
+        }
+        let golden = dir.join("pairs.verdict");
+        if std::env::var("NAZM_BLESS_BENCH_FIXTURES").as_deref() == Ok("1") {
+            std::fs::write(&golden, &out).expect("write pairs.verdict");
+        } else {
+            let want = std::fs::read_to_string(&golden).expect("pairs.verdict");
+            assert_eq!(out, want);
         }
     }
 }
