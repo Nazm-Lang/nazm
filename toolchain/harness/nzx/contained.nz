@@ -175,7 +175,7 @@ fn build_plan(c: Ctx, args: Strs, profile: Profile, b0: Bounds, print_argv: Bool
         let identity = f"NAZM_SOURCE_COMMIT={commit} NAZM_SOURCE_TREE_CLEAN={clean} SOURCE_DATE_EPOCH={epoch} ";
         return Result[Plan, Str].Ok(value: Plan(name: "release", argv: shell(script_release(identity)), bounds: b));
     }
-    if w == "mutate" {
+    if w == "mutate" || w == "mutate-seed" {
         let b = bounds_with_deadline(b0, 3000);
         let passed = match mutate_passthrough(rest) {
             Result.Ok(value: x) => x,
@@ -188,6 +188,12 @@ fn build_plan(c: Ctx, args: Strs, profile: Profile, b0: Bounds, print_argv: Bool
         let commit_arg = if str_len(commit) == 0 { "" } else { f" --source-commit {commit}" };
         let budget = if text_contains(passed, "--budget-secs") || text_contains(passed, "--plan") || text_contains(passed, "--verify-killer") { "" } else { " --budget-secs 2400" };
         let deadline = b.deadline_secs - 20;
+        if w == "mutate-seed" {
+            return Result[Plan, Str].Ok(value: Plan(name: "mutate-seed", argv: shell(script_mutate_seed(j, deadline, mutate_parallelism(profile), commit_arg, budget, passed)), bounds: b));
+        }
+        if text_contains(passed, "--plan") {
+            return Result[Plan, Str].Ok(value: Plan(name: "mutate", argv: shell(script_mutate_plan(j, only_options(rest))), bounds: b));
+        }
         return Result[Plan, Str].Ok(value: Plan(name: "mutate", argv: shell(script_mutate(j, deadline, mutate_parallelism(profile), commit_arg, budget, passed)), bounds: b));
     }
     if w == "bench" {
@@ -268,7 +274,7 @@ fn build_plan(c: Ctx, args: Strs, profile: Profile, b0: Bounds, print_argv: Bool
         return Result[Plan, Str].Ok(value: Plan(name: "run", argv: shell(cmd), bounds: b0));
     }
     let shown = if str_len(w) == 0 && strs_len(args) == 0 { "<none>" } else { w };
-    Result[Plan, Str].Err(error: f"contained: unknown workload {debug_quote(shown)}\n  probe | tests | selfhost | bootstrap | selfbuild | bench | mutate | fuzz [SECONDS] [TARGET...] | archive | run <command>")
+    Result[Plan, Str].Err(error: f"contained: unknown workload {debug_quote(shown)}\n  probe | tests | selfhost | bootstrap | selfbuild | bench | mutate | mutate-seed | fuzz [SECONDS] [TARGET...] | archive | run <command>")
 }
 
 fn tenths(ms: Int) -> Str ! {} {
@@ -294,7 +300,7 @@ fn print_plan(c: Ctx, name: Str, argv: Strs, b: Bounds) -> Int ! { io } {
 /// Append the journal lines a contained campaign printed to the host's copy, under
 /// `target/mutation-campaigns/<key>/journal.jsonl`. The container's own journal dies with it; what it
 /// printed is the only record that crosses, so it is collected whatever the outcome.
-fn collect_journal(c: Ctx, stdout: Str) -> Int ! { io } {
+fn collect_journal(c: Ctx, stdout: Str, campaigns: Str) -> Int ! { io } {
     let io = c.h.io;
     let v = c.h.v;
     let prefix = "nazm-journal ";
@@ -343,7 +349,7 @@ fn collect_journal(c: Ctx, stdout: Str) -> Int ! { io } {
         }
     }
     for key in order {
-        let dir = str_vouch(f"{c.repo}/target/mutation-campaigns/{key}");
+        let dir = str_vouch(f"{c.repo}/target/{campaigns}/{key}");
         match dir_create_all(io, dir) {
             Result.Ok(value: x) => {
                 let path = str_vouch(f"{dir}/journal.jsonl");
@@ -588,11 +594,11 @@ pub fn contained_main(h: Caps, args0: Strs) -> Int ! { io, spawn } {
     }
     say(io, f"contained: {name} — {b.memory_mb} MiB memory (swap equal), {b.milli_cpus / 1000}.{b.milli_cpus % 1000 / 100} CPU, {b.pids} pids, {b.storage_gb} GiB disk, {b.deadline_secs} s deadline");
     let r = run_container(c, name, plan.argv, b);
-    if name == "mutate" {
+    if name == "mutate" || name == "mutate-seed" {
         let kept = if r.stdout_bytes < b.output_cap { r.stdout_bytes } else { b.output_cap };
         if str_len(r.out_spool) > 0 && kept > 0 {
             match file_read_all(io, r.out_spool) {
-                Result.Ok(value: bytes) => { collect_journal(c, bytes_to_str(bytes)); },
+                Result.Ok(value: bytes) => { collect_journal(c, bytes_to_str(bytes), if name == "mutate" { "mutation-campaigns-nz" } else { "mutation-campaigns" }); },
                 Result.Err(error: e) => {},
             };
         }
@@ -614,12 +620,12 @@ pub fn contained_main(h: Caps, args0: Strs) -> Int ! { io, spawn } {
         say(io, f"contained: REFUSED — containment is unavailable: {r.outcome.why}");
         return 1;
     }
-    if w == "failed" && r.outcome.code == 124 && name == "mutate" {
-        say(io, "contained: mutate ended INCOMPLETE — the session deadline passed with a mutant still in flight. That mutant was restored with the container and never journaled, so it has no verdict and runs again. Continue with `cargo xtask contained mutate --resume` and the same selection.");
+    if w == "failed" && r.outcome.code == 124 && (name == "mutate" || name == "mutate-seed") {
+        say(io, f"contained: {name} ended INCOMPLETE — the session deadline passed with a mutant still in flight. That mutant was restored with the container and never journaled, so it has no verdict and runs again. Continue with `nzx contained {name} --resume` and the same selection.");
         return 3;
     }
-    if w == "failed" && r.outcome.code == 3 && name == "mutate" {
-        say(io, "contained: mutate ended INCOMPLETE — the session budget ran out before every selected mutant was finalized. Nothing about the rest is established. Continue with `cargo xtask contained mutate --resume` and the same selection.");
+    if w == "failed" && r.outcome.code == 3 && (name == "mutate" || name == "mutate-seed") {
+        say(io, f"contained: {name} ended INCOMPLETE — the session budget ran out before every selected mutant was finalized. Nothing about the rest is established. Continue with `nzx contained {name} --resume` and the same selection.");
         return 3;
     }
     if w == "tool-failure" || w == "export-refused" {

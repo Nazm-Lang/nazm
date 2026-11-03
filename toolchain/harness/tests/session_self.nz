@@ -1,0 +1,535 @@
+// The campaign session's own tests (R8 slice 13, S13.4): the tier law and the session around it,
+// held to what `xtask/tests/lifecycle.rs` and `campaign.rs`'s tests hold the Rust campaign to — on a
+// small tree built for the purpose, with the checkout's `nazm` (the seed: `$NAZM`) as the test driver
+// and the builder, so no Nazm-built program runs on the host:
+//
+//     NAZM=$CARGO_TARGET_DIR/debug/nazm nazm test --interpret-only toolchain/harness/tests/session_self.nz
+//
+// The toy tree has a helper library, a test file of three tests, a program that uses the helper and a
+// catalogue of eight entries: one a Direct killer catches, one only the whole file catches, one
+// nothing catches, one whose pattern is absent, one that does not compile, one with no mapped killer,
+// one whose test overwrites the mutated file (the restoration must fail and the session must stop),
+// and one that mutates the seed (refused). Verdicts are read from the journal the session wrote.
+
+use "@std/file"
+use "@std/text"
+use "@std/process"
+use "@std/map"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/procs.nz"
+use "../mutate/catalogue.nz"
+use "../mutate/closure.nz"
+use "../mutate/killers.nz"
+use "../mutate/campaign.nz"
+use "../mutate/core.nz"
+use "../mutate/session.nz"
+
+const HELPER: Str = "pub fn add(a: Int, b: Int) -> Int ! {} {\n    a + b\n}\n\npub fn mul(a: Int, b: Int) -> Int ! {} {\n    a * b\n}\n\npub fn spare() -> Int ! {} {\n    7\n}\n";
+
+const TOOL: Str = "use \"helper.nz\"\n\nfn main() -> Int {\n    add(1, 2) + mul(1, 1) - 4\n}\n";
+
+const FOO: Str = "use \"@std/file\"\nuse \"@std/text\"\nuse \"../lib/helper.nz\"\n\n@test\nfn the_sum() -> Result[Int, Str] ! {} {\n    if add(1, 2) == 3 { Result[Int, Str].Ok(value: 0) } else { Result[Int, Str].Err(error: \"add\") }\n}\n\n@test\nfn the_product() -> Result[Int, Str] ! {} {\n    if mul(2, 3) == 6 { Result[Int, Str].Ok(value: 0) } else { Result[Int, Str].Err(error: \"mul\") }\n}\n\n@test\nfn meddles(io: IoCap, v: VouchCap) -> Result[Int, Str] ! { io } {\n    let p = str_vouch(\"toolchain/harness/lib/helper.nz\");\n    match file_read_all(io, p) {\n        Result.Ok(value: b) => {\n            if text_contains(bytes_to_str(b), \"a - b\") {\n                match file_create(io, p) { Result.Ok(value: f) => { file_write_str(f, \"garbage\"); 0 }, Result.Err(error: e) => 0 };\n            }\n            Result[Int, Str].Ok(value: 0)\n        },\n        Result.Err(error: e) => Result[Int, Str].Err(error: \"unreadable\"),\n    }\n}\n";
+
+const CATALOGUE: Str = r#"[[mutation]]
+name = "t-sum-direct"
+why = "the sum becomes a difference"
+file = "toolchain/harness/lib/helper.nz"
+find = "    a + b"
+replace = "    a - b"
+killers = [{ package = "nazm-cli", test = "cli_x", name = "foo::the_sum" }]
+
+[[mutation]]
+name = "t-product-focused"
+why = "the product becomes a sum"
+file = "toolchain/harness/lib/helper.nz"
+find = "    a * b"
+replace = "    a + b"
+killers = [{ package = "nazm-cli", test = "cli_x", name = "foo::the_sum" }]
+
+[[mutation]]
+name = "t-spare-survives"
+why = "nothing reads the spare"
+file = "toolchain/harness/lib/helper.nz"
+find = "    7"
+replace = "    8"
+killers = [{ package = "nazm-cli", test = "cli_x", name = "foo::the_sum" }]
+
+[[mutation]]
+name = "t-absent"
+why = "the pattern is not there"
+file = "toolchain/harness/lib/helper.nz"
+find = "    a / b"
+replace = "    a % b"
+killers = [{ package = "nazm-cli", test = "cli_x", name = "foo::the_sum" }]
+
+[[mutation]]
+name = "t-does-not-compile"
+why = "the helper loses its name"
+file = "toolchain/harness/lib/helper.nz"
+find = "pub fn add("
+replace = "pub fn addx("
+killers = [{ package = "nazm-cli", test = "cli_x", name = "foo::the_sum" }]
+
+[[mutation]]
+name = "t-unmapped"
+why = "its only killer is a Rust test"
+file = "toolchain/harness/lib/helper.nz"
+find = "    a * b"
+replace = "    a * b + 1"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_bare_name" }]
+
+[[mutation]]
+name = "t-meddles"
+why = "its test overwrites the mutated file"
+file = "toolchain/harness/lib/helper.nz"
+find = "pub fn spare() -> Int ! {} {"
+replace = "pub fn spare() -> Int ! {} { let a = 1; let b = 2; let c = a - b;"
+killers = [{ package = "nazm-cli", test = "cli_x", name = "foo::meddles" }]
+
+[[mutation]]
+name = "t-seed"
+why = "a seed file"
+file = "crates/x/src/lib.rs"
+find = "a"
+replace = "b"
+killers = [{ package = "x", lib = true, name = "t" }]
+
+[[mutation]]
+name = "t-after-meddles"
+why = "it comes after the entry that meddles"
+file = "toolchain/harness/lib/helper.nz"
+find = "    7"
+replace = "    9"
+killers = [{ package = "nazm-cli", test = "cli_x", name = "foo::the_sum" }]
+"#;
+
+fn seed(io: IoCap) -> Str ! { io } {
+    nazm_bin(io)
+}
+
+fn toy(h: Caps) -> Result[Str, Str] ! { io } {
+    let d = scratch_new(h);
+    scratch_write(h, d, "xtask/mutations/mutations.toml", CATALOGUE)?;
+    scratch_write(h, d, "toolchain/harness/lib/helper.nz", HELPER)?;
+    scratch_write(h, d, "toolchain/harness/lib/tool.nz", TOOL)?;
+    scratch_write(h, d, "toolchain/harness/cli/foo.nz", FOO)?;
+    scratch_write(h, d, "toolchain/harness/tests/stays-rust.txt", "# nothing stays Rust here\n")?;
+    scratch_write(h, d, "library/core/prelude.nz", "// the prelude\n")?;
+    Result[Str, Str].Ok(value: d)
+}
+
+fn options(h: Caps, d: Str, only: Str) -> Options ! { io } {
+    let mut o = options_default();
+    o.root = f"{d}/tree";
+    o.copy_from = "";
+    o.bin = f"{d}/bin";
+    o.seed = seed(h.io);
+    o.driver = seed(h.io);
+    strs_push(o.driver_flags, "--interpret-only");
+    for n in text_split(only, " ") {
+        if str_len(n) > 0 {
+            strs_push(o.only, n);
+        }
+    }
+    o.campaign_dir = f"{d}/campaigns";
+    o.programs = vec_new[Program]();
+    vec_push(o.programs, Program(name: "tool", source: "toolchain/harness/lib/tool.nz"));
+    o.reset_derived = true;
+    o.toolchain_id = "the-seed";
+    o.deadlines = Deadlines(build: 300, killer: 120, focused: 120, full: 300);
+    o
+}
+
+fn prepare(h: Caps) -> Result[Str, Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    let t = toy(h)?;
+    // The toy tree is the session's tree: moved into place under `tree/`.
+    let r = run(h, "mv", words_of(t, f"{d}/tree"), "", env_here(h.io));
+    check_that(r.code == 0, f"mv: {r.stderr}")?;
+    Result[Str, Str].Ok(value: d)
+}
+
+fn words_of(a: Str, b: Str) -> Strs ! {} {
+    let out = strs_new();
+    strs_push(out, a);
+    strs_push(out, b);
+    out
+}
+
+/// The verdict the session journaled for `name`, `""` when it journaled none.
+fn journaled(h: Caps, d: Str, name: Str) -> Str ! { io } {
+    let v = h.v;
+    let found = dir_list(h.io, str_vouch(f"{d}/campaigns"));
+    match found {
+        Result.Ok(value: keys) => {
+            for k in keys {
+                match journal_read(h, f"{d}/campaigns/{k}/journal.jsonl", k) {
+                    Result.Ok(value: ps) => {
+                        for p in ps {
+                            if p.name == name {
+                                return f"{p.verdict}@{p.tier}";
+                            }
+                        }
+                        0
+                    },
+                    Result.Err(error: e) => 0,
+                };
+            }
+            ""
+        },
+        Result.Err(error: e) => "",
+    }
+}
+
+fn expect(what: Str, got: Str, want: Str) -> Result[Int, Str] ! {} {
+    check_that(got == want, f"{what}: {got}, not {want}")
+}
+
+@test
+fn a_killer_maps_only_to_a_ported_test_that_does_not_stay_rust(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = toy(h)?;
+    let files = map_new[Str]();
+    let ks = vec_new[Killer]();
+    vec_push(ks, Killer(package: "nazm-cli", target: "test=cli_x", name: "foo::the_sum"));
+    vec_push(ks, Killer(package: "nazm-cli", target: "test=cli_x", name: "foo::the_sum"));
+    vec_push(ks, Killer(package: "nazm-cli", target: "test=selfhost", name: "a_bare_name"));
+    vec_push(ks, Killer(package: "nazm-cli", target: "test=cli_x", name: "nofile::t"));
+    vec_push(ks, Killer(package: "nazm-cli", target: "test=cli_x", name: "foo::absent"));
+    vec_push(ks, Killer(package: "nazm-cli", target: "test=cli_x", name: "foo::the_product"));
+    vec_push(ks, Killer(package: "nazm-lang", target: "lib", name: "foo::the_sum"));
+    let stays = stays_of("# comment\nfoo::the_product  library entry\n\n");
+    let m = map_killers(h, d, ks, stays, files);
+    scratch_remove(h, d);
+    check_that(vec_len(m) == 1, f"{vec_len(m)} mapped")?;
+    let k = vec_get(m, 0);
+    expect("the mapping", f"{k.path} {k.filter}", "toolchain/harness/cli/foo.nz foo::the_sum")?;
+    check_that(is_nazm_entry("library/std/text.nz") && is_nazm_entry("compiler/emit.nz") && is_nazm_entry("toolchain/codegen/a64.nz"), "the Nazm entries")?;
+    check_that(!is_nazm_entry("crates/nazm-cli/src/main.rs") && !is_nazm_entry("xtask/src/mutate.rs") && !is_nazm_entry("scripts/x.sh"), "the seed entries")
+}
+
+@test
+fn a_use_closure_follows_the_use_lines_and_the_library(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = toy(h)?;
+    scratch_write(h, d, "library/std/two.nz", "use \"@std/one\"\n")?;
+    scratch_write(h, d, "library/std/one.nz", "// leaf\n")?;
+    scratch_write(h, d, "library/std/other.nz", "// not used\n")?;
+    scratch_write(h, d, "toolchain/harness/lib/deep.nz", "    use \"@std/two\"\nuse \"helper.nz\"\nuse \"../cli/foo.nz\"\n")?;
+    let cl = closure_of(h, d, "toolchain/harness/lib/deep.nz");
+    scratch_remove(h, d);
+    check_that(in_closure(cl, "toolchain/harness/lib/deep.nz"), "itself")?;
+    check_that(in_closure(cl, "library/std/two.nz") && in_closure(cl, "library/std/one.nz"), "a library file reached through another")?;
+    check_that(in_closure(cl, "toolchain/harness/lib/helper.nz") && in_closure(cl, "toolchain/harness/cli/foo.nz"), "relative files")?;
+    check_that(in_closure(cl, "library/core/prelude.nz"), "the prelude is every program's")?;
+    check_that(!in_closure(cl, "library/std/other.nz"), "a library file nothing reaches")?;
+    expect("a std use", resolve_use("a/b/c.nz", "@std/text"), "library/std/text.nz")?;
+    expect("a core use", resolve_use("a/b/c.nz", "@core/prelude.nz"), "library/core/prelude.nz")?;
+    expect("a relative use", resolve_use("a/b/c.nz", "../d/e.nz"), "a/d/e.nz")?;
+    expect("an unknown package", resolve_use("a/b/c.nz", "@elsewhere/x"), "")
+}
+
+fn obs(passed: Int, failing: Int, results: Int, crash: Str) -> Obs ! {} {
+    Obs(kind: "completed", why: "", passed: passed, failing: failing, results: results, crash: crash)
+}
+
+@test
+fn the_tier_law_judges_a_step_as_the_reference_judges_it(io: IoCap) -> Result[Int, Str] ! {} {
+    let timed = Obs(kind: "timed-out", why: "deadline passed after 1s", passed: 0, failing: 0, results: 0, crash: "");
+    let j = judge(1, "foo::a", timed, 1, true);
+    expect("a timeout", f"{j.verdict.word} {j.verdict.detail}", "timeout tier 1 (foo::a): deadline passed after 1s")?;
+    let failed = Obs(kind: "failed", why: "no results", passed: 0, failing: 0, results: 0, crash: "");
+    expect("a runner failure", judge(1, "foo::a", failed, 1, true).verdict.word, "runner-error")?;
+    let crashed = judge(1, "foo::a", obs(0, 0, 0, "the heap limit of"), 1, true);
+    expect("a crash", f"{crashed.outcome} {crashed.verdict.word} {crashed.verdict.detail}", "crash mutant-crash the heap limit of; 1 binary(ies) did not report")?;
+    expect("too few results", judge(2, "f.nz", obs(2, 0, 2, ""), 3, false).verdict.detail, "tier 2 (f.nz): only 2 of 3 tests reported")?;
+    expect("an exact killer that selected two", judge(1, "foo::a", obs(2, 0, 2, ""), 1, true).verdict.detail, "tier 1 (foo::a): an exact killer selected 2 tests, not one")?;
+    let pass = judge(1, "foo::a", obs(1, 0, 1, ""), 1, true);
+    check_that(!pass.decided && pass.outcome == "pass", "a pass decides nothing")?;
+    let caught = judge(3, "full suite", obs(5, 2, 7, ""), 7, false);
+    expect("a failure", f"{caught.verdict.word} {caught.verdict.tier} {caught.verdict.failing} {caught.verdict.detail}", "caught 3 2 tier 3: full suite; 2 test(s) failed")?;
+    expect("a killer word", killer_word(obs(1, 0, 1, "")), "passes")?;
+    expect("a killer word", killer_word(obs(0, 1, 1, "")), "fails")?;
+    expect("a killer word", killer_word(obs(2, 0, 2, "")), "unclear")?;
+    check_that(is_semantic("caught") && is_semantic("survived") && is_semantic("not-injected") && is_semantic("unusable") && is_semantic("mutant-crash") && !is_semantic("timeout") && !is_semantic("runner-error"), "only a verdict about the mutant is reused")
+}
+
+fn finished(code: Int, out: Str, err: Str) -> Finished ! {} {
+    Finished(ended: "exited", code: code, stdout: out, stderr: err, ms: 5, swept: 0, why: "")
+}
+
+@test
+fn a_test_run_is_read_as_the_reference_reads_a_cargo_run(io: IoCap) -> Result[Int, Str] ! {} {
+    let pass = "{\"schema\":\"nazm.test/1\",\"name\":\"a\",\"passed\":true}\n";
+    let fail = "{\"schema\":\"nazm.test/1\",\"name\":\"b\",\"passed\":false}\n";
+    let o = observe(finished(0, f"{pass}{fail}{pass}nazm: 2 of 3 passed\n", ""), 3, false);
+    expect("counts", f"{o.kind} {o.passed} {o.failing} {o.results}", "completed 2 1 3")?;
+    let none = observe(finished(1, "", "nazm: no test cases\n"), 1, false);
+    expect("no results", f"{none.kind}: {none.why}", "failed: the run produced no results at all (status 1). stderr: nazm: no test cases")?;
+    let dead = observe(finished(256 + 11, "", "boom: SIGSEGV\n"), 1, false);
+    expect("a crash", f"{dead.kind} {dead.crash}", "completed SIGSEGV")?;
+    let sig = observe(finished(256 + 9, pass, ""), 1, false);
+    expect("a signalled runner", sig.kind, "failed")?;
+    let timed = observe(Finished(ended: "timed-out", code: 0 - 1, stdout: "", stderr: "", ms: 4000, swept: 0, why: ""), 1, false);
+    expect("a deadline", f"{timed.kind}: {timed.why}", "timed-out: deadline passed after 4s")?;
+    let held = observe(Finished(ended: "pipe-held", code: 0, stdout: "", stderr: "", ms: 4000, swept: 0, why: ""), 1, false);
+    expect("a held pipe", held.kind, "failed")?;
+    let over = observe(Finished(ended: "overflowed", code: 0, stdout: "", stderr: "", ms: 4000, swept: 0, why: ""), 1, false);
+    expect("an overflow", over.kind, "failed")?;
+    check_that(str_len(crash_signature("fine", "fine")) == 0, "no signature in quiet output")
+}
+
+@test
+fn the_identity_has_one_key_and_a_journal_is_read_only_under_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let names = strs_new();
+    strs_push(names, "a");
+    strs_push(names, "b");
+    let id = Identity(tree: "t", catalogue: "c", harness: "h", toolchain: "x", strategy: "targeted", selected: names, deadlines: deadlines_default(), reset_derived: true, cargo_jobs: 1, test_threads: 1, cpu_quota: "unbounded");
+    let other = Identity(tree: "t2", catalogue: "c", harness: "h", toolchain: "x", strategy: "targeted", selected: names, deadlines: deadlines_default(), reset_derived: true, cargo_jobs: 1, test_threads: 1, cpu_quota: "unbounded");
+    check_that(str_len(identity_key(id)) == 16 && identity_key(id) != identity_key(other), "a key of sixteen characters, moved by the tree")?;
+    check_that(text_contains(identity_json(id), "\"schema\":\"nazm.mutation-campaign/2\""), "the schema")?;
+    let d = scratch_new(h);
+    let j = journal_open(h, d, id, "abc123", false)?;
+    let rec = Record(index: 3, name: "a", file: "f.nz", strategy: "targeted", verdict: "caught", detail: "tier 1: x; 1 test(s) failed", tier: 1, by: "x", failing: 1, steps: vec_new[StepRun](), original_digest: "o", mutated_digest: "m", restored_digest: "o", apply_ms: 1, build_ms: 2, tests_ms: 3, restore_ms: 4, total_ms: 10, candidates: strs_new());
+    journal_append(h, j, rec)?;
+    let liar = Record(index: 4, name: "b", file: "f.nz", strategy: "targeted", verdict: "caught", detail: "", tier: 1, by: "x", failing: 1, steps: vec_new[StepRun](), original_digest: "o", mutated_digest: "m", restored_digest: "NOT o", apply_ms: 0, build_ms: 0, tests_ms: 0, restore_ms: 0, total_ms: 0, candidates: strs_new());
+    let key = identity_key(id);
+    let path = f"{d}/{key}/journal.jsonl";
+    let ps = journal_read(h, path, key)?;
+    check_that(vec_len(ps) == 1 && vec_get(ps, 0).name == "a" && vec_get(ps, 0).tier == 1, "the record read back")?;
+    let wrong = journal_read(h, path, identity_key(other));
+    let refused = match wrong {
+        Result.Ok(value: x) => "",
+        Result.Err(error: e) => e,
+    };
+    check_that(text_contains(refused, "different campaign identity"), f"another key reads nothing: {refused}")?;
+    journal_append(h, j, liar)?;
+    let bad = match journal_read(h, path, key) {
+        Result.Ok(value: x) => "",
+        Result.Err(error: e) => e,
+    };
+    scratch_remove(h, d);
+    check_that(text_contains(bad, "claims a verdict without a verified restoration"), f"a record without a verified restoration: {bad}")?;
+    let line = record_json(rec);
+    check_that(text_starts_with(line, "{\"kind\":\"mutant\",\"index\":3,\"name\":\"a\"") && text_contains(line, "\"tier\":\"direct\"") && text_contains(line, "\"restored\":true") && text_contains(line, "\"mutated_digest\":\"m\""), line)
+}
+
+@test
+fn a_session_decides_every_mutant_by_the_tier_law_and_leaves_the_tree_as_it_found_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prepare(h)?;
+    let o = options(h, d, "t-sum-direct t-product-focused t-spare-survives t-absent t-does-not-compile t-unmapped");
+    let before = tree_digest(h, o.root, true)?;
+    let end = run_session(h, o);
+    let after = tree_digest(h, o.root, true)?;
+    let gone = !file_exists_at(io, str_vouch(backup_path(o.root)));
+    // Programs a mutant rebuilt are put back to the pristine bytes.
+    let tool_now = read_raw(h, f"{o.bin}/tool")?;
+    let tool_pristine = read_raw(h, f"{o.bin}/../bin.pristine/tool")?;
+    let direct = journaled(h, d, "t-sum-direct");
+    let focused = journaled(h, d, "t-product-focused");
+    let survived = journaled(h, d, "t-spare-survives");
+    let absent = journaled(h, d, "t-absent");
+    let unusable = journaled(h, d, "t-does-not-compile");
+    let unmapped = journaled(h, d, "t-unmapped");
+    scratch_remove(h, d);
+    expect("a Direct killer", direct, "caught@1")?;
+    expect("a mutant only the whole file catches: the killer passes, the file's other test fails", focused, "caught@2")?;
+    expect("a mutant nothing catches survives only at the full tier", survived, "survived@0")?;
+    expect("a pattern that is not there", absent, "not-injected@0")?;
+    expect("a mutant that does not build", unusable, "unusable@0")?;
+    expect("an entry with no mapped killer is decided by the full tier alone", unmapped, "caught@3")?;
+    check_that(before == after && gone, "the tree digests to what it began as and the backup is gone")?;
+    check_that(tool_now == tool_pristine, "a rebuilt program is the pristine one again")?;
+    // Problems: the survivor, the pattern, the unusable one. Not clean.
+    check_that(end.code == 1 && end.head == "FAIL  mutation coverage", f"{end.code} {end.head}")?;
+    let all = str_join(end.problems, "\n");
+    check_that(text_contains(all, "t-spare-survives: injected and compiled, but the suite still passed. nothing reads the spare") && text_contains(all, "t-absent: pattern not found in toolchain/harness/lib/helper.nz") && text_contains(all, "t-does-not-compile: the mutated tree does not compile"), all)
+}
+
+@test
+fn a_resumed_session_reuses_only_the_verdicts_about_the_mutant(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prepare(h)?;
+    let o = options(h, d, "t-sum-direct t-absent");
+    let first = run_session(h, o);
+    let key = identity_key_of(h, d)?;
+    let path = f"{d}/campaigns/{key}/journal.jsonl";
+    let lines_before = text_count(read_text(h, path)?, "\n");
+    let mut again = options(h, d, "t-sum-direct t-absent");
+    again.resume = true;
+    again.resume_from = f"{d}/campaigns";
+    let second = run_session(h, again);
+    let lines_after = text_count(read_text(h, path)?, "\n");
+    // A different selection is a different campaign: nothing of the first is reused, and a new journal opens.
+    let mut other = options(h, d, "t-sum-direct");
+    other.resume = true;
+    other.resume_from = f"{d}/campaigns";
+    let third = run_session(h, other);
+    let keys = match dir_list(io, str_vouch(f"{d}/campaigns")) {
+        Result.Ok(value: ks) => strs_len(ks),
+        Result.Err(error: e) => 0,
+    };
+    scratch_remove(h, d);
+    check_that(first.code == 1 && second.code == 1, f"first {first.code}, second {second.code}")?;
+    check_that(lines_before == lines_after, f"a resumed session appends nothing for what it reuses: {lines_before} lines, then {lines_after}")?;
+    check_that(third.code == 0 && keys == 2, f"another selection: code {third.code}, {keys} campaigns")
+}
+
+fn identity_key_of(h: Caps, d: Str) -> Result[Str, Str] ! { io } {
+    let v = h.v;
+    match dir_list(h.io, str_vouch(f"{d}/campaigns")) {
+        Result.Ok(value: ks) => if strs_len(ks) == 1 { Result[Str, Str].Ok(value: strs_get(ks, 0)) } else { Result[Str, Str].Err(error: f"{strs_len(ks)} campaigns") },
+        Result.Err(error: e) => Result[Str, Str].Err(error: "no campaigns"),
+    }
+}
+
+@test
+fn a_mutant_whose_restoration_fails_stops_the_session_and_the_record_is_kept(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prepare(h)?;
+    let o = options(h, d, "t-meddles t-after-meddles");
+    let end = run_session(h, o);
+    let kept = file_exists_at(io, str_vouch(backup_path(o.root)));
+    let meddled = journaled(h, d, "t-meddles");
+    let after = journaled(h, d, "t-after-meddles");
+    let recovered = recover(h, o.root, true);
+    let said = match recovered {
+        Result.Ok(value: s) => s,
+        Result.Err(error: e) => e,
+    };
+    scratch_remove(h, d);
+    check_that(end.code == 1, f"{end.code}")?;
+    check_that(kept, "the record of a restoration that failed is kept")?;
+    check_that(str_len(meddled) == 0, f"a verdict was journaled: {meddled}")?;
+    let all = str_join(end.problems, "\n");
+    check_that(text_contains(all, "t-meddles: ") && text_contains(all, "could not be restored") && text_contains(all, "The run stopped here"), all)?;
+    check_that(str_len(after) == 0, f"the rest was not decided: {after}")?;
+    check_that(text_contains(said, "matches neither the mutation applied nor the original saved"), f"recover refuses to restore over a file that matches neither: {said}")
+}
+
+@test
+fn a_stranded_record_refuses_the_session_and_recover_repairs_it_only_when_attested(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prepare(h)?;
+    let o = options(h, d, "t-sum-direct");
+    let m = find_mutation(h, catalogue_path(o.root), "t-sum-direct")?;
+    apply(h, o.root, m)?;
+    let mutated = read_text(h, f"{o.root}/{m.file}")?;
+    let end = run_session(h, o);
+    let refusal = str_join(end.problems, "\n");
+    let unattested = recover(h, o.root, false);
+    let unattested_says = match unattested {
+        Result.Ok(value: s) => s,
+        Result.Err(error: e) => e,
+    };
+    let still = file_exists_at(io, str_vouch(backup_path(o.root)));
+    let repaired = match recover(h, o.root, true) {
+        Result.Ok(value: s) => s,
+        Result.Err(error: e) => e,
+    };
+    let text = read_text(h, f"{o.root}/{m.file}")?;
+    let nothing = match recover(h, o.root, true) {
+        Result.Ok(value: s) => s,
+        Result.Err(error: e) => e,
+    };
+    scratch_remove(h, d);
+    check_that(mutated != HELPER && text == HELPER, "the file was mutated, then repaired")?;
+    check_that(end.code == 1 && text_contains(refusal, "a previous mutation run was interrupted"), refusal)?;
+    check_that(text_contains(unattested_says, "To recover:") && still, "without the attestation nothing changes")?;
+    expect("an attested recovery", repaired, "repaired toolchain/harness/lib/helper.nz")?;
+    expect("nothing left", nothing, "nothing to recover")
+}
+
+@test
+fn one_run_holds_the_tree_and_a_second_is_refused_until_it_ends(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prepare(h)?;
+    let root = f"{d}/tree";
+    let first = take_lock(h, root)?;
+    let second = match take_lock(h, root) {
+        Result.Ok(value: f) => "taken",
+        Result.Err(error: e) => e,
+    };
+    let o = options(h, d, "t-sum-direct");
+    let end = run_session(h, o);
+    file_close(first);
+    let third = match take_lock(h, root) {
+        Result.Ok(value: f) => { file_close(f); "taken" },
+        Result.Err(error: e) => e,
+    };
+    scratch_remove(h, d);
+    check_that(text_contains(second, "another mutation run holds the lock"), second)?;
+    check_that(end.code == 1 && text_contains(str_join(end.problems, "\n"), "another mutation run holds the lock"), "a session refuses while the tree is held")?;
+    expect("released at the end", third, "taken")
+}
+
+@test
+fn an_entry_that_mutates_the_seed_is_refused_by_name_and_the_default_selection_is_the_nazm_entries(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prepare(h)?;
+    let o = options(h, d, "t-seed t-sum-direct");
+    let end = run_session(h, o);
+    let said = str_join(end.problems, "\n");
+    let none = journaled(h, d, "t-sum-direct");
+    scratch_remove(h, d);
+    check_that(end.code == 1 && text_contains(said, "mutate the seed") && text_contains(said, "t-seed") && text_contains(said, "mutate-seed"), said)?;
+    expect("nothing ran", none, "")
+}
+
+@test
+fn a_killer_is_verified_pristine_mutant_restored(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prepare(h)?;
+    let o = options(h, d, "");
+    let good = verify_killer(h, o, "t-sum-direct", strs_new());
+    let report = match good {
+        Result.Ok(value: s) => s,
+        Result.Err(error: ps) => str_join(ps, "; "),
+    };
+    // The same test does not catch the spare's mutation: not a killer.
+    let cands = strs_new();
+    strs_push(cands, "foo::the_sum");
+    let bad = match verify_killer(h, o, "t-spare-survives", cands) {
+        Result.Ok(value: s) => s,
+        Result.Err(error: ps) => str_join(ps, "; "),
+    };
+    let none = match verify_killer(h, o, "t-unmapped", strs_new()) {
+        Result.Ok(value: s) => s,
+        Result.Err(error: ps) => str_join(ps, "; "),
+    };
+    let text = read_text(h, f"{o.root}/toolchain/harness/lib/helper.nz")?;
+    scratch_remove(h, d);
+    check_that(text_contains(report, "VERIFIED    foo::the_sum: pristine passes, mutant fails, restored passes") || text_contains(report, "VERIFIED   foo::the_sum: pristine passes, mutant fails, restored passes"), report)?;
+    check_that(text_contains(report, "killers = [") && text_contains(report, "name = \"foo::the_sum\""), report)?;
+    check_that(text_contains(bad, "t-spare-survives: foo::the_sum is not a killer (pristine passes, mutant passes, restored passes)"), bad)?;
+    check_that(text_contains(none, "has no killer that maps to a Nazm test"), none)?;
+    check_that(text == HELPER, "the tree is as it was")
+}
+
+@test
+fn a_session_with_a_rebuild_command_rebuilds_after_each_injection_and_keeps_the_seed_apart(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prepare(h)?;
+    let mut o = options(h, d, "t-sum-direct t-does-not-compile t-product-focused");
+    // The command a real run gives is Cargo's; this one refuses a tree that names `addx`, as a compiler would.
+    o.rebuild_cmd = "! grep -q addx toolchain/harness/lib/helper.nz";
+    o.programs = vec_new[Program]();
+    let before = tree_digest(h, o.root, true)?;
+    let end = run_session(h, o);
+    let after = tree_digest(h, o.root, true)?;
+    let direct = journaled(h, d, "t-sum-direct");
+    let unusable = journaled(h, d, "t-does-not-compile");
+    let focused = journaled(h, d, "t-product-focused");
+    let builder = file_exists_at(io, str_vouch(f"{o.bin}/builder"));
+    let pristine_programs = file_exists_at(io, str_vouch(f"{o.bin}.pristine"));
+    scratch_remove(h, d);
+    expect("a Direct killer", direct, "caught@1")?;
+    expect("a tree the rebuild refuses", unusable, "unusable@0")?;
+    expect("a Focused catch", focused, "caught@2")?;
+    check_that(before == after, "the tree is as it began")?;
+    check_that(builder && !pristine_programs, "the seed is kept apart as the builder; no program set is kept")?;
+    check_that(end.code == 1, f"{end.code}")
+}

@@ -176,7 +176,7 @@
       `tests`, `selfhost`, `bootstrap`, `release`, `mutate` (journal collection, statuses 3), `bench`, `fuzz`, `archive`
       (their plans are compared, their scripts are the reference's until 13.4 to 13.6), anything on `linux/amd64`,
       `cache clear`, and the oversize/PAX tar paths of a real archive (only the header parser's units)
-- [ ] 13.4 The campaign runner (S13.4): `nazm-mutate session` (entry split, killer mapping,
+- [ ] 13.4 (part done 2026-11-03: the runner is written and its own tests pass interpreted: `procs_self.nz` 7 of 7, `session_self.nz` 13 of 13 (a toy tree, eight entries, the seed as driver and builder), the existing `mutate_self.nz` 8 of 8 and `plan_self.nz` 5 of 5 unchanged; `nzx` and `nazm-mutate` build natively with `build.sh`; `lib_self.nz` 6 of 7, the one failure `a_differential_run_that_disagrees_is_reported` needs `toolchain/codegen/main.nz`, which this tree does not have, and no file of that test or of `lib/` it uses was changed; NOT run: `tests/contained_argv.sh` (the Docker daemon was not running), any `nzx contained mutate`/`mutate-seed` live run, the comparison with the Rust campaign on 20 mapped entries, `--verify-killer` on real killers) The campaign runner (S13.4): `nazm-mutate session` (entry split, killer mapping,
       `unmapped`, the warm session, `use`-closure rebuilds, three tiers, `lib/procs.nz`, journal
       `nazm.mutation-campaign/2` under `target/mutation-campaigns-nz/`, resume, lock, `recover`,
       `--verify-killer`); `nzx contained mutate` and `mutate-seed`; compared with the Rust campaign

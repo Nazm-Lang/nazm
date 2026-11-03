@@ -1,0 +1,183 @@
+// `lib/procs.nz`'s own tests (R8 slice 13, S13.4): what `xtask/src/procs.rs`'s tests hold the Rust
+// subprocess runner to — a status and both streams, a deadline that ends the whole tree (a program
+// a test put in another group included), a group swept after an ordinary exit so a grandchild
+// holding a pipe cannot hang the reader, the output cap, and the process table read as the
+// reference reads it.
+//
+//     nazm test --interpret-only toolchain/harness/tests/procs_self.nz
+//
+// (interpreted: no Nazm-built program runs on the host).
+
+use "@std/file"
+use "@std/text"
+use "@std/process"
+use "@std/time"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/procs.nz"
+
+fn sh(h: Caps, script: Str, ms: Int) -> Finished ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, "-c");
+    strs_push(a, script);
+    procs_run(h, "sh", a, "", env_here(h.io), ms)
+}
+
+fn pids_of(h: Caps, dir: Str, name: Str) -> Ints ! { io } {
+    let out = ints_new();
+    match read_text(h, f"{dir}/{name}") {
+        Result.Ok(value: t) => {
+            for w in text_split(t, "\n") {
+                match text_parse_int(text_trim(w)) {
+                    Result.Ok(value: n) => { ints_push(out, n); 0 },
+                    Result.Err(error: e) => 0,
+                };
+            }
+            0
+        },
+        Result.Err(error: e) => 0,
+    };
+    out
+}
+
+fn alive(h: Caps, pid: Int) -> Bool ! { io, spawn } {
+    let a = words("-p");
+    strs_push(a, f"{pid}");
+    strs_push(a, "-o");
+    strs_push(a, "stat=");
+    let r = run(h, "ps", a, "", env_here(h.io));
+    let s = text_trim(r.stdout);
+    str_len(s) > 0 && !text_starts_with(s, "Z")
+}
+
+fn all_dead(h: Caps, pids: Ints) -> Bool ! { io, spawn } {
+    // A killed process is reaped by its parent or by init a moment later.
+    let mut tries = 0;
+    while tries < 100 {
+        let mut any = false;
+        for p in pids {
+            if alive(h, p) {
+                any = true;
+            }
+        }
+        if !any {
+            return true;
+        }
+        time_sleep(h.t, time_duration_ms(100));
+        tries = tries + 1;
+    }
+    false
+}
+
+@test
+fn a_status_and_both_streams_are_reported(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let r = sh(h, "echo out; echo err >&2; exit 3", 60000);
+    check_that(r.ended == "exited" && r.code == 3, f"{r.ended} {r.code} {r.why}")?;
+    check_that(r.stdout == "out\n" && r.stderr == "err\n", f"{r.stdout}|{r.stderr}")?;
+    let ok = sh(h, "exit 0", 60000);
+    check_that(finished_ok(ok), f"{ok.ended} {ok.code}")?;
+    let killed = sh(h, "kill -KILL $$", 60000);
+    check_that(killed.ended == "exited" && finished_signal(killed) == 9, f"{killed.ended} {killed.code}")?;
+    let missing = procs_run(h, "no-such-program-nazm", strs_new(), "", env_here(io), 60000);
+    check_that(missing.ended == "spawn-failed", f"{missing.ended}")
+}
+
+@test
+fn a_child_has_an_empty_standard_input(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let r = sh(h, "cat; echo done", 60000);
+    check_that(r.ended == "exited" && r.code == 0 && r.stdout == "done\n", f"{r.ended} {r.code} {r.stdout}")
+}
+
+@test
+fn a_deadline_ends_the_whole_tree_even_a_program_in_another_group(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    // `set -m` makes the background job its own group: the group alone is not the tree.
+    let script = f"set -m; (echo $$ >> {d}/pids; sleep 300) & (echo $$ >> {d}/pids; sleep 300) & echo $$ >> {d}/pids; wait";
+    let r = sh(h, script, 1500);
+    let pids = pids_of(h, d, "pids");
+    let dead = all_dead(h, pids);
+    scratch_remove(h, d);
+    check_that(r.ended == "timed-out", f"{r.ended} {r.why}")?;
+    check_that(ints_len(pids) == 3, f"{ints_len(pids)} pids recorded")?;
+    check_that(dead, "a process of the tree outlived the deadline")
+}
+
+@test
+fn a_group_is_swept_after_an_ordinary_exit(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    // The leader exits at once; a grandchild keeps both pipes open and would hold the reader.
+    let r = sh(h, f"(sleep 300 & echo $! >> {d}/pids; wait) & exit 0", 60000);
+    let pids = pids_of(h, d, "pids");
+    let dead = all_dead(h, pids);
+    scratch_remove(h, d);
+    check_that(r.ended == "exited" && r.code == 0, f"{r.ended} {r.code} {r.why}")?;
+    check_that(r.swept >= 1, f"swept {r.swept}")?;
+    check_that(dead, "the grandchild outlived the sweep")
+}
+
+@test
+fn more_output_than_the_cap_is_overflow_not_a_verdict(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let r = sh(h, "head -c 34000000 /dev/zero", 120000);
+    check_that(r.ended == "overflowed", f"{r.ended} {r.why}")?;
+    check_that(str_len(r.stdout) == OUTPUT_CAP, f"kept {str_len(r.stdout)}")
+}
+
+@test
+fn the_process_table_is_read_as_the_reference_reads_it(io: IoCap) -> Result[Int, Str] ! {} {
+    let rows = rows_of("  10     1    10\n  11    10    10\n  12    11    12\n  13     1    13\nnot a row\n  14 x 3\n");
+    check_that(vec_len(rows) == 4, f"{vec_len(rows)} rows")?;
+    // From 10: its child 11, 11's child 12 (another group), and nothing of 13's.
+    let owned = owned_by(10, rows, 999);
+    check_that(ints_len(owned) == 3, f"{ints_len(owned)}")?;
+    let mut has12 = false;
+    let mut has13 = false;
+    for x in owned {
+        if x == 12 { has12 = true; }
+        if x == 13 { has13 = true; }
+    }
+    check_that(has12 && !has13, "descent by parent id, not by group alone")?;
+    // This process and init are never owned.
+    let rows2 = rows_of("  1     0     1\n 50     1    10\n 60    50    10\n");
+    let o2 = owned_by(10, rows2, 60);
+    let mut bad = false;
+    for x in o2 {
+        if x == 1 || x == 60 { bad = true; }
+    }
+    check_that(!bad && ints_len(o2) == 2, f"{ints_len(o2)} owned, bad {bad}")
+}
+
+@test
+fn the_watchdog_ends_the_group_when_its_pipe_closes_and_not_before(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let sleeper = match process_spawn_with(p, str_vouch("sleep"), words("300"), "", env_here(io), true, true) {
+        Result.Ok(value: c) => c,
+        Result.Err(error: e) => { return Result[Int, Str].Err(error: "cannot start sleep"); },
+    };
+    let leader = process_child_id(sleeper);
+    let dog = arm(h, leader);
+    let child = match dog {
+        Option.Some(value: c) => c,
+        Option.None() => { return Result[Int, Str].Err(error: "no watchdog"); },
+    };
+    time_sleep(t, time_duration_ms(500));
+    check_that(alive(h, leader), "the group ended before the pipe closed")?;
+    // The session "dies": its end of the pipe closes and nothing else is done.
+    os_close(os_child_pipe(child.handle, 0));
+    let dead = all_dead(h, ints_of(leader));
+    process_kill(sleeper);
+    process_wait(sleeper);
+    process_kill(child);
+    process_wait(child);
+    check_that(dead, "the watchdog did not end the group")
+}
+
+fn ints_of(n: Int) -> Ints ! {} {
+    let out = ints_new();
+    ints_push(out, n);
+    out
+}

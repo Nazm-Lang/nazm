@@ -1,0 +1,464 @@
+// The campaign's records (R8 slice 13, S13.4): what `xtask/src/campaign.rs` keeps — the identity a
+// verdict depends on and its key, one finalized mutant as a journal line, the journal itself
+// (`nazm.mutation-campaign/2`, each line fsynced and printed as `nazm-journal KEY JSON` for the
+// supervisor to collect), the reading of a journal for `--resume`, and the summary.
+//
+// Seconds are recorded (as `secs`, in milliseconds' resolution) and never compared; a verdict
+// never depends on how long a step took.
+
+use "@std/text"
+use "@std/json"
+use "@std/map"
+use "@std/blake3"
+use "@std/file"
+use "@std/ioerror"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+
+pub const JOURNAL_SCHEMA: Str = "nazm.mutation-campaign/2";
+pub const EXPORT_PREFIX: Str = "nazm-journal ";
+
+/// BLAKE3 of `s`, 64 lower-case hexadecimal digits.
+pub fn blake_hex(s: Str) -> Str ! {} {
+    blake3_hex(bytes_from_str(s))
+}
+
+/// Milliseconds as seconds with three decimals: `12345` is `12.345`.
+pub fn secs_text(ms: Int) -> Str ! {} {
+    let m = if ms < 0 { 0 } else { ms };
+    let frac = m % 1000;
+    let pad = if frac < 10 { "00" } else if frac < 100 { "0" } else { "" };
+    f"{m / 1000}.{pad}{frac}"
+}
+
+// --- the deadlines and the identity --------------------------------------------------------------
+
+/// How long each kind of step may run, in seconds before it is a timeout, which is a no-verdict:
+/// budgets for pathology, not tuning knobs.
+pub struct Deadlines {
+    build: Int,
+    killer: Int,
+    focused: Int,
+    full: Int,
+}
+
+pub fn deadlines_default() -> Deadlines ! {} {
+    Deadlines(build: 1800, killer: 1200, focused: 1500, full: 2400)
+}
+
+fn deadlines_json(d: Deadlines) -> Str ! {} {
+    f"{{\"build_secs\":{d.build},\"killer_secs\":{d.killer},\"focused_secs\":{d.focused},\"full_secs\":{d.full}}}"
+}
+
+/// Everything a verdict depends on. Two campaigns with equal identities judge the same mutants of
+/// the same tree by the same rules; a journal is reusable only between them.
+pub struct Identity {
+    tree: Str,
+    catalogue: Str,
+    harness: Str,
+    toolchain: Str,
+    strategy: Str,
+    selected: Strs,
+    deadlines: Deadlines,
+    reset_derived: Bool,
+    cargo_jobs: Int,
+    test_threads: Int,
+    cpu_quota: Str,
+}
+
+fn jstrs(xs: Strs) -> Str ! {} {
+    let parts = strs_new();
+    for x in xs {
+        strs_push(parts, json_quote(x));
+    }
+    f"[{str_join(parts, ",")}]"
+}
+
+/// The identity as one JSON object, its fields in a fixed order.
+pub fn identity_json(i: Identity) -> Str ! {} {
+    f"{{\"schema\":{json_quote(JOURNAL_SCHEMA)},\"tree\":{json_quote(i.tree)},\"catalogue\":{json_quote(i.catalogue)},\"harness\":{json_quote(i.harness)},\"toolchain\":{json_quote(i.toolchain)},\"strategy\":{json_quote(i.strategy)},\"selected\":{jstrs(i.selected)},\"deadlines\":{deadlines_json(i.deadlines)},\"reset_derived\":{i.reset_derived},\"parallelism\":{{\"cargo_jobs\":{i.cargo_jobs},\"test_threads\":{i.test_threads}}},\"cpu_quota\":{json_quote(i.cpu_quota)}}}"
+}
+
+/// The first 16 hexadecimal characters of the BLAKE3 of the identity's JSON.
+pub fn identity_key(i: Identity) -> Str ! {} {
+    str_slice(blake_hex(identity_json(i)), 0, 16)
+}
+
+/// The header line of a journal.
+pub fn header_line(i: Identity, commit: Str) -> Str ! {} {
+    let c = if str_len(commit) == 0 { "null" } else { json_quote(commit) };
+    f"{{\"kind\":\"campaign\",\"key\":{json_quote(identity_key(i))},\"identity\":{identity_json(i)},\"source_commit\":{c}}}"
+}
+
+// --- one finalized mutant -------------------------------------------------------------------------
+
+/// One step as it ran: its tier (1, 2 or 3), what ran, `pass`, `fail`, `crash`, `incomplete` or
+/// `timeout`, and its milliseconds (of which cargo-style compilation is `compile_ms`, always 0
+/// here: a Nazm test run reports none).
+pub struct StepRun {
+    tier: Int,
+    selector: Str,
+    outcome: Str,
+    ms: Int,
+    compile_ms: Int,
+}
+
+pub fn tier_word(t: Int) -> Str ! {} {
+    if t == 1 { "direct" } else if t == 2 { "focused" } else if t == 3 { "full" } else { "" }
+}
+
+fn step_json(s: StepRun) -> Str ! {} {
+    f"{{\"tier\":{json_quote(tier_word(s.tier))},\"selector\":{json_quote(s.selector)},\"outcome\":{json_quote(s.outcome)},\"secs\":{secs_text(s.ms)},\"compile_secs\":{secs_text(s.compile_ms)}}}"
+}
+
+/// One finalized mutant: a journal line. `restored` is always true in a record that exists; it is
+/// in the line so a reader does not have to trust the program that wrote it.
+pub struct Record {
+    index: Int,
+    name: Str,
+    file: Str,
+    strategy: Str,
+    verdict: Str,
+    detail: Str,
+    tier: Int,
+    by: Str,
+    failing: Int,
+    steps: Vec[StepRun],
+    original_digest: Str,
+    mutated_digest: Str,
+    restored_digest: Str,
+    apply_ms: Int,
+    build_ms: Int,
+    tests_ms: Int,
+    restore_ms: Int,
+    total_ms: Int,
+    candidates: Strs,
+}
+
+pub fn record_json(r: Record) -> Str ! {} {
+    let steps = strs_new();
+    for s in r.steps {
+        strs_push(steps, step_json(s));
+    }
+    let tier = if r.tier == 0 { "null" } else { json_quote(tier_word(r.tier)) };
+    let by = if r.tier == 0 { "null" } else { json_quote(r.by) };
+    let mutated = if str_len(r.mutated_digest) == 0 { "null" } else { json_quote(r.mutated_digest) };
+    let secs = f"{{\"apply\":{secs_text(r.apply_ms)},\"build\":{secs_text(r.build_ms)},\"tests\":{secs_text(r.tests_ms)},\"compile_in_tests\":0.000,\"restore\":{secs_text(r.restore_ms)},\"total\":{secs_text(r.total_ms)}}}";
+    f"{{\"kind\":\"mutant\",\"index\":{r.index},\"name\":{json_quote(r.name)},\"file\":{json_quote(r.file)},\"strategy\":{json_quote(r.strategy)},\"verdict\":{json_quote(r.verdict)},\"detail\":{json_quote(r.detail)},\"tier\":{tier},\"by\":{by},\"failing\":{r.failing},\"steps\":[{str_join(steps, ",")}],\"original_digest\":{json_quote(r.original_digest)},\"mutated_digest\":{mutated},\"restored_digest\":{json_quote(r.restored_digest)},\"restored\":true,\"secs\":{secs},\"candidates\":{jstrs(r.candidates)}}}"
+}
+
+/// The words a printed verdict line begins with, padded to twelve columns as `mutate.rs` pads them.
+pub fn word(v: Str) -> Str ! {} {
+    if v == "caught" { "caught      " }
+    else if v == "survived" { "SURVIVED    " }
+    else if v == "not-injected" { "NOT INJECTED" }
+    else if v == "unusable" { "UNUSABLE    " }
+    else if v == "mutant-crash" { "MUTANT CRASH" }
+    else if v == "timeout" { "TIMEOUT     " }
+    else { "RUNNER ERROR" }
+}
+
+/// The problem a finalized verdict represents, if any, as `mutate.rs` words it; `why` is the
+/// catalogue entry's own account of the defect.
+pub fn problem_of(verdict: Str, detail: Str, name: Str, why: Str) -> Str ! {} {
+    if verdict == "caught" { return ""; }
+    if verdict == "survived" {
+        return f"{name}: injected and compiled, but the suite still passed. {why}";
+    }
+    if verdict == "not-injected" {
+        return f"{name}: {detail}. A mutation that does not apply proves nothing — fix the pattern rather than reading the pass as coverage.";
+    }
+    if verdict == "unusable" {
+        return f"{name}: the mutated tree does not compile, so a failing suite would not mean the defect was detected.";
+    }
+    if verdict == "mutant-crash" {
+        return f"{name}: the mutant killed a test binary ({detail}). The defect had an effect, but no test asserted it and the rest of that binary went unmeasured — move the case out of process, where a crash is an exit code to assert on.";
+    }
+    if verdict == "timeout" {
+        return f"{name}: {detail}. A timeout is neither caught nor survived; it is no verdict.";
+    }
+    f"{name}: the suite did not run to completion ({detail}). This is neither caught nor survived — a run that did not happen says nothing about coverage."
+}
+
+// --- the journal -----------------------------------------------------------------------------------
+
+/// The journal file and whether lines are also printed for a supervisor.
+pub struct Journal {
+    path: Str,
+    key: Str,
+    export: Bool,
+}
+
+fn announce(io: IoCap, key: Str, line: Str) -> Int ! { io } {
+    file_write_str(file_stdout(io), f"{EXPORT_PREFIX}{key} {line}\n");
+    0
+}
+
+fn append_line(io: IoCap, path: Str, line: Str) -> Result[Int, Str] ! { io } {
+    let f = match file_append(io, path) {
+        Result.Ok(value: f) => f,
+        Result.Err(error: e) => { return Result[Int, Str].Err(error: f"{path}: {io_error_show(e)}"); },
+    };
+    match file_write_str(f, f"{line}\n") {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => { file_close(f); return Result[Int, Str].Err(error: f"{path}: {io_error_show(e)}"); },
+    };
+    match file_sync(f) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => { file_close(f); return Result[Int, Str].Err(error: f"{path}: {io_error_show(e)}"); },
+    };
+    file_close(f);
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// Open the journal under `dir/KEY/journal.jsonl` (`dir` empty: no file, lines only printed) and
+/// announce the header.
+pub fn journal_open(h: Caps, dir: Str, i: Identity, commit: Str, export: Bool) -> Result[Journal, Str] ! { io } {
+    let io = h.io;
+    let v = h.v;
+    let key = identity_key(i);
+    let line = header_line(i, commit);
+    let mut path = "";
+    if str_len(dir) > 0 {
+        let d = f"{dir}/{key}";
+        match dir_create_all(io, str_vouch(d)) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => { return Result[Journal, Str].Err(error: f"{d}: {io_error_show(e)}"); },
+        };
+        path = f"{d}/journal.jsonl";
+        if !file_exists_at(io, str_vouch(path)) {
+            append_line(io, str_vouch(path), line)?;
+        }
+    }
+    if export {
+        announce(io, key, line);
+    }
+    Result[Journal, Str].Ok(value: Journal(path: path, key: key, export: export))
+}
+
+/// Record one finalized mutant, durably, then announce it.
+pub fn journal_append(h: Caps, j: Journal, r: Record) -> Result[Int, Str] ! { io } {
+    let io = h.io;
+    let v = h.v;
+    let line = record_json(r);
+    if str_len(j.path) > 0 {
+        append_line(io, str_vouch(j.path), line)?;
+    }
+    if j.export {
+        announce(io, j.key, line);
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// A journal line read back: enough of a record to reuse its verdict and say it again.
+pub struct Prior {
+    name: Str,
+    verdict: Str,
+    detail: Str,
+    tier: Int,
+}
+
+fn tier_number(w: Str) -> Int ! {} {
+    if w == "direct" { 1 } else if w == "focused" { 2 } else if w == "full" { 3 } else { 0 }
+}
+
+fn jstr(d: JsonDoc, n: Int, key: Str) -> Str ! {} {
+    match json_get(d, n, key) {
+        Option.Some(value: x) => match json_str(d, x) {
+            Option.Some(value: s) => s,
+            Option.None() => "",
+        },
+        Option.None() => "",
+    }
+}
+
+/// The finalized records of the journal at `path` — **only** if its header carries `key`: any
+/// other header, and any record claiming a verdict without a verified restoration, refuses.
+pub fn journal_read(h: Caps, path: Str, key: Str) -> Result[Vec[Prior], Str] ! { io } {
+    let text = read_text(h, path)?;
+    let out = vec_new[Prior]();
+    let mut first = true;
+    let mut n = 0;
+    for l in lines(text) {
+        n = n + 1;
+        if str_len(trim_ws(l)) == 0 {
+            continue;
+        }
+        let d = match json_parse_floats(l) {
+            Result.Ok(value: d) => d,
+            Result.Err(error: e) => { return Result[Vec[Prior], Str].Err(error: f"{path} line {n}: {e}"); },
+        };
+        let root = json_root(d);
+        let kind = jstr(d, root, "kind");
+        if first {
+            if kind != "campaign" {
+                return Result[Vec[Prior], Str].Err(error: f"{path} does not begin with a campaign header");
+            }
+            first = false;
+        }
+        if kind == "campaign" {
+            if jstr(d, root, "key") != key {
+                return Result[Vec[Prior], Str].Err(error: f"{path} was recorded against a different campaign identity. Its verdicts describe another tree, catalogue, harness, toolchain, strategy, selection or deadline set, and are not reused.");
+            }
+            continue;
+        }
+        let restored = match json_get(d, root, "restored") {
+            Option.Some(value: x) => match json_bool(d, x) {
+                Option.Some(value: b) => b,
+                Option.None() => false,
+            },
+            Option.None() => false,
+        };
+        let name = jstr(d, root, "name");
+        if !restored || jstr(d, root, "restored_digest") != jstr(d, root, "original_digest") {
+            return Result[Vec[Prior], Str].Err(error: f"{path} line {n}: `{name}` claims a verdict without a verified restoration. The journal is not trusted.");
+        }
+        vec_push(out, Prior(name: name, verdict: jstr(d, root, "verdict"), detail: jstr(d, root, "detail"), tier: tier_number(jstr(d, root, "tier"))));
+    }
+    if first {
+        return Result[Vec[Prior], Str].Err(error: f"{path} is empty");
+    }
+    Result[Vec[Prior], Str].Ok(value: out)
+}
+
+// --- the summary ---------------------------------------------------------------------------------
+
+/// The counts a session ends with: by word, caught at each tier, and the sums of the rest in
+/// `sums`: 0 resumed, 1 workspace-suite runs, 2 decided before the suite, 3 apply, 4 build, 5
+/// tests, 6 restore (milliseconds).
+pub struct Summary {
+    selected: Int,
+    by_word: StrMap[Int],
+    caught_at: Ints,
+    sums: Ints,
+}
+
+pub fn summary_new(selected: Int) -> Summary ! {} {
+    let c = ints_new();
+    ints_push(c, 0); ints_push(c, 0); ints_push(c, 0); ints_push(c, 0);
+    let s = ints_new();
+    let mut i = 0;
+    while i < 7 {
+        ints_push(s, 0);
+        i = i + 1;
+    }
+    Summary(selected: selected, by_word: map_new[Int](), caught_at: c, sums: s)
+}
+
+fn bump(m: StrMap[Int], k: Str) -> Int ! {} {
+    let n = match map_get(m, k) {
+        Option.Some(value: x) => x,
+        Option.None() => 0,
+    };
+    map_set(m, k, n + 1);
+    0
+}
+
+fn add_sum(s: Ints, i: Int, n: Int) -> Int ! {} {
+    ints_set(s, i, ints_get(s, i) + n);
+    0
+}
+
+/// Count a finalized record (`resumed`: reused from the journal; its seconds are not this
+/// session's).
+pub fn summary_add(s: Summary, r: Record, resumed: Bool) -> Int ! {} {
+    bump(s.by_word, r.verdict);
+    if r.tier > 0 {
+        ints_set(s.caught_at, r.tier, ints_get(s.caught_at, r.tier) + 1);
+    }
+    if resumed {
+        add_sum(s.sums, 0, 1);
+        return 0;
+    }
+    let mut broad = 0;
+    for st in r.steps {
+        if st.tier == 3 {
+            broad = broad + 1;
+        }
+    }
+    add_sum(s.sums, 1, broad);
+    if broad == 0 && is_semantic_word(r.verdict) && r.verdict != "not-injected" && r.verdict != "unusable" {
+        add_sum(s.sums, 2, 1);
+    }
+    add_sum(s.sums, 3, r.apply_ms);
+    add_sum(s.sums, 4, r.build_ms);
+    add_sum(s.sums, 5, r.tests_ms);
+    add_sum(s.sums, 6, r.restore_ms);
+    0
+}
+
+/// A reused journal line counted as `summary_add` counts one.
+pub fn summary_add_prior(s: Summary, p: Prior) -> Int ! {} {
+    bump(s.by_word, p.verdict);
+    if p.tier > 0 {
+        ints_set(s.caught_at, p.tier, ints_get(s.caught_at, p.tier) + 1);
+    }
+    add_sum(s.sums, 0, 1);
+    0
+}
+
+fn is_semantic_word(w: Str) -> Bool ! {} {
+    w == "caught" || w == "survived" || w == "not-injected" || w == "unusable" || w == "mutant-crash"
+}
+
+fn count_of(m: StrMap[Int], k: Str) -> Int ! {} {
+    match map_get(m, k) {
+        Option.Some(value: x) => x,
+        Option.None() => 0,
+    }
+}
+
+/// The summary as the Rust campaign prints it (`Summary::render`), with the Nazm campaign's
+/// `unmapped` count and the setup and wall-clock seconds the caller measured.
+pub fn summary_render(s: Summary, key: Str, strategy: Str, not_reached: Int, unmapped: Int, setup_ms: Int, wall_ms: Int) -> Str ! {} {
+    let mut finalized = 0;
+    for w in map_keys(s.by_word) {
+        finalized = finalized + count_of(s.by_word, w);
+    }
+    let out = strs_new();
+    strs_push(out, f"\ncampaign {key} — strategy {strategy}, {s.selected} selected");
+    strs_push(out, f"  caught at tier 1 (direct)    {ints_get(s.caught_at, 1)}");
+    strs_push(out, f"  caught at tier 2 (focused)   {ints_get(s.caught_at, 2)}");
+    strs_push(out, f"  caught at tier 3 (full)      {ints_get(s.caught_at, 3)}");
+    strs_push(out, f"  survived                     {count_of(s.by_word, "survived")}");
+    strs_push(out, f"  unusable                     {count_of(s.by_word, "unusable")}");
+    strs_push(out, f"  not injected                 {count_of(s.by_word, "not-injected")}");
+    strs_push(out, f"  mutant crash                 {count_of(s.by_word, "mutant-crash")}");
+    strs_push(out, f"  no verdict: timeout          {count_of(s.by_word, "timeout")}");
+    strs_push(out, f"  no verdict: runner error     {count_of(s.by_word, "runner-error")}");
+    strs_push(out, "  retired-equivalent           0 (the catalogue has no such state; retiring means removing the entry)");
+    strs_push(out, f"  of which reused from journal {ints_get(s.sums, 0)} (identity {key})");
+    strs_push(out, f"  unmapped                     {unmapped} (no killer of the entry maps to a Nazm test: decided by the full tier alone; a count, never a verdict)");
+    strs_push(out, f"  not reached this session     {not_reached}");
+    strs_push(out, f"  accounted                    {s.selected} = {finalized} finalized + {not_reached} not reached");
+    strs_push(out, f"  workspace suites run         {ints_get(s.sums, 1)} (decided before the full suite: {ints_get(s.sums, 2)})");
+    strs_push(out, f"  seconds: wall {wall_ms / 1000}; setup+baseline {setup_ms / 1000}; apply {secs_text(ints_get(s.sums, 3))}; build {ints_get(s.sums, 4) / 1000}; tests {ints_get(s.sums, 5) / 1000}; restore {secs_text(ints_get(s.sums, 6))}");
+    f"{str_join(out, "\n")}\n"
+}
+
+/// Is the accounting whole? `selected = finalized + not reached`, with nothing missing or twice.
+pub fn accounted(selected: Strs, finalized: Strs, not_reached: Strs) -> Bool ! {} {
+    let seen = map_new[Int]();
+    for n in finalized {
+        if map_has(seen, n) {
+            return false;
+        }
+        map_set(seen, n, 1);
+    }
+    for n in not_reached {
+        if map_has(seen, n) {
+            return false;
+        }
+        map_set(seen, n, 1);
+    }
+    if map_len(seen) != strs_len(selected) {
+        return false;
+    }
+    for n in selected {
+        if !map_has(seen, n) {
+            return false;
+        }
+    }
+    true
+}
