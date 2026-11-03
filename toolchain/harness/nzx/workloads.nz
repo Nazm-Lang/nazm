@@ -9,8 +9,8 @@
 //
 // `mutate` runs the Nazm campaign runner (13.4); `mutate-seed` is the reference's own script, the Rust
 // campaign over the seed's entries. `fuzz` runs `nazm-fuzz` (13.5, S13.5); `fuzz-seed` is the reference's
-// own script (`fuzz/run.sh`, the Rust fuzzer over the seed). Until task 13.6 lands the new benchmark
-// program, the script of `bench` is the reference's own (it runs `xtask` inside the container): the
+// own script (`fuzz/run.sh`, the Rust fuzzer over the seed). `bench` runs `nazm-bench` (13.6, S13.6);
+// `bench-seed` is the reference's own script (`xtask bench` over the seed, inside the container): the
 // runner does not care what its script runs (S13.3).
 
 use "@std/text";
@@ -350,7 +350,15 @@ pub fn bench_manifest(saving: Bool) -> Str ! {} {
     BENCH_MANIFEST_CHECK
 }
 
+/// The Nazm benchmark's script (S13.6): the checkout's release `nazm` built by Cargo, `nazm-bench` built from `/src`
+/// by it, and `nazm-bench` run over the programs, its record and baseline in `/work/benchout`, exported as the
+/// reference's are.
 pub fn script_bench(mode: Str, manifest: Str) -> Str ! {} {
+    f"mkdir -p /work/benchout /work/nzx && cp /src/bench/*.json /work/benchout/ 2>/dev/null; export NAZM_BENCH_DIR=/work/benchout NAZM=/work/target/release/nazm NAZM_LIBRARY=/src/library; cargo build --release --locked -p nazm-cli --jobs 1 >/dev/null && NZX_OUT=/work/nzx bash /src/toolchain/harness/build.sh nazm-bench >/dev/null && /work/nzx/nazm-bench --runs 5 {mode} --src /src --nazm $NAZM && if find /work/benchout -name '*.json' -size +1M | grep -q .; then echo 'bench: an artefact exceeded 1 MiB; refusing to export' >&2; exit 3; fi && {manifest}"
+}
+
+/// The reference's own benchmark script (`bench-seed`: `xtask bench` over the seed, inside the container).
+pub fn script_bench_seed(mode: Str, manifest: Str) -> Str ! {} {
     f"mkdir -p /work/benchout && cp /src/bench/*.json /work/benchout/ 2>/dev/null; export NAZM_BENCH_DIR=/work/benchout; cargo build --release --locked -p nazm-cli --jobs 1 >/dev/null && cargo run -q -p xtask -- bench --runs 5 {mode} && if find /work/benchout -name '*.json' -size +1M | grep -q .; then echo 'bench: an artefact exceeded 1 MiB; refusing to export' >&2; exit 3; fi && {manifest}"
 }
 

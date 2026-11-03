@@ -1,0 +1,406 @@
+// The record (R8 slice 13, S13.6): `nazm.bench/2`, field for field with `render_json` in `xtask/src/bench.rs`,
+// and the check of a record's schema — what a record must hold to be argued with. Pure: the facts about the
+// machine are `main.nz`'s to read and are given here.
+
+use "@std/text"
+use "@std/json"
+use "stats.nz"
+
+pub const SCHEMA: Str = "nazm.bench/2";
+
+/// The facts about the host and the tree that a record states (a number without them is not evidence).
+/// `memory_bytes` is `-1` for a host that does not say.
+pub struct Info {
+    runs: Int,
+    host: Str,
+    cpus: Int,
+    cpu_model: Str,
+    memory_bytes: Int,
+    kernel: Str,
+    rustc: Str,
+    clang: Str,
+    commit: Str,
+    clean: Bool,
+}
+
+/// Peak resident memory of one command, in bytes; `-1` when it could not be read.
+pub struct Memory {
+    program: Str,
+    stage: Str,
+    peak: Int,
+}
+
+/// A native executable's size in bytes; `-1` when there is none.
+pub struct Size {
+    program: Str,
+    bytes: Int,
+}
+
+/// A reference that was not measured, and why.
+pub struct Absent {
+    stage: Str,
+    why: Str,
+}
+
+/// The references and whether each one's arithmetic is checked as Nazm's is: (stage, built with, arithmetic).
+pub fn references() -> Vec[Strs] ! {} {
+    let out = vec_new[Strs]();
+    vec_push(out, row3("reference-c", "clang -O2", "unchecked: C's signed overflow is undefined, not failed"));
+    vec_push(out, row3("reference-python", "python3", "unbounded integers: nothing overflows"));
+    vec_push(out, row3("reference-rust", "rustc -O -C overflow-checks=on", "checked, and bounds-checked: the closest to Nazm's meaning"));
+    vec_push(out, row3("reference-go", "go build", "wrapping, bounds-checked"));
+    out
+}
+
+fn row3(a: Str, b: Str, c: Str) -> Strs ! {} {
+    let r = strs_new();
+    strs_push(r, a);
+    strs_push(r, b);
+    strs_push(r, c);
+    r
+}
+
+/// `s` as a JSON string. The reference escapes `"`, `\` and a newline; this also escapes the other
+/// control characters, which it would write raw and so make an invalid record.
+pub fn quote(s: Str) -> Str ! {} {
+    let parts = strs_new();
+    strs_push(parts, "\"");
+    let mut start = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        let esc = if b == 34 { "\\\"" } else if b == 92 { "\\\\" } else if b == 10 { "\\n" } else if b == 9 { "\\t" } else if b == 13 { "\\r" } else if b < 32 { f"\\u00{text_pad_left(hex2(b), 2, "0")}" } else { "" };
+        if str_len(esc) > 0 {
+            strs_push(parts, str_slice(s, start, i));
+            strs_push(parts, esc);
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    strs_push(parts, str_slice(s, start, str_len(s)));
+    strs_push(parts, "\"");
+    str_join(parts, "")
+}
+
+fn hex2(b: Int) -> Str ! {} {
+    let digits = "0123456789abcdef";
+    str_slice(digits, b / 16, b / 16 + 1) + str_slice(digits, b % 16, b % 16 + 1)
+}
+
+fn comma(i: Int, n: Int) -> Str ! {} {
+    if i + 1 == n { "" } else { "," }
+}
+
+fn nullable(n: Int) -> Str ! {} {
+    if n < 0 { "null" } else { int_to_str(n) }
+}
+
+/// The record, text for text what the reference writes.
+pub fn render_json(info: Info, ms: Vec[Measurement], memory: Vec[Memory], sizes: Vec[Size], absent: Vec[Absent]) -> Str ! {} {
+    let o = strs_new();
+    strs_push(o, "{\n");
+    strs_push(o, f"  \"schema\": \"{SCHEMA}\",\n");
+    strs_push(o, f"  \"runs\": {info.runs},\n");
+    strs_push(o, "  \"warmups_discarded\": 1,\n");
+    strs_push(o, f"  \"host\": {quote(info.host)},\n");
+    strs_push(o, f"  \"cpus\": \"{info.cpus}\",\n");
+    strs_push(o, f"  \"cpu_model\": {quote(info.cpu_model)},\n");
+    strs_push(o, f"  \"memory_bytes\": {nullable(info.memory_bytes)},\n");
+    strs_push(o, f"  \"kernel\": {quote(info.kernel)},\n");
+    strs_push(o, f"  \"rustc\": {quote(info.rustc)},\n");
+    strs_push(o, f"  \"clang\": {quote(info.clang)},\n");
+    strs_push(o, f"  \"commit\": {quote(info.commit)},\n");
+    strs_push(o, f"  \"tree_clean\": {if info.clean { "true" } else { "false" }},\n");
+    strs_push(o, "  \"not_controlled\": [\"thermal state\", \"other processes\", \"CPU frequency scaling\", \"address-space layout\"],\n");
+    strs_push(o, "  \"measurements\": [\n");
+    let n = vec_len(ms);
+    let mut i = 0;
+    while i < n {
+        let m = vec_get(ms, i);
+        strs_push(o, f"    {{\"program\": {quote(m.program)}, \"stage\": {quote(m.stage)}, \"min_ms\": {ns_ms3(m_min(m))}, \"median_ms\": {ns_ms3(m_median(m))}, \"p90_ms\": {ns_ms3(m_p90(m))}, \"max_ms\": {ns_ms3(m_max(m))}, \"mad_ms\": {ns_ms3(m_mad(m))}, \"runs_ms\": [{str_join(runs_ms3(m), ", ")}]}}{comma(i, n)}\n");
+        i = i + 1;
+    }
+    strs_push(o, "  ],\n");
+    // The floor: the median of a program that does nothing, natively — process start-up and exit.
+    let mut floor = "null";
+    for m in ms {
+        if m.program == "floor" && m.stage == "native-O2" && floor == "null" {
+            floor = ns_ms3(m_median(m));
+        }
+    }
+    strs_push(o, f"  \"noise_floor_ms\": {floor},\n");
+    strs_push(o, "  \"binary_bytes\": [\n");
+    let ns = vec_len(sizes);
+    i = 0;
+    while i < ns {
+        let s = vec_get(sizes, i);
+        strs_push(o, f"    {{\"program\": {quote(s.program)}, \"stage\": \"native-O2\", \"bytes\": {nullable(s.bytes)}}}{comma(i, ns)}\n");
+        i = i + 1;
+    }
+    strs_push(o, "  ],\n");
+    strs_push(o, "  \"references\": [\n");
+    let refs = references();
+    i = 0;
+    while i < vec_len(refs) {
+        let r = vec_get(refs, i);
+        strs_push(o, f"    {{\"stage\": {quote(strs_get(r, 0))}, \"built_with\": {quote(strs_get(r, 1))}, \"arithmetic\": {quote(strs_get(r, 2))}}}{comma(i, vec_len(refs))}\n");
+        i = i + 1;
+    }
+    strs_push(o, "  ],\n");
+    strs_push(o, "  \"not_measured\": [\n");
+    let na = vec_len(absent);
+    i = 0;
+    while i < na {
+        let a = vec_get(absent, i);
+        strs_push(o, f"    {{\"stage\": {quote(a.stage)}, \"why\": {quote(a.why)}}}{comma(i, na)}\n");
+        i = i + 1;
+    }
+    strs_push(o, "  ],\n");
+    strs_push(o, f"  \"peak_memory_source\": \"{PEAK_SOURCE}\",\n");
+    strs_push(o, "  \"peak_memory\": [\n");
+    let nm = vec_len(memory);
+    i = 0;
+    while i < nm {
+        let m = vec_get(memory, i);
+        strs_push(o, f"    {{\"program\": {quote(m.program)}, \"stage\": {quote(m.stage)}, \"peak_bytes\": {nullable(m.peak)}}}{comma(i, nm)}\n");
+        i = i + 1;
+    }
+    strs_push(o, "  ]\n");
+    strs_push(o, "}\n");
+    str_join(o, "")
+}
+
+/// Where a peak comes from. The reference's is `/usr/bin/time -l` (bytes on Darwin); this one asks the
+/// system for the child's resource usage once it has been waited for, in bytes on both hosts.
+pub const PEAK_SOURCE: Str = "os_child_rusage, bytes";
+
+// --- the schema ---------------------------------------------------------------------------------
+
+const KEYS: Str = "schema runs warmups_discarded host cpus cpu_model memory_bytes kernel rustc clang commit tree_clean not_controlled measurements noise_floor_ms binary_bytes references not_measured peak_memory_source peak_memory";
+
+fn kid(doc: JsonDoc, node: Int, key: Str) -> Int ! {} {
+    match json_get(doc, node, key) {
+        Option.Some(value: n) => n,
+        Option.None() => 0 - 1,
+    }
+}
+
+fn elem(doc: JsonDoc, node: Int, i: Int) -> Int ! {} {
+    match json_at(doc, node, i) {
+        Option.Some(value: n) => n,
+        Option.None() => 0 - 1,
+    }
+}
+
+/// A number node as whole microseconds (a record's milliseconds have three decimals); `-1` for no number.
+fn us_at(doc: JsonDoc, node: Int) -> Int ! {} {
+    match json_float(doc, node) {
+        Option.Some(value: x) => Int(x * 1000.0 + 0.5),
+        Option.None() => 0 - 1,
+    }
+}
+
+/// Every way `node`'s member `key` is not of `kind` (`string`, `number`, `bool`, `array`, `object`;
+/// `integer` is a number with no fraction; `null-or-integer` also admits `null`), pushed onto `problems`
+/// with `at` naming where. True when it is.
+fn want(doc: JsonDoc, node: Int, key: Str, kind: Str, at: Str, problems: Strs) -> Bool ! {} {
+    let n = kid(doc, node, key);
+    if n < 0 {
+        strs_push(problems, f"{at}{key}: missing");
+        return false;
+    }
+    let k = json_kind(doc, n);
+    let ok = if kind == "integer" {
+        k == "number" && match json_int(doc, n) { Option.Some(value: i) => true, Option.None() => false }
+    } else if kind == "null-or-integer" {
+        k == "null" || (k == "number" && match json_int(doc, n) { Option.Some(value: i) => true, Option.None() => false })
+    } else if kind == "null-or-number" {
+        k == "null" || k == "number"
+    } else {
+        k == kind
+    };
+    if !ok {
+        strs_push(problems, f"{at}{key}: not {kind} (is {k})");
+    }
+    ok
+}
+
+fn str_at(doc: JsonDoc, node: Int, key: Str) -> Str ! {} {
+    match json_str(doc, kid(doc, node, key)) {
+        Option.Some(value: s) => s,
+        Option.None() => "",
+    }
+}
+
+fn sorted_ascending(xs: Ints) -> Bool ! {} {
+    let mut i = 1;
+    while i < ints_len(xs) {
+        if ints_get(xs, i - 1) > ints_get(xs, i) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn abs_diff(a: Int, b: Int) -> Int ! {} {
+    if a > b { a - b } else { b - a }
+}
+
+fn check_measurement(doc: JsonDoc, node: Int, runs: Int, at: Str, problems: Strs) -> Int ! {} {
+    want(doc, node, "program", "string", at, problems);
+    want(doc, node, "stage", "string", at, problems);
+    let mut numbers = true;
+    for k in text_split("min_ms median_ms p90_ms max_ms mad_ms", " ") {
+        if !want(doc, node, k, "number", at, problems) { numbers = false; }
+    }
+    if !want(doc, node, "runs_ms", "array", at, problems) || !numbers { return 0; }
+    let arr = kid(doc, node, "runs_ms");
+    let xs = ints_new();
+    let mut i = 0;
+    while i < json_len(doc, arr) {
+        let u = us_at(doc, elem(doc, arr, i));
+        if u < 0 {
+            strs_push(problems, f"{at}runs_ms[{i}]: not a number");
+            return 0;
+        }
+        ints_push(xs, u);
+        i = i + 1;
+    }
+    if ints_len(xs) != runs {
+        strs_push(problems, f"{at}runs_ms: {ints_len(xs)} runs, the record says {runs}");
+    }
+    if !sorted_ascending(xs) {
+        strs_push(problems, f"{at}runs_ms: not in ascending order");
+        return 0;
+    }
+    let n = ints_len(xs);
+    if n == 0 { return 0; }
+    // Each figure is a run that was observed, the reference's rule: the minimum, the lower middle, the
+    // nearest-rank 90th percentile, the maximum; the spread within a microsecond of the runs'.
+    let rank = if (n * 9 + 9) / 10 < 1 { 1 } else { (n * 9 + 9) / 10 };
+    let median = ints_get(xs, (n - 1) / 2);
+    if us_at(doc, kid(doc, node, "min_ms")) != ints_get(xs, 0) { strs_push(problems, f"{at}min_ms is not the smallest run"); }
+    if us_at(doc, kid(doc, node, "median_ms")) != median { strs_push(problems, f"{at}median_ms is not the lower middle run"); }
+    if us_at(doc, kid(doc, node, "p90_ms")) != ints_get(xs, rank - 1) { strs_push(problems, f"{at}p90_ms is not the nearest-rank 90th percentile"); }
+    if us_at(doc, kid(doc, node, "max_ms")) != ints_get(xs, n - 1) { strs_push(problems, f"{at}max_ms is not the largest run"); }
+    let d = ints_new();
+    for x in xs { ints_push(d, abs_diff(x, median)); }
+    let mad = ints_get(ints_sorted(d), (n - 1) / 2);
+    if abs_diff(us_at(doc, kid(doc, node, "mad_ms")), mad) > 1 { strs_push(problems, f"{at}mad_ms is not the median absolute deviation"); }
+    0
+}
+
+fn each_object(doc: JsonDoc, node: Int, key: Str, at: Str, problems: Strs) -> Ints ! {} {
+    let out = ints_new();
+    if !want(doc, node, key, "array", at, problems) { return out; }
+    let arr = kid(doc, node, key);
+    let mut i = 0;
+    while i < json_len(doc, arr) {
+        let e = elem(doc, arr, i);
+        if json_kind(doc, e) == "object" {
+            ints_push(out, e);
+        } else {
+            strs_push(problems, f"{at}{key}[{i}]: not an object");
+        }
+        i = i + 1;
+    }
+    out
+}
+
+/// Everything wrong with `text` as a `nazm.bench/2` record: it must be JSON, hold exactly the reference's
+/// keys in the reference's order, each of its kind, and each measurement's figures must follow from its
+/// runs. An empty list is a valid record.
+pub fn record_problems(text: Str) -> Strs ! {} {
+    let problems = strs_new();
+    let doc = match json_parse_floats(text) {
+        Result.Ok(value: d) => d,
+        Result.Err(error: e) => {
+            strs_push(problems, f"not JSON: {e}");
+            return problems;
+        },
+    };
+    let root = json_root(doc);
+    if json_kind(doc, root) != "object" {
+        strs_push(problems, "the record is not an object");
+        return problems;
+    }
+    let keys = text_split(KEYS, " ");
+    let mut i = 0;
+    let mut order_ok = json_len(doc, root) == strs_len(keys);
+    while order_ok && i < strs_len(keys) {
+        order_ok = match json_key_at(doc, root, i) { Option.Some(value: k) => k == strs_get(keys, i), Option.None() => false };
+        i = i + 1;
+    }
+    if !order_ok {
+        strs_push(problems, f"the keys are not, in order: {KEYS}");
+    }
+    if want(doc, root, "schema", "string", "", problems) && str_at(doc, root, "schema") != SCHEMA {
+        strs_push(problems, f"schema: {str_at(doc, root, "schema")}, not {SCHEMA}");
+    }
+    let runs_ok = want(doc, root, "runs", "integer", "", problems);
+    let runs = match json_int(doc, kid(doc, root, "runs")) { Option.Some(value: n) => n, Option.None() => 0 - 1 };
+    if runs_ok && runs < 1 { strs_push(problems, "runs: fewer than one"); }
+    if want(doc, root, "warmups_discarded", "integer", "", problems) {
+        if match json_int(doc, kid(doc, root, "warmups_discarded")) { Option.Some(value: n) => n != 1, Option.None() => true } {
+            strs_push(problems, "warmups_discarded: not 1");
+        }
+    }
+    for k in text_split("host cpus cpu_model kernel rustc clang commit", " ") {
+        want(doc, root, k, "string", "", problems);
+    }
+    want(doc, root, "memory_bytes", "null-or-integer", "", problems);
+    want(doc, root, "tree_clean", "bool", "", problems);
+    if want(doc, root, "not_controlled", "array", "", problems) {
+        let nc = kid(doc, root, "not_controlled");
+        let mut j = 0;
+        while j < json_len(doc, nc) {
+            if match json_str(doc, elem(doc, nc, j)) { Option.Some(value: s) => false, Option.None() => true } {
+                strs_push(problems, f"not_controlled[{j}]: not a string");
+            }
+            j = j + 1;
+        }
+    }
+    let ms = each_object(doc, root, "measurements", "", problems);
+    let mut seen = strs_new();
+    for m in ms {
+        let name = f"{str_at(doc, m, "program")}/{str_at(doc, m, "stage")}";
+        check_measurement(doc, m, runs, f"measurements {name}: ", problems);
+        for s in seen {
+            if s == name { strs_push(problems, f"measurements {name}: twice"); }
+        }
+        strs_push(seen, name);
+    }
+    want(doc, root, "noise_floor_ms", "null-or-number", "", problems);
+    for b in each_object(doc, root, "binary_bytes", "", problems) {
+        want(doc, b, "program", "string", "binary_bytes: ", problems);
+        if want(doc, b, "stage", "string", "binary_bytes: ", problems) && str_at(doc, b, "stage") != "native-O2" {
+            strs_push(problems, "binary_bytes: a stage other than native-O2");
+        }
+        want(doc, b, "bytes", "null-or-integer", "binary_bytes: ", problems);
+    }
+    let refs = references();
+    let got = each_object(doc, root, "references", "", problems);
+    if ints_len(got) != vec_len(refs) {
+        strs_push(problems, f"references: {ints_len(got)}, the reference states {vec_len(refs)}");
+    } else {
+        let mut j = 0;
+        while j < ints_len(got) {
+            let r = vec_get(refs, j);
+            let e = ints_get(got, j);
+            if str_at(doc, e, "stage") != strs_get(r, 0) || str_at(doc, e, "built_with") != strs_get(r, 1) || str_at(doc, e, "arithmetic") != strs_get(r, 2) {
+                strs_push(problems, f"references[{j}]: not {strs_get(r, 0)} as stated");
+            }
+            j = j + 1;
+        }
+    }
+    for a in each_object(doc, root, "not_measured", "", problems) {
+        want(doc, a, "stage", "string", "not_measured: ", problems);
+        want(doc, a, "why", "string", "not_measured: ", problems);
+    }
+    want(doc, root, "peak_memory_source", "string", "", problems);
+    for pm in each_object(doc, root, "peak_memory", "", problems) {
+        want(doc, pm, "program", "string", "peak_memory: ", problems);
+        want(doc, pm, "stage", "string", "peak_memory: ", problems);
+        want(doc, pm, "peak_bytes", "null-or-integer", "peak_memory: ", problems);
+    }
+    problems
+}
