@@ -72,10 +72,10 @@ fn pruning_keeps_the_current_generation_and_the_newest_other() -> Result[Int, St
 @test
 fn a_mutation_session_and_the_checkouts_workloads_never_share_a_target() -> Result[Int, Str] ! {} {
     expect(cache_namespace("mutate"), "mutate")?;
-    for w in words("tests selfhost bootstrap selfbuild") {
+    for w in words("tests selfhost bootstrap selfbuild fuzz") {
         expect(cache_namespace(w), "src")?;
     }
-    for w in words("bench release run probe fuzz archive") {
+    for w in words("bench release run probe fuzz-seed archive") {
         expect(cache_namespace(w), "")?;
     }
     Result[Int, Str].Ok(value: 0)
@@ -167,6 +167,7 @@ fn the_defaults_are_the_calibrated_ones() -> Result[Int, Str] ! {} {
     expect(default_profile("tests").name, "p4t4")?;
     expect(default_profile("selfhost").name, "p4t4")?;
     expect(default_profile("fuzz").name, "p4t4")?;
+    expect(default_profile("fuzz-seed").name, "p4t4")?;
     for w in words("mutate bootstrap selfbuild bench release probe run") {
         expect(default_profile(w).name, "p1")?;
     }
@@ -223,4 +224,14 @@ fn the_artefact_is_exported_only_when_a_policy_names_it() -> Result[Int, Str] ! 
     let e = Export(manifest: "/work/rc/EXPORTS", dest: "/repo/target/x", allowed: words("a"), max_bytes: 10);
     let kept = run_argv("/repo", "nazm-run-1", shell("true"), bounds_with_export(b, e), 1, "here", IMAGE, false);
     expect(strs_get(kept, 1), "--name")
+}
+
+@test
+fn the_fuzz_script_runs_the_nazm_fuzzer_and_the_seeds_the_reference() -> Result[Int, Str] ! {} {
+    let n = script_fuzz(4, 60, "front lower");
+    check_that(text_contains(n, "build.sh nazm-fuzz") && text_contains(n, "nazm-fuzz run 60 front lower --src /src") && text_contains(n, "nazm-fuzz diff 120 121364944846963"), "the Nazm script")?;
+    check_that(text_contains(n, "fuzz-min.tar report.txt") && text_contains(n, "[ $s -eq 0 ] && [ $d -eq 0 ]"), "its export and its status")?;
+    check_that(!text_contains(n, "fuzz/run.sh"), "the Nazm script does not run the Rust fuzzer")?;
+    let r = script_fuzz_seed(4, 60, "front");
+    check_that(text_starts_with(r, "CARGO_BUILD_JOBS=4 sh /src/fuzz/run.sh 60 front;") && !text_contains(r, "nazm-fuzz"), "the reference's script")
 }

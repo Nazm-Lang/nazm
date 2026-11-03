@@ -1,0 +1,11 @@
+// Fuzz target `front` (S13.5): parse and check, `compiler/`. The Rust target is `nazm_core::check_source`.
+
+use "common.nz"
+
+fn main(io: IoCap) -> Int {
+    let src = fz_input(io)
+    let r = fz_check(io, src, false)
+    if !r.carried { return 1 }
+    if r.errors > 0 { return 1 }
+    0
+}

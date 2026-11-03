@@ -217,7 +217,7 @@ fn build_plan(c: Ctx, args: Strs, profile: Profile, b0: Bounds, print_argv: Bool
         let b = bounds_with_export(b1, Export(manifest: "/work/benchout/EXPORTS", dest: f"{c.repo}/bench", allowed: allowed, max_bytes: 1048576));
         return Result[Plan, Str].Ok(value: Plan(name: "bench", argv: shell(script_bench(mode, bench_manifest(saving))), bounds: b));
     }
-    if w == "fuzz" {
+    if w == "fuzz" || w == "fuzz-seed" {
         let mut seconds = 300;
         if strs_len(args) > 1 {
             let s = strs_get(args, 1);
@@ -246,6 +246,10 @@ fn build_plan(c: Ctx, args: Strs, profile: Profile, b0: Bounds, print_argv: Bool
         strs_push(allowed, "fuzz-min.tar");
         strs_push(allowed, "report.txt");
         let b = bounds_with_export(bounds_with_deadline(b0, 1800 + seconds * 2 * count), Export(manifest: "/work/fuzzout/EXPORTS", dest: dest, allowed: allowed, max_bytes: 8388608));
+        if w == "fuzz-seed" {
+            return Result[Plan, Str].Ok(value: Plan(name: "fuzz-seed", argv: shell(script_fuzz_seed(j, seconds, str_join(targets, " "))), bounds: b));
+        }
+        // The Nazm fuzzer (S13.5): the five targets, then `diff` over twice the seconds in programs.
         return Result[Plan, Str].Ok(value: Plan(name: "fuzz", argv: shell(script_fuzz(j, seconds, str_join(targets, " "))), bounds: b));
     }
     if w == "archive" {
@@ -274,7 +278,7 @@ fn build_plan(c: Ctx, args: Strs, profile: Profile, b0: Bounds, print_argv: Bool
         return Result[Plan, Str].Ok(value: Plan(name: "run", argv: shell(cmd), bounds: b0));
     }
     let shown = if str_len(w) == 0 && strs_len(args) == 0 { "<none>" } else { w };
-    Result[Plan, Str].Err(error: f"contained: unknown workload {debug_quote(shown)}\n  probe | tests | selfhost | bootstrap | selfbuild | bench | mutate | mutate-seed | fuzz [SECONDS] [TARGET...] | archive | run <command>")
+    Result[Plan, Str].Err(error: f"contained: unknown workload {debug_quote(shown)}\n  probe | tests | selfhost | bootstrap | selfbuild | bench | mutate | mutate-seed | fuzz [SECONDS] [TARGET...] | fuzz-seed [SECONDS] [TARGET...] | archive | run <command>")
 }
 
 fn tenths(ms: Int) -> Str ! {} {

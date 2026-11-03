@@ -9,9 +9,10 @@
 #                                                   its counted heap is at most 256 MiB, and it
 #                                                   checks its own image at start)
 #   nazm-mutate   toolchain/harness/mutate/main.nz  --heap-limit 2G
+#   nazm-fuzz     toolchain/harness/fuzz/main.nz    --heap-limit 2G (S13.5; its targets are built by
+#                                                   `nazm-fuzz build`, with SanitizerCoverage, in the container)
 #
-# The programs the later tasks of slice 13 add (`nazm-fuzz`, `nazm-bench`) are added to the table
-# below with their tasks. The `nazm` is `$NAZM`, else the one this checkout's Cargo builds
+# The program the last task of slice 13 adds (`nazm-bench`) is added to the table below with its task. The `nazm` is `$NAZM`, else the one this checkout's Cargo builds
 # (`stage_checkout_nazm`: the seed before slice 18, the Nazm-built `nazm` after). Building runs no
 # program of the harness's own; it is the compiler's work, as `toolchain/lib/stage.sh`'s scripts
 # do it. Run a built `nzx` directly (it is a runner and holds its own lock); run anything else it
@@ -25,7 +26,8 @@ stage_name=harness-build
 
 # NAME SOURCE HEAP
 table="nzx nzx/main.nz 256M
-nazm-mutate mutate/main.nz 2G"
+nazm-mutate mutate/main.nz 2G
+nazm-fuzz fuzz/main.nz 2G"
 
 nazm=${NAZM:-$(stage_checkout_nazm "$root")}
 [ -x "$nazm" ] || stage_fail "no nazm at $nazm: build it (cargo build -p nazm-cli --bin nazm) or set NAZM"

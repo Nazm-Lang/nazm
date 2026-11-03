@@ -13,6 +13,7 @@
 # contained-turn`) unless NZX_HAVE_TURN=1 says the caller holds it. It also asserts, on the nzx
 # side, that the isolation flags are present and the never-present list (`--privileged`, `--cap-add`,
 # `--device`, `--pid`, `--ipc`, `--userns`, `-v`, `--volume`, the Docker socket) is not, before the image.
+# `fuzz-seed` is the reference's `fuzz` (the Rust fuzzer over the seed), compared the same way.
 # `mutate-seed` is the reference's `mutate` (the Rust campaign over the seed's entries): its cases run
 # `xtask contained mutate` against `nzx contained mutate-seed`, the workload's name normalised, and with a
 # `--only` the plans are element for element equal; with none the selection is the seed's entries by name
@@ -86,7 +87,7 @@ case_() {
     "$NZX" contained "${opts[@]+"${opts[@]}"}" --print-argv "$@" > "$work/n.out" 2> "$work/n.err0"
     local ns=$?
     # The unknown-workload message lists `mutate-seed` too, the one workload the reference does not have.
-    sed 's/ | mutate-seed//' "$work/n.err0" > "$work/n.err"
+    sed 's/ | mutate-seed//; s/ | fuzz-seed \[SECONDS\] \[TARGET...\]//' "$work/n.err0" > "$work/n.err"
     local why=""
     # A case that agrees by both refusing is no evidence: a plan must succeed, a refusal must say why.
     # Plans that read the amd64 image (its cache volume, its platform) refuse where it is not built.
@@ -130,14 +131,14 @@ case_seed() {
     done
     for a in "$@"; do
         xargs+=("$a")
-        if [ "$a" = mutate ]; then nargs+=(mutate-seed); else nargs+=("$a"); fi
-        case $a in --only | --plan | --verify-killer) explicit=1 ;; esac
+        if [ "$a" = mutate ]; then nargs+=(mutate-seed); elif [ "$a" = fuzz ]; then nargs+=(fuzz-seed); else nargs+=("$a"); fi
+        case $a in --only | --plan | --verify-killer | fuzz) explicit=1 ;; esac
     done
     "$XTASK" contained "${opts[@]+"${opts[@]}"}" --print-argv "${xargs[@]}" > "$work/x.out" 2> "$work/x.err"
     local xs=$?
-    "$NZX" contained "${opts[@]+"${opts[@]}"}" --print-argv "${nargs[@]}" 2> "$work/n.err0" | sed 's/mutate-seed/mutate/g' > "$work/n.out"
+    "$NZX" contained "${opts[@]+"${opts[@]}"}" --print-argv "${nargs[@]}" 2> "$work/n.err0" | sed 's/mutate-seed/mutate/g; s/fuzz-seed/fuzz/g' > "$work/n.out"
     local ns=${PIPESTATUS[0]}
-    sed 's/mutate-seed/mutate/g' "$work/n.err0" > "$work/n.err"
+    sed 's/mutate-seed/mutate/g; s/fuzz-seed/fuzz/g' "$work/n.err0" > "$work/n.err"
     local why=""
     [ "$xs" = 0 ] && [ "$ns" = 0 ] || why="status xtask $xs, nzx $ns"
     cmp -s "$work/x.err" "$work/n.err" || why="$why; stderr differs"
@@ -233,10 +234,6 @@ release|release
 bench|bench
 bench save|bench --save
 bench cache|--cache bench run true
-fuzz|fuzz
-fuzz 60|fuzz 60
-fuzz targets|fuzz 60 front lower bogus
-fuzz p1|--profile p1 fuzz 30 run
 archive|archive
 run|run echo hi
 run spaces|run echo   hi there
@@ -266,6 +263,10 @@ while IFS='|' read -r name args; do
     # shellcheck disable=SC2086
     case_seed "$name" $args
 done << 'SEED'
+fuzz-seed|fuzz
+fuzz-seed 60|fuzz 60
+fuzz-seed targets|fuzz 60 front lower bogus
+fuzz-seed p1|--profile p1 fuzz 30 run
 mutate-seed|mutate
 mutate-seed p4t4|--profile p4t4 mutate
 mutate-seed plan|mutate --plan
@@ -277,6 +278,9 @@ mutate-seed budget|mutate --budget-secs 100
 mutate-seed killer|mutate --verify-killer abc.d
 SEED
 nzx_case "mutate (nazm)" "nazm-mutate session /work/mut~--seed /work/target/debug/nazm~--rebuild-cmd 'cargo build -q --locked -p nazm-cli --bin nazm --jobs 1'~--reset-derived-caches~--export-journal~--resume-from /src/target/mutation-campaigns-nz~--cargo-jobs 1 --test-threads 1~--budget-secs 2400" mutate
+nzx_case "fuzz (nazm)" "nazm-fuzz run 300 ~--src /src --nazm \$NAZM~nazm-fuzz diff 600 121364944846963~cargo build -q --locked -p nazm-cli --bin nazm --jobs 4~build.sh nazm-fuzz" fuzz
+nzx_case "fuzz (nazm) targets" "nazm-fuzz run 60 front lower --src /src~nazm-fuzz diff 120 121364944846963" fuzz 60 front lower bogus
+nzx_case "fuzz (nazm) p1" "nazm-fuzz run 30 run --src /src~--jobs 1" --profile p1 fuzz 30 run
 nzx_case "mutate (nazm) only resume" "--only 'a-b_c'~--resume~--strategy 'full'" mutate --only a-b_c --strategy full --resume
 nzx_case "mutate (nazm) verify" "--verify-killer 'abc.d'~--killer 'foo::bar'" mutate --verify-killer abc.d --killer foo::bar
 nzx_case "mutate (nazm) plan" "nazm-mutate plan /work/mut --only 'x1'" mutate --plan --only x1

@@ -1,0 +1,25 @@
+// Fuzz target `run` (S13.5): check, Core IR, and the interpreter with a budget — the front end and
+// `toolchain/interp/`, through S7.1's seam (the Core IR document as text). The Rust target is
+// `nazm_core::run_with_limits` with 20 000 iterations and a depth of 64; so are the limits here. The
+// interpreted program's own failure (a refusal, a panic of its own, a budget spent) is status 2, an
+// ordinary input; the interpreter itself failing to load a document the front end wrote, or stopping
+// on a defect of its own, is status 70.
+
+use "common.nz"
+use "../../../interp/entry.nz"
+
+fn main(io: IoCap, out: OutCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap) -> Int {
+    let src = fz_input(io)
+    let r = fz_check(io, src, true)
+    if !r.carried || r.errors > 0 { return 1 }
+    let library = os_env_get("NAZM_LIBRARY")
+    let run = interp_exec(r.doc, "<input>", library, src, true, 20000, 64, strs_new(), false, out, io, time, net, proc, rnd)
+    // 3: the document the front end wrote does not load, a defect of the toolchain. 4: every task
+    // waits, which Nazm does not promise to prevent. 5: no `main`. 1 and 2: refused, or failed itself.
+    if run.kind == 3 {
+        eprint("run: the Core IR the front end wrote does not load: " + run.diag + "\n")
+        return 70
+    }
+    if run.kind == 0 || run.kind == 4 || run.kind == 5 { return 0 }
+    2
+}

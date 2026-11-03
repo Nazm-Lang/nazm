@@ -1,0 +1,327 @@
+// `nazm-fuzz`'s pure part (R8 slice 13, S13.5): the shell scripts it hands to `sh` (each one a
+// template with `@NAME@` holes, filled here and nowhere else), libFuzzer's command line, and what is
+// read back from libFuzzer's log — the `nazm.fuzz/1` line of `fuzz/src/main.rs`, counted from the
+// artefacts instead of from an in-process list. Nothing here touches a file or starts a program, so
+// `tests/fuzz_self.nz` runs it interpreted.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/strings.nz"
+
+/// The five targets, in the order the Rust run takes them.
+pub fn target_names() -> Strs ! {} {
+    words("front lower run lir manifest")
+}
+
+pub fn valid_target(t: Str) -> Bool ! {} {
+    for n in target_names() {
+        if n == t {
+            return true;
+        }
+    }
+    false
+}
+
+/// The seed `-seed=` of every run, as `fuzz/src/main.rs`'s default seeds its own generator.
+pub const SEED: Int = 24301;
+
+/// Fill `@NAME@` holes: `names` and `values` are parallel.
+pub fn fill(template: Str, names: Strs, values: Strs) -> Str ! {} {
+    let mut out = template;
+    let mut i = 0;
+    while i < strs_len(names) {
+        out = text_replace(out, f"@{strs_get(names, i)}@", strs_get(values, i));
+        i = i + 1;
+    }
+    out
+}
+
+/// What `build` does once, before the first target: the front end's and the pipeline's sources
+/// copied beside an empty `nazm.root`, so that every module the targets reach is inside one source
+/// root (a module outside the root does not see the impls its importer sees: `N0364` on `Hash`).
+const PREPARE: Str = r#"set -eu
+S=@WORK@/src
+if [ ! -f "$S/nazm.root" ]; then
+    rm -rf "$S"
+    mkdir -p "$S"
+    cp -R @SRC@/compiler @SRC@/toolchain "$S/"
+    : > "$S/nazm.root"
+fi
+"#;
+
+pub fn prepare_script(src: Str, work: Str) -> Str ! {} {
+    fill(PREPARE, words("SRC WORK"), vec_of2(src, work))
+}
+
+/// What `build TARGET` does: the target's units as LLVM IR text (`--objects` with `--emit-ir`: the
+/// units' `.ll` and `link.txt`), the program's own modules (`mN`) compiled by `clang` with
+/// SanitizerCoverage's inline counters and the runtime's without, the entry's `main` renamed to
+/// `nz_program_main`, and everything linked with the shim and libFuzzer's `main`.
+const BUILD: Str = r#"set -eu
+S=@WORK@/src
+D=@WORK@/@TARGET@
+U=$D/units
+rm -rf "$D"
+mkdir -p "$U"
+cd "$S"
+NAZM_LIBRARY=@SRC@/library @NAZM@ build --backend llvm --no-cache --emit-ir --objects "$U" --heap-limit 2G toolchain/harness/fuzz/targets/@TARGET@.nz -o "$U/p"
+cd "$U"
+objs=$(sed -n 's/^objects //p' link.txt)
+libs=$(sed -n 's/^libraries //p' link.txt)
+printf '%s\n' $objs | xargs -P @JOBS@ -I{} sh -c 'o={}; n=${o%.o}; name=${n#*-}; case $name in m[0-9]*) cov="-fsanitize-coverage=inline-8bit-counters,pc-table";; *) cov="";; esac; clang -O1 -c $cov -Wno-override-module "p.$name.ll" -o "$o"'
+objcopy --redefine-sym main=nz_program_main ./*-entry.o
+clang -O1 -c @SRC@/toolchain/harness/fuzz/shim.c -o shim.o
+clang -fsanitize=fuzzer shim.o $objs $libs -o "$D/fuzzer"
+test -x "$D/fuzzer"
+"#;
+
+pub fn build_script(src: Str, nazm: Str, work: Str, target: Str, jobs: Int) -> Str ! {} {
+    let names = words("SRC NAZM WORK TARGET JOBS");
+    let values = vec_of2(src, nazm);
+    strs_push(values, work);
+    strs_push(values, target);
+    strs_push(values, int_to_str(jobs));
+    fill(BUILD, names, values)
+}
+
+/// The seeds of one target, read-only trees flattened into one directory of `.nz` files (a manifest's
+/// are `.toml`): the persistent corpus of the Rust run (`fuzz/corpus/T`) and of this one
+/// (`toolchain/harness/fuzz/corpus/T`), the examples, the library, the benchmark programs and the
+/// regression corpus. libFuzzer writes only into the first corpus directory it is given, which is
+/// never one of these.
+const SEEDS: Str = r#"set -eu
+D=@OUT@/@TARGET@/seed
+rm -rf "$D"
+mkdir -p "$D"
+n=0
+for root in @ROOTS@; do
+    [ -d "$root" ] || continue
+    for f in $(find "$root" -type f \( -name '*.@EXT@' -o -name '*.txt' \) | sort); do
+        n=$((n + 1))
+        cp "$f" "$D/$n"
+    done
+done
+echo "$n"
+"#;
+
+/// The directories whose files seed `target`, each under `src`.
+pub fn seed_roots(src: Str, target: Str) -> Str ! {} {
+    let out = strs_new();
+    strs_push(out, f"{src}/fuzz/corpus/{target}");
+    strs_push(out, f"{src}/toolchain/harness/fuzz/corpus/{target}");
+    strs_push(out, f"{src}/examples");
+    if target != "manifest" {
+        strs_push(out, f"{src}/library");
+        strs_push(out, f"{src}/bench/programs");
+        strs_push(out, f"{src}/crates/nazm-cli/tests/fuzz-corpus");
+    }
+    str_join(out, " ")
+}
+
+pub fn seed_script(src: Str, out: Str, target: Str) -> Str ! {} {
+    let ext = if target == "manifest" { "toml" } else { "nz" };
+    let names = words("OUT TARGET ROOTS EXT");
+    let values = vec_of2(out, target);
+    strs_push(values, seed_roots(src, target));
+    strs_push(values, ext);
+    fill(SEEDS, names, values)
+}
+
+/// libFuzzer, one target, `seconds` of it: the fresh corpus first (the one directory it writes),
+/// then the seeds; the log (its standard error) in a file, read back by `parse_log`; its crash,
+/// timeout and out-of-memory artefacts in `OUT/T/crashes/`. Its own status is not the target's: 77
+/// would be the target ending the process, and nothing here ends it.
+const RUN: Str = r#"D=@OUT@/@TARGET@
+mkdir -p "$D/corpus" "$D/crashes" "$D/hangs" "$D/oom"
+export NZ_FUZZ_OUT="$D"
+export NZ_FUZZ_DEADLINE_MS=@DEADLINE@
+export NAZM_LIBRARY=@SRC@/library
+cd "$D"
+@WORK@/@TARGET@/fuzzer -max_total_time=@SECONDS@ -seed=@SEED@ -max_len=65536 -rss_limit_mb=3072 -timeout=30 -print_final_stats=1 -print_funcs=0 -verbosity=1 -dict=@DICT@ -artifact_prefix="$D/crashes/" "$D/corpus" "$D/seed" 2> "$D/log.txt" > /dev/null
+echo "libfuzzer status $?" >> "$D/log.txt"
+"#;
+
+pub fn run_script(src: Str, work: Str, out: Str, target: Str, seconds: Int) -> Str ! {} {
+    let names = words("OUT TARGET SRC WORK SECONDS SEED DICT DEADLINE");
+    let values = vec_of2(out, target);
+    strs_push(values, src);
+    strs_push(values, work);
+    strs_push(values, int_to_str(seconds));
+    strs_push(values, int_to_str(SEED));
+    strs_push(values, f"{src}/toolchain/harness/fuzz/nazm.dict");
+    // One input's deadline: 2 s for `run` (the interpreter may wait for ever), 10 s for the rest.
+    strs_push(values, if target == "run" { "2000" } else { "10000" });
+    fill(RUN, names, values)
+}
+
+/// The smallest set of kept inputs that reaches every counter reached, into `OUT/T/min`: libFuzzer's
+/// own `-merge=1` over the run's corpus and the seeds. The count of what it kept is `kept`.
+const MERGE: Str = r#"D=@OUT@/@TARGET@
+rm -rf "$D/min"
+mkdir -p "$D/min"
+export NZ_FUZZ_OUT="$D/merge"
+export NAZM_LIBRARY=@SRC@/library
+cd "$D"
+@WORK@/@TARGET@/fuzzer -merge=1 -max_len=65536 -rss_limit_mb=3072 -timeout=30 "$D/min" "$D/corpus" "$D/seed" > /dev/null 2>> "$D/log.txt"
+ls "$D/min" | wc -l | tr -d ' '
+"#;
+
+pub fn merge_script(src: Str, work: Str, out: Str, target: Str) -> Str ! {} {
+    let names = words("OUT TARGET SRC WORK");
+    let values = vec_of2(out, target);
+    strs_push(values, src);
+    strs_push(values, work);
+    fill(MERGE, names, values)
+}
+
+fn vec_of2(a: Str, b: Str) -> Strs ! {} {
+    let v = strs_new();
+    strs_push(v, a);
+    strs_push(v, b);
+    v
+}
+
+/// What libFuzzer's log says: `execs` (`stat::number_of_executed_units`), `covered` (the last
+/// `cov:` of a status line), `guards` (the counters it loaded), `seeded` (the seed files it read),
+/// `status` (the status the run ended with: -1 when the log has none).
+pub struct Stats {
+    execs: Int,
+    covered: Int,
+    guards: Int,
+    seeded: Int,
+    status: Int,
+}
+
+fn int_after(line: Str, marker: Str) -> Int ! {} {
+    let at = find(line, marker);
+    if at < 0 {
+        return 0 - 1;
+    }
+    let from = at + str_len(marker);
+    let mut end = from;
+    while end < str_len(line) {
+        let b = str_byte(line, end);
+        if b < 48 || b > 57 {
+            break;
+        }
+        end = end + 1;
+    }
+    if end == from {
+        return 0 - 1;
+    }
+    match text_parse_int(str_slice(line, from, end)) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => 0 - 1,
+    }
+}
+
+pub fn parse_log(text: Str) -> Stats ! {} {
+    let mut execs = 0;
+    let mut covered = 0;
+    let mut guards = 0;
+    let mut seeded = 0;
+    let mut status = 0 - 1;
+    for l in text_lines(text) {
+        if text_starts_with(l, "stat::number_of_executed_units:") {
+            let n = int_after(l, ": ");
+            if n >= 0 {
+                execs = n;
+            }
+        } else if text_starts_with(l, "INFO: Loaded 1 modules") || (text_starts_with(l, "INFO: Loaded ") && text_contains(l, "inline 8-bit counters")) {
+            // `INFO: Loaded 1 modules   (138876 inline 8-bit counters): ...`
+            let n = int_after(l, "(");
+            if n >= 0 {
+                guards = n;
+            }
+        } else if text_starts_with(l, "INFO: seed corpus: files: ") {
+            let n = int_after(l, "files: ");
+            if n >= 0 {
+                seeded = n;
+            }
+        } else if text_starts_with(l, "libfuzzer status ") {
+            status = int_after(l, "status ");
+        } else if text_starts_with(l, "#") && text_contains(l, " cov: ") {
+            let n = int_after(l, " cov: ");
+            if n >= 0 {
+                covered = n;
+            }
+        }
+    }
+    Stats(execs: execs, covered: covered, guards: guards, seeded: seeded, status: status)
+}
+
+/// What the artefacts of one target say: libFuzzer's `crash-*`, `oom-*` (its own rss ceiling) and
+/// `leak-*` are crashes; its `timeout-*` and the shim's `hangs/` files are hangs; the shim's `oom/`
+/// files (`N0406`, a runaway allocation the counted heap refused) are counted apart, and are not
+/// crashes.
+pub struct Found {
+    crashes: Int,
+    hangs: Int,
+    oom: Int,
+}
+
+pub fn count_found(artefacts: Strs, hang_files: Int, oom_files: Int) -> Found ! {} {
+    let mut crashes = 0;
+    let mut hangs = hang_files;
+    for a in artefacts {
+        if text_starts_with(a, "crash-") || text_starts_with(a, "oom-") || text_starts_with(a, "leak-") {
+            crashes = crashes + 1;
+        } else if text_starts_with(a, "timeout-") {
+            hangs = hangs + 1;
+        }
+    }
+    Found(crashes: crashes, hangs: hangs, oom: oom_files)
+}
+
+/// The report line, `fuzz/src/main.rs`'s `nazm.fuzz/1` keys in its order, `oom` added at the end.
+pub fn report_line(target: Str, seconds: Int, seed: Int, s: Stats, kept: Int, f: Found) -> Str ! {} {
+    f"{{\"schema\": \"nazm.fuzz/1\", \"target\": \"{target}\", \"seconds\": {seconds}, \"seed\": {seed}, \"execs\": {s.execs}, \"guards\": {s.guards}, \"covered\": {s.covered}, \"seeded\": {s.seeded}, \"kept\": {kept}, \"hangs\": {f.hangs}, \"crashes\": {f.crashes}, \"oom\": {f.oom}}}"
+}
+
+/// What one target's directory holds when its run is over: the artefacts libFuzzer wrote (names),
+/// the files the shim kept as hangs and as `N0406`. Printed as `artefacts NAME...`, `hangs N`, `oom N`.
+const TALLY: Str = r#"D=@OUT@/@TARGET@
+echo "artefacts $(ls "$D/crashes" 2>/dev/null | tr '\n' ' ')"
+echo "hangs $(ls "$D/hangs" 2>/dev/null | wc -l | tr -d ' ')"
+echo "oom $(ls "$D/oom" 2>/dev/null | wc -l | tr -d ' ')"
+"#;
+
+pub fn tally_script(out: Str, target: Str) -> Str ! {} {
+    fill(TALLY, words("OUT TARGET"), vec_of2(out, target))
+}
+
+pub fn parse_tally(text: Str) -> Found ! {} {
+    let mut names = strs_new();
+    let mut hang_files = 0;
+    let mut oom_files = 0;
+    for l in text_lines(text) {
+        if text_starts_with(l, "artefacts") {
+            names = words(l);
+        } else if text_starts_with(l, "hangs ") {
+            hang_files = int_after(l, "hangs ");
+        } else if text_starts_with(l, "oom ") {
+            oom_files = int_after(l, "oom ");
+        }
+    }
+    // `words` kept the first word, `artefacts`: it is not an artefact, and no artefact starts with it.
+    count_found(names, if hang_files < 0 { 0 } else { hang_files }, if oom_files < 0 { 0 } else { oom_files })
+}
+
+/// Each crash's input, as the first 4 KiB of its text, under a line naming it, for the report.
+const CRASHES: Str = r#"D=@OUT@/@TARGET@
+for f in "$D"/crashes/crash-* "$D"/crashes/oom-* "$D"/crashes/leak-*; do
+    [ -f "$f" ] || continue
+    echo "--- @TARGET@ crash $(basename "$f")"
+    head -c 4096 "$f"
+    echo
+done
+"#;
+
+pub fn crashes_script(out: Str, target: Str) -> Str ! {} {
+    fill(CRASHES, words("OUT TARGET"), vec_of2(out, target))
+}
+
+/// The tar of every target's minimised corpus and crashes, as `fuzz/run.sh` writes it.
+pub fn tar_script(out: Str) -> Str ! {} {
+    fill("cd @OUT@ && tar -cf fuzz-min.tar */min */crashes 2>/dev/null || true\n", words("OUT"), vec_of2(out, ""))
+}
