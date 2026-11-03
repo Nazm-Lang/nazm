@@ -1,0 +1,130 @@
+// `fuzz/plan.nz`, `fuzz/diff.nz` and `lib/gen.nz`'s own tests (R8 slice 13, S13.5): what is pure about
+// `nazm-fuzz` — the scripts it hands to `sh` (their holes all filled, the instrumented and the plain
+// units told apart, the libFuzzer line), libFuzzer's log read back, the `nazm.fuzz/1` line in the Rust
+// fuzzer's key order, the artefact tally, and the generator writing the same program for the same seed.
+// The targets, the shim and the coverage-guided runs are measured inside the container (`nzx contained
+// fuzz`); these run interpreted:
+//
+//     NAZM_HARNESS_ROOT=$PWD nazm test --interpret-only toolchain/harness/tests/fuzz_self.nz
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/gen.nz"
+use "../fuzz/plan.nz"
+use "../fuzz/diff.nz"
+
+fn expect(got: Str, want: Str) -> Result[Int, Str] ! {} {
+    if got == want {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    Result[Int, Str].Err(error: f"got {got}, wanted {want}")
+}
+
+fn has(s: Str, part: Str) -> Result[Int, Str] ! {} {
+    check_that(text_contains(s, part), f"{part} is not in {s}")
+}
+
+fn lacks(s: Str, part: Str) -> Result[Int, Str] ! {} {
+    check_that(!text_contains(s, part), f"{part} is in {s}")
+}
+
+@test
+fn the_five_targets_are_the_rust_runs() -> Result[Int, Str] ! {} {
+    expect(str_join(target_names(), " "), "front lower run lir manifest")?;
+    check_that(valid_target("lir") && !valid_target("bogus") && !valid_target(""), "target names")
+}
+
+@test
+fn a_build_script_has_no_hole_left() -> Result[Int, Str] ! {} {
+    let s = build_script("/src", "/work/target/debug/nazm", "/work/fuzz", "lower", 4);
+    lacks(s, "@SRC@")?;
+    lacks(s, "@NAZM@")?;
+    lacks(s, "@WORK@")?;
+    lacks(s, "@TARGET@")?;
+    lacks(s, "@JOBS@")?;
+    // The target's own source, the units' text, the counters on the program's modules only, the entry
+    // renamed, libFuzzer's `main`.
+    has(s, "toolchain/harness/fuzz/targets/lower.nz")?;
+    has(s, "--emit-ir --objects \"$U\" --heap-limit 2G")?;
+    has(s, "m[0-9]*) cov=\"-fsanitize-coverage=inline-8bit-counters,pc-table\"")?;
+    has(s, "*) cov=\"\";;")?;
+    has(s, "objcopy --redefine-sym main=nz_program_main ./*-entry.o")?;
+    has(s, "clang -fsanitize=fuzzer shim.o $objs $libs -o \"$D/fuzzer\"")?;
+    has(s, "xargs -P 4")
+}
+
+@test
+fn the_prepare_script_copies_the_front_end_beside_an_empty_root_marker() -> Result[Int, Str] ! {} {
+    let s = prepare_script("/src", "/work/fuzz");
+    lacks(s, "@")?;
+    has(s, "cp -R /src/compiler /src/toolchain \"$S/\"")?;
+    has(s, ": > \"$S/nazm.root\"")
+}
+
+@test
+fn seeds_are_the_rust_corpora_and_the_repositorys_programs() -> Result[Int, Str] ! {} {
+    expect(seed_roots("/src", "front"), "/src/fuzz/corpus/front /src/toolchain/harness/fuzz/corpus/front /src/examples /src/library /src/bench/programs /src/crates/nazm-cli/tests/fuzz-corpus")?;
+    expect(seed_roots("/src", "manifest"), "/src/fuzz/corpus/manifest /src/toolchain/harness/fuzz/corpus/manifest /src/examples")?;
+    has(seed_script("/src", "/o", "manifest"), "-name '*.toml'")?;
+    has(seed_script("/src", "/o", "run"), "-name '*.nz'")
+}
+
+@test
+fn a_run_script_is_libfuzzer_with_the_rust_runs_settings() -> Result[Int, Str] ! {} {
+    let s = run_script("/src", "/work/fuzz", "/work/fuzzout", "run", 300);
+    lacks(s, "@")?;
+    has(s, "/work/fuzz/run/fuzzer -max_total_time=300 -seed=24301 -max_len=65536 -rss_limit_mb=3072 -timeout=30")?;
+    has(s, "-dict=/src/toolchain/harness/fuzz/nazm.dict")?;
+    has(s, "-artifact_prefix=\"$D/crashes/\" \"$D/corpus\" \"$D/seed\"")?;
+    has(s, "export NZ_FUZZ_OUT=\"$D\"")?;
+    has(run_script("/src", "/work/fuzz", "/work/fuzzout", "lir", 5), "export NZ_FUZZ_DEADLINE_MS=10000")?;
+    has(run_script("/src", "/work/fuzz", "/work/fuzzout", "run", 5), "export NZ_FUZZ_DEADLINE_MS=2000")?;
+    let m = merge_script("/src", "/work/fuzz", "/work/fuzzout", "run");
+    lacks(m, "@")?;
+    has(m, "-merge=1")?;
+    has(m, "\"$D/min\" \"$D/corpus\" \"$D/seed\"")
+}
+
+@test
+fn libfuzzers_log_is_read_back() -> Result[Int, Str] ! {} {
+    let log = "INFO: Running with entropic power schedule (0xFF, 100).\nINFO: Seed: 24301\nINFO: Loaded 1 modules   (138876 inline 8-bit counters): 138876 [0xaaaac14431d8, 0xaaaac1465054), \nINFO: Loaded 1 PC tables (138876 PCs): 138876 [0xaaaac1465058,0xaaaac1683818), \nINFO:        6 files found in /work/fz/c\nINFO: seed corpus: files: 6 min: 443b max: 2723b total: 6114b rss: 33Mb\n#7\tINITED cov: 10003 ft: 12609 corp: 6/6114b exec/s: 0 rss: 33Mb\n#8\tNEW    cov: 10258 ft: 13312 corp: 7/6599b lim: 2723 exec/s: 0 rss: 36Mb L: 485/2723 MS: 1 EraseBytes-\n#999\tDONE   cov: 10546 ft: 15084 corp: 14/15622b lim: 2723 exec/s: 91 rss: 37Mb\nDone 999 runs in 11 second(s)\nstat::number_of_executed_units: 999\nstat::average_exec_per_sec:     90\nlibfuzzer status 0\n";
+    let s = parse_log(log);
+    expect(f"{s.execs} {s.covered} {s.guards} {s.seeded} {s.status}", "999 10546 138876 6 0")?;
+    let empty = parse_log("");
+    expect(f"{empty.execs} {empty.covered} {empty.guards} {empty.seeded} {empty.status}", "0 0 0 0 -1")
+}
+
+@test
+fn the_tally_tells_crashes_hangs_and_runaway_allocations_apart() -> Result[Int, Str] ! {} {
+    let f = parse_tally("artefacts crash-0a1b oom-77 timeout-9f leak-1 slow-unit-3 \nhangs 2\noom 4\n");
+    // crash-, oom- (libFuzzer's own rss ceiling) and leak- are crashes; timeout- and the shim's hangs/ files are hangs.
+    expect(f"{f.crashes} {f.hangs} {f.oom}", "3 3 4")?;
+    let none = parse_tally("artefacts \nhangs 0\noom 0\n");
+    expect(f"{none.crashes} {none.hangs} {none.oom}", "0 0 0")
+}
+
+@test
+fn the_report_line_has_the_rust_fuzzers_keys_in_its_order() -> Result[Int, Str] ! {} {
+    let s = Stats(execs: 41837, covered: 1272, guards: 140172, seeded: 305, status: 0);
+    let f = Found(crashes: 0, hangs: 1, oom: 2);
+    expect(report_line("manifest", 30, 24301, s, 326, f), "{\"schema\": \"nazm.fuzz/1\", \"target\": \"manifest\", \"seconds\": 30, \"seed\": 24301, \"execs\": 41837, \"guards\": 140172, \"covered\": 1272, \"seeded\": 305, \"kept\": 326, \"hangs\": 1, \"crashes\": 0, \"oom\": 2}")
+}
+
+@test
+fn a_seed_writes_the_same_program_every_time() -> Result[Int, Str] ! {} {
+    let a = program(rng_new(121364944846963));
+    let b = program(rng_new(121364944846963));
+    let c = program(rng_new(121364944846964 + 2));
+    check_that(a == b && a != c && text_contains(a, "fn main() -> Int"), "the generator is not a function of its seed")
+}
+
+@test
+fn legs_agree_when_each_gives_the_first_ones_answer() -> Result[Int, Str] ! {} {
+    let t = words("run 7 0 x llvm-O0 7 0 x llvm-O2 7 0 x");
+    // `words` splits at spaces: an empty failure cannot be written, so every failure here is `x`.
+    check_that(legs_agree(t), "the legs agree")?;
+    let u = words("run 7 0 x llvm-O0 8 0 x");
+    check_that(!legs_agree(u), "the legs differ")?;
+    let tally = tally_line(Tally(programs: 24, agree: 23, differ: 1, invalid: 0, failing: 5), 121364944846963, 3);
+    expect(tally, "{\"schema\": \"nazm.fuzz-diff/1\", \"programs\": 24, \"seed\": 121364944846963, \"legs\": 3, \"agree\": 23, \"differ\": 1, \"invalid\": 0, \"failing\": 5}")
+}

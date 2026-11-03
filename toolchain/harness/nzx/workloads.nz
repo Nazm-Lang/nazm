@@ -8,9 +8,10 @@
 // platform, the cache volume's name) is passed in by `contained.nz`, which reads it.
 //
 // `mutate` runs the Nazm campaign runner (13.4); `mutate-seed` is the reference's own script, the Rust
-// campaign over the seed's entries. Until tasks 13.5 and 13.6 land the new fuzzer and benchmark
-// program, the scripts of `fuzz` and `bench` are the reference's own (they run `fuzz/run.sh` and
-// `xtask` inside the container): the runner does not care what its script runs (S13.3).
+// campaign over the seed's entries. `fuzz` runs `nazm-fuzz` (13.5, S13.5); `fuzz-seed` is the reference's
+// own script (`fuzz/run.sh`, the Rust fuzzer over the seed). Until task 13.6 lands the new benchmark
+// program, the script of `bench` is the reference's own (it runs `xtask` inside the container): the
+// runner does not care what its script runs (S13.3).
 
 use "@std/text";
 
@@ -73,7 +74,7 @@ pub fn profile_by_name(name: Str) -> Option[Profile] ! {} {
 
 /// The profile a workload runs under when `--profile` is not given (N14.1).
 pub fn default_profile(workload: Str) -> Profile ! {} {
-    if workload == "tests" || workload == "selfhost" || workload == "fuzz" {
+    if workload == "tests" || workload == "selfhost" || workload == "fuzz" || workload == "fuzz-seed" {
         return p4t4();
     }
     p1()
@@ -133,7 +134,7 @@ pub fn bounds_with_cache(b: Bounds, volume: Str) -> Bounds ! {} {
 /// Which cache a workload builds in, if any (`""` for none): two namespaces, never one.
 pub fn cache_namespace(workload: Str) -> Str ! {} {
     if workload == "mutate" || workload == "mutate-seed" { return "mutate"; }
-    if workload == "tests" || workload == "selfhost" || workload == "bootstrap" || workload == "selfbuild" {
+    if workload == "tests" || workload == "selfhost" || workload == "bootstrap" || workload == "selfbuild" || workload == "fuzz" {
         return "src";
     }
     ""
@@ -353,8 +354,19 @@ pub fn script_bench(mode: Str, manifest: Str) -> Str ! {} {
     f"mkdir -p /work/benchout && cp /src/bench/*.json /work/benchout/ 2>/dev/null; export NAZM_BENCH_DIR=/work/benchout; cargo build --release --locked -p nazm-cli --jobs 1 >/dev/null && cargo run -q -p xtask -- bench --runs 5 {mode} && if find /work/benchout -name '*.json' -size +1M | grep -q .; then echo 'bench: an artefact exceeded 1 MiB; refusing to export' >&2; exit 3; fi && {manifest}"
 }
 
-/// `targets` is the target names, space-separated.
+/// The Nazm fuzzer's script (S13.5): the checkout's `nazm` built by Cargo into the `src` cache's target
+/// directory (the seed builds the targets and runs the differential legs), `nazm-fuzz` built from `/src`
+/// by `toolchain/harness/build.sh`, each target run for `seconds` (`run`: coverage-guided, libFuzzer on
+/// SanitizerCoverage), then `diff` over `seconds * 2` generated programs. The report and the minimised
+/// corpora are exported; a differential disagreement's program is appended to the report, since only the
+/// two named files cross. The status is 1 when either found anything. `targets` is space-separated.
 pub fn script_fuzz(j: Int, seconds: Int, targets: Str) -> Str ! {} {
+    let programs = seconds * 2;
+    f"mkdir -p /work/nzx /work/fuzzout && export CARGO_TARGET_DIR=/work/target NAZM=/work/target/debug/nazm NAZM_LIBRARY=/src/library && cd /src && cargo build -q --locked -p nazm-cli --bin nazm --jobs {j} && NZX_OUT=/work/nzx bash /src/toolchain/harness/build.sh nazm-fuzz && cd /work && /work/nzx/nazm-fuzz run {seconds} {targets} --src /src --nazm $NAZM --work /work/fuzz --out /work/fuzzout --jobs {j}; s=$?; /work/nzx/nazm-fuzz diff {programs} 121364944846963 --src /src --nazm $NAZM --out /work/fuzzout >> /work/fuzzout/report.txt; d=$?; for f in /work/fuzzout/diff/*.nz; do [ -f \"$f\" ] && {{ echo \"--- diff $f\"; cat \"$f\"; }} >> /work/fuzzout/report.txt; done; : > /work/fuzzout/EXPORTS; for f in fuzz-min.tar report.txt; do [ -f /work/fuzzout/$f ] && echo \"$f $(wc -c < /work/fuzzout/$f)\" >> /work/fuzzout/EXPORTS; done; cat /work/fuzzout/report.txt; [ $s -eq 0 ] && [ $d -eq 0 ]"
+}
+
+/// The reference's own fuzz script (`fuzz-seed`: the Rust fuzzer over the seed). `targets` is the target names, space-separated.
+pub fn script_fuzz_seed(j: Int, seconds: Int, targets: Str) -> Str ! {} {
     f"CARGO_BUILD_JOBS={j} sh /src/fuzz/run.sh {seconds} {targets}; s=$?; : > /work/fuzzout/EXPORTS; for f in fuzz-min.tar report.txt; do [ -f /work/fuzzout/$f ] && echo \"$f $(wc -c < /work/fuzzout/$f)\" >> /work/fuzzout/EXPORTS; done; exit $s"
 }
 
