@@ -196,7 +196,7 @@ fn build_plan(c: Ctx, args: Strs, profile: Profile, b0: Bounds, print_argv: Bool
         }
         return Result[Plan, Str].Ok(value: Plan(name: "mutate", argv: shell(script_mutate(j, deadline, mutate_parallelism(profile), commit_arg, budget, passed)), bounds: b));
     }
-    if w == "bench" {
+    if w == "bench" || w == "bench-seed" {
         let b1 = bounds_with_deadline(b0, 2400);
         let mut saving = false;
         for a in args {
@@ -215,6 +215,10 @@ fn build_plan(c: Ctx, args: Strs, profile: Profile, b0: Bounds, print_argv: Bool
             strs_push(allowed, f"baseline-{slug}.json");
         }
         let b = bounds_with_export(b1, Export(manifest: "/work/benchout/EXPORTS", dest: f"{c.repo}/bench", allowed: allowed, max_bytes: 1048576));
+        if w == "bench-seed" {
+            return Result[Plan, Str].Ok(value: Plan(name: "bench-seed", argv: shell(script_bench_seed(mode, bench_manifest(saving))), bounds: b));
+        }
+        // The Nazm benchmark (S13.6).
         return Result[Plan, Str].Ok(value: Plan(name: "bench", argv: shell(script_bench(mode, bench_manifest(saving))), bounds: b));
     }
     if w == "fuzz" || w == "fuzz-seed" {
@@ -278,7 +282,7 @@ fn build_plan(c: Ctx, args: Strs, profile: Profile, b0: Bounds, print_argv: Bool
         return Result[Plan, Str].Ok(value: Plan(name: "run", argv: shell(cmd), bounds: b0));
     }
     let shown = if str_len(w) == 0 && strs_len(args) == 0 { "<none>" } else { w };
-    Result[Plan, Str].Err(error: f"contained: unknown workload {debug_quote(shown)}\n  probe | tests | selfhost | bootstrap | selfbuild | bench | mutate | mutate-seed | fuzz [SECONDS] [TARGET...] | fuzz-seed [SECONDS] [TARGET...] | archive | run <command>")
+    Result[Plan, Str].Err(error: f"contained: unknown workload {debug_quote(shown)}\n  probe | tests | selfhost | bootstrap | selfbuild | bench | bench-seed | mutate | mutate-seed | fuzz [SECONDS] [TARGET...] | fuzz-seed [SECONDS] [TARGET...] | archive | run <command>")
 }
 
 fn tenths(ms: Int) -> Str ! {} {
