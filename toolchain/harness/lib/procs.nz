@@ -1,0 +1,397 @@
+// The one way the mutation campaign runs a subprocess (R8 slice 13, S13.4): the port of
+// `xtask/src/procs.rs`. Every build and every test the session starts goes through `procs_run`,
+// and there is no second implementation.
+//
+//   * its own process group: the child leads a group whose id is its process id;
+//   * its descendants, found by parentage: at a deadline the tree walked from the child through
+//     parent ids (`ps -A -o pid=,ppid=,pgid=`) is stopped, repeatedly until the walk finds nothing
+//     new, then killed, then the group (`kill -KILL -- -PGID`: procps `kill` reads `-123` after a
+//     signal as an option, `--` works there and on macOS);
+//   * after an ordinary exit whatever is left in the group is swept, so a grandchild holding a
+//     pipe cannot hang the reader;
+//   * a watchdog `sh`, in a group of its own, its standard input held by this process: when this
+//     process dies the kernel closes the pipe, `read` returns and the watchdog kills the group.
+//     On a normal finish the watchdog is killed by pid first.
+//
+// Nothing here signals pid 0, pid 1, this process, or a group other than one this module started.
+// Output is kept to 32 MiB a stream; more is `overflowed`, an infrastructure outcome, never a
+// verdict. What it does not cover is what `procs.rs` says it does not: a descendant that leaves
+// the group and is re-parented before a deadline walks the tree. The watchdog's reliability rests
+// on the pipe's write end not being inherited by other children, which the std's spawn is not
+// shown here to guarantee; the container's pid namespace is the backstop, as in the reference.
+
+use "@std/process"
+use "@std/file"
+use "@std/ioerror"
+use "@std/env"
+use "@std/text"
+use "@std/time"
+use "@std/bytebuf"
+use "run.nz"
+use "strings.nz"
+
+/// How much of each stream is kept.
+pub const OUTPUT_CAP: Int = 33554432;
+
+/// How long a stream may stay open after the leader has exited before the group is swept.
+pub const DRAIN_GRACE_MS: Int = 5000;
+
+/// How one invocation ended, and what it wrote. `ended` is `exited` (`code` is the status; 256 and
+/// the signal when it was signalled), `timed-out`, `pipe-held`, `overflowed` or `spawn-failed`
+/// (`why` says). `ms` is wall-clock, recorded and never compared; `swept` counts the processes
+/// found in the group after the leader exited.
+pub struct Finished {
+    ended: Str,
+    code: Int,
+    stdout: Str,
+    stderr: Str,
+    ms: Int,
+    swept: Int,
+    why: Str,
+}
+
+pub fn finished_failed(why: Str) -> Finished ! {} {
+    Finished(ended: "spawn-failed", code: 0 - 1, stdout: "", stderr: "", ms: 0, swept: 0, why: why)
+}
+
+/// Whether `f` exited with status 0.
+pub fn finished_ok(f: Finished) -> Bool ! {} {
+    f.ended == "exited" && f.code == 0
+}
+
+/// The signal that ended `f`, or 0.
+pub fn finished_signal(f: Finished) -> Int ! {} {
+    if f.ended == "exited" && f.code >= 256 { f.code - 256 } else { 0 }
+}
+
+/// A group id this module may signal: a positive pid that is neither `init` nor this process.
+fn valid_leader(h: Caps, pid: Int) -> Bool ! { io } {
+    pid > 1 && pid != process_id(h.io)
+}
+
+// --- the process table -------------------------------------------------------------------------
+
+/// One row: pid, parent pid, process group.
+pub struct Row {
+    pid: Int,
+    ppid: Int,
+    pgid: Int,
+}
+
+/// Rows from the text `ps -A -o pid=,ppid=,pgid=` prints; a line that is not three numbers is
+/// skipped.
+pub fn rows_of(text: Str) -> Vec[Row] ! {} {
+    let out = vec_new[Row]();
+    for l in lines(text) {
+        let f = split_whitespace(l);
+        if strs_len(f) == 3 {
+            match text_parse_int(strs_get(f, 0)) {
+                Result.Ok(value: a) => match text_parse_int(strs_get(f, 1)) {
+                    Result.Ok(value: b) => match text_parse_int(strs_get(f, 2)) {
+                        Result.Ok(value: c) => { vec_push(out, Row(pid: a, ppid: b, pgid: c)); 0 },
+                        Result.Err(error: e) => 0,
+                    },
+                    Result.Err(error: e) => 0,
+                },
+                Result.Err(error: e) => 0,
+            };
+        }
+    }
+    out
+}
+
+fn process_table(h: Caps) -> Vec[Row] ! { io, spawn } {
+    let a = words("-A -o pid=,ppid=,pgid=");
+    let r = run_within(h, "ps", a, "", env_here(h.io), 60000);
+    if r.code != 0 {
+        return vec_new[Row]();
+    }
+    rows_of(r.stdout)
+}
+
+fn has(xs: Ints, n: Int) -> Bool ! {} {
+    for x in xs {
+        if x == n {
+            return true;
+        }
+    }
+    false
+}
+
+/// The leader, everything descended from it by parent id, and everything in its group: this
+/// process and pids 0 and 1 are never in it.
+pub fn owned_by(leader: Int, table: Vec[Row], me: Int) -> Ints ! {} {
+    let set = ints_new();
+    ints_push(set, leader);
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for r in table {
+            if !has(set, r.pid) && (has(set, r.ppid) || r.pgid == leader) {
+                ints_push(set, r.pid);
+                grew = true;
+            }
+        }
+    }
+    let out = ints_new();
+    for p in set {
+        if p > 1 && p != me {
+            ints_push(out, p);
+        }
+    }
+    out
+}
+
+fn signal(h: Caps, sig: Str, pids: Ints) -> Int ! { io, spawn } {
+    if ints_len(pids) == 0 {
+        return 0;
+    }
+    let a = strs_new();
+    strs_push(a, f"-{sig}");
+    for p in pids {
+        strs_push(a, f"{p}");
+    }
+    run_within(h, "kill", a, "", env_here(h.io), 60000);
+    0
+}
+
+fn signal_group(h: Caps, sig: Str, leader: Int) -> Int ! { io, spawn } {
+    if !valid_leader(h, leader) {
+        return 0;
+    }
+    let a = strs_new();
+    strs_push(a, f"-{sig}");
+    strs_push(a, "--");
+    strs_push(a, f"-{leader}");
+    run_within(h, "kill", a, "", env_here(h.io), 60000);
+    0
+}
+
+/// Stop the whole tree under `leader`, then kill it: how many processes were found. Stopping first
+/// is what makes the walk complete: a stopped process can neither fork nor exit and leave children
+/// re-parented out of reach.
+pub fn kill_tree(h: Caps, leader: Int) -> Int ! { io, spawn } {
+    if !valid_leader(h, leader) {
+        return 0;
+    }
+    let me = process_id(h.io);
+    let seen = ints_new();
+    let mut round = 0;
+    let mut more = true;
+    while more && round < 32 {
+        round = round + 1;
+        let now = owned_by(leader, process_table(h), me);
+        let fresh = ints_new();
+        for p in now {
+            if !has(seen, p) {
+                ints_push(fresh, p);
+            }
+        }
+        if ints_len(fresh) == 0 {
+            more = false;
+        } else {
+            signal(h, "STOP", fresh);
+            for p in fresh {
+                ints_push(seen, p);
+            }
+        }
+    }
+    signal(h, "KILL", seen);
+    signal_group(h, "KILL", leader);
+    ints_len(seen)
+}
+
+/// Kill whatever is still in `leader`'s group once the leader has exited: how many were found.
+pub fn sweep_group(h: Caps, leader: Int) -> Int ! { io, spawn } {
+    if !valid_leader(h, leader) {
+        return 0;
+    }
+    let me = process_id(h.io);
+    let table = process_table(h);
+    let members = ints_new();
+    for r in table {
+        if r.pgid == leader && r.pid != leader {
+            ints_push(members, r.pid);
+        }
+    }
+    if ints_len(members) == 0 {
+        return 0;
+    }
+    // A member may have children of its own outside the group: walk from each.
+    let all = ints_new();
+    for m in members {
+        for p in owned_by(m, process_table(h), me) {
+            if !has(all, p) {
+                ints_push(all, p);
+            }
+        }
+    }
+    signal(h, "STOP", all);
+    signal(h, "KILL", all);
+    signal_group(h, "KILL", leader);
+    ints_len(all)
+}
+
+// --- one invocation ----------------------------------------------------------------------------
+
+/// Read a stream to its end keeping at most `OUTPUT_CAP` bytes; sends the text, then whether more
+/// came.
+fn drain_capped(io: IoCap, from: OsHandle, text: Chan[Str], over: Chan[Int]) -> Int ! { io } {
+    let buf = bytes_new(65536);
+    let kept = bytebuf_new();
+    let src = File(handle: from);
+    let mut flooded = 0;
+    let mut more = true;
+    while more {
+        let n = match file_read(src, buf) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => 0,
+        };
+        if n <= 0 {
+            more = false;
+        } else {
+            let room = OUTPUT_CAP - bytebuf_len(kept);
+            let take = if n < room { n } else { room };
+            if n > room {
+                flooded = 1;
+            }
+            if take > 0 {
+                bytebuf_push_bytes(kept, bytes_slice(buf, 0, take));
+            }
+        }
+    }
+    chan_send_of(text, bytes_to_str(bytebuf_to_bytes(kept)));
+    chan_send_of(over, flooded);
+    0
+}
+
+/// A watchdog for `leader`: `Some(child)` whose standard input this process holds.
+pub fn arm(h: Caps, leader: Int) -> Option[Child] ! { io } {
+    let v = h.v;
+    if !valid_leader(h, leader) {
+        return Option[Child].None();
+    }
+    let a = strs_new();
+    strs_push(a, "-c");
+    strs_push(a, "trap '' INT TERM HUP QUIT; read _ignored; exec env kill -KILL -- \"-$1\"");
+    strs_push(a, "nazm-mutation-watchdog");
+    strs_push(a, f"{leader}");
+    match process_spawn_with(h.p, str_vouch("sh"), a, "", env_here(h.io), true, false) {
+        Result.Ok(value: c) => Option[Child].Some(value: c),
+        Result.Err(error: e) => Option[Child].None(),
+    }
+}
+
+pub fn disarm(w: Option[Child]) -> Int ! { io } {
+    match w {
+        Option.Some(value: c) => {
+            // Killed by pid before the pipe closes, so a finished invocation never triggers it.
+            process_kill(c);
+            process_wait(c);
+            os_close(os_child_pipe(c.handle, 0));
+            os_close(c.handle);
+            0
+        },
+        Option.None() => 0,
+    }
+}
+
+/// Run `program` with `args` in `dir`, its environment exactly `env`, its standard input empty, to
+/// its end, its deadline (`ms`), or cleanup. The group's own: see the head of this file.
+pub fn procs_run(h: Caps, program: Str, args: Strs, dir: Str, env: Strs, ms: Int) -> Finished ! { io, spawn } {
+    let p = h.p;
+    let t = h.t;
+    let v = h.v;
+    let sp = h.sp;
+    let started = time_now(t);
+    let prog = str_vouch(program);
+    let cwd = str_vouch(dir);
+    let c = match process_spawn_with(p, prog, args, cwd, env, true, true) {
+        Result.Ok(value: c) => c,
+        Result.Err(error: e) => {
+            return finished_failed(f"{program}: {io_error_show(e)}");
+        },
+    };
+    let leader = process_child_id(c);
+    // Armed before anything else can fail; every path below disarms it.
+    let dog = arm(h, leader);
+    let outs = chan_new_of[Str](1);
+    let errs = chan_new_of[Str](1);
+    let oo = chan_new_of[Int](1);
+    let eo = chan_new_of[Int](1);
+    let out = os_child_pipe(c.handle, 1);
+    let err = os_child_pipe(c.handle, 2);
+    let got_out = vec_new[Str]();
+    let got_err = vec_new[Str]();
+    let flood_out = vec_new[Int]();
+    let flood_err = vec_new[Int]();
+    let mut status = 0 - 1;
+    let mut timed_out = false;
+    let mut swept = 0;
+    let mut held = false;
+    let deadline = time_deadline(t, ms);
+    scope {
+        spawn drain_capped(h.io, out, outs, oo);
+        spawn drain_capped(h.io, err, errs, eo);
+        status = match process_wait_until(c, deadline) {
+            Result.Ok(value: o) => match o {
+                Option.Some(value: s) => s,
+                Option.None() => {
+                    timed_out = true;
+                    kill_tree(h, leader);
+                    match process_wait(c) {
+                        Result.Ok(value: s) => s,
+                        Result.Err(error: e) => 0 - 1,
+                    }
+                },
+            },
+            Result.Err(error: e) => {
+                kill_tree(h, leader);
+                match process_wait(c) {
+                    Result.Ok(value: s) => s,
+                    Result.Err(error: e2) => 0 - 1,
+                }
+            },
+        };
+        // The leader is reaped. Its streams close when every holder has gone, which is not the
+        // same moment: sweep the group so a member that kept a pipe does not hold the readers.
+        swept = sweep_group(h, leader);
+        let one = vec_new[Chan[Str]]();
+        vec_push(one, outs);
+        if chan_select_until(one, got_out, DRAIN_GRACE_MS) != 0 {
+            held = true;
+            swept = swept + sweep_group(h, leader);
+            chan_recv_of(outs, got_out);
+        }
+        let two = vec_new[Chan[Str]]();
+        vec_push(two, errs);
+        if chan_select_until(two, got_err, DRAIN_GRACE_MS) != 0 {
+            held = true;
+            swept = swept + sweep_group(h, leader);
+            chan_recv_of(errs, got_err);
+        }
+        chan_recv_of(oo, flood_out);
+        chan_recv_of(eo, flood_err);
+    }
+    disarm(dog);
+    os_close(out);
+    os_close(err);
+    os_close(c.handle);
+    let elapsed = time_duration_to_ms(time_elapsed(t, started));
+    let stdout = if vec_len(got_out) > 0 { vec_get(got_out, 0) } else { "" };
+    let stderr = if vec_len(got_err) > 0 { vec_get(got_err, 0) } else { "" };
+    let flooded = (vec_len(flood_out) > 0 && vec_get(flood_out, 0) == 1) || (vec_len(flood_err) > 0 && vec_get(flood_err, 0) == 1);
+    if timed_out {
+        return Finished(ended: "timed-out", code: status, stdout: stdout, stderr: stderr, ms: elapsed, swept: swept, why: f"deadline passed after {ms / 1000}s");
+    }
+    if held {
+        return Finished(ended: "pipe-held", code: status, stdout: stdout, stderr: stderr, ms: elapsed, swept: swept, why: "the process exited but something outside its group still held its output");
+    }
+    if flooded {
+        return Finished(ended: "overflowed", code: status, stdout: stdout, stderr: stderr, ms: elapsed, swept: swept, why: f"output exceeded {OUTPUT_CAP} bytes");
+    }
+    if status < 0 {
+        return Finished(ended: "spawn-failed", code: status, stdout: stdout, stderr: stderr, ms: elapsed, swept: swept, why: "the child could not be waited for");
+    }
+    Finished(ended: "exited", code: status, stdout: stdout, stderr: stderr, ms: elapsed, swept: swept, why: "")
+}

@@ -7,9 +7,10 @@
 // Everything here is pure: what a workload needs from the machine (the commit, the image's
 // platform, the cache volume's name) is passed in by `contained.nz`, which reads it.
 //
-// Until tasks 13.4 to 13.6 land the new campaign runner, fuzzer and benchmark program, the scripts
-// of `mutate`, `fuzz` and `bench` are the reference's own (they run `xtask` and `fuzz/run.sh` inside
-// the container): the runner does not care what its script runs (S13.3).
+// `mutate` runs the Nazm campaign runner (13.4); `mutate-seed` is the reference's own script, the Rust
+// campaign over the seed's entries. Until tasks 13.5 and 13.6 land the new fuzzer and benchmark
+// program, the scripts of `fuzz` and `bench` are the reference's own (they run `fuzz/run.sh` and
+// `xtask` inside the container): the runner does not care what its script runs (S13.3).
 
 use "@std/text";
 
@@ -131,7 +132,7 @@ pub fn bounds_with_cache(b: Bounds, volume: Str) -> Bounds ! {} {
 
 /// Which cache a workload builds in, if any (`""` for none): two namespaces, never one.
 pub fn cache_namespace(workload: Str) -> Str ! {} {
-    if workload == "mutate" { return "mutate"; }
+    if workload == "mutate" || workload == "mutate-seed" { return "mutate"; }
     if workload == "tests" || workload == "selfhost" || workload == "bootstrap" || workload == "selfbuild" {
         return "src";
     }
@@ -300,10 +301,45 @@ pub fn script_release(identity: Str) -> Str ! {} {
     f"{identity}sh scripts/release-candidate.sh && mkdir -p /work/rc && cp /work/target/release-candidate/MANIFEST.txt /work/rc/ && cp /work/target/release-candidate/PROVENANCE.txt /work/rc/ && tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@0 -czf /work/rc/nazm-release-candidate.tar.gz -C /work/target/release-candidate . && cd /work/rc && for f in nazm-release-candidate.tar.gz MANIFEST.txt PROVENANCE.txt; do printf '%s %s\\n' \"$f\" \"$(wc -c < $f | tr -d ' ')\"; done > EXPORTS && cat EXPORTS"
 }
 
-/// `commit` is `""` or ` --source-commit HASH`, `budget` is `""` or ` --budget-secs 2400`,
-/// `passed` is the validated options, each with a space before it.
+/// `mutate-seed`'s script: the reference's own, the Rust campaign over the seed's entries
+/// (`crates/`, `xtask/`, `fuzz/`, and any file that is not the Nazm toolchain's). `commit` is `""` or
+/// ` --source-commit HASH`, `budget` is `""` or ` --budget-secs 2400`, `passed` is the validated
+/// options, each with a space before it. With no `--only` the selection is the seed's entries by name
+/// (`=NAME` each, exactly: the reference would run every entry, the Nazm campaign's included); with
+/// one, the script is the reference's, character for character.
+pub fn script_mutate_seed(j: Int, deadline: Int, par: Str, commit: Str, budget: Str, passed: Str) -> Str ! {} {
+    let chosen = text_contains(passed, "--only") || text_contains(passed, "--plan") || text_contains(passed, "--verify-killer");
+    let pick = if chosen { "" } else { f" $only" };
+    let names = if chosen { "" } else { SEED_NAMES };
+    f"{names}rm -rf /work/mut && mkdir -p /work/mut /work/campaigns && tar -C /src -cf - --exclude=./target --exclude=./.git --exclude=.nazm . | tar -C /work/mut -xmf - && cd /work/mut && export CARGO_TARGET_DIR=/work/target && cargo build -q -p xtask --jobs {j} && exec timeout -s TERM -k 15 {deadline} /work/target/debug/xtask mutate --reset-derived-caches --disposable-target --export-journal --campaign-dir /work/campaigns --resume-from /src/target/mutation-campaigns {par}{commit}{budget}{passed}{pick}"
+}
+
+/// The names of the catalogue's entries that are not the Nazm toolchain's, as ` --only =NAME` text in
+/// the shell variable `only` (awk over the catalogue: an entry is a `[[mutation]]` block's `name` and `file`).
+const SEED_NAMES: Str = r#"only=$(awk '/^\[\[/ { if (m && n != "" && f !~ /^(compiler|library|toolchain)\//) printf " --only =%s", n; m = ($0 ~ /^\[\[mutation\]\]/); n = ""; f = "" } /^name = "/ { n = $0; sub(/^name = "/, "", n); sub(/"$/, "", n) } /^file = "/ { f = $0; sub(/^file = "/, "", f); sub(/"$/, "", f) } END { if (m && n != "" && f !~ /^(compiler|library|toolchain)\//) printf " --only =%s", n }' /src/xtask/mutations/mutations.toml) && "#;
+
+/// The copy and the seed both `mutate` scripts start from: the tree copied to `/work/mut` as the
+/// reference copies it (`.git`, `target/` and every derived `.nazm/` cache left out, fresh modification
+/// times), the checkout's `nazm` built there into the harness's cache volume (the `mutate`
+/// namespace: its copy is always `/work/mut`, never the read-only `/src`), and `nazm-mutate` built
+/// from `/src` with it (`toolchain/harness/build.sh`, a 2 GiB counted heap).
+fn mutate_prelude(j: Int) -> Str ! {} {
+    f"rm -rf /work/mut && mkdir -p /work/mut /work/nzx /work/campaigns && tar -C /src -cf - --exclude=./target --exclude=./.git --exclude=.nazm . | tar -C /work/mut -xmf - && cd /work/mut && export CARGO_TARGET_DIR=/work/target && cargo build -q --locked -p nazm-cli --bin nazm --jobs {j} && NAZM=/work/target/debug/nazm NZX_OUT=/work/nzx bash /src/toolchain/harness/build.sh nazm-mutate"
+}
+
+/// `mutate`'s script, the Nazm campaign (S13.4): the prelude, then one session over `/work/mut` that
+/// runs the mutation baseline and decides each mutant, the `nazm` under test rebuilt by Cargo from the
+/// copy after each injection (`--rebuild-cmd`: the ported tests still carry a Cranelift leg the
+/// Nazm-built `nazm` does not, so the Nazm-built toolchain cannot run them before slice 19).
+/// `commit`, `budget` and `passed` are as for `mutate-seed`'s; `par` is `--cargo-jobs N --test-threads N`.
 pub fn script_mutate(j: Int, deadline: Int, par: Str, commit: Str, budget: Str, passed: Str) -> Str ! {} {
-    f"rm -rf /work/mut && mkdir -p /work/mut /work/campaigns && tar -C /src -cf - --exclude=./target --exclude=./.git --exclude=.nazm . | tar -C /work/mut -xmf - && cd /work/mut && export CARGO_TARGET_DIR=/work/target && cargo build -q -p xtask --jobs {j} && exec timeout -s TERM -k 15 {deadline} /work/target/debug/xtask mutate --reset-derived-caches --disposable-target --export-journal --campaign-dir /work/campaigns --resume-from /src/target/mutation-campaigns {par}{commit}{budget}{passed}"
+    f"{mutate_prelude(j)} && exec timeout -s TERM -k 15 {deadline} /work/nzx/nazm-mutate session /work/mut --seed /work/target/debug/nazm --bin /work/mut-bin --rebuild-cmd 'cargo build -q --locked -p nazm-cli --bin nazm --jobs {j}' --reset-derived-caches --export-journal --campaign-dir /work/campaigns --resume-from /src/target/mutation-campaigns-nz {par}{commit}{budget}{passed}"
+}
+
+/// `mutate --plan`: what `nazm-mutate plan` prints for the selection, nothing run. `only` is the
+/// `--only` options, each with a space before it.
+pub fn script_mutate_plan(j: Int, only: Str) -> Str ! {} {
+    f"{mutate_prelude(j)} && exec /work/nzx/nazm-mutate plan /work/mut{only}"
 }
 
 pub fn bench_manifest(saving: Bool) -> Str ! {} {
@@ -368,6 +404,19 @@ pub fn mutate_passthrough(args: Strs) -> Result[Str, Str] ! {} {
         }
     }
     Result[Str, Str].Ok(value: str_join(out, ""))
+}
+
+/// The `--only` options of `args`, each ` --only 'VALUE'` (already validated by `mutate_passthrough`).
+pub fn only_options(args: Strs) -> Str ! {} {
+    let out = strs_new();
+    let mut i = 0;
+    while i + 1 < strs_len(args) {
+        if strs_get(args, i) == "--only" {
+            strs_push(out, f" --only '{strs_get(args, i + 1)}'");
+        }
+        i = i + 1;
+    }
+    str_join(out, "")
 }
 
 fn safe_value(v: Str) -> Bool ! {} {
