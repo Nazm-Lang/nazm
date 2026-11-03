@@ -1190,6 +1190,9 @@ the host.
   per mutant, tier for tier — the Rust killers against the Rust tests, the mapped ones against the
   ports.
 
+**S13.4 as built (2026-11-03, part), the differences from the text above, logged in `docs/internal/decisions-log.md`:**
+(1) `nazm-mutate session` and `recover` are in `mutate/main.nz`; the campaign is `mutate/{session,campaign,killers,closure}.nz` over `lib/procs.nz` (the subprocess runner: deadline, group sweep, output cap, process table); (2) a `use`-closure follows the `use` lines through `library/` as well (the first wording put every `library/` file in every closure); (3) `--rebuild-cmd` makes the session rebuild the checkout's `nazm` with Cargo after each injection, because the ported tests still carry a Cranelift leg the Nazm-built `nazm` lacks (until slice 19); without it the released programs are built from the copy; (4) `nzx contained mutate` runs the Nazm session (journals under `target/mutation-campaigns-nz/`) and `mutate-seed` is the reference's own script restricted to the seed's entries (journals under `target/mutation-campaigns/`), `mutate --plan` prints `nazm-mutate plan`; (5) not yet run: the live container runs and the 20-entry comparison with the Rust campaign.
+
 ### S13.5 Fuzzing — coverage-guided (SanitizerCoverage and libFuzzer, the platform's) and differential
 
 Fuzzing stays contained only (runbook), so "the platform's `clang`" is the contained image's
