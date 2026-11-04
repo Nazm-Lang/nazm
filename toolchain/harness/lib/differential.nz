@@ -25,6 +25,30 @@ pub fn suite_env(h: Caps) -> Strs ! { io } {
     env_set(env_set(env_here(io), "NAZM_RESULT_REPORT", "1"), "NAZM_USER_CACHE_DIR", "")
 }
 
+/// Whether the `nazm` under test has the Cranelift backend: the seed does, the Nazm-built `nazm`
+/// does not carry it (`rewrite-in-nazm` decision 3), and a run against it sets
+/// `NAZM_HARNESS_NO_CRANELIFT=1` so the legs that build with `--backend cranelift` are left out
+/// (R8 slice 14).
+pub fn cranelift_carried(io: IoCap) -> Bool ! { io } {
+    match env_get(io, "NAZM_HARNESS_NO_CRANELIFT") {
+        Option.Some(value: v) => v == "" || v == "0",
+        Option.None() => true,
+    }
+}
+
+/// The legs a built program is run on: the labels, the `--backend` of each and its `--opt-level`.
+pub fn leg_names(io: IoCap) -> Strs ! { io } {
+    text_split(if cranelift_carried(io) { "llvm -O0|llvm -O2|cranelift" } else { "llvm -O0|llvm -O2" }, "|")
+}
+
+pub fn leg_backends(io: IoCap) -> Strs ! { io } {
+    words(if cranelift_carried(io) { "llvm llvm cranelift" } else { "llvm llvm" })
+}
+
+pub fn leg_opts(io: IoCap) -> Strs ! { io } {
+    words(if cranelift_carried(io) { "0 2 0" } else { "0 2" })
+}
+
 /// `nazm ARGS` in `dir`, under the suite's environment.
 pub fn nazm(h: Caps, dir: Str, args: Strs) -> Ran ! { io, spawn } {
     run(h, nazm_bin(h.io), args, dir, suite_env(h))
@@ -125,13 +149,18 @@ pub fn everywhere(h: Caps, names: Strs, texts: Strs) -> Result[Vec[Labeled], Str
     strs_push(a, "--interpret");
     strs_push(a, main);
     vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), a, d, env)));
-    let labels = words("llvm-O0 llvm-O2 cranelift");
+    let labels = words("llvm-O0 llvm-O2");
     let shown = strs_new();
     strs_push(shown, "llvm -O0");
     strs_push(shown, "llvm -O2");
-    strs_push(shown, "cranelift");
-    let backends = words("llvm llvm cranelift");
-    let opts = words("0 2 0");
+    let backends = words("llvm llvm");
+    let opts = words("0 2");
+    if cranelift_carried(h.io) {
+        strs_push(labels, "cranelift");
+        strs_push(shown, "cranelift");
+        strs_push(backends, "cranelift");
+        strs_push(opts, "0");
+    }
     // Nazm's own code generator, where it builds before 1.0 (its D13: macOS).
     let mut gen = "";
     if on_macos(h) {

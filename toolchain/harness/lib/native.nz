@@ -18,11 +18,11 @@ pub fn everywhere_with_oracle(h: Caps, src: Str, memory: Bool) -> Result[Vec[Lab
     let out = vec_new[Labeled]();
     vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), words("run --interpret prog.nz"), d, env)));
     vec_push(out, Labeled(label: "lir oracle", ran: run(h, nazm_bin(h.io), words("lir --run prog.nz"), d, env)));
-    let shown = text_split("llvm -O0|llvm -O2|cranelift", "|");
-    let backends = words("llvm llvm cranelift");
-    let opts = words("0 2 0");
+    let shown = leg_names(h.io);
+    let backends = leg_backends(h.io);
+    let opts = leg_opts(h.io);
     let mut k = 0;
-    while k < 3 {
+    while k < strs_len(opts) {
         let name = strs_get(shown, k);
         let flat = text_replace(text_replace(name, " ", ""), "-", "");
         let exe = f"{d}/{flat}";
@@ -89,11 +89,11 @@ pub fn everywhere_plain(h: Caps, src: Str) -> Result[Vec[Labeled], Str] ! { io, 
     let env = suite_env(h);
     let out = vec_new[Labeled]();
     vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), words("run --interpret prog.nz"), d, env)));
-    let shown = text_split("llvm -O0|llvm -O2|cranelift", "|");
-    let backends = words("llvm llvm cranelift");
-    let opts = words("0 2 0");
+    let shown = leg_names(h.io);
+    let backends = leg_backends(h.io);
+    let opts = leg_opts(h.io);
     let mut k = 0;
-    while k < 3 {
+    while k < strs_len(opts) {
         let name = strs_get(shown, k);
         let flat = text_replace(text_replace(name, " ", ""), "-", "");
         let exe = f"{d}/{flat}";

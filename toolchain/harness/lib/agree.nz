@@ -38,12 +38,12 @@ pub fn everywhere_at(h: Caps, dir: Str, main: Str) -> Result[Vec[Labeled], Str] 
     let ia = words("run --interpret");
     strs_push(ia, main);
     vec_push(out, Labeled(label: "interpreter", ran: nazm(h, dir, ia)));
-    let whos = text_split("llvm -O0|llvm -O2|cranelift", "|");
-    let backends = words("llvm llvm cranelift");
-    let opts = words("0 2 0");
+    let whos = leg_names(h.io);
+    let backends = leg_backends(h.io);
+    let opts = leg_opts(h.io);
     let env = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
     let mut k = 0;
-    while k < 3 {
+    while k < strs_len(opts) {
         let who = strs_get(whos, k);
         let exe = f"{dir}/{text_replace(text_replace(who, " ", ""), "-", "")}";
         let a = words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)}");
