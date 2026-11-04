@@ -213,7 +213,7 @@ fn output_is_passed_as_bytes_and_a_truncation_is_a_failure_of_its_own() {
 #[cfg_attr(not(target_os = "macos"), ignore = "the host runner is macOS only")]
 fn a_refusal_and_a_deadline_have_statuses_of_their_own() {
     let d = tempfile::tempdir().unwrap();
-    let plain = script(d.path(), "plain", false, Some("4194304"), "exit 0\n");
+    let plain = script(d.path(), "plain", false, None, "exit 0\n");
     assert_eq!(
         host_run(d.path(), &["--", plain.to_str().unwrap()])
             .status
@@ -232,10 +232,33 @@ fn a_refusal_and_a_deadline_have_statuses_of_their_own() {
 #[cfg_attr(not(target_os = "macos"), ignore = "the host runner is macOS only")]
 fn a_program_without_the_counted_heap_is_refused_by_name() {
     let d = tempfile::tempdir().unwrap();
-    let exe = script(d.path(), "plain", false, Some("4194304"), "echo ran\n");
+    let exe = script(d.path(), "plain", false, None, "echo ran\n");
     let o = host_run(d.path(), &["--", exe.to_str().unwrap()]);
     refused_as(&o, "no-counted-heap");
     assert!(!text(&o).contains("\nran"), "{}", text(&o));
+    // a line that only mentions a heap limit is not the heap unit's message
+    let p = d.path().join("mentions");
+    fs::write(
+        &p,
+        "#!/bin/sh\n# the heap limit of 4194304 bytes is reached\necho ran\n",
+    )
+    .unwrap();
+    fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    refused_as(
+        &host_run(d.path(), &["--", p.to_str().unwrap()]),
+        "no-counted-heap",
+    );
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the host runner is macOS only")]
+fn a_stripped_release_image_with_the_heap_units_message_is_admitted() {
+    // no symbol (as `strip` leaves a release build), the unit's message whole
+    let d = tempfile::tempdir().unwrap();
+    let exe = script(d.path(), "stripped", false, Some("4194304"), "echo ran\n");
+    let o = host_run(d.path(), &["--", exe.to_str().unwrap()]);
+    assert!(o.status.success(), "{}", text(&o));
+    assert!(text(&o).contains("ran"), "{}", text(&o));
 }
 
 #[test]
