@@ -2199,3 +2199,32 @@ fn a_toolchain_environment_failure_is_not_blamed_on_the_ir(io: IoCap, p: Process
     check_that(text_contains(out.stderr, "not about the generated IR"), out.stderr)?;
     check_that(!text_contains(out.stderr, "This is a bug in `nazm build`"), out.stderr)
 }
+
+// Every clang that touches generated IR or assembly is told its target. A unit such as the task switch (module
+// asm in the target's own syntax) carries no `target triple`, so the command line alone decides which
+// architecture clang assembles it as: under Rosetta a clang the process starts may default to arm64 (S16.4).
+@test
+fn every_clang_call_of_a_cross_build_names_the_target(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_program(h, "fn main() -> Int {\n    1 + 1\n}\n")?;
+    let path_now = match env_get(h.io, "PATH") {
+        Option.Some(value: x) => x,
+        Option.None() => "",
+    };
+    let script = f"#!/bin/sh\necho \"$@\" >> {dir}/calls.txt\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = -o ]; then : > \"$2\"; fi\n  shift\ndone\nexit 0\n";
+    scratch_write(h, dir, "bin/clang", script)?;
+    set_executable(h, f"{dir}/bin/clang")?;
+    // `--objects`: the units are compiled, nothing is linked (a Linux host has no linker for this target).
+    let out = run(h, nazm_bin(h.io), words("build --no-cache --target x86_64-apple-darwin --objects objs prog.nz"), dir, env_set(suite_env(h), "PATH", f"{dir}/bin:{path_now}"));
+    check_that(out.code == 0, ran_show(out))?;
+    let calls = read_text(h, f"{dir}/calls.txt")?;
+    scratch_remove(h, dir);
+    let mut seen = 0;
+    for line in text_lines(calls) {
+        if text_contains(line, " -c ") && !text_contains(line, "-###") {
+            seen = seen + 1;
+            check_that(text_contains(line, "-target x86_64-apple-darwin"), f"a clang call without the target: {line} (build: {ran_show(out)})")?;
+        }
+    }
+    check_that(seen >= 2, f"too few clang calls to mean anything: {calls}")
+}
