@@ -100,13 +100,16 @@ heap_bytes() {
 }
 heapb=$(heap_bytes "$heap")
 
-# The builder's programs, then every other program of the toolchain, as NAME SOURCE. Since R8 slice 4
-# the builder is `nazm build` (`nazm`) and its two stages; the front end (`fe`) is one of the others.
-builder="nazm:toolchain/commands/nazm.nz pl:toolchain/pipeline/main.nz cg:toolchain/codegen/main.nz"
-# The interpreter (`toolchain/interp/main.nz`) and `nazm-check` (`toolchain/harness/check/main.nz`)
-# joined at R8 slice 1, moved from 0.10.0's `List[T]` to the checkout's `Chain[T]` (R1.5 D7;
-# `openspec/changes/r6-host-qualification/design.md`, *Gaps*; `openspec/changes/r8-cut-over/`).
-others="fe:compiler/diagnose.nz mcp:toolchain/commands/mcp.nz mutate:toolchain/harness/mutate/main.nz jtool:toolchain/harness/tools/jtool.nz interp:toolchain/interp/main.nz check:toolchain/harness/check/main.nz"
+# The builder's programs, then every other program of the toolchain, as NAME:SOURCE, from
+# `programs.txt` (shared with `host-selfbuild.sh`). Since R8 slice 4 the builder is `nazm build`
+# (`nazm`) and its two stages; the front end (`fe`) is one of the others. The interpreter and
+# `nazm-check` joined at R8 slice 1, moved from 0.10.0's `List[T]` to the checkout's `Chain[T]`
+# (R1.5 D7; `openspec/changes/r6-host-qualification/design.md`, *Gaps*; `openspec/changes/r8-cut-over/`).
+programs=$(grep -v '^[[:space:]]*#' "$root/toolchain/selfbuild/programs.txt" | grep -v '^[[:space:]]*$') \
+    || fail "toolchain/selfbuild/programs.txt is missing or empty"
+builder=$(echo "$programs" | awk '$1 == "builder" { printf "%s%s:%s", sep, $2, $3; sep = " " }')
+others=$(echo "$programs" | awk '$1 == "other" { printf "%s%s:%s", sep, $2, $3; sep = " " }')
+[ -n "$builder" ] && [ -n "$others" ] || fail "programs.txt names no builder or no other program"
 
 rm -rf "$out"
 mkdir -p "$out"

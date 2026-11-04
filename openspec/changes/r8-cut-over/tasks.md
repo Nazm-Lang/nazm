@@ -201,13 +201,22 @@
 
 ## 16. Slice 16 — the fixpoint on macOS
 - [x] 16.0 Design (Opus): `design.md`, *Slice 16*, S16.1–S16.5 (the runbook amendment as a draft)
-- [ ] 16.1 `toolchain/selfbuild/programs.txt` shared by both scripts; `host-selfbuild.sh ARCH OUT`
+- [x] 16.1 `toolchain/selfbuild/programs.txt` shared by both scripts; `host-selfbuild.sh ARCH OUT`
       (S16.1): its refusals, every Nazm-built step one `host-run`, the release configuration,
       `SELFBUILD_BACKEND=nazm`, `peaks.txt` in bytes, `environment.txt`, `SDKROOT` and
-      `MACOSX_DEPLOYMENT_TARGET` pinned
-- [ ] 16.2 The comparisons (S16.2): the fixpoint whole with the localisation on a difference, Core
+      `MACOSX_DEPLOYMENT_TARGET` pinned — written 2026-11-04 and verified **without running any
+      Nazm-built program**: `bash -n`, shellcheck (only the `CDPATH=` idiom `selfbuild.sh` also has),
+      the refusals exercised (usage, arch, backend, `NAZM_CONTAINED`, `NAZM_ALLOW_UNCONTAINED`,
+      withdrawal marker, non-empty OUT, not-Darwin by a `uname` stub, contained-workload by a `docker`
+      stub, `STAGE_HEAP` over 2 GiB), and `SELFBUILD_DRY_RUN=1` for both architectures and both
+      backends (27 stage builds + the corpus, Core IR, interpreter, `nazm-check` and probe steps listed
+      as `would host-run`, `environment.txt` written, Rosetta and `rosetta-clang` probes answering).
+      `selfbuild.sh` reads the same `programs.txt` (parse checked; its contained run not repeated)
+- [x] 16.2 The comparisons (S16.2): the fixpoint whole with the localisation on a difference, Core
       IR, the corpus at `--heap-limit 256M` (programs with no counted heap counted apart), the
-      interpreter, `nazm-check`, the 256 MiB probe
+      interpreter, `nazm-check`, the 256 MiB probe — in `host-selfbuild.sh`; **written, not yet
+      exercised** (they run only after a real build, which is 16.3): checked by reading and by
+      the `peaks.txt` summary awk on sample lines. Whatever 16.3 shows may need adjusting
 - [ ] 16.3 aarch64: the run passes on the host
 - [ ] 16.4 x86_64 under Rosetta (S16.4): the `PATH` and `rosetta-clang` probe; the run passes
 - [ ] 16.5 The runbook amendment (S16.5) applied with 16.3's evidence

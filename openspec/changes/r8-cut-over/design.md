@@ -1423,6 +1423,18 @@ What could make two stages differ although their inputs agree, and what holds ea
 > **Still contained only:** the Linux self-build, and everything listed above. The macOS self-build is
 > not a workload of the contained runner and never runs beside one.
 
+## Slice 16 — S16.1/S16.2 as built (2026-11-04)
+
+`toolchain/selfbuild/host-selfbuild.sh ARCH OUT` and `toolchain/selfbuild/programs.txt` (`ROLE NAME SOURCE`, read by both scripts) exist; nothing has run for real. Choices made while writing it, within the design:
+
+- **Stage 0 is always the seed's LLVM backend** with `--release`, even under `SELFBUILD_BACKEND=nazm` (which applies to stages 1–3 and the corpus builds): the seed is not asked to run `--backend nazm`.
+- **Labels in `peaks.txt`.** `host-run`'s report line names no program, so the script writes a `# LABEL` line before every step; the summary sums peaks per `stageS program`.
+- **A refusal or status 70 from `host-run`** kills the whole script (a signal to itself, so it works from inside the loop's subshells); the one refusal that is not fatal is `no-counted-heap` on a corpus program, which is counted by name.
+- **Core IR.** The front end is given the seed machine's own `macos aarch64` (the Rust `core-ir` has no `--target`), also for the x86_64 run.
+- **Refusals added** beyond S16.1's list: `backend`, `out-exists` (OUT must be new or empty; the script never deletes), `no-sdk`.
+- `SELFBUILD_DRY_RUN=1` prints every step as `would host-run` and runs nothing; it is how the script was verified.
+- This Mac's `xcrun --show-sdk-version` fails (the Command Line Tools SDK symlink is not a lookup target); `environment.txt` records that and the SDK's `SDKSettings.json` version (27.2) instead.
+
 ## Open questions — slices 7, 13 and 16 (for the copyright holder)
 
 Direction-level only; every other choice in the three designs above is made on the recommendation of
