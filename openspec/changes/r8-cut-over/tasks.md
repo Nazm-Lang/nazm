@@ -217,7 +217,7 @@
       interpreter, `nazm-check`, the 256 MiB probe — in `host-selfbuild.sh`; **written, not yet
       exercised** (they run only after a real build, which is 16.3): checked by reading and by
       the `peaks.txt` summary awk on sample lines. Whatever 16.3 shows may need adjusting
-- [ ] 16.3 aarch64: the run passes on the host (first run 2026-11-04: fixpoint 9/9 passed, then `host-run`
+- [x] 16.3 aarch64: the run passes on the host (PASSED 2026-11-04 19:11-19:51, `host-selfbuild.sh aarch64`, llvm backend, exit 0, every Nazm-built step one `host-run` at 2 GiB: stages 1 to 3 9/9 byte-identical, Core IR 9/9 identical to the seed's, corpus 57 programs agree and 9 not run on the host for no counted heap (counted apart), interpreter 68/68 agree, `nazm-check` 15 gates byte for byte, the 256 MiB heap stops with N0406; largest peak `nazm` build 1527 MiB; log ~/nazm-hostsb-aarch64-2.log; the check fix 4b9b52d6 was needed) (first run 2026-11-04: fixpoint 9/9 passed, then `host-run`
       refused `fe` because the release image is stripped and the check looked for a symbol; fixed in
       `host-run` and the script's logging, design.md *S16.3 first run*; a re-run is needed)
 - [ ] 16.4 x86_64 under Rosetta (S16.4): the `PATH` and `rosetta-clang` probe; the run passes
