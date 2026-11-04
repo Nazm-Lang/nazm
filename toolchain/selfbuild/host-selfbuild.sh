@@ -72,7 +72,9 @@ export SDKROOT MACOSX_DEPLOYMENT_TARGET
 if [ "$arch" = x86_64 ]; then
     # A translated process that starts the /usr/bin/clang shim cannot use libxcrun (arm64 only):
     # the real compiler first, and the answer probed once from an x86_64 process (S16.4).
-    PATH=$(dirname "$(xcrun --find clang)"):/usr/bin:/bin
+    # cargo (which builds xtask, below) stays reachable, last: its directory holds no clang to shadow the real one.
+    cargo_dir=$(dirname "$(command -v cargo)")
+    PATH=$(dirname "$(xcrun --find clang)"):/usr/bin:/bin:$cargo_dir
     export PATH
     arch -x86_64 sh -c 'clang -target x86_64-apple-darwin -print-target-triple' > /dev/null 2>&1 \
         || stage_fail "refused [rosetta-clang]: clang does not answer from an x86_64 process"
