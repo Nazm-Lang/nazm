@@ -737,7 +737,7 @@ fn bd_front(io: IoCap, proc: ProcessCap, sp: SpawnCap, o: Opts, packages: Packag
             },
         }
     }
-    let f = if o.lib { fx_check_module_in(abs, "", library, bd_os(target), bd_arch(target), io) } else { fx_check_over(abs, "", over_paths, over_texts, library, bd_os(target), bd_arch(target), io) }
+    let f = if o.lib { fx_check_module_in(abs, "", library, bd_os(target), bd_arch(target), io) } else { fx_check_over_whole(abs, "", over_paths, over_texts, library, bd_os(target), bd_arch(target), io) }
     if fx_refusal(f) != "" {
         let why = fx_refusal(f)
         let unreadable = ut_starts(why, "could not read") || ut_ends(why, "is not a directory")
