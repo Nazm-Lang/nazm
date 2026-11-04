@@ -321,7 +321,14 @@ fn help_command(io: IoCap, k: Int) -> Int {
     show(io, cli_help(c, true))
 }
 
+// `main` ends through `exit_with`: a returned `Int` is followed by `main`'s result when `NAZM_RESULT_REPORT` is set,
+// and the Rust `nazm` never prints it (the tests that run the `nazm` under that variable read its stdout whole).
 fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, tm: TimeCap, out: OutCap, net: NetCap, rnd: RandomCap) -> Int {
+    exit_with(nazm_main(io, proc, sp, v, tm, out, net, rnd))
+    0
+}
+
+fn nazm_main(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, tm: TimeCap, out: OutCap, net: NetCap, rnd: RandomCap) -> Int {
     let n = args_count()
     if n == 0 { missing(io) }
     let s = arg(0)
