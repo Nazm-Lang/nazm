@@ -228,17 +228,21 @@ pub(super) fn preflight(
         return Err(ExitCode::from(exit::USAGE));
     }
     // A release build (R1.5, D15) is a hardened macOS executable from the LLVM backend: Cranelift
-    // and Nazm's own generator write no stack canary, and another target is not this host's
-    // macOS, whose `strip` and `codesign` finish it.
+    // and Nazm's own generator write no stack canary, and a target that is not macOS is not
+    // finished by this host's `strip` and `codesign`. Either macOS architecture is, on either
+    // macOS host (S16.4: x86_64 built on an arm64 host): both tools are universal and read the
+    // thin image of either architecture; nothing is run.
     if choice.release {
         let why = if choice.backend != nazm_lir::backend::BackendId::Llvm {
             Some(
                 "`--backend llvm`'s: Cranelift and Nazm's own code generator write no stack canary",
             )
         } else if target.os != nazm_lir::backend::Os::Macos
-            || nazm_lir::backend::Target::host().ok().as_ref() != Some(&target)
+            || nazm_lir::backend::Target::host()
+                .ok()
+                .is_none_or(|h| h.os != nazm_lir::backend::Os::Macos)
         {
-            Some("this host's macOS executable's: another target is not hardened yet")
+            Some("a macOS executable, built on macOS: another target is not hardened yet")
         } else {
             None
         };

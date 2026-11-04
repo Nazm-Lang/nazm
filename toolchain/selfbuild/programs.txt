@@ -1,0 +1,17 @@
+# The toolchain programs the self-builds build: ROLE NAME SOURCE (the checkout's root-relative path).
+# Read by selfbuild.sh (the contained Linux one) and host-selfbuild.sh (the serial macOS one); nothing
+# else is shared between them. Lines starting with # and blank lines are ignored.
+#
+# builder: the builder itself, `nazm build` (the driver with the front end in it) and its two
+#          stages, the pipeline and the code generator (R8 slice 4). Stage 0 builds these three.
+# other:   every other program of the toolchain; the front end (`fe`) is the one the Core IR check
+#          and the heap probe run.
+builder nazm toolchain/commands/nazm.nz
+builder pl toolchain/pipeline/main.nz
+builder cg toolchain/codegen/main.nz
+other fe compiler/diagnose.nz
+other mcp toolchain/commands/mcp.nz
+other mutate toolchain/harness/mutate/main.nz
+other jtool toolchain/harness/tools/jtool.nz
+other interp toolchain/interp/main.nz
+other check toolchain/harness/check/main.nz

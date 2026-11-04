@@ -33,7 +33,8 @@ pub fn sr_size(raw: Str) -> Int {
 // `host-run`'s reading of an image (`heap_limit_of`): the counted heap linked, one heap limit, at
 // most 2 GiB. "" when it is admitted, else the refusal's name and why.
 pub fn sr_admitted(image: Str) -> Str {
-    if ut_find(image, "nz.heap_malloc", 0) < 0 {
+    // A release image is stripped (no symbol): the heap unit's own message, whole, then marks it.
+    if ut_find(image, "nz.heap_malloc", 0) < 0 && strs_len(sr_limits(image)) == 0 {
         return "no-counted-heap: the executable does not link the counted heap (`nz.heap_malloc` is not in it): build it with `--heap-limit`"
     }
     let found = sr_limits(image)
@@ -49,7 +50,7 @@ pub fn sr_admitted(image: Str) -> Str {
 // Every heap limit an image's `N0406` message names (`the heap limit of N bytes is reached`, N in
 // digits), each once.
 pub fn sr_limits(image: Str) -> Strs {
-    let before = "the heap limit of "
+    let before = "nazm: error[N0406]: out of memory: the heap limit of "
     let after = " bytes is reached"
     let found = strs_new()
     let mut from = 0

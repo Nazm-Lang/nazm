@@ -160,13 +160,13 @@ fn two_release_builds_are_the_same_bytes() {
 #[test]
 fn release_is_refused_where_it_cannot_hold() {
     // Cranelift has no stack protector; a debug build keeps what a release one strips; a library
-    // and objects are not executables; another target is not this host's macOS.
+    // and objects are not executables; a target that is not macOS is refused (the other macOS architecture is hardened: S16.4).
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("main.nz"), PROGRAM).unwrap();
     for (extra, why) in [
         (&["--backend", "cranelift"][..], "--backend llvm"),
-        // The other macOS architecture links here, so only `--release` refuses it.
-        (&["--target", "x86_64-apple-darwin"][..], "another target"),
+        // Not a macOS target: this host's `strip` and `codesign` do not finish it.
+        (&["--target", "x86_64-pc-windows-gnu"][..], "another target"),
         (&["--objects", "o"][..], "--objects"),
         (&["--debug"][..], "--debug"),
         (&["--lib"][..], "--lib"),
@@ -198,4 +198,58 @@ fn the_provenance_record_names_a_release_build_and_only_a_release_build() {
         serde_json::json!(true)
     );
     assert!(read("p.json")["backend"].get("release").is_none());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_other_macos_architecture_is_hardened_like_the_host_s() {
+    // S16.4: x86_64 built on an arm64 host (or the reverse). The same four properties, read from
+    // the thin image with the system's tools, and the default build of that target has none of
+    // them, so the checks fail on an unhardened image.
+    let other = if cfg!(target_arch = "aarch64") {
+        ("x86_64-apple-darwin", "x86_64")
+    } else {
+        ("aarch64-apple-darwin", "arm64")
+    };
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("main.nz"), PROGRAM).unwrap();
+    for (name, extra) in [("hardened", &["--release"][..]), ("plain", &[][..])] {
+        let mut args = vec!["build", "main.nz", "-o", name, "--target", other.0];
+        args.extend_from_slice(extra);
+        let out = nazm(d.path(), &args);
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let release = d.path().join("hardened");
+    let default = d.path().join("plain");
+    let header = tool("otool", &["-hv"], &release);
+    assert!(
+        header.to_lowercase().contains(&other.1.to_lowercase()),
+        "{header}"
+    );
+    assert!(header.contains(" PIE"), "{header}");
+    let hardened = tool("nm", &["-u"], &release);
+    assert!(hardened.contains("___stack_chk_fail"), "{hardened}");
+    assert!(hardened.contains("___stack_chk_guard"), "{hardened}");
+    assert!(!tool("nm", &["-u"], &default).contains("___stack_chk"));
+    let signed = tool("codesign", &["-dv"], &release);
+    assert!(
+        signed.contains("adhoc") && signed.contains("runtime"),
+        "{signed}"
+    );
+    assert!(!tool("codesign", &["-dv"], &default).contains("runtime"));
+    let verify = Command::new("codesign")
+        .args(["--verify", "--strict"])
+        .arg(&release)
+        .output()
+        .unwrap();
+    assert!(verify.status.success());
+    let symbols = tool("nm", &["-U"], &release);
+    assert!(
+        !symbols.contains("_main") && !symbols.contains("nz"),
+        "{symbols}"
+    );
 }

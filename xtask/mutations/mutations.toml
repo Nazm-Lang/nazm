@@ -21229,7 +21229,7 @@ killers = [{ package = "nazm-lir", lib = true, name = "op::llvm::tests::a_functi
 name = "r6-host-run-links-no-counted-heap"
 why = "a program without the counted heap is admitted to the host"
 file = "xtask/src/host_run.rs"
-find = """    if !contains(image, SYMBOL) {"""
+find = """    if !symbol && found.is_empty() {"""
 replace = """    if false {"""
 killers = [{ package = "xtask", bin = "xtask", name = "host_run::tests::a_program_without_the_counted_heap_is_refused" }]
 

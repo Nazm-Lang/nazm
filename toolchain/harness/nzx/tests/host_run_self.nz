@@ -72,7 +72,15 @@ fn a_limit_is_read_from_the_programs_own_message(io: IoCap, p: ProcessCap, sp: S
 @test
 fn a_program_without_the_counted_heap_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io } {
     let h = caps(io, p, sp, v, t);
-    starts(outcome(h, image("4194304", false)), "refused no-counted-heap:")
+    starts(outcome(h, "no heap at all"), "refused no-counted-heap:")?;
+    // A line that only mentions a heap limit is not the heap unit's message.
+    starts(outcome(h, "the heap limit of 4194304 bytes is reached"), "refused no-counted-heap:")
+}
+
+@test
+fn a_stripped_release_image_is_known_by_the_heap_units_message(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io } {
+    let h = caps(io, p, sp, v, t);
+    expect(outcome(h, image("268435456", false)), "268435456")
 }
 
 @test
@@ -102,8 +110,8 @@ fn two_different_limits_are_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: V
 fn a_limit_across_a_chunk_boundary_is_found(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io } {
     let h = caps(io, p, sp, v, t);
     // 1 MiB chunks: the message starts a few bytes before the first chunk ends.
-    let pad = bytes_to_str(bytes_new(1048576 - 30));
-    expect(outcome(h, f"{pad}nz.heap_malloc the heap limit of 4194304 bytes is reached"), "4194304")
+    let pad = bytes_to_str(bytes_new(1048576 - 60));
+    expect(outcome(h, f"{pad}nz.heap_malloc nazm: error[N0406]: out of memory: the heap limit of 4194304 bytes is reached"), "4194304")
 }
 
 @test

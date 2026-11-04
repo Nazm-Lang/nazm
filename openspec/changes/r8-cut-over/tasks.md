@@ -197,20 +197,37 @@
 
 
 ## 15. Slice 15 — the chain on Linux
-- [ ] 15.1 Seed → stage 1 → 2 → 3 through Nazm's `nazm build`, the released set, contained
+- [x] 15.1 Seed → stage 1 → 2 → 3 through Nazm's `nazm build`, the released set, contained — done 2026-11-04 with the shortfall stated in `design.md`, *S15 as built*: `cargo xtask contained --profile p4t4 selfbuild backend=llvm` (the default, released backend) on the tree after the slice 14 fixes passed in 1140.6 s: stages 1 to 3 each built the 9 programs (`nazm`, `pl`, `cg`, `fe`, `mcp`, `mutate`, `jtool`, `interp`, `check`) through the previous stage's `nazm build`; stage 0 (seed) equals stage 1 for `nazm`, `pl`, `cg`; stage 1 vs 2 and 2 vs 3: 9 of 9 identical; Core IR 9 documents identical; 66 corpus programs agree; 68 run by the self-built interpreter agree; `nazm-check` byte for byte (16 gates); the 256 MiB heap probe stopped with N0406
 
 ## 16. Slice 16 — the fixpoint on macOS
 - [x] 16.0 Design (Opus): `design.md`, *Slice 16*, S16.1–S16.5 (the runbook amendment as a draft)
-- [ ] 16.1 `toolchain/selfbuild/programs.txt` shared by both scripts; `host-selfbuild.sh ARCH OUT`
+- [x] 16.1 `toolchain/selfbuild/programs.txt` shared by both scripts; `host-selfbuild.sh ARCH OUT`
       (S16.1): its refusals, every Nazm-built step one `host-run`, the release configuration,
       `SELFBUILD_BACKEND=nazm`, `peaks.txt` in bytes, `environment.txt`, `SDKROOT` and
-      `MACOSX_DEPLOYMENT_TARGET` pinned
-- [ ] 16.2 The comparisons (S16.2): the fixpoint whole with the localisation on a difference, Core
+      `MACOSX_DEPLOYMENT_TARGET` pinned — written 2026-11-04 and verified **without running any
+      Nazm-built program**: `bash -n`, shellcheck (only the `CDPATH=` idiom `selfbuild.sh` also has),
+      the refusals exercised (usage, arch, backend, `NAZM_CONTAINED`, `NAZM_ALLOW_UNCONTAINED`,
+      withdrawal marker, non-empty OUT, not-Darwin by a `uname` stub, contained-workload by a `docker`
+      stub, `STAGE_HEAP` over 2 GiB), and `SELFBUILD_DRY_RUN=1` for both architectures and both
+      backends (27 stage builds + the corpus, Core IR, interpreter, `nazm-check` and probe steps listed
+      as `would host-run`, `environment.txt` written, Rosetta and `rosetta-clang` probes answering).
+      `selfbuild.sh` reads the same `programs.txt` (parse checked; its contained run not repeated)
+- [x] 16.2 The comparisons (S16.2): the fixpoint whole with the localisation on a difference, Core
       IR, the corpus at `--heap-limit 256M` (programs with no counted heap counted apart), the
-      interpreter, `nazm-check`, the 256 MiB probe
-- [ ] 16.3 aarch64: the run passes on the host
-- [ ] 16.4 x86_64 under Rosetta (S16.4): the `PATH` and `rosetta-clang` probe; the run passes
-- [ ] 16.5 The runbook amendment (S16.5) applied with 16.3's evidence
+      interpreter, `nazm-check`, the 256 MiB probe — in `host-selfbuild.sh`; **written, not yet
+      exercised** (they run only after a real build, which is 16.3): checked by reading and by
+      the `peaks.txt` summary awk on sample lines. Whatever 16.3 shows may need adjusting
+- [x] 16.3 aarch64: the run passes on the host (PASSED 2026-11-04 19:11-19:51, `host-selfbuild.sh aarch64`, llvm backend, exit 0, every Nazm-built step one `host-run` at 2 GiB: stages 1 to 3 9/9 byte-identical, Core IR 9/9 identical to the seed's, corpus 57 programs agree and 9 not run on the host for no counted heap (counted apart), interpreter 68/68 agree, `nazm-check` 15 gates byte for byte, the 256 MiB heap stops with N0406; largest peak `nazm` build 1527 MiB; log ~/nazm-hostsb-aarch64-2.log; the check fix 4b9b52d6 was needed) (first run 2026-11-04: fixpoint 9/9 passed, then `host-run`
+      refused `fe` because the release image is stripped and the check looked for a symbol; fixed in
+      `host-run` and the script's logging, design.md *S16.3 first run*; a re-run is needed)
+- [x] 16.4 x86_64 under Rosetta (S16.4): the `PATH` and `rosetta-clang` probe; the run passes
+      (2026-11-04: first run stopped at stage 0, the seed refused `--release` for x86_64; fixed in seed and Nazm
+      `build`, see design S16.4 first run; second run stopped at stage 1: clang's default architecture under Rosetta,
+      fixed by `bd_cross` in `build.nz` and the seed rebuild added to the script, design S16.4 second run; third run
+      2026-11-04/05 passed: `host-selfbuild.sh x86_64 ~/nazm-hostsb-x86_64-3` exit 0, stage3 `nazm` is Mach-O x86_64, stages 1 to 3
+      byte-identical, 57 corpus programs agree (9 not run on the host), 68 run by the self-built interpreter as by the seed's,
+      `nazm-check` agrees, the 256 MiB heap stops with N0406 (probe peak 6.1 MiB, exit 2); largest stage `nazm` 1561.9 MiB)
+- [x] 16.5 The runbook amendment (S16.5) applied with 16.3's evidence (2026-11-05: `docs/internal/runbook.md`, after *What may run on the host*, with the 16.3 and 16.4 evidence)
 
 ## 17. Slice 17 — Windows x86_64
 - [ ] 17.1 The released set built by Nazm for `x86_64-pc-windows-gnu`; the host-safe suite on the

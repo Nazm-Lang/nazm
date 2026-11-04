@@ -9,6 +9,7 @@ use "../lib/run.nz"
 use "../lib/scratch.nz"
 use "../lib/jsonq.nz"
 use "../lib/differential.nz"
+use "../lib/host.nz"
 
 /// A function with a local array, which a stack canary guards.
 fn program() -> Str ! {} {
@@ -173,9 +174,9 @@ fn two_release_builds_are_the_same_bytes(io: IoCap, p: ProcessCap, sp: SpawnCap,
 
 fn refused_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
     // Cranelift has no stack protector; a debug build keeps what a release one strips; a library
-    // and objects are not executables; another target is not this host's macOS (the other macOS
-    // architecture links here, so only `--release` refuses it).
-    let extras = text_split("--backend cranelift|--target x86_64-apple-darwin|--objects o|--debug|--lib", "|");
+    // and objects are not executables; a non-macOS target is refused (the other macOS architecture
+    // is hardened too: S16.4).
+    let extras = text_split("--backend cranelift|--target x86_64-pc-windows-gnu|--objects o|--debug|--lib", "|");
     let whys = text_split("--backend llvm|another target|--objects|--debug|--lib", "|");
     let mut i = 0;
     while i < strs_len(extras) {
@@ -215,6 +216,51 @@ fn the_provenance_record_names_a_release_build_and_only_a_release_build(io: IoCa
     }
     let d = scratch_new(h);
     let got = provenance_in(h, d);
+    scratch_remove(h, d);
+    got
+}
+
+fn other_arch_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    // S16.4: the other macOS architecture, built here and never run: the same four properties
+    // read from the thin image, and the default build of that target has none of them.
+    let arm = uname(h, "-m") == "arm64";
+    let triple = if arm { "x86_64-apple-darwin" } else { "aarch64-apple-darwin" };
+    let want = if arm { "x86_64" } else { "arm64" };
+    scratch_write(h, d, "main.nz", program())?;
+    let r = nazm(h, d, words(f"build main.nz -o hardened --release --target {triple}"));
+    check_that(r.code == 0, f"--release --target {triple}: {r.stderr}")?;
+    let q = nazm(h, d, words(f"build main.nz -o plain --target {triple}"));
+    check_that(q.code == 0, f"--target {triple}: {q.stderr}")?;
+    let release = f"{d}/hardened";
+    let default = f"{d}/plain";
+    let header = tool(h, "otool", "-hv", release);
+    check_that(text_contains(text_to_lower(header), want), header)?;
+    check_that(text_contains(header, " PIE"), header)?;
+    let hardened = tool(h, "nm", "-u", release);
+    check_that(text_contains(hardened, "___stack_chk_fail"), hardened)?;
+    check_that(text_contains(hardened, "___stack_chk_guard"), hardened)?;
+    let plain = tool(h, "nm", "-u", default);
+    check_that(!text_contains(plain, "___stack_chk"), plain)?;
+    let signed = tool(h, "codesign", "-dv", release);
+    check_that(text_contains(signed, "adhoc") && text_contains(signed, "runtime"), signed)?;
+    let a = words("--verify --strict");
+    strs_push(a, release);
+    let verify = run(h, "codesign", a, "", env_here(h.io));
+    check_that(verify.code == 0, verify.stderr)?;
+    let unsigned = tool(h, "codesign", "-dv", default);
+    check_that(!text_contains(unsigned, "runtime"), unsigned)?;
+    let symbols = tool(h, "nm", "-U", release);
+    check_that(!text_contains(symbols, "_main") && !text_contains(symbols, "nz"), f"a release build names none of its functions: {symbols}")
+}
+
+@test
+fn the_other_macos_architecture_is_hardened_like_the_host_s(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    let d = scratch_new(h);
+    let got = other_arch_in(h, d);
     scratch_remove(h, d);
     got
 }

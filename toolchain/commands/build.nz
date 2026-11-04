@@ -278,8 +278,8 @@ fn bd_preflight(io: IoCap, proc: ProcessCap, sp: SpawnCap, o: Opts) -> Str {
         let mut why = ""
         if o.backend != "llvm" {
             why = "`--backend llvm`'s: Cranelift and Nazm's own code generator write no stack canary"
-        } else if bd_os(t) != "macos" || t != host {
-            why = "this host's macOS executable's: another target is not hardened yet"
+        } else if bd_os(t) != "macos" || bd_os(host) != "macos" {
+            why = "a macOS executable, built on macOS: another target is not hardened yet"
         }
         if why != "" { bd_early(io, o, "nazm: `--release` hardens " + why, 5) }
     }
@@ -941,6 +941,17 @@ fn text_split_spaces(s: Str) -> Strs {
     out
 }
 
+// The triple clang is told (`-target`): a target that is not the host's, and also x86_64 macOS itself. A
+// translated process (x86_64 under Rosetta) is "on an x86_64 host" by its own reckoning, but a clang it starts
+// may be arm64 only and then defaults to arm64: it assembles x86 module asm as ARM64. Naming the triple
+// makes the unit's architecture independent of the clang's default; on a native x86_64 Mac it names what
+// the default already is. "" otherwise.
+fn bd_cross(target: Str, host: Str) -> Str {
+    if target != host { return target }
+    if target == "x86_64-apple-darwin" { return target }
+    ""
+}
+
 // `-target T` for a target that is not the host's.
 fn bd_target_args(cross: Str, out: Strs) -> Int {
     if cross != "" {
@@ -1345,7 +1356,7 @@ fn runtime_build(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int {
         if ut_starts(line, "services ") { services = text_split_spaces(str_slice(line, 9, str_len(line))) }
     }
     let host = bd_host()
-    let cross = if target == host { "" } else { target }
+    let cross = bd_cross(target, host)
     let env = bd_passed(io)
     // Every unit by clang, as `Backend::compile` does: the per-target ones first, then the runtime.
     let members = strs_new()
@@ -1459,7 +1470,7 @@ pub fn bd_build(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, v: Vouch
     }
     let target = bd_preflight(io, proc, sp, o)
     let host = bd_host()
-    let cross = if target == host { "" } else { target }
+    let cross = bd_cross(target, host)
     let llvm = o.backend == "llvm"
     if !llvm && o.debug { bd_refuse(io, o, "`nazm build --debug` with `--backend nazm` (debug information is the LLVM backend's here)") }
     let pipeline = bd_stage(io, o, "NAZM_PIPELINE", "nazm-pipeline")

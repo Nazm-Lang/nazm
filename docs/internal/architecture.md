@@ -9581,7 +9581,7 @@ is unchanged: nothing below happens without the flag.
   release builds of one program are the same bytes.
 
 **Where it is refused** (`USAGE`, by name, before anything is compiled): another backend (Cranelift
-and Nazm's generator write no canary), another target than this host's macOS, and — by the command
+and Nazm's generator write no canary), a target that is not macOS, or a host that is not (either macOS architecture is hardened, S16.4), and — by the command
 line — with `--debug`, `--lib`, `--objects` or `--runtime` (a prebuilt runtime was compiled
 without the canary). A provenance record names a release build (`backend.release`), and only one.
 

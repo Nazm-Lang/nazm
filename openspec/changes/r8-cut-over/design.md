@@ -1423,6 +1423,18 @@ What could make two stages differ although their inputs agree, and what holds ea
 > **Still contained only:** the Linux self-build, and everything listed above. The macOS self-build is
 > not a workload of the contained runner and never runs beside one.
 
+## Slice 16 — S16.1/S16.2 as built (2026-11-04)
+
+`toolchain/selfbuild/host-selfbuild.sh ARCH OUT` and `toolchain/selfbuild/programs.txt` (`ROLE NAME SOURCE`, read by both scripts) exist; nothing has run for real. Choices made while writing it, within the design:
+
+- **Stage 0 is always the seed's LLVM backend** with `--release`, even under `SELFBUILD_BACKEND=nazm` (which applies to stages 1–3 and the corpus builds): the seed is not asked to run `--backend nazm`.
+- **Labels in `peaks.txt`.** `host-run`'s report line names no program, so the script writes a `# LABEL` line before every step; the summary sums peaks per `stageS program`.
+- **A refusal or status 70 from `host-run`** kills the whole script (a signal to itself, so it works from inside the loop's subshells); the one refusal that is not fatal is `no-counted-heap` on a corpus program, which is counted by name.
+- **Core IR.** The front end is given the seed machine's own `macos aarch64` (the Rust `core-ir` has no `--target`), also for the x86_64 run.
+- **Refusals added** beyond S16.1's list: `backend`, `out-exists` (OUT must be new or empty; the script never deletes), `no-sdk`.
+- `SELFBUILD_DRY_RUN=1` prints every step as `would host-run` and runs nothing; it is how the script was verified.
+- This Mac's `xcrun --show-sdk-version` fails (the Command Line Tools SDK symlink is not a lookup target); `environment.txt` records that and the SDK's `SDKSettings.json` version (27.2) instead.
+
 ## Open questions — slices 7, 13 and 16 (for the copyright holder)
 
 Direction-level only; every other choice in the three designs above is made on the recommendation of
@@ -1465,3 +1477,111 @@ for in-process libFuzzer is accepted, never shipped, as `fuzz/cov.c` is today.
 **14.1 follow-up (2026-11-04), defects found and fixed.** Two root causes, three commits-worth of symptoms. (1) `main` of `nazm` and of `nazm-pipeline` returned an `Int`, and the runtime prints `main`'s result when `NAZM_RESULT_REPORT` is set, which the test driver sets and the children inherit: `check` printed `ok` then `0`, and the pipeline's MIR/interface/LIR JSON documents ended in a stray `0` (the seed's CLI never prints it). Both now end through `exit_with` (commit 608cd616). This is the "text after the value" cause of the ~43 `--json` failures, and the `check_does_not_evaluate` failure. (2) `run --interpret` and `build` loaded the program with `fx_check_over`, the language server's partial load, so an unreadable file also drew `N0204` and exit 1; they now use `fx_check_over_whole` (the loader's diagnostic alone, exit 3; commit 22bc4eb9). Re-run contained (`p4t4`): `cli` 14/14; `authority` 9/12, `closures` 18/20, `const_tables` 3/5, `mir` 10/10, `documentation` 6/6, `docs` 8/8, `reexports` 5/8, `schemas` 18/25, `core_ir` 3/8, `lir` 4/8. The `authority:` line was a misclassification: the four named `authority` tests fail on explicit Cranelift builds (three; refusals) and on the MIR trailing text (one; fixed), and the build's `authority:` line goes to stderr as the seed's. Every remaining failure in these 11 files that I could read is a documented refusal (Cranelift, `lir --run`, `--cache-report`, `nazm.root` marker, non-cut-over `lir --target`, the tests' own `test` runner, `repo --map` of the built-from repository) or the Linux ELF archiver limit (`runtime.o`). One was not explained: a `patch` answering `not_in_compilation` (a `reexports` test). NOT re-run: the other chunk files (the ~536 total was not recounted), so the N0407 `build.nz:1516` failures, `nzcg`, and the roughly 40 unclassified failures (lsp, registry, summary, user_tests) are unconfirmed; the `fx_check_over_whole` change in `build` may affect N0407.
 
 **14.2.** All 64 entries of `stays-rust.txt` stay the seed's own tests: 43 `stage R2-R3 replace` (the Rust compiler's MIR/interface stages, which the seed keeps; the Nazm compiler has its own `*_self` tests), 10 `library entry`, 6 `LLVM text not written`, 5 `table not printed` (each reaches a Rust API the Nazm `nazm` does not offer). The seed is frozen with its tests at slice 19. A CLI route may exist for a few (`cross::inspect_names_every_target…`, `repository::the_map…`, `summary::the_check_summary…`); none was tried: stated shortfall.
+
+## Slice 15 — S15 as built (2026-11-04)
+
+**What was built.** Nothing new: `toolchain/selfbuild/selfbuild.sh` already was the chain (seed, then three stages, each program built by the previous stage's `nazm build`; slices 4 and 5 passed it on both backends). Slice 15 is its run in the final form on the tree after slice 14's fixes (`fx_check_over_whole` in `build`, `exit_with` in `nazm` and `nazm-pipeline`), on the released (default LLVM) backend.
+
+**Run.** `cargo xtask contained --profile p4t4 selfbuild backend=llvm`, aarch64 Linux container, 4 CPU, 4096 MiB, heap limit 2G per built program: passed, 1140.6 s wall clock (not a measurement), `oom_killed=false`. Stages 1, 2, 3 each built the 9 programs; stage 0 equals stage 1 for `nazm`, `pl`, `cg`; stage 1 vs 2 and 2 vs 3: 9 of 9 identical, 0 differ; Core IR 9 documents identical to the reference's; 66 corpus programs built by stage 3 agree with the seed's builds, 0 not built; 68 programs run by stage 3's interpreter as by the seed's; `nazm-check` byte for byte (16 gates ok); the front end built with a 256 MiB heap stopped with N0406. Largest step per stage: stage 1 to 3 `nazm build` 1506 to 1507 MiB peak resident; seed's `nazm` build 1217 MiB.
+
+**Shortfalls.** (1) The released set is the nine programs of `selfbuild.sh`; it contains `nazm`, `pl` (`nazm-pipeline`), `cg` (`nzcg`) and `mcp` (`nazm-mcp`). The chain was not run with the slice 12 archive layout (no `NAZM_LIBRARY`, `libexec/` beside `nazm`): the script still sets `NAZM_LIBRARY`, `NAZM_PIPELINE`, `NAZM_NZCG` explicitly. (2) Only the `llvm` backend was run this time; the `nazm` backend passed in slice 4 and was not repeated after slice 14's fixes. (3) The runner printed `survivors=1` on this run (earlier ones printed 0); `docker ps -a` afterwards showed no `nazm-selfbuild` container left, so it was gone by the time it was checked, but the count is unexplained. (4) The 14.1 residue (about 10 unexplained suite failures) was not touched; it did not block the chain. (5) Target is Linux aarch64 only; x86_64 and macOS are slices 16 and 17.
+
+### S16.3 first run, 2026-11-04: what it showed (not yet passed)
+
+The first real `host-selfbuild.sh aarch64` build passed the fixpoint (stages 1 = 2 = 3, 9 of 9 identical) and
+then `host-run` refused stage 3's `fe`: `refused [no-counted-heap]`. Found by static inspection only
+(`strings`, `nm`, a seed build of three small programs; no Nazm-built program was run):
+
+- **Root cause: the check, not the compiler.** `--release` strips the symbol table (`release.rs`: `strip`),
+  and `nz.heap_malloc` is a hidden function, so a release image has no such name; `host-run` looked for
+  exactly that name. `nazm` and `pl` passed only because their own text quotes the runtime's IR source.
+  All 9 stage-3 executables, and the seed-built `cg`, `nazm` and `pl`, carry the heap unit's message
+  `nazm: error[N0406]: out of memory: the heap limit of 2147483648 bytes is reached`, and `fe` and `jtool`
+  import `malloc`, `realloc` and `free` (the counted heap's callers). A seed-built release program that
+  allocates has the message and no symbol; with `--heap-limit` and no allocation it has neither (the heap
+  unit is linked only when reached), which is the case the rule exists to refuse.
+- **Fix:** an image is counted-heap-linked if the symbol is in it **or** the heap unit's whole message
+  (`nazm: error[N0406]: out of memory: the heap limit of N bytes is reached`) is, which nothing but the unit
+  carries; a line that only mentions a limit, or an image with neither, is still `no-counted-heap`. The
+  same change in the three copies (`xtask/src/host_run.rs`, `toolchain/commands/stagerun.nz`,
+  `toolchain/harness/nzx/image.nz`) and their tests. The rule is not relaxed for programs without the unit.
+- **Residual weakness, stated:** the message proves the unit is linked, not that every `malloc` reaches
+  the counted one; that is the compiler's renaming (`count_heap`), checked by the LIR tests.
+- **The refusal was invisible:** `host-selfbuild.sh` sent the core step's standard error to `/dev/null`,
+  and `step`'s `cat` of the refusal went there with it. The script now keeps descriptor 3 as its own
+  standard error for refusals and `FAILED` lines (`toolchain/selfbuild/tests/host-selfbuild-refusal.sh`).
+- 16.3 stays open: it needs the re-run below, by the user.
+
+
+### S16.4 first run, 2026-11-04: stage 0 refused `--release` for x86_64 (fixed; not yet re-run)
+
+`host-selfbuild.sh x86_64` failed at stage 0: the seed's `nazm build --release --target
+x86_64-apple-darwin` was refused by preflight ("`--release` hardens this host's macOS executable's: another
+target is not hardened yet"), because the rule required target == host. **Decided by the copyright holder,
+2026-11-04:** teach the compiler to harden the other macOS architecture, so 16.4 runs in the release
+configuration (no fallback to a non-release x86_64 build).
+
+- **Rule now:** `--release` needs the LLVM backend, a macOS target (either architecture) and a macOS host.
+  Refused as before: another backend (Cranelift, `--backend nazm`), a non-macOS target (e.g.
+  `x86_64-pc-windows-gnu`), a non-macOS host, and `--debug`/`--lib`/`--objects`/`--runtime`. Same change in
+  the seed (`preflight.rs`) and in Nazm's `toolchain/commands/build.nz`; the message is now "a macOS
+  executable, built on macOS: another target is not hardened yet".
+- **Hardening of the foreign-architecture image, unchanged code, checked by reading:** canaries are written
+  into the LLVM text (architecture independent; `___stack_chk_fail`/`_guard` come from libSystem); `-pie` is
+  the linker's; `strip` and `codesign` are `/usr/bin` universal binaries (x86_64, arm64e), so they act on a thin
+  x86_64 file from either architecture and, under Rosetta, run as x86_64 without `xcrun` (neither is a shim).
+  No check was weakened or removed (the compiler has none of its own: the properties are read back by the tests).
+- **Evidence (seed, arm64 host, nothing Nazm-built run):** a `--release --target x86_64-apple-darwin` hello
+  builds; `file`: Mach-O 64-bit executable x86_64; `otool -hv`: X86_64, PIE; `nm -u`: `___stack_chk_fail`,
+  `___stack_chk_guard`; `nm -U`: only `__mh_execute_header`; `codesign -dv`: flags `adhoc,runtime`;
+  `codesign --verify --strict` passes; the plain seed-built hello printed `hi` under Rosetta.
+  Rust test `release_build::the_other_macos_architecture_is_hardened_like_the_host_s` (same checks, plus the
+  default build of that target has none of them, so each check fails on an unhardened image) and the refusal
+  test now uses a Windows target; `cli_m_r release_build` 8 of 8 pass; clippy and fmt clean.
+- **Nazm side:** `toolchain/harness/cli/release_build.nz` has the same new test and refusal change;
+  `toolchain/commands/tests/build.sh` has mode `llvm-release-x86` (byte comparison, seed against Nazm
+  `nazm`); `tests/args/build.txt` line 67 now compares a build, not a refusal, on macOS. Run contained
+  (Linux) only: the harness `release_build` refusal test agrees (the macOS tests do not exist in a Linux
+  Rust run, so they are `no Rust test of this name` there, as before); the macOS-only Nazm paths (the new
+  test, `llvm-release-x86`) were **not run**: they need a Nazm-built program on the macOS host.
+- **Not verified:** that the Nazm-built `nazm` hardens x86_64 identically to the seed (that is what stages 1-3
+  and `llvm-release-x86` show); that `strip`/`codesign` run correctly as translated x86_64 processes from the
+  Nazm-built driver (first seen in the 16.4 run). 16.4 stays open.
+
+### S16.4 second run, 2026-11-04: stage 1 clang assembled x86_64 module asm as ARM64 (fixed in `build.nz`; not yet re-run)
+
+`host-selfbuild.sh x86_64` passed stage 0 and failed at stage 1: the x86_64 Nazm-built `nazm build --release
+--target x86_64-apple-darwin` got `clang` status 4 on `switch.ll` ("unknown token in expression", "unrecognized
+instruction mnemonic, did you mean: ld2, udf?" on `movq %rbx, %rdi`).
+
+- **Root cause.** Neither the seed nor Nazm puts a `target triple` in any generated unit (`Backend::compile`: "no target
+  triple in the unit"); the architecture of every unit, `switch.ll` (module asm in the target's own syntax) above all,
+  is decided by `-target` on the clang command line. The seed and `build.nz` both pass `-target T` only "for a target
+  that is not the host's" (`target_args`/`bd_target_args`; `cross = if target == host { "" } else { target }`). Stage 0
+  ran in the arm64 seed, where x86_64 is cross, so `-target x86_64-apple-darwin` was named. Stages 1-3 run x86_64
+  under Rosetta, where `fe_host_arch()` answers x86_64, so target == host, nothing was named, and the arm64-only Command
+  Line Tools `clang` it spawned natively defaulted to arm64. The x86 module asm is the first thing that cannot be
+  assembled that way (the other units are portable IR, which clang would also have compiled for arm64: the final link
+  would have failed or produced the wrong image next). The same `cross` also feeds the link (`bd_link`,
+  `bd_link_shared`), so the defect covered the whole pipeline, not one file.
+- **Fix (`toolchain/commands/build.nz`).** New `bd_cross(target, host)`: the target when it is not the host's, and also
+  when it is `x86_64-apple-darwin` itself, so every clang call that compiles or links (all units: `entry`, `errno`,
+  `switch`, the `g*` units, the runtime, objects from the store, whole-program bitcode, the executable and the shared
+  library link) carries `-target x86_64-apple-darwin`. On a native Intel Mac this names what the default already is. The
+  object-cache key includes the compile flags, so only x86_64-macOS builds on an x86_64 host get a new key.
+  aarch64-apple-darwin and every other target's command lines are unchanged. The IR is not changed (no triple added:
+  that would change every unit's bytes and the seed/Nazm byte comparison), so the "verified on" header is untouched.
+  The Rust seed is not changed: it is only ever run natively, where its default is the host's.
+- **Test.** `toolchain/harness/cli/build.nz`: `every_clang_call_of_a_cross_build_names_the_target` puts a clang that
+  logs its arguments first on `PATH`, builds with `--no-cache --target x86_64-apple-darwin --objects`, and requires
+  `-target x86_64-apple-darwin` on every compile call. It passes on the seed (run natively with `NAZM` set to the seed)
+  and, contained, on the Nazm-built `nazm` (see tasks.md 16.4). **It cannot fail before the fix**: the case the fix
+  changes (target == host == x86_64-apple-darwin, a translated process) exists only under Rosetta, which no contained
+  test has; the test pins the property for the cross case. The defect itself was shown by reading the kept IR and the
+  `bd_cross` rule, not reproduced.
+- **Also recorded.** `host-selfbuild.sh` built only xtask, not the seed `target/debug/nazm`, so stage 0 could use a stale
+  seed; it now runs `cargo build --locked -q -p nazm-cli` before stage 0 (skipped under `NAZM=` and `SELFBUILD_DRY_RUN=1`).
+- **Not verified.** That stage 1 now passes under Rosetta (needs the host run, by the user); that nothing else in the
+  Nazm pipeline asks the machine's architecture instead of the target's (`fe_host_arch` is used by `bd_host` and the
+  core-IR step, which the script gives `macos aarch64` explicitly). Re-run: `cd ~/nazm-r8-s15 &&
+  toolchain/selfbuild/host-selfbuild.sh x86_64 ~/nazm-hostsb-x86_64-3`.
