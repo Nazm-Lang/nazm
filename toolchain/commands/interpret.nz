@@ -90,7 +90,7 @@ fn ip_document(io: IoCap, proc: ProcessCap, sp: SpawnCap, o: Opts, packages: Pac
             },
         }
     }
-    let f = fx_check_over(abs, "", paths, texts, library, fe_host_os(), fe_host_arch(), io)
+    let f = fx_check_over_whole(abs, "", paths, texts, library, fe_host_os(), fe_host_arch(), io)
     if fx_refusal(f) != "" {
         let why = fx_refusal(f)
         eprint("nazm: " + why + nl())

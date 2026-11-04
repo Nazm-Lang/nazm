@@ -96,6 +96,12 @@ pub fn fx_check_over(path: Str, source_root: Str, paths: Strs, texts: Strs, libr
     check_as(path, source_root, paths, texts, library, os, arch, true, true, io)
 }
 
+// The same over `paths`' texts, as a command runs a program (not as the language server analyses it): a compilation the loader could not load
+// reports the loader's diagnostics and nothing else.
+pub fn fx_check_over_whole(path: Str, source_root: Str, paths: Strs, texts: Strs, library: Str, os: Str, arch: Str, io: IoCap) -> Facts {
+    check_as(path, source_root, paths, texts, library, os, arch, true, false, io)
+}
+
 // The same compilation as a module (`Entry::Absent`), as `nazm doc` checks one: whether anything
 // can run is not asked, so a root without `main` is no error.
 pub fn fx_check_module(path: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts { check_as(path, "", strs_new(), strs_new(), library, os, arch, false, false, io) }
