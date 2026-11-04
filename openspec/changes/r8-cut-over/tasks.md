@@ -197,7 +197,7 @@
 
 
 ## 15. Slice 15 — the chain on Linux
-- [ ] 15.1 Seed → stage 1 → 2 → 3 through Nazm's `nazm build`, the released set, contained
+- [x] 15.1 Seed → stage 1 → 2 → 3 through Nazm's `nazm build`, the released set, contained — done 2026-11-04 with the shortfall stated in `design.md`, *S15 as built*: `cargo xtask contained --profile p4t4 selfbuild backend=llvm` (the default, released backend) on the tree after the slice 14 fixes passed in 1140.6 s: stages 1 to 3 each built the 9 programs (`nazm`, `pl`, `cg`, `fe`, `mcp`, `mutate`, `jtool`, `interp`, `check`) through the previous stage's `nazm build`; stage 0 (seed) equals stage 1 for `nazm`, `pl`, `cg`; stage 1 vs 2 and 2 vs 3: 9 of 9 identical; Core IR 9 documents identical; 66 corpus programs agree; 68 run by the self-built interpreter agree; `nazm-check` byte for byte (16 gates); the 256 MiB heap probe stopped with N0406
 
 ## 16. Slice 16 — the fixpoint on macOS
 - [x] 16.0 Design (Opus): `design.md`, *Slice 16*, S16.1–S16.5 (the runbook amendment as a draft)
