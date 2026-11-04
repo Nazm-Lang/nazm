@@ -217,7 +217,9 @@
       interpreter, `nazm-check`, the 256 MiB probe — in `host-selfbuild.sh`; **written, not yet
       exercised** (they run only after a real build, which is 16.3): checked by reading and by
       the `peaks.txt` summary awk on sample lines. Whatever 16.3 shows may need adjusting
-- [ ] 16.3 aarch64: the run passes on the host
+- [ ] 16.3 aarch64: the run passes on the host (first run 2026-11-04: fixpoint 9/9 passed, then `host-run`
+      refused `fe` because the release image is stripped and the check looked for a symbol; fixed in
+      `host-run` and the script's logging, design.md *S16.3 first run*; a re-run is needed)
 - [ ] 16.4 x86_64 under Rosetta (S16.4): the `PATH` and `rosetta-clang` probe; the run passes
 - [ ] 16.5 The runbook amendment (S16.5) applied with 16.3's evidence
 
