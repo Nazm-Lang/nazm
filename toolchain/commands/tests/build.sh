@@ -42,6 +42,8 @@
 #                 working directory (`prog.nazm-PID/`, in the debug map), so they are compared
 #                 through `dwarfdump --debug-info --debug-line` (UUIDs left out), not as bytes
 #   llvm-release  `--release -o prog`: canaries, position independent, stripped, signed
+#   llvm-release-x86 `--release --target x86_64-apple-darwin -o prog`: the same for the other macOS architecture
+#                 (S16.4); on an arm64 host the image is built, never run
 #   (BUILD_TOOLCHAIN=1 adds the toolchain's own programs as inputs)
 #   llvm-soa      `--layout soa --emit-ir --objects objs` (soa: the same on `--backend nazm`)
 #
@@ -88,7 +90,7 @@ REF=${NAZM_REF:-$NAZM}
 OUT=${BUILD_OUT:-${TMPDIR:-/tmp}/nazm-build-compare}
 mkdir -p "$OUT" && OUT=$(cd "$OUT" && pwd -P)   # the physical path: a message names it so (macOS: /var is /private/var)
 PART=${BUILD_PART:-all}
-MODES=${BUILD_MODES:-exe heap objects x86 windows cached llvm llvm-heap llvm-objects llvm-x86 llvm-windows llvm-x86exe llvm-ir llvm-irexe llvm-O1 llvm-O2 llvm-O3 llvm-debug llvm-debugexe llvm-release soa llvm-soa report report-objects report-nazm report-cached report-cached-nazm summary timings lib lib-shared lib-objects rtlink prov link}
+MODES=${BUILD_MODES:-exe heap objects x86 windows cached llvm llvm-heap llvm-objects llvm-x86 llvm-windows llvm-x86exe llvm-ir llvm-irexe llvm-O1 llvm-O2 llvm-O3 llvm-debug llvm-debugexe llvm-release llvm-release-x86 soa llvm-soa report report-objects report-nazm report-cached report-cached-nazm summary timings lib lib-shared lib-objects rtlink prov link}
 mkdir -p "$OUT/bin"
 for p in nazm:toolchain/commands/nazm.nz nazm-pipeline:toolchain/pipeline/main.nz nzcg:toolchain/codegen/main.nz; do
     name=${p%%:*}
@@ -277,6 +279,7 @@ for src in "${inputs[@]}"; do
             llvm-debug) args=(--debug --emit-ir --objects objs); backend=() ;;
             llvm-debugexe) args=(--debug -o prog); backend=() ;;
             llvm-release) args=(--release -o prog); backend=() ;;
+            llvm-release-x86) args=(--release --target x86_64-apple-darwin -o prog); backend=() ;;
             report) args=(--build-report -o prog); backend=() ;;
             report-objects) args=(--build-report --objects objs); backend=() ;;
             report-nazm) args=(--build-report -o prog) ;;
