@@ -102,7 +102,14 @@ fn target_supported(t: Str) -> Bool {
             || t == "aarch64-unknown-linux-gnu" || t == "x86_64-unknown-linux-gnu"
 }
 
+// `main` ends through `exit_with`, so the pipeline's stdout is its document alone: a returned `Int` would be
+// followed by `main`'s result when `NAZM_RESULT_REPORT` is set, and the caller (`nazm`) inherits that variable.
 fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
+    exit_with(pipeline_main(io, v))
+    0
+}
+
+fn pipeline_main(io: IoCap, v: VouchCap) -> Int ! { io } {
     let given = process_args(io)
     // `--target TRIPLE` first, as `nazm lir --target`; without it, Apple silicon's macOS. Then the
     // LLVM backend's flags (`--llvm`, `--debug`, `--release`, `--no-small`), which `build` reads.
