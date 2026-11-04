@@ -23,8 +23,12 @@ stage_name=host-selfbuild
 . "$root/toolchain/lib/stage.sh"
 
 say() { printf '%s\n' "$*"; }
+# Descriptor 3 is the script's own standard error, kept whatever a step redirects: a refusal or a
+# failure is written there, so a step's `2> /dev/null` can never swallow it (the first host run
+# lost a `no-counted-heap` refusal that way).
+exec 3>&2
 # `fail` also stops the run from inside a subshell: it signals the script itself, which exits 1.
-fail() { printf 'host-selfbuild: FAILED: %s\n' "$*" >&2; kill -TERM $$; exit 1; }
+fail() { printf 'host-selfbuild: FAILED: %s\n' "$*" >&3; kill -TERM $$; exit 1; }
 trap 'exit 1' TERM
 
 [ $# -eq 2 ] || stage_fail "usage: host-selfbuild.sh aarch64|x86_64 OUT"
@@ -144,7 +148,7 @@ step() {
     "$STAGE_RUN" "$deadline" "$@" 2> "$errf" < /dev/null
     st=$?
     if [ "$st" -eq 70 ] || { grep -q '^host-run: refused \[' "$errf" && ! { [ -n "${STEP_ALLOW_NOHEAP:-}" ] && grep -q '^host-run: refused \[no-counted-heap\]' "$errf"; }; }; then
-        cat "$errf" >&2
+        cat "$errf" >&3
         fail "host-run stopped the run at '$label' (status $st): $(grep -m1 'refused\|WITHDRAWAL' "$errf")"
     fi
     return "$st"
@@ -250,7 +254,7 @@ mkdir -p "$out/core"
 for p in $builder $others; do
     name=${p%%:*}; src=${p#*:}
     step "core $name front-end" 900 "$last/fe" --coredoc-sources "$root/$src" "$root/library" macos "$core_arch" > "$out/core/$name.json" 2> /dev/null
-    [ -s "$out/core/$name.json" ] || { corediffer=$((corediffer + 1)); say "  Core IR of $src: the front end wrote none"; continue; }
+    [ -s "$out/core/$name.json" ] || { corediffer=$((corediffer + 1)); say "  Core IR of $src: the front end wrote none: $(head -c 600 "$errf" 2> /dev/null)"; continue; }
     "$seed" core-ir --with-sources "$root/$src" 2> /dev/null > "$out/core/$name.ref.json"
     if cmp -s "$out/core/$name.ref.json" "$out/core/$name.json"; then
         coreagree=$((coreagree + 1))
