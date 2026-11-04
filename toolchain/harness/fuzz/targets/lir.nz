@@ -1,0 +1,49 @@
+// Fuzz target `lir` (S13.5): on to LIR and its validator. The Rust target also runs LIR's own
+// interpreter, which has no Nazm counterpart and is not carried (`nazm lir --run` is refused).
+// Outside the native subset is a refusal, not a defect; `lir_texts` validates every unit it writes.
+
+use "@std/hash"
+use "@std/hashmap"
+use "@std/text"
+use "common.nz"
+use "../../../pipeline/cir.nz"
+use "../../../pipeline/types.nz"
+use "../../../pipeline/program.nz"
+use "../../../pipeline/verify.nz"
+use "../../../pipeline/expand.nz"
+use "../../../pipeline/lir.nz"
+use "../../../pipeline/ops.nz"
+
+fn main(io: IoCap) -> Int {
+    let src = fz_input(io)
+    let r = fz_check(io, src, true)
+    if !r.carried || r.errors > 0 { return 1 }
+    let c = match cir_read(r.doc) {
+        Ok(c) => c,
+        Err(e) => {
+            eprint("lir: the Core IR the front end wrote does not read: " + e + "\n")
+            return 70
+        },
+    }
+    if strs_len(expansions(c)) > 0 { return 1 }
+    let p = match lower_program(c) {
+        Ok(p) => p,
+        Err(e) => { return 1 },
+    }
+    let tt = table_build(c)
+    let errors = verify(p, tt)
+    if strs_len(errors) > 0 {
+        for e in errors { eprint("lir: MIR lowered from a checked program does not verify: " + e + "\n") }
+        return 70
+    }
+    if p.entry < 0 { return 1 }
+    match lir_texts(c, tt, p) {
+        Ok(ts) => {
+            match lir_document(c, tt, p, "aarch64-apple-darwin", ts) {
+                Ok(d) => 0,
+                Err(e) => 1,
+            }
+        },
+        Err(e) => 1,
+    }
+}

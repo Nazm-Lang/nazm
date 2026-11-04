@@ -1,0 +1,227 @@
+// `nzx contained`'s supervisor against the real daemon (S13.3): the run, the outcomes and the
+// export path (`docker cp NAME:PATH -` read as a tar stream, the manifest validated, the
+// destination touched only when every file passed). Each case is one small container under the
+// probe's bounds; the cases that need Docker or the image skip, as the Rust suite's
+// `docker_or_skip` does, unless `NAZM_REQUIRE_HOST_TOOLS=1`.
+//
+//     nazm test --interpret-only toolchain/harness/nzx/tests/contained_run.nz
+//
+// Run it from the checkout's root and only with the container turn held
+// (`mkdir ~/.cache/nazm-scripts/contained-turn`): these are contained runs, one at a time.
+
+use "@std/file";
+use "@std/text";
+use "../../lib/run.nz";
+use "../../lib/host.nz";
+use "../../lib/scratch.nz";
+use "../workloads.nz";
+use "../supervise.nz";
+
+fn context(h: Caps) -> Ctx ! { io, spawn } {
+    let repo = match file_canonical(h.io, ".") {
+        Result.Ok(value: p) => p,
+        Result.Err(error: e) => ".",
+    };
+    Ctx(h: h, repo: repo, image: IMAGE, amd64: false, host: "here")
+}
+
+/// Whether Docker answers and the image is built.
+fn available(c: Ctx) -> Bool ! { io, spawn } {
+    str_len(docker_problem(c.h)) == 0 && image_present(c.h, c.image)
+}
+
+fn bounds(dest: Str, allowed: Strs, max: Int) -> Bounds ! {} {
+    let b = Bounds(memory_mb: 256, milli_cpus: 1000, profile: p1(), pids: 64, storage_gb: 1, scratch_mb: 16, fsize_bytes: 4194304, deadline_secs: 30, output_cap: 262144, has_export: false, export: no_export(), has_cache: false, cache: "");
+    bounds_with_export(b, Export(manifest: "/work/o/EXPORTS", dest: dest, allowed: allowed, max_bytes: max))
+}
+
+fn plain() -> Bounds ! {} {
+    Bounds(memory_mb: 256, milli_cpus: 1000, profile: p1(), pids: 64, storage_gb: 1, scratch_mb: 16, fsize_bytes: 4194304, deadline_secs: 30, output_cap: 262144, has_export: false, export: no_export(), has_cache: false, cache: "")
+}
+
+fn finish(c: Ctx, r: Report) -> Int ! { io } {
+    scratch_remove(c.h, r.scratch);
+    0
+}
+
+fn dest_has(h: Caps, dest: Str, name: Str) -> Str ! { io } {
+    match read_text(h, f"{dest}/{name}") {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => "<absent>",
+    }
+}
+
+@test
+fn a_workload_that_exits_zero_passes_and_its_output_is_kept(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let c = context(h);
+    if skip_without(h, available(c), "Docker or the image is not available")? {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    let r = run_container(c, "run-pass", shell("echo out; echo err >&2"), plain());
+    let ok = r.outcome.word == "passed" && r.stdout_bytes == 4 && r.stderr_bytes == 4 && !r.oom_killed;
+    let out = read_text(h, r.out_spool);
+    finish(c, r);
+    check_that(ok, "passed, 4 bytes on each stream")?;
+    check_that(survivors(h) == 0, "no container left")
+}
+
+@test
+fn a_failing_workload_is_failed_with_its_code(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let c = context(h);
+    if skip_without(h, available(c), "Docker or the image is not available")? {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    let r = run_container(c, "run-fail", shell("exit 7"), plain());
+    let word = r.outcome.word;
+    let code = r.outcome.code;
+    finish(c, r);
+    check_that(word == "failed" && code == 7, f"failed(7), got {word}({code})")
+}
+
+@test
+fn an_artefact_the_manifest_names_is_exported_and_nothing_else(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let c = context(h);
+    if skip_without(h, available(c), "Docker or the image is not available")? {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    let dest = scratch_new(h);
+    let script = "mkdir -p /work/o && printf hello > /work/o/a.txt && printf extra > /work/o/b.txt && printf 'a.txt 5\\n' > /work/o/EXPORTS";
+    let r = run_container(c, "run-export", shell(script), bounds(dest, words("a.txt"), 1024));
+    let word = r.outcome.word;
+    let why = r.outcome.why;
+    finish(c, r);
+    let a = dest_has(h, dest, "a.txt");
+    let b = dest_has(h, dest, "b.txt");
+    scratch_remove(h, dest);
+    check_that(word == "passed", f"passed, got {word}: {why}")?;
+    check_that(a == "hello", f"a.txt exported, got `{a}`")?;
+    check_that(b == "<absent>", "b.txt, not in the manifest, is not exported")?;
+    check_that(survivors(h) == 0, "the exported container is removed")
+}
+
+fn refused(h: Caps, c: Ctx, name: Str, script: Str, allowed: Str, max: Int) -> Str ! { io, spawn } {
+    let dest = scratch_new(h);
+    let r = run_container(c, name, shell(script), bounds(dest, words(allowed), max));
+    let word = r.outcome.word;
+    let why = r.outcome.why;
+    finish(c, r);
+    let left = dest_has(h, dest, "a.txt");
+    scratch_remove(h, dest);
+    if left != "<absent>" {
+        return f"{word}: the destination was touched ({left})";
+    }
+    if word != "export-refused" {
+        return f"expected export-refused, got {word}: {why}";
+    }
+    why
+}
+
+@test
+fn an_export_the_policy_does_not_permit_is_refused_and_the_destination_untouched(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let c = context(h);
+    if skip_without(h, available(c), "Docker or the image is not available")? {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    // A name off the allowlist.
+    let off = refused(h, c, "run-off", "mkdir -p /work/o && printf hi > /work/o/z.txt && printf 'z.txt 2\\n' > /work/o/EXPORTS", "a.txt", 1024);
+    check_that(text_starts_with(off, "z.txt is not permitted here; this run may export [\"a.txt\"]"), f"off the list: {off}")?;
+    // Listed twice.
+    let twice = refused(h, c, "run-twice", "mkdir -p /work/o && printf hi > /work/o/a.txt && printf 'a.txt 2\\na.txt 2\\n' > /work/o/EXPORTS", "a.txt", 1024);
+    check_that(twice == "a.txt is listed twice", f"twice: {twice}")?;
+    // A declared size over the policy's budget.
+    let big = refused(h, c, "run-big", "mkdir -p /work/o && printf hi > /work/o/a.txt && printf 'a.txt 2000\\n' > /work/o/EXPORTS", "a.txt", 1024);
+    check_that(big == "a.txt: declared 2000 bytes, over this policy's 1024 budget", f"big: {big}")?;
+    // A manifest that is not `name size`.
+    let bad = refused(h, c, "run-bad", "mkdir -p /work/o && printf hi > /work/o/a.txt && printf 'a.txt\\n' > /work/o/EXPORTS", "a.txt", 1024);
+    check_that(bad == "malformed manifest line: \"a.txt\"", f"malformed: {bad}")?;
+    // A manifest that names nothing.
+    let none = refused(h, c, "run-none", "mkdir -p /work/o && : > /work/o/EXPORTS", "a.txt", 1024);
+    check_that(none == "the manifest named nothing", f"nothing: {none}")?;
+    // No manifest at all: docker cp says why.
+    let absent = refused(h, c, "run-absent", "true", "a.txt", 1024);
+    check_that(text_starts_with(absent, "manifest /work/o/EXPORTS:"), f"absent: {absent}")?;
+    check_that(survivors(h) == 0, "no container left")
+}
+
+@test
+fn a_symlink_a_directory_and_an_oversized_file_are_refused_from_the_tar_header(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let c = context(h);
+    if skip_without(h, available(c), "Docker or the image is not available")? {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    let link = refused(h, c, "run-link", "mkdir -p /work/o && ln -s /etc/passwd /work/o/a.txt && printf 'a.txt 5\\n' > /work/o/EXPORTS", "a.txt", 1024);
+    check_that(text_starts_with(link, "a.txt: /work/o/a.txt is a symlink"), f"symlink: {link}")?;
+    let dir = refused(h, c, "run-dir", "mkdir -p /work/o/a.txt && printf 'a.txt 5\\n' > /work/o/EXPORTS", "a.txt", 1024);
+    check_that(text_starts_with(dir, "a.txt: /work/o/a.txt is a directory"), f"directory: {dir}")?;
+    // The manifest says 3 bytes; the file is 8: the header's size is over the declared transfer budget.
+    let lie = refused(h, c, "run-lie", "mkdir -p /work/o && printf 12345678 > /work/o/a.txt && printf 'a.txt 3\\n' > /work/o/EXPORTS", "a.txt", 1024);
+    check_that(text_starts_with(lie, "a.txt: /work/o/a.txt: the archive header declares 8 bytes, over the 3-byte transfer budget"), f"lie: {lie}")?;
+    // The manifest says 8 bytes; the file is 3: fewer bytes than declared.
+    let short = refused(h, c, "run-short", "mkdir -p /work/o && printf 123 > /work/o/a.txt && printf 'a.txt 8\\n' > /work/o/EXPORTS", "a.txt", 1024);
+    check_that(text_starts_with(short, "a.txt: transferred 3 bytes, manifest declared 8"), f"short: {short}")?;
+    check_that(survivors(h) == 0, "no container left")
+}
+
+@test
+fn a_workload_past_its_deadline_is_killed_at_the_container(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let c = context(h);
+    if skip_without(h, available(c), "Docker or the image is not available")? {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    let b = bounds_with_deadline(plain(), 3);
+    let r = run_container(c, "run-late", shell("sleep 60"), b);
+    let word = r.outcome.word;
+    finish(c, r);
+    check_that(word == "timeout", f"timeout, got {word}")?;
+    check_that(survivors(h) == 0, "no container left")
+}
+
+@test
+fn a_container_a_dead_supervisor_left_is_reaped_by_its_labels_alone(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let c = context(h);
+    if skip_without(h, available(c), "Docker or the image is not available")? {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    // A container labelled as a supervisor of this host's whose pid is certainly not a process, and
+    // one with the same name shape but no label: only the first is this runner's to remove.
+    let host = host_name_of(h);
+    let owned = "nazm-reapme-999999";
+    let foreign = "nazm-foreign-999998";
+    let a = words("create --name");
+    strs_push(a, owned);
+    strs_push(a, "--label");
+    strs_push(a, RUN_OWNER);
+    strs_push(a, "--label");
+    strs_push(a, f"{SUPERVISOR_PID}=999999");
+    strs_push(a, "--label");
+    strs_push(a, f"{SUPERVISOR_HOST}={host}");
+    strs_push(a, IMAGE);
+    strs_push(a, "true");
+    let made = run(h, "docker", a, "", env_here(io));
+    let b = words("create --name");
+    strs_push(b, foreign);
+    strs_push(b, IMAGE);
+    strs_push(b, "true");
+    let made2 = run(h, "docker", b, "", env_here(io));
+    check_that(made.code == 0 && made2.code == 0, "the two containers are created")?;
+    let cc = Ctx(h: h, repo: c.repo, image: c.image, amd64: false, host: host);
+    let gone = reap_stale(cc);
+    let rm = words("rm -f");
+    strs_push(rm, foreign);
+    run(h, "docker", rm, "", env_here(io));
+    let rm2 = words("rm -f");
+    strs_push(rm2, owned);
+    run(h, "docker", rm2, "", env_here(io));
+    check_that(str_join(gone, ",") == owned, f"only the labelled one is reaped, got [{str_join(gone, ",")}]")
+}
+
+fn host_name_of(h: Caps) -> Str ! { io, spawn } {
+    text_trim(run(h, "hostname", strs_new(), "", env_here(h.io)).stdout)
+}

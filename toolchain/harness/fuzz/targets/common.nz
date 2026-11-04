@@ -1,0 +1,66 @@
+// The fuzz targets' shared front (R8 slice 13, S13.5): the input file, and the front end over its
+// text as one file of a compilation named `<input>` — what `interpret.nz`'s `ip_check_source`
+// does for `repl`, without its `exit_with(6)`: a program the front end does not carry is an
+// ordinary input here, not the end of the process. Every target is a program of its own, built by
+// `nazm-fuzz build TARGET` with LLVM's SanitizerCoverage on its units, and run once per input by
+// `shim.c`, which hands it one argument: the file the input was written to.
+//
+// Exit statuses of a target: 0 the input was taken, 1 it was refused (the checker said no, the
+// program was not carried), 2 the interpreted program itself failed, 70 a defect of the toolchain
+// (a validator that rejects what the checker accepted, a stage that failed on a checked program).
+
+use "../../../../compiler/diag.nz"
+use "../../../../compiler/sema.nz"
+use "../../../../compiler/package.nz"
+use "../../../../compiler/facts.nz"
+use "../../../../compiler/facts-core.nz"
+use "../../../commands/front.nz"
+use "@std/fs"
+
+/// What the front end said of one input: the errors rendered, whether the front end carried the
+/// program at all, and the Core IR document when there is no error.
+pub struct Fz {
+    carried: Bool,
+    errors: Int,
+    text: Str,
+    doc: Str,
+}
+
+/// The input's text: the file the first argument names, or `""` when there is none.
+pub fn fz_input(io: IoCap) -> Str {
+    if args_count() < 1 { return "" }
+    match fs_read(io, arg(0)) {
+        Ok(t) => t,
+        Err(e) => "",
+    }
+}
+
+/// `source` as the one file of a compilation named `<input>`, its Core IR when `want_doc`.
+pub fn fz_check(io: IoCap, source: Str, want_doc: Bool) -> Fz {
+    let library = os_env_get("NAZM_LIBRARY")
+    let abs = "/<input>"
+    let paths = strs_new()
+    let texts = strs_new()
+    strs_push(paths, abs)
+    strs_push(texts, source)
+    let f = fx_check_over(abs, "", paths, texts, library, fe_host_os(), fe_host_arch(), io)
+    if fx_refusal(f) != "" { return Fz(carried: false, errors: 0, text: fx_refusal(f), doc: "") }
+    if !fx_carried(f) && !fe_load_failed(f) { return Fz(carried: false, errors: 0, text: fx_why(f), doc: "") }
+    let d = fx_diags(f)
+    let names = fe_names(f, "")
+    strs_set(names, 0, "<input>")
+    let out = strs_new()
+    let tx = fe_texts(f)
+    let bs = fe_bases(f)
+    let mut errors = 0
+    for i in 0..dg_len(d) {
+        if strs_get(d.severity, i) != "warning" {
+            errors += 1
+            strs_push(out, dg_render(d, i, names, tx, bs))
+        }
+    }
+    if errors > 0 { return Fz(carried: true, errors: errors, text: str_join(out, ""), doc: "") }
+    let doc = if want_doc { fx_core_document(f) } else { "" }
+    if want_doc && doc == "" { return Fz(carried: false, errors: 0, text: "a program whose Core IR the front end does not carry", doc: "") }
+    Fz(carried: true, errors: 0, text: "", doc: doc)
+}

@@ -1,0 +1,701 @@
+// `nzx contained [--platform amd64] [--profile P] [--cache bench] WORKLOAD` (S13.3): the port of
+// `xtask/src/commands/contained.rs`. The workloads, their deadlines, profiles, caches and export
+// policies are `workloads.nz`'s table; the container's supervision is `supervise.nz`; the volumes are
+// `cache.nz`. This file reads what a plan needs from the machine (the commit, the image's platform),
+// builds it, runs it and reports it in the reference's words and statuses.
+//
+// The hidden `--print-argv` (before the workload) prints the `docker run` arguments one element a
+// line on standard output and the plan on standard error and starts nothing: the reference prints
+// the same (`xtask contained --print-argv`), and `tests/contained_argv.sh` diffs them.
+
+use "@std/process";
+use "@std/file";
+use "@std/ioerror";
+use "@std/env";
+use "@std/text";
+use "../lib/run.nz";
+use "../lib/scratch.nz";
+use "hostrun.nz";
+use "image.nz";
+use "workloads.nz";
+use "cache.nz";
+use "supervise.nz";
+
+/// What a workload will run: its name, its script and its bounds.
+struct Plan {
+    name: Str,
+    argv: Strs,
+    bounds: Bounds,
+}
+
+fn out_line(io: IoCap, s: Str) -> Int ! { io } {
+    file_write_str(file_stdout(io), f"{s}\n");
+    0
+}
+
+/// `git ARGS` in the checkout: its trimmed standard output when it succeeded.
+fn git(c: Ctx, spec: Str) -> Option[Str] ! { io, spawn } {
+    let r = run(c.h, "git", words(spec), c.repo, env_here(c.h.io));
+    if r.code == 0 {
+        return Option[Str].Some(value: text_trim(r.stdout));
+    }
+    Option[Str].None()
+}
+
+fn all_digits(s: Str) -> Bool ! {} {
+    if str_len(s) == 0 {
+        return false;
+    }
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b < 48 || b > 57 {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+fn all_hex(s: Str) -> Bool ! {} {
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if !((b >= 48 && b <= 57) || (b >= 65 && b <= 70) || (b >= 97 && b <= 102)) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+/// The platform slug of the image the workloads run in, measured by the supervisor (not taken from
+/// this machine, nor from the workload): `uname -sm` in the image, lower-cased, every byte that is
+/// not a letter or digit a `-`.
+fn image_platform_slug(c: Ctx) -> Result[Str, Str] ! { io, spawn } {
+    let a = words("run --rm --network none");
+    if c.amd64 {
+        strs_push(a, "--platform");
+        strs_push(a, "linux/amd64");
+    }
+    strs_push(a, c.image);
+    strs_push(a, "uname");
+    strs_push(a, "-sm");
+    let r = run(c.h, "docker", a, "", env_here(c.h.io));
+    if r.code < 0 {
+        return Result[Str, Str].Err(error: f"could not run docker: {first_line(r.stderr)}");
+    }
+    if r.code != 0 {
+        return Result[Str, Str].Err(error: text_trim(r.stderr));
+    }
+    let host = text_trim(r.stdout);
+    if str_len(host) == 0 {
+        return Result[Str, Str].Err(error: "`uname -sm` in the image said nothing");
+    }
+    let lower = text_to_lower(host);
+    let out = strs_new();
+    let mut i = 0;
+    while i < str_len(lower) {
+        let b = str_byte(lower, i);
+        if (b >= 97 && b <= 122) || (b >= 48 && b <= 57) {
+            strs_push(out, str_slice(lower, i, i + 1));
+        } else {
+            strs_push(out, "-");
+        }
+        i = i + 1;
+    }
+    Result[Str, Str].Ok(value: str_join(out, ""))
+}
+
+fn make_dir(c: Ctx, dir: Str, what: Str, print_argv: Bool) -> Result[Int, Str] ! { io } {
+    if print_argv {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    let v = c.h.v;
+    match dir_create_all(c.h.io, str_vouch(dir)) {
+        Result.Ok(value: n) => Result[Int, Str].Ok(value: 0),
+        Result.Err(error: e) => Result[Int, Str].Err(error: f"contained: cannot {what} {dir}: {rust_io_error(e)}"),
+    }
+}
+
+fn names(xs: Str) -> Strs ! {} {
+    words(xs)
+}
+
+/// The plan for `workload` (`args[0]`), or the message the reference prints before it fails.
+fn build_plan(c: Ctx, args: Strs, profile: Profile, b0: Bounds, print_argv: Bool) -> Result[Plan, Str] ! { io, spawn } {
+    let w = if strs_len(args) > 0 { strs_get(args, 0) } else { "" };
+    let j = profile.cargo_jobs;
+    let rest = strs_new();
+    for i in 1..strs_len(args) {
+        strs_push(rest, strs_get(args, i));
+    }
+    if w == "selfhost" {
+        return Result[Plan, Str].Ok(value: Plan(name: "selfhost", argv: shell(script_selfhost(profile)), bounds: b0));
+    }
+    if w == "bootstrap" {
+        return Result[Plan, Str].Ok(value: Plan(name: "bootstrap", argv: shell(script_bootstrap(j)), bounds: bounds_with_deadline(b0, 1800)));
+    }
+    if w == "selfbuild" {
+        let settings = selfbuild_settings(args)?;
+        return Result[Plan, Str].Ok(value: Plan(name: "selfbuild", argv: shell(script_selfbuild(j, settings)), bounds: bounds_with_deadline(b0, 3600)));
+    }
+    if w == "tests" {
+        return Result[Plan, Str].Ok(value: Plan(name: "tests", argv: shell(script_tests(profile)), bounds: b0));
+    }
+    if w == "release" {
+        let dest = f"{c.repo}/target/release-candidate";
+        let mut allowed = strs_new();
+        strs_push(allowed, "nazm-release-candidate.tar.gz");
+        strs_push(allowed, "MANIFEST.txt");
+        strs_push(allowed, "PROVENANCE.txt");
+        let b = bounds_with_export(bounds_with_deadline(b0, 2400), Export(manifest: "/work/rc/EXPORTS", dest: dest, allowed: allowed, max_bytes: 67108864));
+        make_dir(c, dest, "prepare", print_argv)?;
+        // The revision, established here rather than inside: `git` is not in the image.
+        let commit = match git(c, "rev-parse HEAD") {
+            Option.Some(value: x) => x,
+            Option.None() => "",
+        };
+        let dirty = match git(c, "status --porcelain") {
+            Option.Some(value: x) => x,
+            Option.None() => { return Result[Plan, Str].Err(error: "contained: cannot read the tree's state with git, so the candidate could not be attributed to a revision"); },
+        };
+        if str_len(commit) == 0 {
+            return Result[Plan, Str].Err(error: "contained: cannot establish the source commit");
+        }
+        let clean = if str_len(dirty) == 0 { "yes" } else { "no" };
+        let epoch = match git(c, "log -1 --format=%ct HEAD") {
+            Option.Some(value: x) => if all_digits(x) { x } else { "" },
+            Option.None() => "",
+        };
+        if str_len(epoch) == 0 {
+            return Result[Plan, Str].Err(error: "contained: cannot read the commit's time, so the candidate's dates would be the run's");
+        }
+        // Only the verdict crosses, not the porcelain text.
+        let identity = f"NAZM_SOURCE_COMMIT={commit} NAZM_SOURCE_TREE_CLEAN={clean} SOURCE_DATE_EPOCH={epoch} ";
+        return Result[Plan, Str].Ok(value: Plan(name: "release", argv: shell(script_release(identity)), bounds: b));
+    }
+    if w == "mutate" || w == "mutate-seed" {
+        let b = bounds_with_deadline(b0, 3000);
+        let passed = match mutate_passthrough(rest) {
+            Result.Ok(value: x) => x,
+            Result.Err(error: e) => { return Result[Plan, Str].Err(error: f"contained: {e}"); },
+        };
+        let commit = match git(c, "rev-parse HEAD") {
+            Option.Some(value: x) => if all_hex(x) { x } else { "" },
+            Option.None() => "",
+        };
+        let commit_arg = if str_len(commit) == 0 { "" } else { f" --source-commit {commit}" };
+        let budget = if text_contains(passed, "--budget-secs") || text_contains(passed, "--plan") || text_contains(passed, "--verify-killer") { "" } else { " --budget-secs 2400" };
+        let deadline = b.deadline_secs - 20;
+        if w == "mutate-seed" {
+            return Result[Plan, Str].Ok(value: Plan(name: "mutate-seed", argv: shell(script_mutate_seed(j, deadline, mutate_parallelism(profile), commit_arg, budget, passed)), bounds: b));
+        }
+        if text_contains(passed, "--plan") {
+            return Result[Plan, Str].Ok(value: Plan(name: "mutate", argv: shell(script_mutate_plan(j, only_options(rest))), bounds: b));
+        }
+        return Result[Plan, Str].Ok(value: Plan(name: "mutate", argv: shell(script_mutate(j, deadline, mutate_parallelism(profile), commit_arg, budget, passed)), bounds: b));
+    }
+    if w == "bench" || w == "bench-seed" {
+        let b1 = bounds_with_deadline(b0, 2400);
+        let mut saving = false;
+        for a in args {
+            if a == "--save" {
+                saving = true;
+            }
+        }
+        let mode = if saving { "--save" } else { "--check" };
+        let slug = match image_platform_slug(c) {
+            Result.Ok(value: s) => s,
+            Result.Err(error: e) => { return Result[Plan, Str].Err(error: f"contained: cannot establish the image's platform: {e}"); },
+        };
+        let allowed = strs_new();
+        strs_push(allowed, "record.json");
+        if saving {
+            strs_push(allowed, f"baseline-{slug}.json");
+        }
+        let b = bounds_with_export(b1, Export(manifest: "/work/benchout/EXPORTS", dest: f"{c.repo}/bench", allowed: allowed, max_bytes: 1048576));
+        if w == "bench-seed" {
+            return Result[Plan, Str].Ok(value: Plan(name: "bench-seed", argv: shell(script_bench_seed(mode, bench_manifest(saving))), bounds: b));
+        }
+        // The Nazm benchmark (S13.6).
+        return Result[Plan, Str].Ok(value: Plan(name: "bench", argv: shell(script_bench(mode, bench_manifest(saving))), bounds: b));
+    }
+    if w == "fuzz" || w == "fuzz-seed" {
+        let mut seconds = 300;
+        if strs_len(args) > 1 {
+            let s = strs_get(args, 1);
+            let digits = if text_starts_with(s, "+") { str_slice(s, 1, str_len(s)) } else { s };
+            if all_digits(digits) && str_len(digits) <= 15 {
+                seconds = match text_parse_int(digits) {
+                    Result.Ok(value: n) => n,
+                    Result.Err(error: e) => 300,
+                };
+            }
+        }
+        let targets = strs_new();
+        for i in 2..strs_len(args) {
+            let t = strs_get(args, i);
+            for ok in names("front lower run lir manifest") {
+                if ok == t {
+                    strs_push(targets, t);
+                }
+            }
+        }
+        let count = if strs_len(targets) == 0 { 5 } else { strs_len(targets) };
+        // The cold instrumented build, then each target twice its budget (the run and the minimisation).
+        let dest = f"{c.repo}/target/fuzz";
+        make_dir(c, dest, "make", print_argv)?;
+        let allowed = strs_new();
+        strs_push(allowed, "fuzz-min.tar");
+        strs_push(allowed, "report.txt");
+        let b = bounds_with_export(bounds_with_deadline(b0, 1800 + seconds * 2 * count), Export(manifest: "/work/fuzzout/EXPORTS", dest: dest, allowed: allowed, max_bytes: 8388608));
+        if w == "fuzz-seed" {
+            return Result[Plan, Str].Ok(value: Plan(name: "fuzz-seed", argv: shell(script_fuzz_seed(j, seconds, str_join(targets, " "))), bounds: b));
+        }
+        // The Nazm fuzzer (S13.5): the five targets, then `diff` over twice the seconds in programs.
+        return Result[Plan, Str].Ok(value: Plan(name: "fuzz", argv: shell(script_fuzz(j, seconds, str_join(targets, " "))), bounds: b));
+    }
+    if w == "archive" {
+        let b1 = bounds_with_deadline(b0, 3600);
+        let slug = match image_platform_slug(c) {
+            Result.Ok(value: s) => s,
+            Result.Err(error: e) => { return Result[Plan, Str].Err(error: f"contained: cannot establish the image's platform: {e}"); },
+        };
+        let triple = if slug == "linux-aarch64" { "aarch64-unknown-linux-gnu" } else { if slug == "linux-x86-64" { "x86_64-unknown-linux-gnu" } else { "" } };
+        if str_len(triple) == 0 {
+            return Result[Plan, Str].Err(error: f"contained: no host archive is defined for the image's platform `{slug}`");
+        }
+        let dest = f"{c.repo}/target/archives";
+        make_dir(c, dest, "make", print_argv)?;
+        let name = f"nazm-{triple}.tar.gz";
+        let allowed = strs_new();
+        strs_push(allowed, name);
+        let b = bounds_with_export(b1, Export(manifest: "/work/archiveout/EXPORTS", dest: dest, allowed: allowed, max_bytes: 134217728));
+        return Result[Plan, Str].Ok(value: Plan(name: "archive", argv: shell(script_archive(j, triple, name)), bounds: b));
+    }
+    if w == "run" {
+        let cmd = str_join(rest, " ");
+        if str_len(text_trim(cmd)) == 0 {
+            return Result[Plan, Str].Err(error: "contained: `run` needs a command");
+        }
+        return Result[Plan, Str].Ok(value: Plan(name: "run", argv: shell(cmd), bounds: b0));
+    }
+    let shown = if str_len(w) == 0 && strs_len(args) == 0 { "<none>" } else { w };
+    Result[Plan, Str].Err(error: f"contained: unknown workload {debug_quote(shown)}\n  probe | tests | selfhost | bootstrap | selfbuild | bench | bench-seed | mutate | mutate-seed | fuzz [SECONDS] [TARGET...] | fuzz-seed [SECONDS] [TARGET...] | archive | run <command>")
+}
+
+fn tenths(ms: Int) -> Str ! {} {
+    let t = (ms + 50) / 100;
+    f"{t / 10}.{t % 10}"
+}
+
+/// `--print-argv`: the `docker run` argument list for `name` (the pid fixed at 1), one element a
+/// line on standard output, and the plan the list does not carry on standard error.
+fn print_plan(c: Ctx, name: Str, argv: Strs, b: Bounds) -> Int ! { io } {
+    let io = c.h.io;
+    for a in run_argv(c.repo, f"nazm-{name}-1", argv, b, 1, c.host, c.image, c.amd64) {
+        out_line(io, a);
+    }
+    let mut export = "none";
+    if b.has_export {
+        export = f"{b.export.manifest} {b.export.dest} [{str_join(b.export.allowed, ",")}] {b.export.max_bytes}";
+    }
+    say(io, f"plan: {name} deadline={b.deadline_secs}s memory={b.memory_mb}m cpus={b.milli_cpus} pids={b.pids} storage={b.storage_gb}G scratch={b.scratch_mb}m fsize={b.fsize_bytes} cap={b.output_cap} export={export}");
+    0
+}
+
+/// Append the journal lines a contained campaign printed to the host's copy, under
+/// `target/mutation-campaigns/<key>/journal.jsonl`. The container's own journal dies with it; what it
+/// printed is the only record that crosses, so it is collected whatever the outcome.
+fn collect_journal(c: Ctx, stdout: Str, campaigns: Str) -> Int ! { io } {
+    let io = c.h.io;
+    let v = c.h.v;
+    let prefix = "nazm-journal ";
+    let keys = strs_new();
+    let lines = strs_new();
+    let owners = strs_new();
+    for line in text_lines(stdout) {
+        if text_starts_with(line, prefix) {
+            let r = str_slice(line, str_len(prefix), str_len(line));
+            let sp = match text_find(r, " ") {
+                Option.Some(value: i) => i,
+                Option.None() => 0 - 1,
+            };
+            if sp == 16 {
+                let key = str_slice(r, 0, 16);
+                if all_hex(key) {
+                    strs_push(owners, key);
+                    strs_push(lines, str_slice(r, 17, str_len(r)));
+                    let mut seen = false;
+                    for k in keys {
+                        if k == key {
+                            seen = true;
+                        }
+                    }
+                    if !seen {
+                        strs_push(keys, key);
+                    }
+                }
+            }
+        }
+    }
+    // Campaigns in key order, as the reference's ordered map walks them.
+    let order = strs_new();
+    for k in keys {
+        strs_push(order, k);
+    }
+    let n = strs_len(order);
+    for i in 0..n {
+        for k in 0..(n - 1 - i) {
+            if text_compare(strs_get(order, k), strs_get(order, k + 1)) > 0 {
+                let a = strs_get(order, k);
+                let b = strs_get(order, k + 1);
+                strs_set(order, k, b);
+                strs_set(order, k + 1, a);
+            }
+        }
+    }
+    for key in order {
+        let dir = str_vouch(f"{c.repo}/target/{campaigns}/{key}");
+        match dir_create_all(io, dir) {
+            Result.Ok(value: x) => {
+                let path = str_vouch(f"{dir}/journal.jsonl");
+                let fresh = !file_exists_at(io, path);
+                match file_append(io, path) {
+                    Result.Ok(value: f) => {
+                        let mut written = 0;
+                        let mut first = true;
+                        for k in 0..strs_len(owners) {
+                            if strs_get(owners, k) == key {
+                                let l = strs_get(lines, k);
+                                // The header opens a fresh file and is otherwise already there.
+                                let skip = first && !fresh && text_contains(l, "\"kind\":\"campaign\"");
+                                first = false;
+                                if !skip {
+                                    match file_write_str(f, f"{l}\n") {
+                                        Result.Ok(value: w) => { written = written + 1; },
+                                        Result.Err(error: e) => {},
+                                    };
+                                }
+                            }
+                        }
+                        file_sync(f);
+                        file_close(f);
+                        say(io, f"contained: {written} journal line(s) for campaign {key} kept at {path}");
+                    },
+                    Result.Err(error: e) => { say(io, f"contained: cannot open {path}"); },
+                };
+            },
+            Result.Err(error: e) => { say(io, f"contained: cannot create {dir}"); },
+        };
+    }
+    0
+}
+
+/// `contained cache` lists the harness-owned verification caches; `contained cache clear` removes them.
+fn contained_cache(c: Ctx, what: Str) -> Int ! { io, spawn } {
+    let io = c.h.io;
+    if what == "" || what == "list" {
+        let owned = cache_list(c.h);
+        if vec_len(owned) == 0 {
+            out_line(io, "no verification cache");
+        }
+        for i in 0..vec_len(owned) {
+            let v = vec_get(owned, i);
+            out_line(io, f"{v.name}  namespace {v.namespace}  key {v.key}  created {v.created}");
+        }
+        return 0;
+    }
+    if what == "clear" {
+        for n in cache_clear(c.h) {
+            out_line(io, f"removed {n}");
+        }
+        return 0;
+    }
+    say(io, f"contained cache: `list` or `clear`, not `{what}`");
+    1
+}
+
+struct Case {
+    name: Str,
+    script: Str,
+    want: Str,
+    proves: Str,
+}
+
+fn case(name: Str, script: Str, want: Str, proves: Str) -> Case ! {} {
+    Case(name: name, script: script, want: want, proves: proves)
+}
+
+fn probe_cases() -> Vec[Case] ! {} {
+    let cases = vec_new[Case]();
+    vec_push(cases, case("limits-visible", "cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.swap.max /sys/fs/cgroup/pids.max", "passed", "the cgroup reports the caps that were asked for"));
+    // Allocates in chunks and memsets every one: a shell pipeline would only stream through small
+    // buffers and prove nothing. 400 MiB against a 256 MiB cap stays safe on the host even if enforcement fails.
+    vec_push(cases, case("memory", "printf '%s' '#include <stdlib.h>\n#include <string.h>\n#include <stdio.h>\nint main(void){for(long i=0;i<50;i++){char*p=malloc(8L<<20);if(!p){printf(\"MALLOC_FAILED %ld\\n\",i);return 3;}memset(p,(int)(i&0xff),8L<<20);}printf(\"COMPLETED\\n\");return 0;}' > /scratch/m.c && clang -O0 -o /scratch/m /scratch/m.c && /scratch/m", "memory-limit", "allocation past the cap is refused, not merely reclaimed"));
+    vec_push(cases, case("deadline", "sleep 120", "timeout", "a workload outliving its deadline is killed at the container"));
+    vec_push(cases, case("output", "i=0; while [ $i -lt 400 ]; do head -c 65536 /dev/zero | tr '\\0' 'x'; i=$((i+1)); done", "output-overflow", "a flood is drained and capped, not buffered"));
+    vec_push(cases, case("scratch", "dd if=/dev/zero of=/scratch/f bs=1M count=64 2>&1 | tail -1; test ! -s /scratch/f || test $(stat -c%s /scratch/f) -lt 67108864", "passed", "the tmpfs refuses to grow past its size"));
+    vec_push(cases, case("descendant", "(sleep 120 &) ; echo detached; sleep 120", "timeout", "a detached grandchild dies with the container"));
+    cases
+}
+
+fn probe_bounds() -> Bounds ! {} {
+    Bounds(memory_mb: 256, milli_cpus: 1000, profile: p1(), pids: 64, storage_gb: 1, scratch_mb: 16, fsize_bytes: 4194304, deadline_secs: 20, output_cap: 262144, has_export: false, export: no_export(), has_cache: false, cache: "")
+}
+
+/// Verifies that each limit is real on this daemon before anything depends on it. Every probe's own
+/// maximum is small, so it stays safe even if enforcement silently fails.
+fn contained_probe(c: Ctx, print_argv: Bool) -> Int ! { io, spawn } {
+    let io = c.h.io;
+    let tight = probe_bounds();
+    let cases = probe_cases();
+    if print_argv {
+        for i in 0..vec_len(cases) {
+            let k = vec_get(cases, i);
+            out_line(io, "--");
+            print_plan(c, f"probe-{k.name}", shell(k.script), tight);
+        }
+        return 0;
+    }
+    let mut failures = 0;
+    out_line(io, "contained probe — verifying each bound is real before anything relies on it\n");
+    for i in 0..vec_len(cases) {
+        let k = vec_get(cases, i);
+        let r = run_container(c, f"probe-{k.name}", shell(k.script), tight);
+        scratch_remove(c.h, r.scratch);
+        if r.outcome.word == "unavailable" {
+            say(io, f"REFUSED — containment is unavailable: {r.outcome.why}");
+            return 1;
+        }
+        let ok = r.outcome.word == k.want;
+        if !ok {
+            failures = failures + 1;
+        }
+        let verdict = if ok { "ok" } else { "MISMATCH" };
+        out_line(io, f"  {text_pad_right(verdict, 11, " ")} {text_pad_right(k.name, 16, " ")} expected {text_pad_right(k.want, 16, " ")} {tenths(r.elapsed_ms)}s  {k.proves}");
+        if !ok {
+            out_line(io, f"      got {r.outcome.word} (stdout {r.stdout_bytes} B, stderr {r.stderr_bytes} B)");
+        }
+    }
+    let left = survivors(c.h);
+    out_line(io, f"\n  survivors after all probes: {left}");
+    if failures == 0 && left == 0 {
+        out_line(io, "  containment verified on this daemon");
+        return 0;
+    }
+    say(io, f"  containment NOT verified: {failures} mismatched, {left} survivors");
+    1
+}
+
+fn host_name(h: Caps) -> Str ! { io, spawn } {
+    let r = run(h, "hostname", strs_new(), "", env_here(h.io));
+    if r.code != 0 {
+        return "";
+    }
+    text_trim(r.stdout)
+}
+
+/// `nzx contained ARGS`: the status to exit with.
+pub fn contained_main(h: Caps, args0: Strs) -> Int ! { io, spawn } {
+    let io = h.io;
+    let v = h.v;
+    let repo = match file_canonical(io, ".") {
+        Result.Ok(value: p) => p,
+        Result.Err(error: e) => {
+            say(io, f"contained: cannot resolve the repository root: {rust_io_error(e)}");
+            return 1;
+        },
+    };
+    let mut args = args0;
+    let mut amd64 = false;
+    if strs_len(args) > 0 && strs_get(args, 0) == "--platform" {
+        if strs_len(args) < 2 || strs_get(args, 1) != "amd64" {
+            say(io, "contained: --platform takes `amd64`; without it the host's own image runs");
+            return 1;
+        }
+        amd64 = true;
+        args = drop_first(args, 2);
+    }
+    let mut chosen = p1();
+    let mut has_chosen = false;
+    if strs_len(args) > 0 && strs_get(args, 0) == "--profile" {
+        let found = if strs_len(args) > 1 { profile_by_name(strs_get(args, 1)) } else { Option[Profile].None() };
+        match found {
+            Option.Some(value: p) => { chosen = p; has_chosen = true; },
+            Option.None() => {
+                say(io, f"contained: --profile is one of {str_join(profile_all(), ", ")}");
+                return 1;
+            },
+        };
+        args = drop_first(args, 2);
+    }
+    let mut explicit_cache = "";
+    if strs_len(args) > 0 && strs_get(args, 0) == "--cache" {
+        if strs_len(args) > 1 && strs_get(args, 1) == "bench" {
+            explicit_cache = "bench";
+            args = drop_first(args, 2);
+        } else {
+            say(io, "contained: --cache takes `bench`; the other namespaces are the workloads' own");
+            return 1;
+        }
+    }
+    let mut print_argv = false;
+    if strs_len(args) > 0 && strs_get(args, 0) == "--print-argv" {
+        print_argv = true;
+        args = drop_first(args, 1);
+    }
+    let workload = if strs_len(args) > 0 { strs_get(args, 0) } else { "" };
+    let profile = if has_chosen { chosen } else { default_profile(workload) };
+    let image = if amd64 { IMAGE_AMD64 } else { IMAGE };
+    let c = Ctx(h: h, repo: repo, image: image, amd64: amd64, host: host_name(h));
+    let b0 = bounds_with_profile(bounds_default(), profile);
+
+    if workload == "probe" {
+        return contained_probe(c, print_argv);
+    }
+    if workload == "cache" {
+        if print_argv {
+            say(io, "contained: --print-argv takes a workload that runs a container");
+            return 1;
+        }
+        return contained_cache(c, if strs_len(args) > 1 { strs_get(args, 1) } else { "" });
+    }
+    let plan = match build_plan(c, args, profile, b0, print_argv) {
+        Result.Ok(value: p) => p,
+        Result.Err(error: m) => { say(io, m); return 1; },
+    };
+    let name = plan.name;
+    let mut b = plan.bounds;
+    // The persistent verification target, for the workloads that build the workspace and are judged
+    // on it. A benchmark, a release and an arbitrary `run` never share it.
+    let own_ns = cache_namespace(name);
+    let ns = if str_len(own_ns) > 0 { own_ns } else { explicit_cache };
+    if str_len(ns) > 0 {
+        let prepared = if print_argv {
+            // Named, not created: printing the plan changes nothing on the daemon.
+            match cache_fields(h, repo, image) {
+                Result.Ok(value: f) => Result[Str, Str].Ok(value: cache_volume(ns, cache_key(f))),
+                Result.Err(error: e) => Result[Str, Str].Err(error: e),
+            }
+        } else {
+            cache_ensure(h, repo, ns, image)
+        };
+        match prepared {
+            Result.Ok(value: vol) => { b = bounds_with_cache(b, vol); },
+            Result.Err(error: e) => {
+                say(io, f"contained: cannot prepare the verification cache: {e}");
+                return 1;
+            },
+        };
+    }
+    // An emulated image runs several times slower than the host's own; its deadline is four times
+    // the native one, so a slow run is not mistaken for a hung one (Gate 3).
+    if amd64 {
+        b = bounds_with_deadline(b, b.deadline_secs * 4);
+        say(io, "contained: linux/amd64 under emulation; the deadline is four times the native one");
+    }
+    if print_argv {
+        print_plan(c, name, plan.argv, b);
+        return 0;
+    }
+    say(io, f"contained: {name} — {b.memory_mb} MiB memory (swap equal), {b.milli_cpus / 1000}.{b.milli_cpus % 1000 / 100} CPU, {b.pids} pids, {b.storage_gb} GiB disk, {b.deadline_secs} s deadline");
+    let r = run_container(c, name, plan.argv, b);
+    if name == "mutate" || name == "mutate-seed" {
+        let kept = if r.stdout_bytes < b.output_cap { r.stdout_bytes } else { b.output_cap };
+        if str_len(r.out_spool) > 0 && kept > 0 {
+            match file_read_all(io, r.out_spool) {
+                Result.Ok(value: bytes) => { collect_journal(c, bytes_to_str(bytes), if name == "mutate" { "mutation-campaigns-nz" } else { "mutation-campaigns" }); },
+                Result.Err(error: e) => {},
+            };
+        }
+    }
+    if str_len(r.out_spool) > 0 {
+        let kept = if r.stdout_bytes < b.output_cap { r.stdout_bytes } else { b.output_cap };
+        copy_out(io, r.out_spool, kept, file_stdout(io));
+        let kept_err = if r.stderr_bytes < b.output_cap { r.stderr_bytes } else { b.output_cap };
+        copy_out(io, r.err_spool, kept_err, file_stderr(io));
+    }
+    scratch_remove(h, r.scratch);
+    say(io, f"\ncontained: {name} {r.outcome.word} in {tenths(r.elapsed_ms)}s — stdout {r.stdout_bytes} B, stderr {r.stderr_bytes} B, oom_killed={r.oom_killed}, survivors={survivors(h)}");
+    let w = r.outcome.word;
+    if w == "passed" {
+        return 0;
+    }
+    if w == "unavailable" {
+        // Explicit refusal. A silent skip would report green on no evidence.
+        say(io, f"contained: REFUSED — containment is unavailable: {r.outcome.why}");
+        return 1;
+    }
+    if w == "failed" && r.outcome.code == 124 && (name == "mutate" || name == "mutate-seed") {
+        say(io, f"contained: {name} ended INCOMPLETE — the session deadline passed with a mutant still in flight. That mutant was restored with the container and never journaled, so it has no verdict and runs again. Continue with `nzx contained {name} --resume` and the same selection.");
+        return 3;
+    }
+    if w == "failed" && r.outcome.code == 3 && (name == "mutate" || name == "mutate-seed") {
+        say(io, f"contained: {name} ended INCOMPLETE — the session budget ran out before every selected mutant was finalized. Nothing about the rest is established. Continue with `nzx contained {name} --resume` and the same selection.");
+        return 3;
+    }
+    if w == "tool-failure" || w == "export-refused" {
+        say(io, f"contained: {name} did not pass ({w})");
+        return 1;
+    }
+    say(io, f"contained: {name} did not pass ({w})");
+    1
+}
+
+fn drop_first(xs: Strs, n: Int) -> Strs ! {} {
+    let out = strs_new();
+    let mut i = n;
+    while i < strs_len(xs) {
+        strs_push(out, strs_get(xs, i));
+        i = i + 1;
+    }
+    out
+}
+
+/// Whether `args` ask for a plan only (`--print-argv` among the options before the workload).
+pub fn asks_print_argv(args: Strs) -> Bool ! {} {
+    let mut i = 0;
+    while i < strs_len(args) {
+        let a = strs_get(args, i);
+        if a == "--print-argv" {
+            return true;
+        }
+        if a == "--platform" || a == "--profile" || a == "--cache" {
+            i = i + 2;
+        } else {
+            return false;
+        }
+    }
+    false
+}
+
+/// The host-run lock, held for this runner's whole life (question 5; S13.3): both slots of
+/// `host-run`'s state directory, each a file whose kernel lock the process holds until it exits, so
+/// a host stage and a container never overlap by construction and two `nzx contained` never run at
+/// once. `Err` is the refusal `host-stage-running`.
+pub fn hold_host_lock(h: Caps) -> Result[Int, Refusal] ! { io } {
+    let io = h.io;
+    let v = h.v;
+    let dir = state_dir(io);
+    match dir_create_all(io, dir) {
+        Result.Ok(value: n) => {},
+        Result.Err(error: e) => { return Result[Int, Refusal].Err(error: refusal("usage", f"{dir}: {io_error_show(e)}")); },
+    };
+    let slots = words("lock lock-2");
+    for slot in slots {
+        let file = match file_append(io, str_vouch(f"{dir}/{slot}")) {
+            Result.Ok(value: f) => f,
+            Result.Err(error: e) => { return Result[Int, Refusal].Err(error: refusal("usage", f"{dir}: {io_error_show(e)}")); },
+        };
+        let got = match file_try_lock(file, true) {
+            Result.Ok(value: g) => g,
+            Result.Err(error: e) => false,
+        };
+        if !got {
+            return Result[Int, Refusal].Err(error: refusal("host-stage-running", f"a host stage or another `nzx contained` holds the host-run lock ({dir}/{slot}): nothing runs beside a container"));
+        }
+    }
+    Result[Int, Refusal].Ok(value: 0)
+}

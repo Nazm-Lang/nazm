@@ -1,0 +1,281 @@
+// Killers mapped to the Nazm tests, and what one test run says (R8 slice 13, S13.4): the entry
+// split, the mapping, the observation `campaign.rs`'s `observe` makes of a `cargo test` run made of
+// a `nazm test --json` run, and the tier law's `judge` — the same rules, word for word, over the
+// same two kinds of fact.
+//
+// A catalogue killer `{package = "nazm-cli", test = T, name = "FILE::fn"}` maps to the Nazm test
+// `toolchain/harness/cli/FILE.nz`, function `fn`, when that file and function exist and
+// `tests/stays-rust.txt` does not list `FILE::fn`. Any other killer has no mapping. An entry with no
+// mapped killer is `unmapped`: a count, never a verdict; the full tier alone decides it.
+
+use "@std/text"
+use "@std/map"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/procs.nz"
+use "catalogue.nz"
+
+/// Where an entry is decided: the Nazm campaign's (`compiler/`, `library/`, `toolchain/`) or the
+/// seed's (every other file, `crates/`, `xtask/`, `fuzz/`, `scripts/`, `examples/`).
+pub fn is_nazm_entry(file: Str) -> Bool ! {} {
+    text_starts_with(file, "compiler/") || text_starts_with(file, "library/") || text_starts_with(file, "toolchain/")
+}
+
+/// A killer mapped to its Nazm test: the file's stem, the function, the file's path in the tree,
+/// the `--filter` text and the lab the journal shows.
+pub struct Mapped {
+    stem: Str,
+    name: Str,
+    path: Str,
+    filter: Str,
+}
+
+/// The tests that stay Rust, from `stays-rust.txt`'s text: the first word of every line that is
+/// not a comment.
+pub fn stays_of(text: Str) -> Strs ! {} {
+    let out = strs_new();
+    for l in lines(text) {
+        let t = trim_ws(l);
+        if str_len(t) > 0 && !text_starts_with(t, "#") {
+            let w = split_whitespace(t);
+            if strs_len(w) > 0 {
+                strs_push(out, strs_get(w, 0));
+            }
+        }
+    }
+    out
+}
+
+fn strs_has_one(xs: Strs, s: Str) -> Bool ! {} {
+    for x in xs {
+        if x == s {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether `text` declares `fn NAME(` (a test function is `fn NAME(` after `@test`).
+pub fn declares_fn(text: Str, name: Str) -> Bool ! {} {
+    let needle = f"fn {name}(";
+    let mut from = 0;
+    while true {
+        let at = find_from(text, needle, from);
+        if at < 0 {
+            return false;
+        }
+        // A whole word: the byte before `fn` is not an identifier byte.
+        if at == 0 || !is_ident_byte(str_byte(text, at - 1)) {
+            return true;
+        }
+        from = at + 1;
+    }
+    false
+}
+
+/// The killers of an entry that map, in the entry's order, each once. `files` caches each cli
+/// file's text by stem (an empty text for one that does not exist).
+pub fn map_killers(h: Caps, root: Str, killers: Vec[Killer], stays: Strs, files: StrMap[Str]) -> Vec[Mapped] ! { io } {
+    let out = vec_new[Mapped]();
+    for k in killers {
+        if k.package != "nazm-cli" {
+            continue;
+        }
+        let at = find(k.name, "::");
+        if at <= 0 {
+            continue;
+        }
+        let stem = str_slice(k.name, 0, at);
+        let fn_name = str_slice(k.name, at + 2, str_len(k.name));
+        if str_len(fn_name) == 0 || strs_has_one(stays, k.name) {
+            continue;
+        }
+        let path = f"toolchain/harness/cli/{stem}.nz";
+        let text = match map_get(files, stem) {
+            Option.Some(value: t) => t,
+            Option.None() => {
+                let t = match read_text(h, f"{root}/{path}") {
+                    Result.Ok(value: x) => x,
+                    Result.Err(error: e) => "",
+                };
+                map_set(files, stem, t);
+                t
+            },
+        };
+        if str_len(text) == 0 || !declares_fn(text, fn_name) {
+            continue;
+        }
+        let mut dup = false;
+        for m in out {
+            if m.stem == stem && m.name == fn_name {
+                dup = true;
+            }
+        }
+        if !dup {
+            vec_push(out, Mapped(stem: stem, name: fn_name, path: path, filter: k.name));
+        }
+    }
+    out
+}
+
+// --- what a run says ---------------------------------------------------------------------------
+
+/// What one test invocation produced: a fact about a process, not about a mutation. `kind` is
+/// `completed` (it ran to its end and reported `results` tests, `passed` and `failing` of them),
+/// `timed-out` or `failed` (a reason about the runner, not the code; `why`). `crash` is a
+/// signature when fewer tests reported than expected and the output says why.
+pub struct Obs {
+    kind: Str,
+    why: Str,
+    passed: Int,
+    failing: Int,
+    results: Int,
+    crash: Str,
+}
+
+/// What a test died of, if it did: the reference's list, and the heap limit a Nazm-built program
+/// reports (`N0406`).
+pub fn crash_signature(stdout: Str, stderr: Str) -> Str ! {} {
+    let sigs = strs_new();
+    strs_push(sigs, "fatal runtime error: stack overflow");
+    strs_push(sigs, "has overflowed its stack");
+    strs_push(sigs, "memory allocation of");
+    strs_push(sigs, "SIGSEGV");
+    strs_push(sigs, "SIGABRT");
+    strs_push(sigs, "signal: 6");
+    strs_push(sigs, "signal: 11");
+    strs_push(sigs, "the heap limit of");
+    for s in sigs {
+        if text_contains(stderr, s) || text_contains(stdout, s) {
+            return s;
+        }
+    }
+    ""
+}
+
+/// The last line of `s`, trimmed.
+fn last_line(s: Str) -> Str ! {} {
+    let mut last = "";
+    for l in lines(s) {
+        let t = trim_ws(l);
+        if str_len(t) > 0 {
+            last = t;
+        }
+    }
+    last
+}
+
+/// A `nazm test --json` run read as `observe` reads a `cargo test` run. `expected` is how many
+/// tests a complete run reports.
+pub fn observe(f: Finished, expected: Int, broad: Bool) -> Obs ! {} {
+    if f.ended == "timed-out" {
+        return Obs(kind: "timed-out", why: f"deadline passed after {f.ms / 1000}s", passed: 0, failing: 0, results: 0, crash: "");
+    }
+    if f.ended == "spawn-failed" {
+        return Obs(kind: "failed", why: f"could not start: {f.why}", passed: 0, failing: 0, results: 0, crash: "");
+    }
+    if f.ended == "pipe-held" {
+        return Obs(kind: "failed", why: "the process exited but something outside its group still held its output", passed: 0, failing: 0, results: 0, crash: "");
+    }
+    if f.ended == "overflowed" {
+        return Obs(kind: "failed", why: f"output exceeded {OUTPUT_CAP} bytes", passed: 0, failing: 0, results: 0, crash: "");
+    }
+    let mut results = 0;
+    let mut passed = 0;
+    let mut failing = 0;
+    for l in lines(f.stdout) {
+        if text_contains(l, "\"schema\":\"nazm.test/1\"") {
+            results = results + 1;
+            if text_ends_with(l, "\"passed\":true}") {
+                passed = passed + 1;
+            } else {
+                failing = failing + 1;
+            }
+        }
+    }
+    let crash = crash_signature(f.stdout, f.stderr);
+    // A selector's single run that dies reports nothing at all: a crash when the output says so,
+    // exactly as it would be inside the whole suite.
+    if !broad && results < expected && str_len(crash) > 0 {
+        return Obs(kind: "completed", why: "", passed: 0, failing: 0, results: results, crash: crash);
+    }
+    if results == 0 {
+        return Obs(kind: "failed", why: f"the run produced no results at all (status {f.code}). stderr: {last_line(f.stderr)}", passed: 0, failing: 0, results: 0, crash: "");
+    }
+    if finished_signal(f) > 0 {
+        return Obs(kind: "failed", why: f"the test runner was killed by signal {finished_signal(f)}", passed: 0, failing: 0, results: results, crash: "");
+    }
+    Obs(kind: "completed", why: "", passed: passed, failing: failing, results: results, crash: if results < expected { crash } else { "" })
+}
+
+// --- the tier law ------------------------------------------------------------------------------
+
+/// A mutant's verdict: `word` is `caught`, `survived`, `not-injected`, `unusable`, `mutant-crash`,
+/// `runner-error` or `timeout`; `tier` and `by` say what caught it; `failing` how many tests failed.
+pub struct Verdict {
+    word: Str,
+    detail: Str,
+    tier: Int,
+    by: Str,
+    failing: Int,
+}
+
+pub fn verdict_plain(word: Str, detail: Str) -> Verdict ! {} {
+    Verdict(word: word, detail: detail, tier: 0, by: "", failing: 0)
+}
+
+/// Whether a resumed campaign may reuse a verdict: about the mutant, not about the run.
+pub fn is_semantic(word: Str) -> Bool ! {} {
+    word == "caught" || word == "survived" || word == "not-injected" || word == "unusable" || word == "mutant-crash"
+}
+
+/// A step's judgement: `outcome` (`pass`, `fail`, `crash`, `incomplete`, `timeout`) and, when the
+/// step decides the mutant, the verdict (`decided`).
+pub struct Judged {
+    outcome: Str,
+    decided: Bool,
+    verdict: Verdict,
+}
+
+fn passes() -> Judged ! {} {
+    Judged(outcome: "pass", decided: false, verdict: verdict_plain("", ""))
+}
+
+/// One observation, read under the rules of the step it came from. `exact` is a step that names one
+/// test; `tier` and `lab` say where it ran.
+pub fn judge(tier: Int, lab: Str, o: Obs, expected: Int, exact: Bool) -> Judged ! {} {
+    if o.kind == "timed-out" {
+        return Judged(outcome: "timeout", decided: true, verdict: verdict_plain("timeout", f"tier {tier} ({lab}): {o.why}"));
+    }
+    if o.kind == "failed" {
+        return Judged(outcome: "incomplete", decided: true, verdict: verdict_plain("runner-error", f"tier {tier} ({lab}): {o.why}"));
+    }
+    if str_len(o.crash) > 0 && o.results < expected {
+        return Judged(outcome: "crash", decided: true, verdict: verdict_plain("mutant-crash", f"{o.crash}; {expected - o.results} binary(ies) did not report"));
+    }
+    if o.results < expected {
+        return Judged(outcome: "incomplete", decided: true, verdict: verdict_plain("runner-error", f"tier {tier} ({lab}): only {o.results} of {expected} tests reported"));
+    }
+    // A killer is one test. If it selected none, or several, the metadata is not what the plan
+    // says it is, and neither a pass nor a failure means anything.
+    if exact && o.passed + o.failing != 1 {
+        return Judged(outcome: "incomplete", decided: true, verdict: verdict_plain("runner-error", f"tier {tier} ({lab}): an exact killer selected {o.passed + o.failing} tests, not one"));
+    }
+    if o.failing == 0 {
+        return passes();
+    }
+    Judged(outcome: "fail", decided: true, verdict: Verdict(word: "caught", detail: f"tier {tier}: {lab}; {o.failing} test(s) failed", tier: tier, by: lab, failing: o.failing))
+}
+
+/// What one exact killer run says: `passes`, `fails`, or `unclear` for anything that is not exactly
+/// one test reported once.
+pub fn killer_word(o: Obs) -> Str ! {} {
+    if o.kind == "completed" && o.passed == 1 && o.failing == 0 && o.results == 1 {
+        return "passes";
+    }
+    if o.kind == "completed" && o.passed == 0 && o.failing == 1 && o.results == 1 {
+        return "fails";
+    }
+    "unclear"
+}

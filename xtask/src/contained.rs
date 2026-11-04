@@ -648,7 +648,7 @@ pub(crate) fn stale(listed: &[Listed], host: &str, alive: impl Fn(u32) -> bool) 
 
 /// This machine's name, as the supervisor labels record it; empty when it cannot be read, and
 /// then nothing is reaped.
-fn host_name() -> String {
+pub(crate) fn host_name() -> String {
     Command::new("hostname")
         .output()
         .ok()
@@ -731,7 +731,7 @@ fn guarded(argv: &[&str], cached: bool) -> Vec<String> {
 /// The `docker` arguments a contained run is started with — every isolation property in one place,
 /// a pure function a test can read (v1, Q1-A2-07: built inline, the properties held but nothing
 /// asserted them). `container` is the run's name, `pid` and `host` the supervisor's.
-fn run_argv(
+pub(crate) fn run_argv(
     repo: &Path,
     container: &str,
     argv: &[&str],

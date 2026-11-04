@@ -1,0 +1,500 @@
+// What `nazm-bench` does on a host (R8 slice 13, S13.6): the port of `run`, `verify`, `references` and
+// the baseline's path in `xtask/src/bench.rs`. Every command a stage runs is timed with the language's
+// monotonic clock at the finest unit it offers (nanoseconds); the clock is a value a test can replace
+// (`--fake-clock`: each reading one millisecond after the last) so the whole path runs, writes a record
+// and is checked without a single real measurement.
+
+use "@std/text"
+use "@std/file"
+use "@std/env"
+use "@std/time"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "stats.nz"
+use "check.nz"
+use "record.nz"
+use "spawn.nz"
+
+/// How long one command may run: the reference sets none, and a hung child must not hang the run.
+pub const COMMAND_MS: Int = 1800000;
+
+/// The clock every timing reads. A fake one counts a millisecond a reading.
+pub struct Clock {
+    fake: Bool,
+    tick: Ints,
+}
+
+pub fn clock_real() -> Clock ! {} {
+    Clock(fake: false, tick: ints_new())
+}
+
+pub fn clock_fake() -> Clock ! {} {
+    let t = ints_new();
+    ints_push(t, 0);
+    Clock(fake: true, tick: t)
+}
+
+pub fn clock_now(c: Clock, t: TimeCap) -> Int ! {} {
+    if c.fake {
+        let n = ints_get(c.tick, 0) + 1000000;
+        ints_set(c.tick, 0, n);
+        return n;
+    }
+    time_now(t).nanos
+}
+
+/// A command: a program and its arguments.
+pub struct Cmd {
+    program: Str,
+    args: Strs,
+}
+
+pub fn cmd(program: Str, args: Strs) -> Cmd ! {} {
+    Cmd(program: program, args: args)
+}
+
+/// What every program is run with: this process's environment without `NAZM_RESULT_REPORT` (every program
+/// here runs as a user runs it: it prints its answer and ends with status 0).
+pub fn bench_env(io: IoCap) -> Strs ! { io } {
+    env_unset(env_here(io), "NAZM_RESULT_REPORT")
+}
+
+/// A command's standard output then its standard error, trimmed: `output` in the reference.
+pub fn output_of(h: Caps, c: Cmd, env: Strs) -> Str ! { io, spawn } {
+    let r = run_within(h, c.program, c.args, "", env, COMMAND_MS);
+    if r.code == 0 - 1 {
+        return f"could not run: {r.stderr}";
+    }
+    text_trim(f"{r.stdout}{r.stderr}")
+}
+
+/// `once`: the command run once, its time in nanoseconds, or what it wrote to standard error.
+pub fn once(h: Caps, clock: Clock, c: Cmd, env: Strs) -> Result[Int, Str] ! { io, spawn } {
+    let start = clock_now(clock, h.t);
+    let r = run_within(h, c.program, c.args, "", env, COMMAND_MS);
+    let end = clock_now(clock, h.t);
+    if r.code == 0 {
+        return Result[Int, Str].Ok(value: end - start);
+    }
+    if r.code == TIMED_OUT {
+        return Result[Int, Str].Err(error: f"did not finish within {COMMAND_MS / 1000} s");
+    }
+    Result[Int, Str].Err(error: text_trim(r.stderr))
+}
+
+/// `measure`: one untimed warm-up (the first run pays for reading the binary and the source off disk,
+/// which is the filesystem cache's property, not the compiler's; it is discarded and said so), then `runs`.
+pub fn measure(h: Caps, clock: Clock, program: Str, stage: Str, runs: Int, c: Cmd, env: Strs) -> Result[Measurement, Str] ! { io, spawn } {
+    once(h, clock, c, env)?;
+    let times = ints_new();
+    let mut i = 0;
+    while i < runs {
+        ints_push(times, once(h, clock, c, env)?);
+        i = i + 1;
+    }
+    Result[Measurement, Str].Ok(value: measurement(program, stage, times))
+}
+
+/// Where the record and the baseline are written: `NAZM_BENCH_DIR`, else `SRC/bench`.
+pub fn bench_dir(io: IoCap, src: Str) -> Str ! { io } {
+    match env_get(io, "NAZM_BENCH_DIR") {
+        Option.Some(value: d) => if str_len(d) > 0 { d } else { f"{src}/bench" },
+        Option.None() => f"{src}/bench",
+    }
+}
+
+/// Where Cargo put its artefacts: `CARGO_TARGET_DIR`, else `SRC/target`.
+pub fn target_dir(io: IoCap, src: Str) -> Str ! { io } {
+    match env_get(io, "CARGO_TARGET_DIR") {
+        Option.Some(value: d) => if str_len(d) > 0 { d } else { f"{src}/target" },
+        Option.None() => f"{src}/target",
+    }
+}
+
+fn argv(xs: Str) -> Strs ! {} {
+    words(xs)
+}
+
+fn argv_with(xs: Str, tail: Strs) -> Strs ! {} {
+    let a = words(xs);
+    for t in tail {
+        strs_push(a, t);
+    }
+    a
+}
+
+fn one(x: Str) -> Strs ! {} {
+    let a = strs_new();
+    strs_push(a, x);
+    a
+}
+
+/// The five stages of a program, in order: check, build `-O0`, build `-O2`, `run --interpret`, the native
+/// `-O2` executable it built.
+pub fn stage_names() -> Strs ! {} {
+    words("check build-O0 build-O2 interpret native-O2")
+}
+
+pub fn stage_cmd(nazm: Str, stage: Str, source: Str, exe: Str) -> Cmd ! {} {
+    if stage == "check" { return cmd(nazm, argv_with("check", one(source))); }
+    if stage == "build-O0" { return cmd(nazm, argv_with("build", build_tail(source, exe, "0"))); }
+    if stage == "build-O2" { return cmd(nazm, argv_with("build", build_tail(source, exe, "2"))); }
+    if stage == "interpret" { return cmd(nazm, argv_with("run --interpret", one(source))); }
+    cmd(exe, strs_new())
+}
+
+fn build_tail(source: Str, exe: Str, level: Str) -> Strs ! {} {
+    let a = strs_new();
+    strs_push(a, source);
+    strs_push(a, "-o");
+    strs_push(a, exe);
+    strs_push(a, "--opt-level");
+    strs_push(a, level);
+    a
+}
+
+/// The names of `SRC/bench/programs/*.nz`, sorted, without the extension.
+pub fn program_names(h: Caps, src: Str) -> Result[Strs, Str] ! { io } {
+    let listed = match dir_list(h.io, f"{src}/bench/programs") {
+        Result.Ok(value: l) => l,
+        Result.Err(error: e) => { return Result[Strs, Str].Err(error: f"no programs in {src}/bench/programs"); },
+    };
+    let out = strs_new();
+    for n in listed {
+        if text_ends_with(n, ".nz") {
+            strs_push(out, str_slice(n, 0, str_len(n) - 3));
+        }
+    }
+    if strs_len(out) == 0 {
+        return Result[Strs, Str].Err(error: f"no programs in {src}/bench/programs");
+    }
+    Result[Strs, Str].Ok(value: out)
+}
+
+/// Every program must produce its recorded answer, interpreted and compiled, before anything is timed:
+/// a benchmark whose compiled form was folded away, or whose two implementations quietly disagree, still
+/// produces a number, and the number is the thing people quote. A program with no `.expected` beside it
+/// is refused, not skipped. `Err` names the first that fails.
+pub fn verify(h: Caps, nazm: Str, scratch: Str, src: Str, names: Strs, env: Strs) -> Result[Int, Str] ! { io, spawn } {
+    for name in names {
+        let path = f"{src}/bench/programs/{name}.nz";
+        let expected_path = f"{src}/bench/programs/{name}.expected";
+        let expected = match read_text(h, expected_path) {
+            Result.Ok(value: t) => text_trim(t),
+            Result.Err(error: e) => {
+                return Result[Int, Str].Err(error: f"{path} has no `.expected` beside it. Every benchmark states its answer, so that a compiled form which folded away cannot be timed as though it had run.");
+            },
+        };
+        let interpreted = output_of(h, stage_cmd(nazm, "interpret", path, ""), env);
+        if interpreted != expected {
+            return Result[Int, Str].Err(error: f"{name}: `nazm run` produced {debug_quote(interpreted)}, expected {debug_quote(expected)}");
+        }
+        let exe = f"{scratch}/{name}";
+        let built = run_within(h, nazm, stage_cmd(nazm, "build-O2", path, exe).args, "", env, COMMAND_MS);
+        if built.code != 0 {
+            return Result[Int, Str].Err(error: f"{name}: `nazm build` refused it: {text_trim(built.stderr)}");
+        }
+        let native = output_of(h, cmd(exe, strs_new()), env);
+        if native != expected {
+            return Result[Int, Str].Err(error: f"{name}: the -O2 executable produced {debug_quote(native)}, expected {debug_quote(expected)}");
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// `s` the way Rust's `{:?}` writes a string.
+pub fn debug_quote(s: Str) -> Str ! {} {
+    let out = strs_new();
+    strs_push(out, "\"");
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b == 34 { strs_push(out, "\\\""); }
+        else if b == 92 { strs_push(out, "\\\\"); }
+        else if b == 10 { strs_push(out, "\\n"); }
+        else if b == 9 { strs_push(out, "\\t"); }
+        else if b == 13 { strs_push(out, "\\r"); }
+        else { strs_push(out, str_slice(s, i, i + 1)); }
+        i = i + 1;
+    }
+    strs_push(out, "\"");
+    str_join(out, "")
+}
+
+fn stem(file: Str) -> Str ! {} {
+    let r = rfind(file, ".");
+    if r < 0 { file } else { str_slice(file, 0, r) }
+}
+
+fn extension(file: Str) -> Str ! {} {
+    let r = rfind(file, ".");
+    if r < 0 { "" } else { str_slice(file, r + 1, str_len(file)) }
+}
+
+/// Time the external references, where the toolchain for one is installed. Each must print what the Nazm
+/// program it mirrors prints (the same `.expected`): a reference that computes something else is not a
+/// reference, and is recorded as not measured, with what it printed.
+pub fn references_run(h: Caps, clock: Clock, src: Str, scratch: Str, runs: Int, env: Strs, absent: Vec[Absent], only: Str) -> Vec[Measurement] ! { io, spawn } {
+    let out = vec_new[Measurement]();
+    let dir = f"{src}/bench/reference";
+    let sources = match dir_list(h.io, dir) {
+        Result.Ok(value: l) => l,
+        Result.Err(error: e) => { return out; },
+    };
+    for file in sources {
+        let name = stem(file);
+        if str_len(only) > 0 && name != only { continue; }
+        let source = f"{dir}/{file}";
+        let expected = match read_text(h, f"{src}/bench/programs/{name}.expected") {
+            Result.Ok(value: t) => text_trim(t),
+            Result.Err(error: e) => {
+                eprintln(f"bench: {name} has no Nazm counterpart to be a reference to");
+                continue;
+            },
+        };
+        let ext = extension(file);
+        let mut stage = "";
+        let mut command = cmd("", strs_new());
+        let mut renv = env;
+        if ext == "c" {
+            let exe = f"{scratch}/{name}.c.out";
+            let built = run_within(h, "clang", argv_with("-O2 -o", two(exe, source)), "", env, COMMAND_MS);
+            if built.code != 0 {
+                println("bench: clang is unavailable; the C reference was not measured");
+                vec_push(absent, Absent(stage: "reference-c", why: "clang is not installed"));
+                continue;
+            }
+            stage = "reference-c";
+            command = cmd(exe, strs_new());
+        } else if ext == "rs" {
+            let exe = f"{scratch}/{name}.rs.out";
+            let built = run_within(h, "rustc", argv_with("-O -C overflow-checks=on -o", two(exe, source)), "", env, COMMAND_MS);
+            if built.code != 0 {
+                println("bench: rustc is unavailable; the Rust reference was not measured");
+                vec_push(absent, Absent(stage: "reference-rust", why: "rustc could not build it"));
+                continue;
+            }
+            stage = "reference-rust";
+            command = cmd(exe, strs_new());
+        } else if ext == "go" {
+            let exe = f"{scratch}/{name}.go.out";
+            // Go's caches in the scratch directory: nothing written outside it.
+            let genv = env_set(env_set(env_set(env_set(env, "GOCACHE", f"{scratch}/gocache"), "GOPATH", f"{scratch}/gopath"), "GOFLAGS", "-mod=mod"), "GOTOOLCHAIN", "local");
+            let built = run_within(h, "go", argv_with("build -o", two(exe, source)), "", genv, COMMAND_MS);
+            if built.code != 0 {
+                println("bench: go is unavailable; the Go reference was not measured");
+                vec_push(absent, Absent(stage: "reference-go", why: "go is not installed"));
+                continue;
+            }
+            stage = "reference-go";
+            command = cmd(exe, strs_new());
+        } else if ext == "py" {
+            let probe = run_within(h, "python3", one("--version"), "", env, COMMAND_MS);
+            if probe.code != 0 {
+                println("bench: python3 is unavailable; that reference was not measured");
+                vec_push(absent, Absent(stage: "reference-python", why: "python3 is not installed"));
+                continue;
+            }
+            stage = "reference-python";
+            command = cmd("python3", one(source));
+        } else {
+            continue;
+        }
+        let got = output_of(h, command, renv);
+        if got != expected {
+            eprintln(f"bench: the {stage} for {name} produced {debug_quote(got)}, expected {debug_quote(expected)} — it is not computing the same thing and was not measured");
+            vec_push(absent, Absent(stage: stage, why: f"it printed {debug_quote(got)}, not {debug_quote(expected)}"));
+            continue;
+        }
+        match measure(h, clock, name, stage, runs, command, renv) {
+            Result.Ok(value: m) => { vec_push(out, m); 0 },
+            Result.Err(error: e) => { eprintln(f"bench: {name}/{stage} failed: {e}"); 0 },
+        };
+    }
+    out
+}
+
+fn two(a: Str, b: Str) -> Strs ! {} {
+    let r = strs_new();
+    strs_push(r, a);
+    strs_push(r, b);
+    r
+}
+
+// --- the host -----------------------------------------------------------------------------------
+
+/// A command's standard output, trimmed; `unknown` when it could not be started (`shell` in the
+/// reference).
+pub fn shell(h: Caps, program: Str, args: Strs) -> Str ! { io, spawn } {
+    let r = run_within(h, program, args, "", env_here(h.io), 60000);
+    if r.code == 0 - 1 || r.code == TIMED_OUT {
+        return "unknown";
+    }
+    text_trim(r.stdout)
+}
+
+fn file_or_empty(h: Caps, path: Str) -> Str ! { io } {
+    match read_text(h, path) {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => "",
+    }
+}
+
+fn line_value(text: Str, key: Str) -> Str ! {} {
+    for l in text_lines(text) {
+        if text_starts_with(l, key) {
+            return match text_find(l, ":") {
+                Option.Some(value: at) => text_trim(str_slice(l, at + 1, str_len(l))),
+                Option.None() => "",
+            };
+        }
+    }
+    ""
+}
+
+/// The CPU model the way the reference reads it: `/proc/cpuinfo`'s `model name`, else the implementer and
+/// part of an Arm core, else `sysctl` where there is no `/proc`.
+pub fn cpu_model(h: Caps) -> Str ! { io, spawn } {
+    let info = file_or_empty(h, "/proc/cpuinfo");
+    if str_len(info) == 0 {
+        return shell(h, "sysctl", words("-n machdep.cpu.brand_string"));
+    }
+    let name = line_value(info, "model name");
+    if str_len(name) > 0 { return name; }
+    f"implementer {line_value(info, "CPU implementer")} part {line_value(info, "CPU part")}"
+}
+
+/// The logical CPUs this process may use: the host's count, and where a cgroup caps the quota, no more
+/// than the quota rounded up (what `available_parallelism` answers in the reference).
+pub fn cpu_count(h: Caps) -> Int ! { io, spawn } {
+    let mut n = match text_parse_int(shell(h, "nproc", strs_new())) {
+        Result.Ok(value: k) => k,
+        Result.Err(error: e) => match text_parse_int(shell(h, "getconf", one("_NPROCESSORS_ONLN"))) {
+            Result.Ok(value: k) => k,
+            Result.Err(error: e2) => 0,
+        },
+    };
+    let quota = text_trim(file_or_empty(h, "/sys/fs/cgroup/cpu.max"));
+    let w = words(quota);
+    if strs_len(w) == 2 && strs_get(w, 0) != "max" {
+        match text_parse_int(strs_get(w, 0)) {
+            Result.Ok(value: q) => match text_parse_int(strs_get(w, 1)) {
+                Result.Ok(value: period) => {
+                    if period > 0 {
+                        let cap = (q + period - 1) / period;
+                        if cap >= 1 && (n == 0 || cap < n) { n = cap; }
+                    }
+                    0
+                },
+                Result.Err(error: e) => 0,
+            },
+            Result.Err(error: e) => 0,
+        };
+    }
+    n
+}
+
+/// The host's memory in bytes, `-1` when it does not say.
+pub fn memory_bytes(h: Caps) -> Int ! { io, spawn } {
+    let m = line_value(file_or_empty(h, "/proc/meminfo"), "MemTotal");
+    let kb = words(m);
+    if strs_len(kb) > 0 {
+        return match text_parse_int(strs_get(kb, 0)) {
+            Result.Ok(value: n) => n * 1024,
+            Result.Err(error: e) => 0 - 1,
+        };
+    }
+    match text_parse_int(shell(h, "sysctl", words("-n hw.memsize"))) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => 0 - 1,
+    }
+}
+
+/// What a record states about the host and the tree.
+pub fn info_of(h: Caps, src: Str, runs: Int) -> Info ! { io, spawn } {
+    let clang = shell(h, "clang", one("--version"));
+    let clang_lines = text_lines(clang);
+    let first = if strs_len(clang_lines) > 0 { strs_get(clang_lines, 0) } else { "" };
+    Info(runs: runs, host: shell(h, "uname", one("-sm")), cpus: cpu_count(h), cpu_model: cpu_model(h), memory_bytes: memory_bytes(h), kernel: shell(h, "uname", one("-r")), rustc: shell(h, "rustc", one("--version")), clang: first, commit: shell(h, "git", argv_with("-C", two(src, "rev-parse HEAD"))), clean: str_len(shell(h, "git", argv_with("-C", two(src, "status --porcelain")))) == 0)
+}
+
+/// The baseline belonging to this machine: `baseline.json` where it was recorded on this host, else
+/// `baseline-<host>.json`, so that two hosts never overwrite each other's.
+pub fn baseline_path(h: Caps, dir: Str) -> Str ! { io, spawn } {
+    let host = shell(h, "uname", one("-sm"));
+    let legacy = f"{dir}/baseline.json";
+    match read_text(h, legacy) {
+        Result.Ok(value: t) => {
+            if baseline_field(t, "host") == host {
+                return legacy;
+            }
+        },
+        Result.Err(error: e) => { 0 },
+    };
+    let slug = strs_new();
+    let mut i = 0;
+    while i < str_len(host) {
+        let b = str_byte(host, i);
+        if (b >= 97 && b <= 122) || (b >= 48 && b <= 57) {
+            strs_push(slug, str_slice(host, i, i + 1));
+        } else if b >= 65 && b <= 90 {
+            strs_push(slug, str_slice(text_to_lower(host), i, i + 1));
+        } else {
+            strs_push(slug, "-");
+        }
+        i = i + 1;
+    }
+    f"{dir}/baseline-{str_join(slug, "")}.json"
+}
+
+/// Under a memory ceiling it cannot exceed: `NAZM_CONTAINED=1` and a cgroup v2 `memory.max` that is a
+/// number above zero (the variable alone is a declaration; on macOS there is no cgroup).
+pub fn under_ceiling(h: Caps) -> Bool ! { io } {
+    let declared = match env_get(h.io, "NAZM_CONTAINED") {
+        Option.Some(value: v) => v == "1",
+        Option.None() => false,
+    };
+    if !declared { return false; }
+    match text_parse_int(text_trim(file_or_empty(h, "/sys/fs/cgroup/memory.max"))) {
+        Result.Ok(value: n) => n > 0,
+        Result.Err(error: e) => false,
+    }
+}
+
+// --- the tables ---------------------------------------------------------------------------------
+
+fn pad_right(s: Str, w: Int) -> Str ! {} {
+    text_pad_right(s, w, " ")
+}
+
+pub fn render_table(ms: Vec[Measurement]) -> Str ! {} {
+    let out = strs_new();
+    let mut width = 20;
+    let mut first = true;
+    for m in ms {
+        let k = str_len(key(m));
+        if first || k > width { width = k; first = false; }
+    }
+    strs_push(out, f"\n  {pad_right("", width)}  {text_pad_left("min ms", 10, " ")}  {text_pad_left("median ms", 10, " ")}\n");
+    for m in ms {
+        strs_push(out, f"  {pad_right(key(m), width)}  {text_pad_left(ms1(us_of(m_min(m))), 10, " ")}  {text_pad_left(ms1(us_of(m_median(m))), 10, " ")}\n");
+    }
+    str_join(out, "")
+}
+
+pub fn render_memory(mem: Vec[Memory]) -> Str ! {} {
+    let out = strs_new();
+    let mut width = 20;
+    let mut first = true;
+    for m in mem {
+        let k = str_len(m.program) + str_len(m.stage) + 1;
+        if first || k > width { width = k; first = false; }
+    }
+    strs_push(out, f"\n  {pad_right("peak memory", width)}  {text_pad_left("bytes", 12, " ")}\n");
+    for m in mem {
+        let shown = if m.peak < 0 { "not measured" } else { int_to_str(m.peak) };
+        strs_push(out, f"  {pad_right(f"{m.program}/{m.stage}", width)}  {text_pad_left(shown, 12, " ")}\n");
+    }
+    str_join(out, "")
+}

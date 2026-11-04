@@ -1,0 +1,76 @@
+case quiet
+1> \nbench: nothing slower than the baseline by more than 25% and 5 ms
+exit 0
+case a-regression
+2> slower: sieve/native-O2: 10.0 -> 20.0 ms
+2> \nbench: 1 measurement(s) slower than the baseline by more than 25% and 5 ms
+exit 1
+case moved-less-than-the-floor
+1> \nbench: nothing slower than the baseline by more than 25% and 5 ms
+exit 0
+case moved-exactly-the-floor-up
+2> slower: sieve/native-O2: 10.0 -> 15.0 ms
+2> \nbench: 1 measurement(s) slower than the baseline by more than 25% and 5 ms
+exit 1
+case moved-exactly-the-floor-down
+1> faster: sieve/native-O2: 15.0 -> 10.0 ms
+1> \nbench: nothing slower than the baseline by more than 25% and 5 ms
+exit 0
+case an-improvement
+1> faster: sieve/build-O2: 20.0 -> 10.0 ms
+1> \nbench: nothing slower than the baseline by more than 25% and 5 ms
+exit 0
+case near-zero-is-not-gated
+1> \nbench: nothing slower than the baseline by more than 25% and 5 ms
+exit 0
+case moved-little-in-ratio
+1> \nbench: nothing slower than the baseline by more than 25% and 5 ms
+exit 0
+case ratio-exactly-at-the-tolerance
+1> \nbench: nothing slower than the baseline by more than 25% and 5 ms
+exit 0
+case ratio-just-past-the-tolerance
+2> slower: arith/interpret: 100.0 -> 126.0 ms
+2> \nbench: 1 measurement(s) slower than the baseline by more than 25% and 5 ms
+exit 1
+case an-improvement-exactly-at-the-tolerance
+1> \nbench: nothing slower than the baseline by more than 25% and 5 ms
+exit 0
+case an-improvement-just-past-the-tolerance
+1> faster: arith/interpret: 100.0 -> 74.0 ms
+1> \nbench: nothing slower than the baseline by more than 25% and 5 ms
+exit 0
+case in-the-run-and-not-the-baseline
+1> bench: strings/check is not in the baseline
+1> \nbench: nothing slower than the baseline by more than 25% and 5 ms
+exit 0
+case in-the-baseline-and-not-the-run
+1> bench: gone/check is in the baseline and was not measured
+1> bench: gone/native-O2 is in the baseline and was not measured
+1> \nbench: nothing slower than the baseline by more than 25% and 5 ms
+exit 0
+case a-baseline-of-zero-is-skipped
+1> \nbench: nothing slower than the baseline by more than 25% and 5 ms
+exit 0
+case the-first-version-of-the-record
+2> slower: sieve/native-O2: 2.5 -> 20.0 ms
+2> \nbench: 1 measurement(s) slower than the baseline by more than 25% and 5 ms
+exit 1
+case the-median-is-the-lower-middle
+1> \nbench: nothing slower than the baseline by more than 25% and 5 ms
+exit 0
+case several-at-once
+1> bench: e/check is not in the baseline
+1> faster: c/check: 50.0 -> 20.0 ms
+2> slower: a/check: 10.0 -> 30.0 ms
+2> slower: d/check: 50.0 -> 90.0 ms
+2> \nbench: 2 measurement(s) slower than the baseline by more than 25% and 5 ms
+exit 1
+case a-line-that-is-not-a-number
+1> bench: sieve/native-O2 is not in the baseline
+1> \nbench: nothing slower than the baseline by more than 25% and 5 ms
+exit 0
+case an-empty-baseline
+1> bench: sieve/native-O2 is not in the baseline
+1> \nbench: nothing slower than the baseline by more than 25% and 5 ms
+exit 0
