@@ -1485,3 +1485,30 @@ for in-process libFuzzer is accepted, never shipped, as `fuzz/cov.c` is today.
 **Run.** `cargo xtask contained --profile p4t4 selfbuild backend=llvm`, aarch64 Linux container, 4 CPU, 4096 MiB, heap limit 2G per built program: passed, 1140.6 s wall clock (not a measurement), `oom_killed=false`. Stages 1, 2, 3 each built the 9 programs; stage 0 equals stage 1 for `nazm`, `pl`, `cg`; stage 1 vs 2 and 2 vs 3: 9 of 9 identical, 0 differ; Core IR 9 documents identical to the reference's; 66 corpus programs built by stage 3 agree with the seed's builds, 0 not built; 68 programs run by stage 3's interpreter as by the seed's; `nazm-check` byte for byte (16 gates ok); the front end built with a 256 MiB heap stopped with N0406. Largest step per stage: stage 1 to 3 `nazm build` 1506 to 1507 MiB peak resident; seed's `nazm` build 1217 MiB.
 
 **Shortfalls.** (1) The released set is the nine programs of `selfbuild.sh`; it contains `nazm`, `pl` (`nazm-pipeline`), `cg` (`nzcg`) and `mcp` (`nazm-mcp`). The chain was not run with the slice 12 archive layout (no `NAZM_LIBRARY`, `libexec/` beside `nazm`): the script still sets `NAZM_LIBRARY`, `NAZM_PIPELINE`, `NAZM_NZCG` explicitly. (2) Only the `llvm` backend was run this time; the `nazm` backend passed in slice 4 and was not repeated after slice 14's fixes. (3) The runner printed `survivors=1` on this run (earlier ones printed 0); `docker ps -a` afterwards showed no `nazm-selfbuild` container left, so it was gone by the time it was checked, but the count is unexplained. (4) The 14.1 residue (about 10 unexplained suite failures) was not touched; it did not block the chain. (5) Target is Linux aarch64 only; x86_64 and macOS are slices 16 and 17.
+
+### S16.3 first run, 2026-11-04: what it showed (not yet passed)
+
+The first real `host-selfbuild.sh aarch64` build passed the fixpoint (stages 1 = 2 = 3, 9 of 9 identical) and
+then `host-run` refused stage 3's `fe`: `refused [no-counted-heap]`. Found by static inspection only
+(`strings`, `nm`, a seed build of three small programs; no Nazm-built program was run):
+
+- **Root cause: the check, not the compiler.** `--release` strips the symbol table (`release.rs`: `strip`),
+  and `nz.heap_malloc` is a hidden function, so a release image has no such name; `host-run` looked for
+  exactly that name. `nazm` and `pl` passed only because their own text quotes the runtime's IR source.
+  All 9 stage-3 executables, and the seed-built `cg`, `nazm` and `pl`, carry the heap unit's message
+  `nazm: error[N0406]: out of memory: the heap limit of 2147483648 bytes is reached`, and `fe` and `jtool`
+  import `malloc`, `realloc` and `free` (the counted heap's callers). A seed-built release program that
+  allocates has the message and no symbol; with `--heap-limit` and no allocation it has neither (the heap
+  unit is linked only when reached), which is the case the rule exists to refuse.
+- **Fix:** an image is counted-heap-linked if the symbol is in it **or** the heap unit's whole message
+  (`nazm: error[N0406]: out of memory: the heap limit of N bytes is reached`) is, which nothing but the unit
+  carries; a line that only mentions a limit, or an image with neither, is still `no-counted-heap`. The
+  same change in the three copies (`xtask/src/host_run.rs`, `toolchain/commands/stagerun.nz`,
+  `toolchain/harness/nzx/image.nz`) and their tests. The rule is not relaxed for programs without the unit.
+- **Residual weakness, stated:** the message proves the unit is linked, not that every `malloc` reaches
+  the counted one; that is the compiler's renaming (`count_heap`), checked by the LIR tests.
+- **The refusal was invisible:** `host-selfbuild.sh` sent the core step's standard error to `/dev/null`,
+  and `step`'s `cat` of the refusal went there with it. The script now keeps descriptor 3 as its own
+  standard error for refusals and `FAILED` lines (`toolchain/selfbuild/tests/host-selfbuild-refusal.sh`).
+- 16.3 stays open: it needs the re-run below, by the user.
+
