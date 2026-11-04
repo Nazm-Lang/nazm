@@ -220,11 +220,13 @@
 - [x] 16.3 aarch64: the run passes on the host (PASSED 2026-11-04 19:11-19:51, `host-selfbuild.sh aarch64`, llvm backend, exit 0, every Nazm-built step one `host-run` at 2 GiB: stages 1 to 3 9/9 byte-identical, Core IR 9/9 identical to the seed's, corpus 57 programs agree and 9 not run on the host for no counted heap (counted apart), interpreter 68/68 agree, `nazm-check` 15 gates byte for byte, the 256 MiB heap stops with N0406; largest peak `nazm` build 1527 MiB; log ~/nazm-hostsb-aarch64-2.log; the check fix 4b9b52d6 was needed) (first run 2026-11-04: fixpoint 9/9 passed, then `host-run`
       refused `fe` because the release image is stripped and the check looked for a symbol; fixed in
       `host-run` and the script's logging, design.md *S16.3 first run*; a re-run is needed)
-- [ ] 16.4 x86_64 under Rosetta (S16.4): the `PATH` and `rosetta-clang` probe; the run passes
+- [x] 16.4 x86_64 under Rosetta (S16.4): the `PATH` and `rosetta-clang` probe; the run passes
       (2026-11-04: first run stopped at stage 0, the seed refused `--release` for x86_64; fixed in seed and Nazm
       `build`, see design S16.4 first run; second run stopped at stage 1: clang's default architecture under Rosetta,
-      fixed by `bd_cross` in `build.nz` and the seed rebuild added to the script, design S16.4 second run; the re-run
-      is still to be made, by the user)
+      fixed by `bd_cross` in `build.nz` and the seed rebuild added to the script, design S16.4 second run; third run
+      2026-11-04/05 passed: `host-selfbuild.sh x86_64 ~/nazm-hostsb-x86_64-3` exit 0, stage3 `nazm` is Mach-O x86_64, stages 1 to 3
+      byte-identical, 57 corpus programs agree (9 not run on the host), 68 run by the self-built interpreter as by the seed's,
+      `nazm-check` agrees, the 256 MiB heap stops with N0406 (probe peak 6.1 MiB, exit 2); largest stage `nazm` 1561.9 MiB)
 - [ ] 16.5 The runbook amendment (S16.5) applied with 16.3's evidence
 
 ## 17. Slice 17 — Windows x86_64
