@@ -134,7 +134,7 @@ cases() {
     case_end output_is_passed_as_bytes_and_a_truncation_is_a_failure_of_its_own
 
     case_start
-    script "$d" plain 0 4194304 'exit 0'
+    script "$d" plain 0 '' 'exit 0'
     hr "$d" -- "$d/plain"
     expect_status 1 "refusal"
     script "$d" hangs 1 4194304 'sleep 30'
@@ -143,10 +143,13 @@ cases() {
     case_end a_refusal_and_a_deadline_have_statuses_of_their_own
 
     case_start
-    script "$d" plain 0 4194304 'echo ran'
+    script "$d" plain 0 '' 'echo ran'
     hr "$d" -- "$d/plain"
     refused_as no-counted-heap "plain"
     grep -q '^ran' "$work/out" && fails+=("the program ran")
+    script "$d" stripped 0 4194304 'echo ran'
+    hr "$d" -- "$d/stripped"
+    expect_status 0 "a stripped image with the heap unit's message is admitted"
     case_end a_program_without_the_counted_heap_is_refused_by_name
 
     case_start

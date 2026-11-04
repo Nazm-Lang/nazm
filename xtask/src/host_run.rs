@@ -6,7 +6,9 @@
 //! every byte it asks for and ends with `N0406` past its limit (`docs/user/spec.md`, *A bounded
 //! heap*). So the runner does not trust a declaration; it reads the executable:
 //!
-//! - the counted heap is linked: the symbol `nz.heap_malloc` is in the file;
+//! - the counted heap is linked: the symbol `nz.heap_malloc` is in the file, or, in a stripped release
+//!   image (which has no symbol table to name it), the heap unit's own message, whole, is: the heap
+//!   unit is linked only when the program allocates, and carries that message and nothing else does;
 //! - the limit is the number in the program's own `N0406` message, which the counted heap embeds
 //!   and prints (`crates/nazm-runtime/src/heap.rs`, `message`); it must be present, single and at
 //!   most 2 GiB.
@@ -49,7 +51,9 @@ const MAX_OUTPUT_MIB: usize = 256;
 const MAX_IMAGE: u64 = 512 * 1024 * 1024;
 
 const SYMBOL: &[u8] = b"nz.heap_malloc";
-const LIMIT_BEFORE: &[u8] = b"the heap limit of ";
+/// The heap unit's message up to its number (`nazm_runtime::heap`): the whole line, so a program's
+/// own text that merely mentions a heap limit is not mistaken for the unit.
+const LIMIT_BEFORE: &[u8] = b"nazm: error[N0406]: out of memory: the heap limit of ";
 const LIMIT_AFTER: &[u8] = b" bytes is reached";
 const N0406: &str = "error[N0406]";
 
@@ -122,9 +126,7 @@ impl Refusal {
 
 /// The heap limit an executable's bytes show, once they show the counted heap linked.
 pub(crate) fn heap_limit_of(image: &[u8]) -> Result<u64, Refusal> {
-    if !contains(image, SYMBOL) {
-        return Err(Refusal::NoCountedHeap);
-    }
+    let symbol = contains(image, SYMBOL);
     let mut found: Vec<u64> = Vec::new();
     let mut from = 0;
     while let Some(at) = find(image.get(from..).unwrap_or_default(), LIMIT_BEFORE) {
@@ -144,6 +146,10 @@ pub(crate) fn heap_limit_of(image: &[u8]) -> Result<u64, Refusal> {
             }
         }
         from = start;
+    }
+    // A release build is stripped, so the symbol is gone; the unit's message is its mark then.
+    if !symbol && found.is_empty() {
+        return Err(Refusal::NoCountedHeap);
     }
     match found.as_slice() {
         [] => Err(Refusal::NoLimit),
@@ -579,9 +585,19 @@ mod tests {
     #[test]
     fn a_program_without_the_counted_heap_is_refused() {
         assert_eq!(
-            heap_limit_of(&image("4194304", false)),
+            heap_limit_of(b"junk the heap limit of 4194304 bytes is reached, mentioned only"),
             Err(Refusal::NoCountedHeap)
         );
+        assert_eq!(
+            heap_limit_of(b"no heap at all"),
+            Err(Refusal::NoCountedHeap)
+        );
+    }
+
+    #[test]
+    fn a_stripped_release_image_is_known_by_the_heap_units_message() {
+        // no symbol table (`strip`), the message whole: admitted with its limit
+        assert_eq!(heap_limit_of(&image("268435456", false)), Ok(268_435_456));
     }
 
     #[test]

@@ -101,7 +101,7 @@ pub fn bytes_find(buf: Bytes, needle: Str, from: Int) -> Int ! {} {
 }
 
 fn add_limits(buf: Bytes, found: Strs) -> Int ! {} {
-    let before = "the heap limit of ";
+    let before = "nazm: error[N0406]: out of memory: the heap limit of ";
     let after = " bytes is reached";
     let mut from = 0;
     let mut at = bytes_find(buf, before, from);
@@ -174,7 +174,7 @@ pub fn image_scan(io: IoCap, path: Str) -> Result[Scan, Str] ! { io } {
 /// `heap_limit_of`: the one heap limit (digits) a scan shows, once it shows the counted heap
 /// linked, or the refusal.
 pub fn limit_of(s: Scan) -> Result[Str, Refusal] ! {} {
-    if !s.symbol {
+    if !s.symbol && strs_len(s.limits) == 0 {
         return Result[Str, Refusal].Err(error: refusal("no-counted-heap", "the executable does not link the counted heap (`nz.heap_malloc` is not in it): build it with `--heap-limit`"));
     }
     if strs_len(s.limits) == 0 {
