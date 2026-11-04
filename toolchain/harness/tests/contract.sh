@@ -40,6 +40,7 @@ build() { # SOURCE OUT
 }
 if [ ! -x "$OUT/bin/nazm" ]; then build "$root/toolchain/commands/nazm.nz" "$OUT/bin/nazm"; fi
 if [ ! -x "$OUT/libexec/nazm/nazm-pipeline" ]; then build "$root/toolchain/pipeline/main.nz" "$OUT/libexec/nazm/nazm-pipeline"; fi
+if [ ! -x "$OUT/libexec/nazm/nzcg" ]; then build "$root/toolchain/codegen/main.nz" "$OUT/libexec/nazm/nzcg"; fi
 PORT=$OUT/bin/nazm
 export NAZM_LIBEXEC=$OUT/libexec/nazm
 # Tools the ported tests use (as run.sh builds them): the JSON tool for documents too large for the interpreter.
