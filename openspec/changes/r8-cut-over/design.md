@@ -1547,3 +1547,41 @@ configuration (no fallback to a non-release x86_64 build).
 - **Not verified:** that the Nazm-built `nazm` hardens x86_64 identically to the seed (that is what stages 1-3
   and `llvm-release-x86` show); that `strip`/`codesign` run correctly as translated x86_64 processes from the
   Nazm-built driver (first seen in the 16.4 run). 16.4 stays open.
+
+### S16.4 second run, 2026-11-04: stage 1 clang assembled x86_64 module asm as ARM64 (fixed in `build.nz`; not yet re-run)
+
+`host-selfbuild.sh x86_64` passed stage 0 and failed at stage 1: the x86_64 Nazm-built `nazm build --release
+--target x86_64-apple-darwin` got `clang` status 4 on `switch.ll` ("unknown token in expression", "unrecognized
+instruction mnemonic, did you mean: ld2, udf?" on `movq %rbx, %rdi`).
+
+- **Root cause.** Neither the seed nor Nazm puts a `target triple` in any generated unit (`Backend::compile`: "no target
+  triple in the unit"); the architecture of every unit, `switch.ll` (module asm in the target's own syntax) above all,
+  is decided by `-target` on the clang command line. The seed and `build.nz` both pass `-target T` only "for a target
+  that is not the host's" (`target_args`/`bd_target_args`; `cross = if target == host { "" } else { target }`). Stage 0
+  ran in the arm64 seed, where x86_64 is cross, so `-target x86_64-apple-darwin` was named. Stages 1-3 run x86_64
+  under Rosetta, where `fe_host_arch()` answers x86_64, so target == host, nothing was named, and the arm64-only Command
+  Line Tools `clang` it spawned natively defaulted to arm64. The x86 module asm is the first thing that cannot be
+  assembled that way (the other units are portable IR, which clang would also have compiled for arm64: the final link
+  would have failed or produced the wrong image next). The same `cross` also feeds the link (`bd_link`,
+  `bd_link_shared`), so the defect covered the whole pipeline, not one file.
+- **Fix (`toolchain/commands/build.nz`).** New `bd_cross(target, host)`: the target when it is not the host's, and also
+  when it is `x86_64-apple-darwin` itself, so every clang call that compiles or links (all units: `entry`, `errno`,
+  `switch`, the `g*` units, the runtime, objects from the store, whole-program bitcode, the executable and the shared
+  library link) carries `-target x86_64-apple-darwin`. On a native Intel Mac this names what the default already is. The
+  object-cache key includes the compile flags, so only x86_64-macOS builds on an x86_64 host get a new key.
+  aarch64-apple-darwin and every other target's command lines are unchanged. The IR is not changed (no triple added:
+  that would change every unit's bytes and the seed/Nazm byte comparison), so the "verified on" header is untouched.
+  The Rust seed is not changed: it is only ever run natively, where its default is the host's.
+- **Test.** `toolchain/harness/cli/build.nz`: `every_clang_call_of_a_cross_build_names_the_target` puts a clang that
+  logs its arguments first on `PATH`, builds with `--no-cache --target x86_64-apple-darwin --objects`, and requires
+  `-target x86_64-apple-darwin` on every compile call. It passes on the seed (run natively with `NAZM` set to the seed)
+  and, contained, on the Nazm-built `nazm` (see tasks.md 16.4). **It cannot fail before the fix**: the case the fix
+  changes (target == host == x86_64-apple-darwin, a translated process) exists only under Rosetta, which no contained
+  test has; the test pins the property for the cross case. The defect itself was shown by reading the kept IR and the
+  `bd_cross` rule, not reproduced.
+- **Also recorded.** `host-selfbuild.sh` built only xtask, not the seed `target/debug/nazm`, so stage 0 could use a stale
+  seed; it now runs `cargo build --locked -q -p nazm-cli` before stage 0 (skipped under `NAZM=` and `SELFBUILD_DRY_RUN=1`).
+- **Not verified.** That stage 1 now passes under Rosetta (needs the host run, by the user); that nothing else in the
+  Nazm pipeline asks the machine's architecture instead of the target's (`fe_host_arch` is used by `bd_host` and the
+  core-IR step, which the script gives `macos aarch64` explicitly). Re-run: `cd ~/nazm-r8-s15 &&
+  toolchain/selfbuild/host-selfbuild.sh x86_64 ~/nazm-hostsb-x86_64-3`.
