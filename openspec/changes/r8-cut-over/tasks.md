@@ -222,7 +222,9 @@
       `host-run` and the script's logging, design.md *S16.3 first run*; a re-run is needed)
 - [ ] 16.4 x86_64 under Rosetta (S16.4): the `PATH` and `rosetta-clang` probe; the run passes
       (2026-11-04: first run stopped at stage 0, the seed refused `--release` for x86_64; fixed in seed and Nazm
-      `build`, see design S16.4 first run; the re-run is still to be made, by the user)
+      `build`, see design S16.4 first run; second run stopped at stage 1: clang's default architecture under Rosetta,
+      fixed by `bd_cross` in `build.nz` and the seed rebuild added to the script, design S16.4 second run; the re-run
+      is still to be made, by the user)
 - [ ] 16.5 The runbook amendment (S16.5) applied with 16.3's evidence
 
 ## 17. Slice 17 — Windows x86_64
