@@ -278,8 +278,8 @@ fn bd_preflight(io: IoCap, proc: ProcessCap, sp: SpawnCap, o: Opts) -> Str {
         let mut why = ""
         if o.backend != "llvm" {
             why = "`--backend llvm`'s: Cranelift and Nazm's own code generator write no stack canary"
-        } else if bd_os(t) != "macos" || t != host {
-            why = "this host's macOS executable's: another target is not hardened yet"
+        } else if bd_os(t) != "macos" || bd_os(host) != "macos" {
+            why = "a macOS executable, built on macOS: another target is not hardened yet"
         }
         if why != "" { bd_early(io, o, "nazm: `--release` hardens " + why, 5) }
     }

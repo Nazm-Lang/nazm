@@ -1512,3 +1512,38 @@ then `host-run` refused stage 3's `fe`: `refused [no-counted-heap]`. Found by st
   standard error for refusals and `FAILED` lines (`toolchain/selfbuild/tests/host-selfbuild-refusal.sh`).
 - 16.3 stays open: it needs the re-run below, by the user.
 
+
+### S16.4 first run, 2026-11-04: stage 0 refused `--release` for x86_64 (fixed; not yet re-run)
+
+`host-selfbuild.sh x86_64` failed at stage 0: the seed's `nazm build --release --target
+x86_64-apple-darwin` was refused by preflight ("`--release` hardens this host's macOS executable's: another
+target is not hardened yet"), because the rule required target == host. **Decided by the copyright holder,
+2026-11-04:** teach the compiler to harden the other macOS architecture, so 16.4 runs in the release
+configuration (no fallback to a non-release x86_64 build).
+
+- **Rule now:** `--release` needs the LLVM backend, a macOS target (either architecture) and a macOS host.
+  Refused as before: another backend (Cranelift, `--backend nazm`), a non-macOS target (e.g.
+  `x86_64-pc-windows-gnu`), a non-macOS host, and `--debug`/`--lib`/`--objects`/`--runtime`. Same change in
+  the seed (`preflight.rs`) and in Nazm's `toolchain/commands/build.nz`; the message is now "a macOS
+  executable, built on macOS: another target is not hardened yet".
+- **Hardening of the foreign-architecture image, unchanged code, checked by reading:** canaries are written
+  into the LLVM text (architecture independent; `___stack_chk_fail`/`_guard` come from libSystem); `-pie` is
+  the linker's; `strip` and `codesign` are `/usr/bin` universal binaries (x86_64, arm64e), so they act on a thin
+  x86_64 file from either architecture and, under Rosetta, run as x86_64 without `xcrun` (neither is a shim).
+  No check was weakened or removed (the compiler has none of its own: the properties are read back by the tests).
+- **Evidence (seed, arm64 host, nothing Nazm-built run):** a `--release --target x86_64-apple-darwin` hello
+  builds; `file`: Mach-O 64-bit executable x86_64; `otool -hv`: X86_64, PIE; `nm -u`: `___stack_chk_fail`,
+  `___stack_chk_guard`; `nm -U`: only `__mh_execute_header`; `codesign -dv`: flags `adhoc,runtime`;
+  `codesign --verify --strict` passes; the plain seed-built hello printed `hi` under Rosetta.
+  Rust test `release_build::the_other_macos_architecture_is_hardened_like_the_host_s` (same checks, plus the
+  default build of that target has none of them, so each check fails on an unhardened image) and the refusal
+  test now uses a Windows target; `cli_m_r release_build` 8 of 8 pass; clippy and fmt clean.
+- **Nazm side:** `toolchain/harness/cli/release_build.nz` has the same new test and refusal change;
+  `toolchain/commands/tests/build.sh` has mode `llvm-release-x86` (byte comparison, seed against Nazm
+  `nazm`); `tests/args/build.txt` line 67 now compares a build, not a refusal, on macOS. Run contained
+  (Linux) only: the harness `release_build` refusal test agrees (the macOS tests do not exist in a Linux
+  Rust run, so they are `no Rust test of this name` there, as before); the macOS-only Nazm paths (the new
+  test, `llvm-release-x86`) were **not run**: they need a Nazm-built program on the macOS host.
+- **Not verified:** that the Nazm-built `nazm` hardens x86_64 identically to the seed (that is what stages 1-3
+  and `llvm-release-x86` show); that `strip`/`codesign` run correctly as translated x86_64 processes from the
+  Nazm-built driver (first seen in the 16.4 run). 16.4 stays open.
