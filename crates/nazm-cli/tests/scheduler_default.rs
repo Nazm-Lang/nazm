@@ -90,8 +90,27 @@ fn run(
 
 /// The pool's workers when `NAZM_WORKERS` is unset: one per processor online, at most 64
 /// (performance leadership, 2026-10-15; four before, whatever the machine).
+///
+/// "Online" is what the runtime counts (`_SC_NPROCESSORS_ONLN`), not `available_parallelism`,
+/// which also honours a container's CPU quota: in a four-CPU container on an eight-CPU host the
+/// runtime starts eight workers and `available_parallelism` says four (2026-11-03, the contained
+/// gate at `p4t4`). `getconf` is the same call; the standard library's answer is the fallback.
 fn default_workers() -> String {
-    let n = std::thread::available_parallelism().map_or(4, |n| n.get().min(64));
+    let online = std::process::Command::new("getconf")
+        .arg("_NPROCESSORS_ONLN")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<usize>()
+                .ok()
+        })
+        .filter(|n| *n > 0);
+    let n = online
+        .or_else(|| std::thread::available_parallelism().ok().map(|n| n.get()))
+        .map_or(4, |n| n.min(64));
     format!("nazm-pool: workers={n} ")
 }
 
