@@ -174,6 +174,12 @@ build_with() {
 
 say "host-selfbuild: target $target, backend $backend, heap limit $heap, release configuration, SDK $SDKROOT, deployment target $MACOSX_DEPLOYMENT_TARGET"
 
+# The seed is the checkout's own `target/debug/nazm`: bring it up to date first (the script built only xtask, so a
+# stale seed built stage 0). Not for a seed named by NAZM, and not in a dry run.
+if [ -z "${NAZM:-}" ] && [ "${SELFBUILD_DRY_RUN:-}" != 1 ]; then
+    (cd "$root" && cargo build --locked -q -p nazm-cli) || fail "stage 0: the seed (cargo build -p nazm-cli) did not build"
+fi
+
 # --- stage 0: the seed (Rust, run directly) builds the builder -------------------------------------
 # On the seed's default (LLVM) backend whatever SELFBUILD_BACKEND is: the seed is not asked to run `--backend nazm`.
 cfg0=(--release --backend llvm --no-cache --target "$target")
