@@ -1,0 +1,627 @@
+// `nzx contained`'s supervisor (S13.3): the port of `contained::run`, `reap_stale`, `survivors` and
+// `export_validated` in `xtask/src/contained.rs`. What it holds in memory is bounded by the runner's
+// own counted heap (256 MiB, question 5): the container's two streams are spooled to files in a
+// scratch directory (kept to the cap, counted beyond it) and copied out in chunks; an exported
+// artefact is read from `docker cp`'s tar stream a chunk at a time and written to a staging file.
+//
+// What differs from the reference: the stdout and stderr of the workload are copied out as bytes,
+// where the reference prints them lossily as UTF-8; the text of an operating-system error is Nazm's
+// (`rust_io_error`'s wording, which is Rust's); `{:?}` of a string is `debug_quote`'s (ASCII only).
+
+use "@std/process";
+use "@std/file";
+use "@std/ioerror";
+use "@std/env";
+use "@std/text";
+use "@std/time";
+use "../lib/run.nz";
+use "../lib/scratch.nz";
+use "hostrun.nz";
+use "workloads.nz";
+use "tar.nz";
+
+/// How a run ended: the word (`passed`, `failed`, `timeout`, `memory-limit`, `output-overflow`,
+/// `tool-failure`, `export-refused`, `unavailable`), the exit code of `failed`, and the reason of the three that carry one.
+pub struct Outcome {
+    word: Str,
+    code: Int,
+    why: Str,
+}
+
+pub fn outcome(word: Str, code: Int, why: Str) -> Outcome ! {} {
+    Outcome(word: word, code: code, why: why)
+}
+
+/// What one container run produced. The spools hold the first `output_cap` bytes of each stream.
+pub struct Report {
+    outcome: Outcome,
+    scratch: Str,
+    out_spool: Str,
+    err_spool: Str,
+    stdout_bytes: Int,
+    stderr_bytes: Int,
+    elapsed_ms: Int,
+    oom_killed: Bool,
+}
+
+/// What a supervisor needs to know about this run: the authority, the checkout, the image and the host.
+pub struct Ctx {
+    h: Caps,
+    repo: Str,
+    image: Str,
+    amd64: Bool,
+    host: Str,
+}
+
+pub fn say(io: IoCap, s: Str) -> Int ! { io } {
+    file_write_str(file_stderr(io), f"{s}\n");
+    0
+}
+
+fn docker(h: Caps, spec: Str) -> Ran ! { io, spawn } {
+    run(h, "docker", words(spec), "", env_here(h.io))
+}
+
+fn docker_args(h: Caps, a: Strs) -> Ran ! { io, spawn } {
+    run(h, "docker", a, "", env_here(h.io))
+}
+
+fn empty_report(o: Outcome) -> Report ! {} {
+    Report(outcome: o, scratch: "", out_spool: "", err_spool: "", stdout_bytes: 0, stderr_bytes: 0, elapsed_ms: 0, oom_killed: false)
+}
+
+/// The first line of `s`, trimmed.
+pub fn first_line(s: Str) -> Str ! {} {
+    for l in text_lines(s) {
+        return text_trim(l);
+    }
+    ""
+}
+
+/// The supervisor runs on the host, so either variable in its own environment is the forbidden host
+/// configuration, not a waiver it should pass on: `""` when neither is set.
+pub fn host_env_problem(io: IoCap) -> Str ! { io } {
+    for v in words("NAZM_CONTAINED NAZM_ALLOW_UNCONTAINED") {
+        match env_get(io, v) {
+            Option.Some(value: x) => {
+                return f"contained: `{v}` is set in the host's environment; unset it. The runner sets `NAZM_CONTAINED=1` inside the container itself, and nothing sets either on a host.";
+            },
+            Option.None() => {},
+        };
+    }
+    ""
+}
+
+/// `docker info`: `""` when the daemon answers, else why not.
+pub fn docker_problem(h: Caps) -> Str ! { io, spawn } {
+    let r = docker(h, "info");
+    if r.code == 0 {
+        return "";
+    }
+    if r.code < 0 {
+        return f"could not run `docker`: {first_line(r.stderr)}";
+    }
+    f"the Docker daemon is not reachable: {first_line(r.stderr)}"
+}
+
+pub fn image_present(h: Caps, image: Str) -> Bool ! { io, spawn } {
+    let a = words("image inspect");
+    strs_push(a, image);
+    docker_args(h, a).code == 0
+}
+
+/// The pid a container's name and labels claim for a supervisor that is certainly not this one
+/// (`me`) and on this host, or `0 - 1` when it is not a candidate: named `nazm-<workload>-<pid>`
+/// with the workload lower-case letters and `-`, the pid canonical and equal to the label's, the
+/// label's host `host`. Whether that pid is a process is for the caller (`stale`'s `alive`).
+pub fn stale_pid(name: Str, label_pid: Str, label_host: Str, host: Str, me: Int) -> Int ! {} {
+    if str_len(host) == 0 || !text_starts_with(name, "nazm-") {
+        return 0 - 1;
+    }
+    let rest = str_slice(name, 5, str_len(name));
+    let mut dash = 0 - 1;
+    let mut i = 0;
+    while i < str_len(rest) {
+        if str_byte(rest, i) == 45 {
+            dash = i;
+        }
+        i = i + 1;
+    }
+    if dash < 0 {
+        return 0 - 1;
+    }
+    let workload = str_slice(rest, 0, dash);
+    let pid = str_slice(rest, dash + 1, str_len(rest));
+    if str_len(workload) == 0 {
+        return 0 - 1;
+    }
+    let mut k = 0;
+    while k < str_len(workload) {
+        let b = str_byte(workload, k);
+        if !((b >= 97 && b <= 122) || b == 45) {
+            return 0 - 1;
+        }
+        k = k + 1;
+    }
+    // A canonical u32: digits, no leading zero (but `0`), at most 4294967295.
+    if str_len(pid) == 0 || str_len(pid) > 10 || (str_len(pid) > 1 && str_byte(pid, 0) == 48) {
+        return 0 - 1;
+    }
+    let mut n = 0;
+    k = 0;
+    while k < str_len(pid) {
+        let b = str_byte(pid, k);
+        if b < 48 || b > 57 {
+            return 0 - 1;
+        }
+        n = n * 10 + (b - 48);
+        k = k + 1;
+    }
+    if n > 4294967295 || pid != label_pid || label_host != host || n == me {
+        return 0 - 1;
+    }
+    n
+}
+
+/// Is `pid` a process? `ps -p`, not `kill -0`: `kill -0` also fails for a live process that belongs to
+/// someone else. When `ps` itself cannot run, the answer is "alive": an unknown is never a licence to remove.
+fn process_alive(h: Caps, pid: Int) -> Bool ! { io, spawn } {
+    let a = words("-p");
+    strs_push(a, int_to_str(pid));
+    strs_push(a, "-o");
+    strs_push(a, "pid=");
+    let r = run(h, "ps", a, "", env_here(h.io));
+    r.code < 0 || r.code == 0
+}
+
+/// Remove the containers a supervisor on this host labelled as its own and then left behind by
+/// dying — exactly those, by exact name (Q1-A2-01) — and name them.
+pub fn reap_stale(c: Ctx) -> Strs ! { io, spawn } {
+    let h = c.h;
+    let a = words("ps -a --filter");
+    strs_push(a, f"label={RUN_OWNER}");
+    strs_push(a, "--format");
+    strs_push(a, f"{{{{.Names}}}}\t{{{{.Label \"{SUPERVISOR_PID}\"}}}}\t{{{{.Label \"{SUPERVISOR_HOST}\"}}}}");
+    let listed = docker_args(h, a);
+    let gone = strs_new();
+    let me = process_id(h.io);
+    for line in text_lines(listed.stdout) {
+        let f = text_split(line, "\t");
+        if strs_len(f) >= 3 {
+            let pid = stale_pid(strs_get(f, 0), strs_get(f, 1), strs_get(f, 2), c.host, me);
+            if pid >= 0 && !process_alive(h, pid) {
+                let rm = words("rm -f");
+                strs_push(rm, strs_get(f, 0));
+                docker_args(h, rm);
+                strs_push(gone, strs_get(f, 0));
+            }
+        }
+    }
+    gone
+}
+
+/// Containers this runner left behind. Always zero, or the runner has a leak.
+pub fn survivors(h: Caps) -> Int ! { io, spawn } {
+    let r = docker(h, "ps -aq --filter name=nazm-");
+    if r.code != 0 {
+        return 0;
+    }
+    let mut n = 0;
+    for l in text_lines(r.stdout) {
+        if str_len(text_trim(l)) > 0 {
+            n = n + 1;
+        }
+    }
+    n
+}
+
+fn inspect_text(h: Caps, container: Str, format: Str) -> Str ! { io, spawn } {
+    let a = words("inspect");
+    strs_push(a, container);
+    strs_push(a, "--format");
+    strs_push(a, format);
+    text_trim(docker_args(h, a).stdout)
+}
+
+/// Run `argv` (the script) inside the bounded environment with the checkout mounted read-only at `/src`.
+pub fn run_container(c: Ctx, name: Str, argv: Strs, b: Bounds) -> Report ! { io, spawn } {
+    let h = c.h;
+    let io = h.io;
+    let sp = h.sp;
+    let v = h.v;
+    let env_why = host_env_problem(io);
+    if str_len(env_why) > 0 {
+        return empty_report(outcome("unavailable", 0, env_why));
+    }
+    let why = docker_problem(h);
+    if str_len(why) > 0 {
+        return empty_report(outcome("unavailable", 0, why));
+    }
+    for n in reap_stale(c) {
+        say(io, f"contained: removed {n}, left behind by a supervisor that is no longer running");
+    }
+    if !image_present(h, c.image) {
+        let plat = if c.amd64 { "--platform linux/amd64 " } else { "" };
+        return empty_report(outcome("unavailable", 0, f"image `{c.image}` is absent. Build it:\n    docker build {plat}-f docker/contained.Dockerfile -t {c.image} ."));
+    }
+    let pid = process_id(io);
+    let container = f"nazm-{name}-{pid}";
+    let full = run_argv(c.repo, container, argv, b, pid, c.host, c.image, c.amd64);
+    let scratch = scratch_new(h);
+    if str_len(scratch) == 0 {
+        return empty_report(outcome("tool-failure", 0, "cannot make a scratch directory for the container's output"));
+    }
+    let out_spool = str_vouch(f"{scratch}/out.spool");
+    let err_spool = str_vouch(f"{scratch}/err.spool");
+    let t = h.t;
+    let started = time_now(t);
+    let child = match process_spawn_with(h.p, str_vouch("docker"), full, "", env_here(io), false, true) {
+        Result.Ok(value: ch) => ch,
+        Result.Err(error: e) => {
+            scratch_remove(h, scratch);
+            return empty_report(outcome("tool-failure", 0, f"spawn: {rust_io_error(e)}"));
+        },
+    };
+    let outs = chan_new_of[Int](1);
+    let errs = chan_new_of[Int](1);
+    let out = os_child_pipe(child.handle, 1);
+    let err = os_child_pipe(child.handle, 2);
+    let deadline = time_deadline(t, b.deadline_secs * 1000);
+    let mut status = 0;
+    let mut timed_out = false;
+    let mut waited = "";
+    let got_out = vec_new[Int]();
+    let got_err = vec_new[Int]();
+    scope {
+        spawn drain(io, out, out_spool, b.output_cap, outs);
+        spawn drain(io, err, err_spool, b.output_cap, errs);
+        status = match process_wait_until(child, deadline) {
+            Result.Ok(value: s) => match s {
+                Option.Some(value: x) => x,
+                Option.None() => {
+                    timed_out = true;
+                    // The container, not the client: terminating the client leaves the daemon's container running.
+                    let kill = words("kill");
+                    strs_push(kill, container);
+                    docker_args(h, kill);
+                    match process_wait(child) {
+                        Result.Ok(value: x) => x,
+                        Result.Err(error: e) => { waited = f"wait: {rust_io_error(e)}"; 0 },
+                    }
+                },
+            },
+            Result.Err(error: e) => { waited = f"wait: {rust_io_error(e)}"; 0 },
+        };
+        chan_recv_of(outs, got_out);
+        chan_recv_of(errs, got_err);
+    }
+    os_close(out);
+    os_close(err);
+    os_close(child.handle);
+    let elapsed_ms = time_duration_to_ms(time_elapsed(t, started));
+    if str_len(waited) > 0 {
+        let rm = words("rm -f");
+        strs_push(rm, container);
+        docker_args(h, rm);
+        scratch_remove(h, scratch);
+        return empty_report(outcome("tool-failure", 0, waited));
+    }
+    let ototal = if vec_len(got_out) > 0 { vec_get(got_out, 0) } else { 0 };
+    let etotal = if vec_len(got_err) > 0 { vec_get(got_err, 0) } else { 0 };
+    // `--rm` removes it, so inspect may legitimately find nothing; absence is not evidence of an OOM
+    // either way, and the exit code carries the signal.
+    let oom = inspect_text(h, container, "{{.State.OOMKilled}}") == "true";
+    let code = if status >= 256 { 0 - 1 } else { status };
+    let cap = b.output_cap;
+    let overflow = ototal > cap || etotal > cap;
+    let mut o = outcome("failed", code, "");
+    if timed_out {
+        o = outcome("timeout", 0, "");
+    } else {
+        if oom || code == 137 {
+            o = outcome("memory-limit", 0, "");
+        } else {
+            if code == 0 {
+                o = if overflow { outcome("output-overflow", 0, "") } else { outcome("passed", 0, "") };
+            }
+        }
+    }
+    // Export only from a workload that succeeded, and only once the container has stopped. A failed
+    // export is a failed command: copying nothing and reporting success is how a missing artefact
+    // becomes an invisible one.
+    if b.has_export && o.word == "passed" {
+        match export_validated(h, container, b.export) {
+            Result.Ok(value: n) => {},
+            Result.Err(error: why) => { o = outcome("export-refused", 0, why); },
+        };
+    }
+    let rm = words("rm -f");
+    strs_push(rm, container);
+    docker_args(h, rm);
+    Report(outcome: o, scratch: scratch, out_spool: out_spool, err_spool: err_spool, stdout_bytes: ototal, stderr_bytes: etotal, elapsed_ms: elapsed_ms, oom_killed: oom)
+}
+
+// --- the export ----------------------------------------------------------------------------------
+
+/// `["a", "b"]`: Rust's `{:?}` of a list of names.
+fn debug_list(xs: Strs) -> Str ! {} {
+    let parts = strs_new();
+    for x in xs {
+        strs_push(parts, debug_quote(x));
+    }
+    f"[{str_join(parts, ", ")}]"
+}
+
+fn temp_root(io: IoCap) -> Str ! { io } {
+    match env_get(io, "TMPDIR") {
+        Option.Some(value: t) => if str_len(t) > 0 { t } else { "/tmp" },
+        Option.None() => "/tmp",
+    }
+}
+
+/// Everything from the first `n` bytes of `f` into `buf`: how many it got (fewer than `n` at the end).
+fn read_exact(f: File, buf: Bytes, n: Int) -> Int ! { io } {
+    let mut got = 0;
+    let mut more = true;
+    while more && got < n {
+        let k = match file_read(f, bytes_slice(buf, got, n)) {
+            Result.Ok(value: x) => x,
+            Result.Err(error: e) => 0,
+        };
+        if k <= 0 {
+            more = false;
+        } else {
+            got = got + k;
+        }
+    }
+    got
+}
+
+/// Every failure goes through here: kill the transfer first, so a refused copy cannot keep pulling
+/// bytes, then let docker's own message explain it if it has one.
+fn stop(ch: Child, errp: OsHandle, why: Str) -> Str ! { io } {
+    process_kill(ch);
+    let buf = bytes_new(4096);
+    let got = read_exact(File(handle: errp), buf, 4096);
+    let said = first_line(bytes_to_str(bytes_slice(buf, 0, got)));
+    process_wait(ch);
+    os_close(errp);
+    os_close(ch.handle);
+    if str_len(said) == 0 { why } else { f"{why} ({said})" }
+}
+
+/// Copy one path out of a stopped container, refusing anything that is not a regular file and
+/// stopping the moment the transfer exceeds `max` bytes: `docker cp SRC -` writes a tar stream whose
+/// header states the entry's type and size before any of its bytes follow. Returns how many bytes
+/// were written to `local`.
+pub fn copy_out_bounded(h: Caps, container: Str, inside: Str, local: Str, max: Int) -> Result[Int, Str] ! { io, spawn } {
+    let io = h.io;
+    let v = h.v;
+    let a = words("cp");
+    strs_push(a, f"{container}:{inside}");
+    strs_push(a, "-");
+    let ch = match process_spawn_with(h.p, str_vouch("docker"), a, "", env_here(io), false, true) {
+        Result.Ok(value: x) => x,
+        Result.Err(error: e) => { return Result[Int, Str].Err(error: f"could not run docker cp: {rust_io_error(e)}"); },
+    };
+    let stream = File(handle: os_child_pipe(ch.handle, 1));
+    let errp = os_child_pipe(ch.handle, 2);
+    let header = bytes_new(512);
+    if read_exact(stream, header, 512) < 512 {
+        return Result[Int, Str].Err(error: stop(ch, errp, "no tar header from docker cp: failed to fill whole buffer"));
+    }
+    let size = match tar_size(header, inside, max) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: why) => { return Result[Int, Str].Err(error: stop(ch, errp, why)); },
+    };
+    // Only now does anything reach host storage, and only `size` bytes of it.
+    let file = match file_create(io, str_vouch(local)) {
+        Result.Ok(value: f) => f,
+        Result.Err(error: e) => { return Result[Int, Str].Err(error: stop(ch, errp, f"{inside}: {rust_io_error(e)}")); },
+    };
+    let buf = bytes_new(65536);
+    let mut left = size;
+    while left > 0 {
+        let want = if left < 65536 { left } else { 65536 };
+        let n = match file_read(stream, bytes_slice(buf, 0, want)) {
+            Result.Ok(value: x) => x,
+            Result.Err(error: e) => 0 - 1,
+        };
+        if n == 0 {
+            file_close(file);
+            return Result[Int, Str].Err(error: stop(ch, errp, f"{inside}: the stream ended {left} bytes early"));
+        }
+        if n < 0 {
+            file_close(file);
+            return Result[Int, Str].Err(error: stop(ch, errp, f"{inside}: read error"));
+        }
+        match file_write(file, bytes_slice(buf, 0, n)) {
+            Result.Ok(value: w) => {},
+            Result.Err(error: e) => {
+                file_close(file);
+                return Result[Int, Str].Err(error: stop(ch, errp, f"{inside}: {rust_io_error(e)}"));
+            },
+        };
+        left = left - n;
+    }
+    file_close(file);
+    // The payload is in hand; the rest of the archive is padding and end-of-file blocks that nothing
+    // here needs, so the transfer stops rather than draining it.
+    process_kill(ch);
+    process_wait(ch);
+    os_close(errp);
+    os_close(ch.handle);
+    Result[Int, Str].Ok(value: size)
+}
+
+fn parse_u63(s: Str) -> Int ! {} {
+    if str_len(s) == 0 || str_len(s) > 18 {
+        return 0 - 1;
+    }
+    let mut n = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b < 48 || b > 57 {
+            return 0 - 1;
+        }
+        n = n * 10 + (b - 48);
+        i = i + 1;
+    }
+    n
+}
+
+fn words_of(line: Str) -> Strs ! {} {
+    let out = strs_new();
+    for w in text_split(text_replace(text_replace(line, "\t", " "), "\r", " "), " ") {
+        if str_len(w) > 0 {
+            strs_push(out, w);
+        }
+    }
+    out
+}
+
+/// The manifest's lines are claims to be checked, not facts: stage every artefact the policy
+/// permits, once each, within its size; the names staged, or why it is refused.
+fn stage_artefacts(h: Caps, container: Str, policy: Export, stage: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let v = h.v;
+    let manifest_local = f"{stage}/EXPORTS";
+    match copy_out_bounded(h, container, policy.manifest, manifest_local, 4096) {
+        Result.Ok(value: n) => {},
+        Result.Err(error: e) => { return Result[Strs, Str].Err(error: f"manifest {policy.manifest}: {e}"); },
+    };
+    let text = match file_read_all(h.io, str_vouch(manifest_local)) {
+        Result.Ok(value: b) => bytes_to_str(b),
+        Result.Err(error: e) => { return Result[Strs, Str].Err(error: f"manifest is not text: {rust_io_error(e)}"); },
+    };
+    if !utf8_valid(text) {
+        return Result[Strs, Str].Err(error: "manifest is not text: stream did not contain valid UTF-8");
+    }
+    let mut dir = "/";
+    let mut cut = 0 - 1;
+    let mut i = 0;
+    while i < str_len(policy.manifest) {
+        if str_byte(policy.manifest, i) == 47 {
+            cut = i;
+        }
+        i = i + 1;
+    }
+    if cut > 0 {
+        dir = str_slice(policy.manifest, 0, cut);
+    }
+    let seen = strs_new();
+    for line in text_lines(text) {
+        if str_len(text_trim(line)) > 0 {
+            let parts = words_of(line);
+            if strs_len(parts) != 2 {
+                return Result[Strs, Str].Err(error: f"malformed manifest line: {debug_quote(line)}");
+            }
+            let name = strs_get(parts, 0);
+            let size = strs_get(parts, 1);
+            let mut ok = false;
+            for a in policy.allowed {
+                if a == name {
+                    ok = true;
+                }
+            }
+            if !ok {
+                return Result[Strs, Str].Err(error: f"{name} is not permitted here; this run may export {debug_list(policy.allowed)}");
+            }
+            for s in seen {
+                if s == name {
+                    return Result[Strs, Str].Err(error: f"{name} is listed twice");
+                }
+            }
+            strs_push(seen, name);
+            let declared = parse_u63(size);
+            if declared < 0 {
+                return Result[Strs, Str].Err(error: f"{name}: unreadable size {debug_quote(size)}");
+            }
+            if declared > policy.max_bytes {
+                return Result[Strs, Str].Err(error: f"{name}: declared {declared} bytes, over this policy's {policy.max_bytes} budget");
+            }
+            // The manifest's own claim is the transfer budget.
+            let written = match copy_out_bounded(h, container, f"{dir}/{name}", f"{stage}/{name}", declared) {
+                Result.Ok(value: n) => n,
+                Result.Err(error: e) => { return Result[Strs, Str].Err(error: f"{name}: {e}"); },
+            };
+            if written != declared {
+                return Result[Strs, Str].Err(error: f"{name}: transferred {written} bytes, manifest declared {declared}");
+            }
+        }
+    }
+    if strs_len(seen) == 0 {
+        return Result[Strs, Str].Err(error: "the manifest named nothing");
+    }
+    Result[Strs, Str].Ok(value: seen)
+}
+
+/// `std::fs::copy`: the content of `src` onto `dst`, in chunks.
+fn copy_file(io: IoCap, src: Str, dst: Str) -> Result[Int, Str] ! { io } {
+    let f = match file_open(io, src) {
+        Result.Ok(value: x) => x,
+        Result.Err(error: e) => { return Result[Int, Str].Err(error: rust_io_error(e)); },
+    };
+    let out = match file_create(io, dst) {
+        Result.Ok(value: x) => x,
+        Result.Err(error: e) => { file_close(f); return Result[Int, Str].Err(error: rust_io_error(e)); },
+    };
+    let buf = bytes_new(65536);
+    let mut total = 0;
+    let mut more = true;
+    while more {
+        let n = match file_read(f, buf) {
+            Result.Ok(value: x) => x,
+            Result.Err(error: e) => 0,
+        };
+        if n <= 0 {
+            more = false;
+        } else {
+            match file_write(out, bytes_slice(buf, 0, n)) {
+                Result.Ok(value: w) => {},
+                Result.Err(error: e) => { file_close(f); file_close(out); return Result[Int, Str].Err(error: rust_io_error(e)); },
+            };
+            total = total + n;
+        }
+    }
+    file_close(f);
+    file_close(out);
+    Result[Int, Str].Ok(value: total)
+}
+
+/// Copies out exactly what the policy permits, or refuses and changes nothing: artefacts are
+/// staged and validated first, and the destination is touched only once all of them pass.
+pub fn export_validated(h: Caps, container: Str, policy: Export) -> Result[Int, Str] ! { io, spawn } {
+    let io = h.io;
+    let v = h.v;
+    // Quiescence: a running container is still writing, and copying from one is copying from a moving target.
+    if inspect_text(h, container, "{{.State.Running}}") == "true" {
+        return Result[Int, Str].Err(error: f"{container} is still running; refusing to export");
+    }
+    let root = temp_root(io);
+    let trimmed = if text_ends_with(root, "/") { str_slice(root, 0, str_len(root) - 1) } else { root };
+    let stage = str_vouch(f"{trimmed}/nazm-export-{container}");
+    scratch_remove(h, stage);
+    match dir_create_all(io, stage) {
+        Result.Ok(value: n) => {},
+        Result.Err(error: e) => { return Result[Int, Str].Err(error: f"staging directory: {rust_io_error(e)}"); },
+    };
+    let staged = match stage_artefacts(h, container, policy, stage) {
+        Result.Ok(value: s) => s,
+        Result.Err(error: e) => { scratch_remove(h, stage); return Result[Int, Str].Err(error: e); },
+    };
+    // Everything validated; only now is the destination touched.
+    for name in staged {
+        let dest = str_vouch(f"{policy.dest}/{name}");
+        match copy_file(io, str_vouch(f"{stage}/{name}"), dest) {
+            Result.Ok(value: n) => {},
+            Result.Err(error: e) => {
+                scratch_remove(h, stage);
+                return Result[Int, Str].Err(error: f"{name}: could not place it: {e}");
+            },
+        };
+        say(io, f"contained: exported {name} ({size_of(io, dest)} bytes)");
+    }
+    scratch_remove(h, stage);
+    Result[Int, Str].Ok(value: 0)
+}

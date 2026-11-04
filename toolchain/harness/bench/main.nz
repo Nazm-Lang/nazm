@@ -1,0 +1,370 @@
+// `nazm-bench` (R8 slice 13, S13.6): measurement, recorded so it can be argued with — what `cargo xtask bench`
+// does for the seed, in Nazm. It times the compiler's stages over `bench/programs`, the references where a
+// toolchain for one is present, native sizes and peak memory, and writes `record.json` (`nazm.bench/2`).
+//
+//   nazm-bench [--runs N] [--save | --check] [--src DIR] [--nazm FILE]     measure (contained only)
+//   nazm-bench verify [--src DIR] [--nazm FILE]                            only the expected-output check (contained only)
+//   nazm-bench validate FILE...                                            a record's schema, nothing run
+//   nazm-bench judge BASELINE RECORD                                       `--check`'s verdict of one record against another
+//   nazm-bench pairs FILE                                                  `--check`'s verdicts on fixed pairs (`fixtures/pairs.txt`)
+//
+//   --runs N      timed runs after one discarded warm-up       default 5
+//   --save        also replace the baseline of this host
+//   --check       compare with the baseline of this host (same host only: a regression is more than 25 % and 5 ms)
+//   --src DIR     the checkout                                 default .
+//   --nazm FILE   the `nazm` measured                          default $CARGO_TARGET_DIR/release/nazm
+//
+// Measuring runs only where a memory ceiling holds (`NAZM_CONTAINED=1` and a numeric `memory.max`), and the
+// refusal comes before anything is read. `--fake-clock` (a test's: each clock reading is one millisecond after
+// the last, nothing is measured, the file is `record-fake-clock.json`, never a baseline) runs the same path
+// without a real measurement. `--only NAME` (with `--fake-clock` only) restricts it to one program.
+// Exit status: 0 done, 1 a failure of the benchmark or a regression, 2 a refusal or a bad invocation.
+
+use "@std/text"
+use "@std/file"
+use "@std/env"
+use "@std/process"
+use "@std/json"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "stats.nz"
+use "check.nz"
+use "record.nz"
+use "pairs.nz"
+use "spawn.nz"
+use "driver.nz"
+
+struct Opts {
+    runs: Int,
+    save: Bool,
+    check: Bool,
+    src: Str,
+    nazm: Str,
+    fake: Bool,
+    only: Str,
+    rest: Strs,
+}
+
+fn usage() -> Str ! {} {
+    "usage: nazm-bench [--runs N] [--save | --check] [--src DIR] [--nazm FILE] | verify | validate FILE... | judge BASELINE RECORD | pairs FILE"
+}
+
+fn parse_opts(args: Strs, from: Int) -> Result[Opts, Str] ! {} {
+    let rest = strs_new();
+    let mut runs = 5;
+    let mut save = false;
+    let mut check = false;
+    let mut src = ".";
+    let mut nazm = "";
+    let mut fake = false;
+    let mut only = "";
+    let mut i = from;
+    while i < strs_len(args) {
+        let a = strs_get(args, i);
+        if a == "--save" {
+            save = true;
+            i = i + 1;
+        } else if a == "--check" {
+            check = true;
+            i = i + 1;
+        } else if a == "--fake-clock" {
+            fake = true;
+            i = i + 1;
+        } else if a == "--runs" || a == "--src" || a == "--nazm" || a == "--only" {
+            if i + 1 >= strs_len(args) {
+                return Result[Opts, Str].Err(error: f"{a} needs a value");
+            }
+            let v = strs_get(args, i + 1);
+            if a == "--runs" {
+                runs = match text_parse_int(v) {
+                    Result.Ok(value: n) => n,
+                    Result.Err(error: e) => 0,
+                };
+                if runs < 1 || runs > 1000 {
+                    return Result[Opts, Str].Err(error: f"--runs {v}: 1 to 1000");
+                }
+            } else if a == "--src" {
+                src = v;
+            } else if a == "--nazm" {
+                nazm = v;
+            } else {
+                only = v;
+            }
+            i = i + 2;
+        } else if text_starts_with(a, "--") {
+            return Result[Opts, Str].Err(error: f"unknown option {a}");
+        } else {
+            strs_push(rest, a);
+            i = i + 1;
+        }
+    }
+    if save && check {
+        return Result[Opts, Str].Err(error: "--save and --check do not go together");
+    }
+    if fake && (save || check) {
+        return Result[Opts, Str].Err(error: "--fake-clock measures nothing: it cannot be saved as a baseline or checked against one");
+    }
+    if str_len(only) > 0 && !fake {
+        return Result[Opts, Str].Err(error: "--only is for --fake-clock runs: a record of some programs is not a measurement of the others");
+    }
+    Result[Opts, Str].Ok(value: Opts(runs: runs, save: save, check: check, src: src, nazm: nazm, fake: fake, only: only, rest: rest))
+}
+
+fn refusal() -> Str ! {} {
+    "refusing to run `nazm-bench` with no resource ceiling: it runs only inside the contained runner (`nzx contained bench`), where `NAZM_CONTAINED=1` is set and the cgroup caps memory. Setting the variable on a host does not make a ceiling (docs/internal/runbook.md)."
+}
+
+fn chosen_nazm(h: Caps, o: Opts) -> Str ! { io } {
+    if str_len(o.nazm) > 0 { o.nazm } else { f"{target_dir(h.io, o.src)}/release/nazm" }
+}
+
+/// The measurements of one program's five stages, then the self-compile, the references, sizes and peaks.
+fn run_all(h: Caps, o: Opts) -> Int ! { io, spawn } {
+    let nazm = chosen_nazm(h, o);
+    if !file_exists_at(h.io, nazm) {
+        eprintln(f"bench: {nazm} is missing. Measure the release build, not the debug one:\n  cargo build --release -p nazm-cli");
+        return 1;
+    }
+    let env = bench_env(h.io);
+    let mut names = match program_names(h, o.src) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => { eprintln(f"bench: {e}"); return 1; },
+    };
+    if str_len(o.only) > 0 {
+        let kept = strs_new();
+        for n in names {
+            if n == o.only { strs_push(kept, n); }
+        }
+        if strs_len(kept) == 0 {
+            eprintln(f"bench: --only {o.only}: no such program");
+            return 2;
+        }
+        names = kept;
+    }
+    let scratch = f"{target_dir(h.io, o.src)}/bench-scratch";
+    match scratch_mkdir(h, scratch, "") {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => { eprintln(f"bench: {e}"); return 1; },
+    };
+    // Before any timing: both implementations must produce the recorded answer.
+    match verify(h, nazm, scratch, o.src, names, env) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => { eprintln(f"bench: {e}"); return 1; },
+    };
+    let clock = if o.fake { clock_fake() } else { clock_real() };
+    let ms = vec_new[Measurement]();
+    for name in names {
+        let source = f"{o.src}/bench/programs/{name}.nz";
+        let exe = f"{scratch}/{name}";
+        for stage in stage_names() {
+            match measure(h, clock, name, stage, o.runs, stage_cmd(nazm, stage, source, exe), env) {
+                Result.Ok(value: m) => { vec_push(ms, m); 0 },
+                Result.Err(error: e) => { eprintln(f"bench: {name}/{stage} failed: {e}"); return 1; },
+            };
+        }
+    }
+    // The compiler compiling itself: the largest Nazm program that exists, and the one whose compile time
+    // anybody actually waits for.
+    let whole = f"{o.src}/compiler/emit.nz";
+    if str_len(o.only) == 0 {
+        if file_exists_at(h.io, whole) {
+            let exe = f"{scratch}/selfcompile";
+            for stage in words("check build-O0") {
+                match measure(h, clock, "compiler", stage, o.runs, stage_cmd(nazm, stage, whole, exe), env) {
+                    Result.Ok(value: m) => { vec_push(ms, m); 0 },
+                    Result.Err(error: e) => { eprintln(f"bench: compiler/{stage} failed: {e}"); return 1; },
+                };
+            }
+        } else {
+            eprintln(f"bench: skipping the self-compile benchmark: {whole} is missing");
+        }
+    }
+    // One external reference per language, where the toolchain is present; absent ones are recorded as such.
+    let absent = vec_new[Absent]();
+    vec_push(absent, Absent(stage: "reference-zig", why: "no Zig reference is written: no Zig toolchain is installed here to check one"));
+    let refs = references_run(h, clock, o.src, scratch, o.runs, env, absent, o.only);
+    for m in refs {
+        vec_push(ms, m);
+    }
+    // Each native executable's size.
+    let sizes = vec_new[Size]();
+    for name in names {
+        let bytes = match file_metadata(h.io, f"{scratch}/{name}") {
+            Result.Ok(value: md) => md.size,
+            Result.Err(error: e) => 0 - 1,
+        };
+        vec_push(sizes, Size(program: name, bytes: bytes));
+    }
+    // Peak memory, once per command rather than repeatedly: it varies far less than time does, and it is
+    // a separate question from speed.
+    let memory = vec_new[Memory]();
+    for name in names {
+        let source = f"{o.src}/bench/programs/{name}.nz";
+        let interpret = stage_cmd(nazm, "interpret", source, "");
+        let a = run_peak(h, interpret.program, interpret.args, env, COMMAND_MS);
+        vec_push(memory, Memory(program: name, stage: "interpret", peak: if a.peak > 0 { a.peak } else { 0 - 1 }));
+        let b = run_peak(h, f"{scratch}/{name}", strs_new(), env, COMMAND_MS);
+        vec_push(memory, Memory(program: name, stage: "native-O2", peak: if b.peak > 0 { b.peak } else { 0 - 1 }));
+    }
+    let info = info_of(h, o.src, o.runs);
+    let json = render_json(info, ms, memory, sizes, absent);
+    print(render_table(ms));
+    print(render_memory(memory));
+    let dir = bench_dir(h.io, o.src);
+    let record = if o.fake { f"{dir}/record-fake-clock.json" } else { f"{dir}/record.json" };
+    match write_at(h, record, json) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => { eprintln(f"bench: cannot write {record}: {e}"); return 1; },
+    };
+    println(f"\nwritten: {record}");
+    if o.fake {
+        eprintln("bench: --fake-clock: nothing in that record was measured");
+        return 0;
+    }
+    if o.save {
+        let baseline = baseline_path(h, dir);
+        return match write_at(h, baseline, json) {
+            Result.Ok(value: n) => { println(f"baseline: {baseline}"); 0 },
+            Result.Err(error: e) => { eprintln(f"bench: cannot write {baseline}: {e}"); 1 },
+        };
+    }
+    if o.check {
+        return compare(h, dir, ms);
+    }
+    0
+}
+
+/// `compare`: the baseline of this host, if there is one and it was recorded here.
+fn compare(h: Caps, dir: Str, ms: Vec[Measurement]) -> Int ! { io, spawn } {
+    let path = baseline_path(h, dir);
+    let text = match read_text(h, path) {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => {
+            eprintln(f"bench: no baseline at {path}. Record one with `nzx contained bench --save`.");
+            return 1;
+        },
+    };
+    let was = baseline_field(text, "host");
+    let host = shell(h, "uname", words("-sm"));
+    if was != host {
+        // Not a failure: a percentage between two machines is a number with no meaning.
+        println(f"\nbench: the baseline was recorded on {debug_quote(was)} and this is {debug_quote(host)}; not comparing.");
+        return 0;
+    }
+    say_verdict(judge(text, ms))
+}
+
+fn say_verdict(j: Judged) -> Int ! { io } {
+    let mut i = 0;
+    while i < strs_len(j.lines) {
+        if ints_get(j.errs, i) == 1 { eprintln(strs_get(j.lines, i)); } else { println(strs_get(j.lines, i)); }
+        i = i + 1;
+    }
+    if j.failed { 1 } else { 0 }
+}
+
+/// The measurements a record holds, from its runs (`runs_ms`), in nanoseconds.
+fn measurements_of(doc: JsonDoc) -> Vec[Measurement] ! {} {
+    let out = vec_new[Measurement]();
+    let mut i = 0;
+    while i < jlen(doc, "measurements") {
+        let at = f"measurements/{i}";
+        let runs = ints_new();
+        let mut j = 0;
+        while j < jlen(doc, f"{at}/runs_ms") {
+            let us = match json_float(doc, jq(doc, f"{at}/runs_ms/{j}")) {
+                Option.Some(value: x) => Int(x * 1000.0 + 0.5),
+                Option.None() => 0,
+            };
+            ints_push(runs, us * 1000);
+            j = j + 1;
+        }
+        vec_push(out, measurement(jstr(doc, f"{at}/program"), jstr(doc, f"{at}/stage"), runs));
+        i = i + 1;
+    }
+    out
+}
+
+fn main(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Int ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let args = process_args(io);
+    let cmd = if strs_len(args) > 0 { strs_get(args, 0) } else { "" };
+    if cmd == "validate" {
+        if strs_len(args) < 2 {
+            eprintln(usage());
+            return 2;
+        }
+        let mut bad = 0;
+        let mut i = 1;
+        while i < strs_len(args) {
+            let f = strs_get(args, i);
+            match read_text(h, f) {
+                Result.Ok(value: text) => {
+                    let problems = record_problems(text);
+                    if strs_len(problems) == 0 {
+                        println(f"{f}: a valid {SCHEMA} record");
+                    } else {
+                        bad = bad + 1;
+                        for pr in problems { eprintln(f"{f}: {pr}"); }
+                    }
+                },
+                Result.Err(error: e) => { bad = bad + 1; eprintln(f"{f}: {e}"); },
+            };
+            i = i + 1;
+        }
+        return if bad == 0 { 0 } else { 1 };
+    }
+    if cmd == "judge" {
+        if strs_len(args) != 3 {
+            eprintln(usage());
+            return 2;
+        }
+        let base = match read_text(h, strs_get(args, 1)) { Result.Ok(value: s) => s, Result.Err(error: e) => { eprintln(e); return 2; } };
+        let rec = match read_text(h, strs_get(args, 2)) { Result.Ok(value: s) => s, Result.Err(error: e) => { eprintln(e); return 2; } };
+        let doc = match jparse(rec) { Result.Ok(value: d) => d, Result.Err(error: e) => { eprintln(f"{strs_get(args, 2)}: not JSON: {e}"); return 2; } };
+        return say_verdict(judge(base, measurements_of(doc)));
+    }
+    if cmd == "pairs" {
+        if strs_len(args) != 2 {
+            eprintln(usage());
+            return 2;
+        }
+        let text = match read_text(h, strs_get(args, 1)) { Result.Ok(value: s) => s, Result.Err(error: e) => { eprintln(e); return 2; } };
+        return match pairs_verdicts(text) {
+            Result.Ok(value: s) => { print(s); 0 },
+            Result.Err(error: e) => { eprintln(f"nazm-bench: {e}"); 2 },
+        };
+    }
+    let verifying = cmd == "verify";
+    let o = match parse_opts(args, if verifying { 1 } else { 0 }) {
+        Result.Ok(value: o) => o,
+        Result.Err(error: e) => { eprintln(f"nazm-bench: {e}"); return 2; },
+    };
+    // Before anything is read: no ceiling, no measuring.
+    if !under_ceiling(h) {
+        eprintln(refusal());
+        return 2;
+    }
+    if strs_len(o.rest) > 0 {
+        eprintln(usage());
+        return 2;
+    }
+    if verifying {
+        let nazm = chosen_nazm(h, o);
+        let names = match program_names(h, o.src) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => { eprintln(f"bench: {e}"); return 1; },
+        };
+        let scratch = f"{target_dir(h.io, o.src)}/bench-scratch";
+        match scratch_mkdir(h, scratch, "") {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => { eprintln(f"bench: {e}"); return 1; },
+        };
+        return match verify(h, nazm, scratch, o.src, names, bench_env(io)) {
+            Result.Ok(value: n) => { println(f"bench: {strs_len(names)} programs print their recorded answer, interpreted and compiled at -O2"); 0 },
+            Result.Err(error: e) => { eprintln(f"bench: {e}"); 1 },
+        };
+    }
+    run_all(h, o)
+}

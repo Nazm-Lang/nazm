@@ -1047,6 +1047,19 @@ with `nazm build --heap-limit 16M`).
 `stage-run.sh` uses `target/nzx/nzx host-run` when it exists and `cargo xtask host-run` otherwise,
 until slice 19 removes the second.
 
+**S13.2 as built (2026-11-01), the differences from the text above, all logged in `docs/internal/decisions-log.md`:**
+(1) the stage's two streams are spooled to files in the state directory and copied out in chunks (a 256 MiB
+heap cannot hold two 192 MiB buffers); (2) the image is read in 1 MiB chunks with a 4096-byte carry;
+(3) the runner finds its own image with `/proc/self/exe` or `ps -p PID -o comm=` (there is no `arg(0)` of
+the program's name; `test.nz` does the same), the check runs before anything else, and the refusal reads
+`nzx: refused [runner-unbounded]: WHY`, status 1; (4) the lock slots are the reference's two (`lock`,
+`lock-2`, since 2026-10-22), not one; (5) the tests are `toolchain/harness/nzx/tests/host_run.sh` (a script
+running every case of `xtask/tests/host_run.rs` against both runners, plus three new ones) and
+`tests/host_run_self.nz` (the reference's unit tests and the image check, interpreted), not a Nazm test
+program, which on the host would be a third Nazm-built process; (6) a stage that leaves a process holding
+its pipes is ended with its group after 5 s; (7) the usage line says `nzx host-run`, and an
+operating-system error is worded by Nazm's `io_error_show`.
+
 ### S13.3 `nzx contained [--platform amd64] [--profile P] [--cache bench] WORKLOAD` — the port of `contained.rs`
 
 - **Workloads:** every one the Rust runner has — `probe`, `cache [list|clear]`, `tests`, `selfhost`,
@@ -1096,6 +1109,26 @@ until slice 19 removes the second.
   container's life, refusing with `host-stage-running` when it cannot take it — so a host stage and
   a container never overlap by construction (the Rust runner relies on `host-run`'s `docker ps`
   alone), and two `nzx contained` never run at once.
+
+**S13.3 as built (2026-11-01), the differences from the text above, all logged in `docs/internal/decisions-log.md`:**
+(1) the reference's `xtask contained` gained the hidden `--print-argv` (after the options, before the
+workload; the pid is fixed at 1; `docker image inspect` and, for `bench` and `archive`, `docker run --rm ...
+uname -sm` are the only calls to the daemon; no directory and no volume is made): the `docker run` arguments one
+element a line on standard output, and `plan: NAME deadline=… memory=… export=…` on standard error, which both
+runners print and `tests/contained_argv.sh` diffs; `probe` prints the six cases' plans separated by `--`;
+(2) the table is `nzx/workloads.nz` (pure: profiles, bounds, scripts, `run_argv`, the option checks), not data
+read from a file, and until 13.4 to 13.6 the scripts of `mutate`, `fuzz` and `bench` are the reference's own;
+(3) the host-run lock is **both** slots of `host-run`'s state directory (`lock`, `lock-2`: the reference has two
+since 2026-10-22), taken for the whole life of every `nzx contained` except `--print-argv`; refusal
+`nzx: refused [host-stage-running]: …`, status 1; (4) the container's two streams are spooled to files in a scratch
+directory (kept to the 4 MiB cap, counted beyond it) and copied out as bytes, where the reference prints them
+lossily as UTF-8; (5) the host name in the labels is `hostname`, as the reference, not `uname -n`; (6) the
+tar header is parsed by `nzx/tar.nz` and the stream read by `supervise.nz`: the manifest and each artefact are
+written to the staging file a chunk at a time, so no artefact is held whole; a Rust `{:?}` of a string is
+`debug_quote`'s (ASCII only); (7) the tests are `tests/contained_argv.sh` (both runners, every workload), `tests/
+contained_self.nz` (the pure parts, interpreted) and `tests/contained_run.nz` (the supervisor against the real
+daemon, interpreted by the seed, run only with the container turn held): not a Nazm-built test program started on
+the host.
 
 ### S13.4 The mutation campaign runner
 
@@ -1157,6 +1190,9 @@ until slice 19 removes the second.
   per mutant, tier for tier — the Rust killers against the Rust tests, the mapped ones against the
   ports.
 
+**S13.4 as built (2026-11-03, part), the differences from the text above, logged in `docs/internal/decisions-log.md`:**
+(1) `nazm-mutate session` and `recover` are in `mutate/main.nz`; the campaign is `mutate/{session,campaign,killers,closure}.nz` over `lib/procs.nz` (the subprocess runner: deadline, group sweep, output cap, process table); (2) a `use`-closure follows the `use` lines through `library/` as well (the first wording put every `library/` file in every closure); (3) `--rebuild-cmd` makes the session rebuild the checkout's `nazm` with Cargo after each injection, because the ported tests still carry a Cranelift leg the Nazm-built `nazm` lacks (until slice 19); without it the released programs are built from the copy; (4) `nzx contained mutate` runs the Nazm session (journals under `target/mutation-campaigns-nz/`) and `mutate-seed` is the reference's own script restricted to the seed's entries (journals under `target/mutation-campaigns/`), `mutate --plan` prints `nazm-mutate plan`; (5) run (2026-11-03): `contained_argv.sh` 63 cases agree (2365 elements); the Nazm and the Rust campaigns over the only 5 entries whose killers all map agree 5 of 5 (caught at tier 1 by the same tests; 20 were asked for, 89 of the 94 non-seed killers are whole-test names: widening the catalogue is a 13.7 follow-up); the Rust campaign must run at `--profile p4t4` or less: at `p8t8` the 4096 MiB container kills the linker (`ld` signal 9) and every mutant is UNUSABLE; `--verify-killer` on one killer VERIFIED.
+
 ### S13.5 Fuzzing — coverage-guided (SanitizerCoverage and libFuzzer, the platform's) and differential
 
 Fuzzing stays contained only (runbook), so "the platform's `clang`" is the contained image's
@@ -1215,6 +1251,9 @@ so only programs whose units are LLVM IR can be instrumented.
   `libclang-rt-19-dev` (the platform's package) — a harness change, so the lifecycle suite
   `gate-plan` names for `docker/` runs.
 
+**S13.5 as built (2026-11-03), the differences from the text above, logged in `docs/internal/decisions-log.md`:**
+(1) no new `--emit-units` flag: the seed's `build --backend llvm --no-cache --emit-ir --objects DIR` already writes every unit's `.ll` (`p.NAME.ll`), its object and `link.txt`, so the seed is untouched; (2) the targets are built from a copy of `compiler/` and `toolchain/` beside an empty `nazm.root` (a module outside the entry's directory does not see the impls its importer sees: `N0364` on `Hash`), and are written in the toolchain's style (`targets/{common,front,lower,lir,run,manifest}.nz`; `common.nz` is `ip_check_source` without its `exit_with(6)`); (3) `lir` stops at LIR text and its validator (the Rust target's LIR interpreter has no Nazm counterpart), `run` is `interp_exec` with 20 000 iterations and depth 64; status 0, 1, 2 are ordinary, 70 and signals are defects; (4) the shim publishes the counters through a `MAP_SHARED` region and interposes `exit` in the forked child, because libFuzzer's `atexit` handler ends the process with 77 whenever the target calls `exit`, and a Nazm program ends with `exit`; (5) the report is the Rust fuzzer's `nazm.fuzz/1` keys in its order with `oom` added; (6) `diff` has three legs in the container (run, LLVM `-O0`, `-O2`): Nazm's own code generator is macOS-only (`--with-nazm-backend` exists, never run), and Cranelift and the LIR interpreter went with the seed; (7) `fuzz` is the Nazm fuzzer (cache namespace `src`), `fuzz-seed` the reference's script; (8) `docker/contained.Dockerfile` gains `libclang-rt-19-dev` (libFuzzer's archive); the shared image tag was not rebuilt, so the live runs used a thin derived image.
+
 ### S13.6 `bench`
 
 `nazm-bench` ports `xtask/src/bench.rs`: the refusal before anything is read unless contained
@@ -1230,6 +1269,9 @@ nothing to the language for it. **Verified without timing** (the agent rule; the
 measures): a record's schema validated, the expected-output check, and `--check`'s verdicts over
 fixed pairs of records equal to the Rust function's on the same pairs.
 
+**S13.6 as built (2026-11-03), the differences from the text above, logged in `docs/internal/decisions-log.md`:**
+(1) `nazm-bench` is `toolchain/harness/bench/{main,driver,stats,check,record,pairs,spawn}.nz`, built by `build.sh` (heap limit 2G) and run by `nzx contained bench`; `bench-seed` is the reference's own script (`xtask bench`), compared by `contained_argv.sh` as `fuzz-seed` is; (2) every figure is whole nanoseconds from the monotonic clock, printed to the microsecond, so `--check`'s ratio tests are exact integer tests (`4*now > 5*was`), a baseline's median is read as decimal digits, and a tie in the one-decimal table rounds half up where Rust rounds an exact binary tie to even; (3) the clock is a value: `--fake-clock` (hidden, with `--only NAME`) makes each reading one millisecond after the last, writes `record-fake-clock.json` and refuses `--save`/`--check`, so the whole path runs and is validated with nothing measured; (4) `nazm-bench validate FILE...`, `judge BASELINE RECORD` and `pairs FILE` are pure, run anywhere and need no ceiling; measuring and `verify` refuse before reading anything unless `NAZM_CONTAINED=1` and `memory.max` is a number; (5) `--check`'s judgement is held to the Rust function: `xtask/src/bench.rs`'s `compare` was split so its pure part, `judge`, returns the lines it prints, a Rust test writes (with `NAZM_BLESS_BENCH_FIXTURES=1`) or checks `toolchain/harness/bench/fixtures/pairs.verdict` over the 22 cases of `pairs.txt`, and `bench_self.nz` requires the port to produce the same text; (6) the peak is `process_peak_memory` (`getrusage` of the waited child), recorded `null` under the interpreter, and `peak_memory_source` says so; `cpus` is `nproc` capped by `cpu.max`'s quota (Rust's `available_parallelism`); (7) a JSON string escapes every control character (the reference writes a tab raw, an invalid record); (8) `bench/programs/floor.expected` was `0`, the old result report, and the reference, which removes the report variable, could not pass its own check: it is now empty.
+
 ### S13.7 What `xtask` keeps
 
 After slice 13, `xtask` is the seed's: `check`'s eight Rust-architecture gates (one resolver, Core IR
@@ -1240,6 +1282,8 @@ entries, and the `lint` alias. `contained` and `host-run` stay in `xtask`, uncha
 `--print-argv`, until slice 19, so the runbook's commands keep working during the overlap; slice 19
 removes them and slice 20 names `nzx` in the runbook (the drafts of those runbook changes are this
 slice's last task).
+
+**S13.7 as built (2026-11-03):** the drafts are one document, `openspec/changes/r8-cut-over/runbook-draft-slices-19-20.md`: Part A (slice 19: command names, the host and contained sections, `mutate`/`fuzz`/`bench` as the Nazm tools with `*-seed` removed, Cargo in the image at `--profile p4t4` or less, what `xtask` keeps), Part B (slice 20: the runners as Nazm programs, question 5's accepted answer and question 6's, the stated shortfalls). Nothing is applied to `docs/internal/runbook.md`, which still names `cargo xtask contained`/`host-run`. The 13.4 follow-up (widen the catalogue's killer names, 89 of 94 whole-test) is task 13.8, not done.
 
 ### S13.8 Order inside the slice
 

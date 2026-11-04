@@ -1,8 +1,8 @@
 ## 0. The plan
 - [x] 0.1 The inventory, the slices in order with sizes and models, the open questions (`design.md`)
 - [x] 0.2 The copyright holder's answers to `design.md`'s four open questions (accepted 2026-10-20)
-- [ ] 0.3 The copyright holder's answers to questions 5 and 6 (`design.md`, *Open questions —
-      slices 7, 13 and 16*)
+- [x] 0.3 The copyright holder's answers to questions 5 and 6 (`design.md`, *Open questions —
+      slices 7, 13 and 16*): both recommendations accepted 2026-10-20 (`design.md` states it)
 
 ## 1. Slice 1 — R6 gap 1: the interpreter and `nazm-check` on the checkout's language
 - [x] 1.1 `toolchain/interp/{types,values,vm}.nz` and `toolchain/harness/check/supply.nz`: `List[T]`
@@ -156,26 +156,40 @@
 
 ## 13. Slice 13 — the harness remainder (`r7-harness` 6.2, 6.3)
 - [x] 13.1 Design (Opus): `design.md`, *Slice 13*, S13.1–S13.8; questions 5 and 6 open
-- [ ] 13.2 `toolchain/harness/build.sh` (`target/nzx/`); `nzx`'s self-check of its own image
+- [ ] 13.2 (part done 2026-11-01: `build.sh`, `nzx host-run`, its self-check, its tests and `stage-run.sh` are in; the host runs were measured: `tests/host_run.sh both` 37 agree, 0 differ, 2 skipped (19 cases on nzx, 18 on xtask; `not-macos` skipped on macOS), `host_run.sh compare` 21 agree, 0 differ, `host_run_self.nz` 14 of 14 interpreted; left: a contained run of `host_run_self.nz` natively, and `build.sh` for `nazm-fuzz`/`nazm-bench` with 13.5/13.6) `toolchain/harness/build.sh` (`target/nzx/`); `nzx`'s self-check of its own image
       (`runner-unbounded`); `nzx host-run` byte for byte with `xtask/src/host_run.rs` (S13.2); its
       tests ported from `xtask/tests/host_run.rs`, run against both runners; `stage-run.sh` prefers
       `nzx`
-- [ ] 13.3 `nzx contained` (S13.3): the workload table, `run_argv` element for element with
-      `--print-argv` (and the seed's matching `--print-argv`), the volume key equal to Rust's,
+- [x] 13.3 `nzx contained` (S13.3), done 2026-11-01: the workload table, `run_argv` element for element with
+      `--print-argv` (and the seed's matching `--print-argv`, added: its only change), the volume key equal to Rust's,
       supervision, reaping, the tar export, the host-run lock; then `nzx contained probe` and
-      `nzx contained selfbuild` pass
-- [ ] 13.4 The campaign runner (S13.4): `nazm-mutate session` (entry split, killer mapping,
+      `nzx contained selfbuild` pass. Measured: `tests/contained_argv.sh` 56 cases agree, 0 differ, 2036 argv
+      elements compared (every workload, the profiles, `--cache bench`, the probe's six, the refusals; the plans
+      that read the `linux/amd64` image refuse in both runners here, the image is not built: only `--platform
+      amd64 release` was compared); the volume names printed equal Rust's for `src`, `mutate` and `bench` on the real
+      image id and `Cargo.lock`, and `nzx contained cache list` equals `xtask contained cache list`;
+      `contained_self.nz` 11 of 11 (interpreted); `contained_run.nz` 7 of 7 (interpreted, against the daemon: pass,
+      fail(7), the export, six refusals, a symlink/directory/oversize/short file, a deadline, reaping by labels);
+      `nzx contained probe` 6 of 6 ok, survivors 0; `nzx contained --profile p8t8 selfbuild` passed (stages 1 to 3
+      byte-identical, 66 programs agree, 68 run as by the seed's; 848.6 s wall clock, not a measurement), survivors 0,
+      no new volume (the `src` volume the Rust runner named was found by the same key). Not run: the live runs of
+      `tests`, `selfhost`, `bootstrap`, `release`, `mutate` (journal collection, statuses 3), `bench`, `fuzz`, `archive`
+      (their plans are compared, their scripts are the reference's until 13.4 to 13.6), anything on `linux/amd64`,
+      `cache clear`, and the oversize/PAX tar paths of a real archive (only the header parser's units)
+- [x] 13.4 done 2026-11-03, with a shortfall stated plainly: the comparison with the Rust campaign is over 5 entries, not the 20 asked for, because only 5 of the 94 `compiler/`/`library/`/`toolchain/` entries have every killer mapped (89 of 94 killers are whole-test names, not `FILE::fn`); widening the catalogue is a follow-up for 13.7, not done here. Measured: interpreted tests `procs_self.nz` 7 of 7, `session_self.nz` 13 of 13, `mutate_self.nz` 8 of 8, `plan_self.nz` 5 of 5, `lib_self.nz` 7 of 7 (needs `NAZM_HARNESS_ROOT`, as `tests/run.sh` sets it); `tests/contained_argv.sh` 63 cases agree, 2365 argv elements compared, 0 differ; live `nzx contained --profile p8t8 mutate` over the 5 entries (`n45-a-wrapper-drops-its-effect`, `n45-a-wrapper-needs-no-capability`, `n45-an-error-is-swallowed`, `n45-a-parse-overflows-instead-of-failing`, `n45-a-search-reads-past-the-end`): 5 caught at tier 1 (direct), 0 survived, 0 unusable, unmapped 0, restore digest equal, journal under `target/mutation-campaigns-nz/`; the Rust campaign (`nzx contained --profile p4t4 mutate-seed`, same 5): 5 caught at tier 1 by the same tests, 0 survived: the verdicts agree 5 of 5, tier for tier. The first Rust runs at `p8t8` returned UNUSABLE ("does not build (tests included)"): the build log shows `ld terminated with signal 9 [Killed]`, the linker killed by the container's 4096 MiB memory with 8 parallel Cargo jobs (a runner setting, not the campaign: at `p4t4`, 4 jobs, all 5 build; the Rust campaign was not changed); `mutate --plan` 2113 selected; `--verify-killer n45-an-error-is-swallowed --killer stdlib::option_result_and_seq_helpers_work_for_every_type` VERIFIED (one killer only) The campaign runner (S13.4): `nazm-mutate session` (entry split, killer mapping,
       `unmapped`, the warm session, `use`-closure rebuilds, three tiers, `lib/procs.nz`, journal
       `nazm.mutation-campaign/2` under `target/mutation-campaigns-nz/`, resume, lock, `recover`,
       `--verify-killer`); `nzx contained mutate` and `mutate-seed`; compared with the Rust campaign
       on 20 mapped entries
-- [ ] 13.5 Fuzzing (S13.5), after slice 5: the image probe (and `libclang-rt-19-dev` if needed);
+- [x] 13.5 done 2026-11-03 (S13.5 as built, `design.md`). Measured: interpreted `fuzz_self.nz` 10 of 10 (plus `procs_self` 7/7, `session_self` 13/13, `mutate_self` 8/8, `plan_self` 5/5, `lib_self` 7/7, `contained_self` 12/12, unchanged); `contained_argv.sh` 66 cases agree, 2503 argv elements, 0 differ; contained (the plan's own argv for `nzx contained --profile p4t4 fuzz 60`, image swapped for a thin layer adding `libclang-rt-19-dev`, cache volume swapped for a private one): all five targets built with SanitizerCoverage and run 60 s each, 0 crashes, 0 hangs, 0 oom (front 2770 execs/21615 covered, lower 2478/32938, run 2734/31343, lir 2530/40492, manifest 74519/1292), then `nazm-fuzz diff 120 121364944846963` exit 0 (its summary line was not captured: the script then did not print the report; now it does); `fuzz_diff.nz` (now on `lib/gen.nz`) 1 of 1 contained. Shortfalls: 60 s a target is a smoke run, not a campaign; the shared image `nazm-contained:1.98.1` was NOT rebuilt (Dockerfile edited only), so `nzx contained fuzz` as is fails at the link until it is rebuilt; diff has 3 legs (no `--backend nazm`, no Cranelift/LIR interpreter); `lir` has no LIR-interpreter step; no seeded defect was injected to prove a crash is caught (the exit paths are by reading); the lifecycle suite for `docker/` was not run; the minimised corpora were not committed. Original text: Fuzzing (S13.5), after slice 5: the image probe (and `libclang-rt-19-dev` if needed);
       `build --emit-units` (hidden); the five targets; `shim.c`; `nazm-fuzz build|run`; the
       `nazm.fuzz/1` report and exports; `lib/gen.nz` and `nazm-fuzz diff`; `nzx contained fuzz`
-- [ ] 13.6 `nazm-bench` (S13.6), verified without timing: the schema, the expected-output check,
+- [x] 13.6 done 2026-11-03 (S13.6 as built, `design.md`), verified WITHOUT any timing. Measured: interpreted `bench_self.nz` 9 of 9 (the figures of `Measurement`'s Rust test number for number; `--check` on all 22 fixed pairs of `fixtures/pairs.txt` producing exactly the text the Rust function wrote to `pairs.verdict`, boundaries at the 25 % and the 5 ms included; the schema of `bench/baseline-linux-aarch64.json`, a record the Rust bench wrote, valid; that record taken apart and rendered again byte for byte, every line but `mad_ms`, which the record rounds; seven rule-breaking records each named); `cargo test -p xtask bench::` 3 of 3; `fuzz_self` 10/10, `procs_self` 7/7, `session_self` 13/13, `mutate_self` 8/8, `plan_self` 5/5, `lib_self` 7/7, `contained_self` 13/13, `host_run_self` 14/14 (with `NAZM` set, as the suites need) unchanged; `contained_argv.sh` 67 cases agree, 2591 argv elements, 0 differ (`bench-seed` against `xtask contained bench`, `bench` as plan facts); `cargo fmt --check`, `cargo lint`, `cargo xtask check` clean. Contained (`nzx contained --profile p4t4 --cache bench run`, cold cache): `nazm-bench` built natively; with no ceiling declared it refuses, status 2; `verify`: 7 of 7 programs print their recorded answer interpreted and at -O2; `--fake-clock --runs 1` ran every stage, the self-compile, the references (C and Rust measured; Go and Python absent, recorded as not measured), 7 sizes and 14 peaks (real, from `getrusage`), wrote a record that `validate` accepts. Shortfalls: no real measurement was taken or compared (agents never time), so the harness overhead inside the timed region and the 25 %/5 ms gate on real numbers are unverified; `--save`/`--check` against a real baseline were not run (`judge` and the fixed pairs cover the verdict, the host check and the baseline path rule are by reading); `nzx contained bench` as a whole (the Cargo release build, `build.sh`, the export manifest) was not run end to end, only its pieces and its plan; the amd64 plan was not compared (image absent); `floor.expected` was fixed (it made the Rust bench's own check fail); `cpus` is `nproc` capped by the cgroup quota, not `available_parallelism`. Original text: `nazm-bench` (S13.6), verified without timing: the schema, the expected-output check,
       `--check`'s verdicts on fixed record pairs against the Rust function's
-- [ ] 13.7 The drafts of the runbook's changes for slices 19 and 20 (`nzx` named; `xtask`'s
-      `contained` and `host-run` removed; question 5's answer recorded)
+- [x] 13.7 done 2026-11-03 (S13.7 as built, `design.md`): the drafts of the runbook's changes for slices 19 and 20 (`nzx` named; `xtask`'s
+      `contained` and `host-run` removed; question 5's answer recorded) are in
+      `openspec/changes/r8-cut-over/runbook-draft-slices-19-20.md` (Part A slice 19, Part B slice 20; not applied to `docs/internal/runbook.md`)
+- [ ] 13.8 Follow-up logged by 13.4: widen the mutation catalogue's killer names (89 of 94 entries name a whole test, only 5 map to `FILE::fn`), then repeat the Nazm/Rust campaign comparison over at least 20 entries before slice 19 (draft, last section)
 
 ## 14. Slice 14 — the tests are the contract
 - [ ] 14.1 The black-box suite against the Nazm-built `nazm`; `rewrite-in-nazm` 3.1, 3.2, 3.4

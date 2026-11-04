@@ -1,0 +1,84 @@
+// One child, run to its end with its peak resident memory read afterwards (R8 slice 13, S13.6): what
+// `peak_rss` in `xtask/src/bench.rs` does with `/usr/bin/time`, done with `process_peak_memory`
+// (`getrusage` of a waited-for child), which the interpreter cannot answer: there the peak is `-1`,
+// recorded as `null` ("not measured"), never as a guess. Nothing here reads a clock.
+
+use "@std/process"
+use "@std/file"
+use "@std/ioerror"
+use "@std/text"
+use "@std/time"
+use "../lib/run.nz"
+
+fn collect(from: OsHandle, into: Chan[Str]) -> Int ! { io } {
+    let all = match file_read_rest(File(handle: from)) {
+        Result.Ok(value: b) => bytes_to_str(b),
+        Result.Err(error: e) => "",
+    };
+    chan_send_of(into, all);
+    0
+}
+
+/// What `run_peak` saw: the status (as `run`'s), both streams, and the peak in bytes (`-1`: not read).
+pub struct Peaked {
+    code: Int,
+    stdout: Str,
+    stderr: Str,
+    peak: Int,
+}
+
+/// `program` with `args` and `env`, an empty standard input, both streams drained as it runs, ended with
+/// its group after `ms` milliseconds; then its peak resident memory.
+pub fn run_peak(h: Caps, program: Str, args: Strs, env: Strs, ms: Int) -> Peaked ! { io, spawn } {
+    let p = h.p;
+    let sp = h.sp;
+    let v = h.v;
+    let program = str_vouch(program);
+    let c = match process_spawn_with(p, program, args, "", env, true, true) {
+        Result.Ok(value: c) => c,
+        Result.Err(error: e) => {
+            return Peaked(code: 0 - 1, stdout: "", stderr: f"{program}: {io_error_show(e)}", peak: 0 - 1);
+        },
+    };
+    let deadline = time_deadline(h.t, ms);
+    let outs = chan_new_of[Str](1);
+    let errs = chan_new_of[Str](1);
+    let out = os_child_pipe(c.handle, 1);
+    let err = os_child_pipe(c.handle, 2);
+    let mut status = 0;
+    let mut peak = 0 - 1;
+    let got_out = vec_new[Str]();
+    let got_err = vec_new[Str]();
+    scope {
+        spawn collect(out, outs);
+        spawn collect(err, errs);
+        status = match process_wait_until(c, deadline) {
+            Result.Ok(value: o) => match o {
+                Option.Some(value: s) => {
+                    peak = match process_peak_memory(c) {
+                        Result.Ok(value: b) => b,
+                        Result.Err(error: e) => 0 - 1,
+                    };
+                    s
+                },
+                Option.None() => {
+                    process_kill_group(p, process_child_id(c), 9);
+                    match process_wait(c) {
+                        Result.Ok(value: s) => s,
+                        Result.Err(error: e) => 0,
+                    };
+                    TIMED_OUT
+                },
+            },
+            Result.Err(error: e) => 0 - 1,
+        };
+        chan_recv_of(outs, got_out);
+        chan_recv_of(errs, got_err);
+    }
+    os_close(out);
+    os_close(err);
+    os_close(c.handle);
+    let stdout = if vec_len(got_out) > 0 { vec_get(got_out, 0) } else { "" };
+    let stderr = if vec_len(got_err) > 0 { vec_get(got_err, 0) } else { "" };
+    Peaked(code: status, stdout: stdout, stderr: stderr, peak: peak)
+}

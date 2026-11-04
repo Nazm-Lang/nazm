@@ -1,0 +1,240 @@
+// What `host-run` reads from an executable (S13.2): the port of `xtask/src/host_run.rs`'s
+// `heap_limit_of` and `read_image`, and the runner's own check of its own image (S13.1,
+// question 5: refusal `runner-unbounded`).
+//
+// The reference reads the whole file (up to 512 MiB). A runner built with a counted heap of
+// 256 MiB cannot, so the file is read in chunks of 1 MiB with a carry of 4096 bytes, and a match
+// that starts in the carry is found again, which the list of distinct limits makes harmless. What
+// differs from the reference: a heap limit written with more than about 4000 leading zeros is not
+// seen across a chunk boundary.
+
+use "@std/file";
+use "@std/ioerror";
+use "@std/text";
+use "../lib/run.nz";
+
+/// The most heap a host stage may be built with: 2 GiB.
+pub const MAX_LIMIT: Str = "2147483648";
+/// The most heap the runner itself may be built with: 256 MiB (question 5).
+pub const RUNNER_LIMIT: Str = "268435456";
+/// The largest executable the runner will read to check.
+pub const MAX_IMAGE: Int = 536870912;
+
+const CHUNK: Int = 1048576;
+const CARRY: Int = 4096;
+
+/// A refusal: its name (the tests and the runbook cite it) and why.
+pub struct Refusal {
+    name: Str,
+    why: Str,
+}
+
+pub fn refusal(name: Str, why: Str) -> Refusal ! {} {
+    Refusal(name: name, why: why)
+}
+
+/// What an image shows: whether the counted heap's symbol is in it, and every distinct heap limit
+/// its `N0406` message names, each as digits without leading zeros, in order of first appearance.
+pub struct Scan {
+    symbol: Bool,
+    limits: Strs,
+}
+
+/// `a` and `b`, digits without leading zeros: whether `a` is the larger number.
+pub fn digits_gt(a: Str, b: Str) -> Bool ! {} {
+    if str_len(a) != str_len(b) {
+        return str_len(a) > str_len(b);
+    }
+    let mut i = 0;
+    while i < str_len(a) {
+        let x = str_byte(a, i);
+        let y = str_byte(b, i);
+        if x != y {
+            return x > y;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+/// `d` (digits) without its leading zeros (one `0` when all are zeros).
+pub fn digits_norm(d: Str) -> Str ! {} {
+    let mut i = 0;
+    while i + 1 < str_len(d) && str_byte(d, i) == 48 {
+        i = i + 1;
+    }
+    str_slice(d, i, str_len(d))
+}
+
+/// Whether `d` (normalized) is a `u64`, which Rust's `parse::<u64>` reads.
+fn is_u64(d: Str) -> Bool ! {} {
+    !digits_gt(d, "18446744073709551615")
+}
+
+fn match_at(buf: Bytes, at: Int, needle: Str) -> Bool ! {} {
+    let n = str_len(needle);
+    if at + n > bytes_len(buf) {
+        return false;
+    }
+    let mut i = 0;
+    while i < n {
+        if Int(bytes_get(buf, at + i)) != str_byte(needle, i) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+/// Where `needle` first occurs in `buf` at or after `from`, or `0 - 1`.
+pub fn bytes_find(buf: Bytes, needle: Str, from: Int) -> Int ! {} {
+    let first = str_byte(needle, 0);
+    let last = bytes_len(buf) - str_len(needle);
+    let mut i = from;
+    while i <= last {
+        if Int(bytes_get(buf, i)) == first && match_at(buf, i, needle) {
+            return i;
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn add_limits(buf: Bytes, found: Strs) -> Int ! {} {
+    let before = "the heap limit of ";
+    let after = " bytes is reached";
+    let mut from = 0;
+    let mut at = bytes_find(buf, before, from);
+    while at >= 0 {
+        let start = at + str_len(before);
+        let mut end = start;
+        while end < bytes_len(buf) && Int(bytes_get(buf, end)) >= 48 && Int(bytes_get(buf, end)) <= 57 {
+            end = end + 1;
+        }
+        if end > start && match_at(buf, end, after) {
+            let n = digits_norm(bytes_to_str(bytes_slice(buf, start, end)));
+            if is_u64(n) {
+                let mut seen = false;
+                for f in found {
+                    if f == n {
+                        seen = true;
+                    }
+                }
+                if !seen {
+                    strs_push(found, n);
+                }
+            }
+        }
+        from = start;
+        at = bytes_find(buf, before, from);
+    }
+    0
+}
+
+/// Read `path` in chunks and report what it shows. `Err` names the read that failed.
+pub fn image_scan(io: IoCap, path: Str) -> Result[Scan, Str] ! { io } {
+    let f = match file_open(io, path) {
+        Result.Ok(value: f) => f,
+        Result.Err(error: e) => { return Result[Scan, Str].Err(error: io_error_show(e)); },
+    };
+    let found = strs_new();
+    let mut symbol = false;
+    let mut carry = bytes_new(0);
+    let chunk = bytes_new(CHUNK);
+    let mut more = true;
+    let mut failed = "";
+    while more {
+        let n = match file_read(f, chunk) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => { failed = io_error_show(e); 0 },
+        };
+        if n <= 0 {
+            more = false;
+        } else {
+            let buf = bytes_new(bytes_len(carry) + n);
+            bytes_copy(bytes_slice(buf, 0, bytes_len(carry)), carry);
+            bytes_copy(bytes_slice(buf, bytes_len(carry), bytes_len(carry) + n), bytes_slice(chunk, 0, n));
+            if bytes_find(buf, "nz.heap_malloc", 0) >= 0 {
+                symbol = true;
+            }
+            add_limits(buf, found);
+            let keep = if bytes_len(buf) < CARRY { bytes_len(buf) } else { CARRY };
+            let next = bytes_new(keep);
+            bytes_copy(next, bytes_slice(buf, bytes_len(buf) - keep, bytes_len(buf)));
+            carry = next;
+        }
+    }
+    file_close(f);
+    if str_len(failed) > 0 {
+        return Result[Scan, Str].Err(error: failed);
+    }
+    Result[Scan, Str].Ok(value: Scan(symbol: symbol, limits: found))
+}
+
+/// `heap_limit_of`: the one heap limit (digits) a scan shows, once it shows the counted heap
+/// linked, or the refusal.
+pub fn limit_of(s: Scan) -> Result[Str, Refusal] ! {} {
+    if !s.symbol {
+        return Result[Str, Refusal].Err(error: refusal("no-counted-heap", "the executable does not link the counted heap (`nz.heap_malloc` is not in it): build it with `--heap-limit`"));
+    }
+    if strs_len(s.limits) == 0 {
+        return Result[Str, Refusal].Err(error: refusal("no-heap-limit", "the executable carries no heap limit (its `N0406` message is not in it)"));
+    }
+    if strs_len(s.limits) > 1 {
+        return Result[Str, Refusal].Err(error: refusal("ambiguous-heap-limit", f"the executable names several heap limits: [{str_join(s.limits, ", ")}]"));
+    }
+    let one = strs_get(s.limits, 0);
+    if digits_gt(one, MAX_LIMIT) {
+        return Result[Str, Refusal].Err(error: refusal("heap-limit-too-large", f"its heap limit is {one} bytes, over the 2 GiB ({MAX_LIMIT}) a host stage may have"));
+    }
+    Result[Str, Refusal].Ok(value: one)
+}
+
+/// `read_image`'s checks on `path`: a regular file, executable, at most `MAX_IMAGE` bytes.
+/// `""` when it passes, else the reason (after the path).
+pub fn image_problem(io: IoCap, path: Str) -> Str ! { io } {
+    let m = match file_metadata(io, path) {
+        Result.Ok(value: m) => m,
+        Result.Err(error: e) => { return io_error_show(e); },
+    };
+    if m.kind != FileKind.Regular() {
+        return "not a regular file";
+    }
+    if m.permissions % 512 / 64 % 2 == 0 && m.permissions % 64 / 8 % 2 == 0 && m.permissions % 8 % 2 == 0 {
+        return "not executable";
+    }
+    if m.size > MAX_IMAGE {
+        return f"larger than {MAX_IMAGE} bytes";
+    }
+    ""
+}
+
+/// The runner's verdict on a scan of its own image: `Ok` when the counted heap is linked and one `N0406`
+/// limit of at most 256 MiB is in it, else the refusal `runner-unbounded`.
+pub fn runner_verdict(s: Scan) -> Result[Int, Refusal] ! {} {
+    let limit = match limit_of(s) {
+        Result.Ok(value: l) => l,
+        Result.Err(error: r) => { return Result[Int, Refusal].Err(error: refusal("runner-unbounded", f"this runner was not built with a counted heap of at most 256 MiB ({r.name}: {r.why})")); },
+    };
+    if digits_gt(limit, RUNNER_LIMIT) {
+        return Result[Int, Refusal].Err(error: refusal("runner-unbounded", f"this runner's heap limit is {limit} bytes, over the 256 MiB ({RUNNER_LIMIT}) a runner may have: build it with `--heap-limit 256M`"));
+    }
+    Result[Int, Refusal].Ok(value: 0)
+}
+
+/// The runner's check of its own image (question 5): the counted heap linked, one `N0406` limit,
+/// at most 256 MiB. `Err` is the refusal `runner-unbounded`.
+pub fn runner_check(io: IoCap, own: Str) -> Result[Int, Refusal] ! { io } {
+    if str_len(own) == 0 {
+        return Result[Int, Refusal].Err(error: refusal("runner-unbounded", "this runner cannot find its own image, so it cannot check it"));
+    }
+    let bad = image_problem(io, own);
+    if str_len(bad) > 0 {
+        return Result[Int, Refusal].Err(error: refusal("runner-unbounded", f"{own}: {bad}"));
+    }
+    let scan = match image_scan(io, own) {
+        Result.Ok(value: s) => s,
+        Result.Err(error: e) => { return Result[Int, Refusal].Err(error: refusal("runner-unbounded", f"{own}: {e}")); },
+    };
+    runner_verdict(scan)
+}

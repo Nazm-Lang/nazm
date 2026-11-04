@@ -1,0 +1,211 @@
+// `--check` (R8 slice 13, S13.6): the port of `compare` in `xtask/src/bench.rs`, held to the Rust
+// function's verdicts on the fixed pairs of `fixtures/pairs.txt`. A median that moved by less than
+// 5 ms, or by less than 25 % either way, is not reported: both bars must be cleared. Pure: the host
+// check and the baseline's file are `main.nz`'s.
+//
+// Differences from the reference, all at the arithmetic: medians are whole microseconds, as the
+// record prints them (the reference compares `f64` milliseconds), so the ratio tests are exact in
+// integers (`now / was > 1.25` is `4 * now > 5 * was`), and a baseline's median is read as decimal
+// digits (`12`, `12.5`, `12.345`), not as every text Rust's `f64::from_str` takes (`1e3`, `+5`, `.5`).
+
+use "@std/text"
+use "stats.nz"
+
+/// The smallest move worth reporting, in microseconds (`FLOOR_MS`); the 25 % is written 4 : 5 and 4 : 3 below.
+pub const FLOOR_US: Int = 5000;
+
+/// A verdict: the lines `--check` prints in the order it prints them (`errs` says which go to
+/// standard error), and whether it fails.
+pub struct Judged {
+    lines: Strs,
+    errs: Ints,
+    failed: Bool,
+}
+
+fn emit(j: Judged, to_stderr: Bool, line: Str) -> Int ! {} {
+    strs_push(j.lines, line);
+    ints_push(j.errs, if to_stderr { 1 } else { 0 });
+    0
+}
+
+/// `12`, `12.5`, `12.345`, `12.3456` as microseconds (the fourth decimal rounds half up); `None` for
+/// anything else, `null` included.
+pub fn parse_us(text: Str) -> Option[Int] ! {} {
+    let n = str_len(text);
+    if n == 0 { return Option[Int].None(); }
+    let mut i = 0;
+    let mut whole = 0;
+    while i < n && str_byte(text, i) >= 48 && str_byte(text, i) <= 57 {
+        if whole > 9000000000000 { return Option[Int].None(); }
+        whole = whole * 10 + (str_byte(text, i) - 48);
+        i = i + 1;
+    }
+    if i == 0 { return Option[Int].None(); }
+    let mut frac = 0;
+    let mut digits = 0;
+    let mut round_up = false;
+    if i < n && str_byte(text, i) == 46 {
+        i = i + 1;
+        if i >= n { return Option[Int].None(); }
+        while i < n && str_byte(text, i) >= 48 && str_byte(text, i) <= 57 {
+            let d = str_byte(text, i) - 48;
+            if digits < 3 {
+                frac = frac * 10 + d;
+            } else {
+                if digits == 3 && d >= 5 { round_up = true; }
+            }
+            digits = digits + 1;
+            i = i + 1;
+        }
+    }
+    if i != n { return Option[Int].None(); }
+    let mut d = digits;
+    while d < 3 {
+        frac = frac * 10;
+        d = d + 1;
+    }
+    Option[Int].Some(value: whole * 1000 + frac + if round_up { 1 } else { 0 })
+}
+
+/// A string field of the baseline, `""` when there is none: the first line holding `"NAME": "`.
+pub fn baseline_field(text: Str, name: Str) -> Str ! {} {
+    let prefix = f"\"{name}\": \"";
+    for l in text_lines(text) {
+        let t = text_trim(l);
+        if text_starts_with(t, prefix) {
+            let rest = str_slice(t, str_len(prefix), str_len(t));
+            return match text_find(rest, "\"") {
+                Option.Some(value: q) => str_slice(rest, 0, q),
+                Option.None() => rest,
+            };
+        }
+    }
+    ""
+}
+
+/// The median of `program`'s `stage` in the baseline's text, in microseconds, `None` when no line names
+/// them or the number is not one. The first line holding both names is the one read.
+pub fn baseline_median_us(text: Str, program: Str, stage: Str) -> Option[Int] ! {} {
+    let needle = f"\"program\": \"{program}\", \"stage\": \"{stage}\"";
+    let tag = "\"median_ms\": ";
+    for l in text_lines(text) {
+        if text_contains(l, needle) {
+            return match text_find(l, tag) {
+                Option.Some(value: at) => {
+                    let rest = str_slice(l, at + str_len(tag), str_len(l));
+                    let mut end = 0;
+                    while end < str_len(rest) && str_byte(rest, end) != 44 && str_byte(rest, end) != 125 {
+                        end = end + 1;
+                    }
+                    parse_us(text_trim(str_slice(rest, 0, end)))
+                },
+                Option.None() => Option[Int].None(),
+            };
+        }
+    }
+    Option[Int].None()
+}
+
+fn measured(ms: Vec[Measurement], program: Str, stage: Str) -> Bool ! {} {
+    let mut i = 0;
+    while i < vec_len(ms) {
+        let m = vec_get(ms, i);
+        if m.program == program && m.stage == stage { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+/// The program and stage a baseline line names, when it begins `{"program": "`: the reference reads
+/// every such line, a measurement's, a size's and a peak's alike.
+fn named(line: Str) -> Option[Strs] ! {} {
+    let t = text_trim(line);
+    let head = "{\"program\": \"";
+    if !text_starts_with(t, head) { return Option[Strs].None(); }
+    let rest = str_slice(t, str_len(head), str_len(t));
+    let q = match text_find(rest, "\"") {
+        Option.Some(value: at) => at,
+        Option.None() => { return Option[Strs].None(); },
+    };
+    let program = str_slice(rest, 0, q);
+    let after = str_slice(rest, q + 1, str_len(rest));
+    let tag = "\"stage\": \"";
+    let s = match text_find(after, tag) {
+        Option.Some(value: at) => str_slice(after, at + str_len(tag), str_len(after)),
+        Option.None() => { return Option[Strs].None(); },
+    };
+    let stage = match text_find(s, "\"") {
+        Option.Some(value: at) => str_slice(s, 0, at),
+        Option.None() => s,
+    };
+    let out = strs_new();
+    strs_push(out, program);
+    strs_push(out, stage);
+    Option[Strs].Some(value: out)
+}
+
+/// What `--check` says about `ms` against the baseline text: `compare`'s lines, in its order.
+pub fn judge(text: Str, ms: Vec[Measurement]) -> Judged ! {} {
+    let j = Judged(lines: strs_new(), errs: ints_new(), failed: false);
+    let regressions = strs_new();
+    let improvements = strs_new();
+    let mut i = 0;
+    while i < vec_len(ms) {
+        let m = vec_get(ms, i);
+        i = i + 1;
+        let was = match baseline_median_us(text, m.program, m.stage) {
+            Option.Some(value: w) => w,
+            Option.None() => {
+                emit(j, false, f"bench: {key(m)} is not in the baseline");
+                continue;
+            },
+        };
+        let now = us_of(m_median(m));
+        if was <= 0 { continue; }
+        let moved = if now > was { now - was } else { was - now };
+        if moved < FLOOR_US { continue; }
+        if now * 4 > was * 5 {
+            strs_push(regressions, f"{key(m)}: {ms1(was)} -> {ms1(now)} ms");
+        } else if now * 4 < was * 3 {
+            strs_push(improvements, f"{key(m)}: {ms1(was)} -> {ms1(now)} ms");
+        }
+    }
+    // A benchmark in the baseline that this run did not produce: deleting a program is legitimate, and
+    // the comparison quietly covering one fewer thing is not.
+    for l in text_lines(text) {
+        match named(l) {
+            Option.Some(value: ps) => {
+                if !measured(ms, strs_get(ps, 0), strs_get(ps, 1)) {
+                    emit(j, false, f"bench: {strs_get(ps, 0)}/{strs_get(ps, 1)} is in the baseline and was not measured");
+                }
+            },
+            Option.None() => 0,
+        };
+    }
+    for s in improvements {
+        emit(j, false, f"faster: {s}");
+    }
+    if strs_len(regressions) == 0 {
+        emit(j, false, "\nbench: nothing slower than the baseline by more than 25% and 5 ms");
+        return j;
+    }
+    for r in regressions {
+        emit(j, true, f"slower: {r}");
+    }
+    emit(j, true, f"\nbench: {strs_len(regressions)} measurement(s) slower than the baseline by more than 25% and 5 ms");
+    Judged(lines: j.lines, errs: j.errs, failed: true)
+}
+
+/// A verdict in the fixture's text: a line a row, `1> ` for standard output and `2> ` for standard
+/// error, a newline inside a line written `\n`, then `exit N`.
+pub fn verdict_text(j: Judged) -> Str ! {} {
+    let out = strs_new();
+    let mut i = 0;
+    while i < strs_len(j.lines) {
+        let mark = if ints_get(j.errs, i) == 1 { "2> " } else { "1> " };
+        strs_push(out, f"{mark}{text_replace(strs_get(j.lines, i), "\n", "\\n")}\n");
+        i = i + 1;
+    }
+    strs_push(out, f"exit {if j.failed { 1 } else { 0 }}\n");
+    str_join(out, "")
+}

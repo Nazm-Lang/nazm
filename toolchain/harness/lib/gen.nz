@@ -1,0 +1,153 @@
+// The generator of R7's semantic differential fuzzing (N73, `docs/internal/architecture.md` §7.75), shared by
+// the test `cli/fuzz_diff.nz` and by `nazm-fuzz diff` (R8 slice 13, S13.5): a seeded writer of well-typed
+// programs that terminate by construction. It is the Rust test's generator step for step — the same
+// xorshift on `UInt64`, the same draws in the same order — so a seed writes the same programs.
+
+use "@std/text"
+use "strings.nz"
+use "port.nz"
+use "run.nz"
+
+/// The generator's state: one word, xorshifted.
+pub struct Rng {
+    s: Vec[UInt64],
+}
+
+fn next(r: Rng) -> UInt64 ! {} {
+    let mut s = vec_get(r.s, 0);
+    s = s ^ (s >> 12);
+    s = s ^ (s << 25);
+    s = s ^ (s >> 27);
+    vec_set(r.s, 0, s);
+    wrapping_mul(s, UInt64(2685821657736338717))
+}
+
+fn below(r: Rng, n: Int) -> Int ! {} {
+    let m = if n < 1 { 1 } else { n };
+    Int(next(r) % UInt64(m))
+}
+
+fn pick(r: Rng, xs: Strs) -> Str ! {} {
+    strs_get(xs, below(r, strs_len(xs)))
+}
+
+/// Every generated program's types (N81).
+const LAYOUTS: Str = "struct P { a: Int, b: Int }\nstruct Q { flag: Bool, name: Str, n: Int }\nenum S { Num(n: Int), Pair(q: Q, k: Int), Empty }\nfn q_of(x: Int, y: Int) -> Q { Q(flag: x < y, name: int_to_str(x), n: y) }\nfn s_of(x: Int, y: Int) -> S { if x < y { S.Pair(q: q_of(x, y), k: x) } else { if x == y { S.Empty() } else { S.Num(n: y) } } }\nfn s_val(s: S) -> Int { match s { S.Num(n: n) => n, S.Pair(q: q, k: k) => (if q.flag { str_len(q.name) } else { 0 - str_len(q.name) }) + k % 7, S.Empty() => 3, } }\n";
+
+fn literal(r: Rng) -> Str ! {} {
+    let k = below(r, 10);
+    if k == 0 { return "9223372036854775807"; }
+    if k == 1 { return "(0 - 9223372036854775807 - 1)"; }
+    if k == 2 { return "3037000500"; }
+    if k == 3 { return "-1"; }
+    if k == 4 { return "0"; }
+    int_to_str(below(r, 41) - 20)
+}
+
+fn int_expr(r: Rng, vars: Strs, depth: Int, callable: Int) -> Str ! {} {
+    if depth == 0 || below(r, 3) == 0 {
+        return if strs_len(vars) > 0 && below(r, 3) != 0 { pick(r, vars) } else { literal(r) };
+    }
+    let k = below(r, 10);
+    if k <= 3 {
+        let op = pick(r, text_split("+|-|*|/|%|+|-", "|"));
+        let a = int_expr(r, vars, depth - 1, callable);
+        let b = int_expr(r, vars, depth - 1, callable);
+        return f"({a} {op} {b})";
+    }
+    if k == 4 {
+        return f"(0 - {int_expr(r, vars, depth - 1, callable)})";
+    }
+    if k == 5 {
+        let c = cond(r, vars, depth - 1, callable);
+        let a = int_expr(r, vars, depth - 1, callable);
+        let b = int_expr(r, vars, depth - 1, callable);
+        return f"(if {c} {{ {a} }} else {{ {b} }})";
+    }
+    if k == 6 && callable > 0 {
+        let f = below(r, callable);
+        let a = int_expr(r, vars, depth - 1, callable);
+        let b = int_expr(r, vars, depth - 1, callable);
+        return f"f{f}({a}, {b})";
+    }
+    let a = int_expr(r, vars, depth - 1, callable);
+    let b = int_expr(r, vars, depth - 1, callable);
+    // Layouts (N81): a record with a `Bool` and a `Str` beside an `Int`, inside an enum's payload.
+    if k == 8 { return f"s_val(s_of({a}, {b}))"; }
+    if k == 9 { return f"q_of({a}, {b}).n"; }
+    f"P(a: {a}, b: {b}).a"
+}
+
+fn cond(r: Rng, vars: Strs, depth: Int, callable: Int) -> Str ! {} {
+    let op = pick(r, text_split("<|<=|>|>=|==|!=", "|"));
+    let a = int_expr(r, vars, depth, callable);
+    let b = int_expr(r, vars, depth, callable);
+    let c = f"{a} {op} {b}";
+    let k = below(r, 5);
+    if k == 0 { return f"({c} && {cond(r, vars, 0, callable)})"; }
+    if k == 1 { return f"({c} || {cond(r, vars, 0, callable)})"; }
+    c
+}
+
+fn copy_strs(xs: Strs) -> Strs ! {} {
+    let out = strs_new();
+    for x in xs {
+        strs_push(out, x);
+    }
+    out
+}
+
+/// One function body: a statement per line, so a line can be removed when shrinking.
+fn body(r: Rng, params: Strs, callable: Int) -> Str ! {} {
+    let vars = copy_strs(params);
+    let out = strs_new();
+    let n = 1 + below(r, 5);
+    let mut k = 0;
+    while k < n {
+        let v = f"v{k}";
+        let which = below(r, 4);
+        if which == 0 {
+            strs_push(out, f"    let mut {v} = {int_expr(r, vars, 2, callable)};\n");
+            let bound = 1 + below(r, 6);
+            let e = int_expr(r, vars, 1, callable);
+            strs_push(out, f"    let mut i{k} = 0; while i{k} < {bound} {{ {v} = {v} + {e}; i{k} = i{k} + 1; }}\n");
+        } else if which == 1 {
+            strs_push(out, f"    let mut {v} = {int_expr(r, vars, 2, callable)};\n");
+            let c = cond(r, vars, 1, callable);
+            let a = int_expr(r, vars, 1, callable);
+            let b = int_expr(r, vars, 1, callable);
+            strs_push(out, f"    if {c} {{ {v} = {a}; }} else {{ {v} = {b}; }}\n");
+        } else {
+            strs_push(out, f"    let {v} = {int_expr(r, vars, 3, callable)};\n");
+        }
+        strs_push(vars, v);
+        k = k + 1;
+    }
+    strs_push(out, f"    let result = {int_expr(r, vars, 2, callable)};\n");
+    strs_push(out, "    result\n");
+    str_join(out, "")
+}
+
+pub fn program(r: Rng) -> Str ! {} {
+    let out = strs_new();
+    strs_push(out, LAYOUTS);
+    let n = 1 + below(r, 3);
+    let mut f = 0;
+    while f < n {
+        strs_push(out, f"fn f{f}(x: Int, y: Int) -> Int {{\n");
+        strs_push(out, body(r, words("x y"), f));
+        strs_push(out, "}\n");
+        f = f + 1;
+    }
+    strs_push(out, "fn main() -> Int {\n");
+    strs_push(out, body(r, strs_new(), n));
+    strs_push(out, "}\n");
+    str_join(out, "")
+}
+
+/// A generator seeded as the Rust test seeds it: the seed with its low bit set.
+pub fn rng_new(seed: Int) -> Rng ! {} {
+    let rs = vec_new[UInt64]();
+    vec_push(rs, UInt64(seed) | UInt64(1));
+    Rng(s: rs)
+}
