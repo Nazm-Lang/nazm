@@ -192,8 +192,9 @@
 - [ ] 13.8 Follow-up logged by 13.4: widen the mutation catalogue's killer names (89 of 94 entries name a whole test, only 5 map to `FILE::fn`), then repeat the Nazm/Rust campaign comparison over at least 20 entries before slice 19 (draft, last section)
 
 ## 14. Slice 14 — the tests are the contract
-- [ ] 14.1 The black-box suite against the Nazm-built `nazm`; `rewrite-in-nazm` 3.1, 3.2, 3.4
-- [ ] 14.2 `stays-rust.txt` revisited: each test ported through the CLI or kept as the seed's
+- [ ] 14.1 (run 2026-11-04, NOT closed: 896 of 1471 tests pass on the Nazm-built `nazm`, 536 fail only on it, 32 fail on the seed too, 7 not run; classified in `design.md`, S14 as built; `toolchain/harness/tests/contract.sh`) The black-box suite against the Nazm-built `nazm`; `rewrite-in-nazm` 3.1, 3.2, 3.4
+- [x] 14.2 done 2026-11-04 as a decision, shortfall stated: all 64 entries kept as the seed's (none ported through the CLI; each category's reason is in `design.md`, S14 as built); no entry was individually tried as a CLI port. `stays-rust.txt` header updated
+
 
 ## 15. Slice 15 — the chain on Linux
 - [ ] 15.1 Seed → stage 1 → 2 → 3 through Nazm's `nazm build`, the released set, contained

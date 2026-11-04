@@ -11,7 +11,7 @@
 # Prints one line per comparison and ends with `N agree, M differ, stays Rust (K)`; exits 1 when
 # anything differs or a Rust run could not be made. A Rust test named in `tests/stays-rust.txt`
 # reaches a Rust API the CLI does not offer: it is counted as staying Rust, never as agreeing, and
-# it must have no port (the list is revisited after the cut-over, R8).
+# it must have no port (revisited in R8 slice 14: all stay the seed's).
 #
 # Environment:
 #   HARNESS_NAZM      the `nazm` that builds and runs the harness (default: `NAZM`, the tree's)

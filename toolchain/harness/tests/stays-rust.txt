@@ -1,7 +1,8 @@
 # The Rust tests that stay Rust (R7; the coordinator's decision of 2026-10-15): each reaches a Rust
 # API the `nazm` binary does not offer, so a black-box port has nothing to compare. `tests/run.sh`
 # reports them as "stays Rust (N)", never as agreeing, and fails when one of them is ported or no
-# longer exists. The list is revisited after the cut-over (R8).
+# longer exists. R8 slice 14 revisited the list: all 64 stay the seed's own tests (see
+# `openspec/changes/r8-cut-over/design.md`, S14 as built); the seed is frozen with them (slice 19).
 #
 # One test a line, `FILE::TEST` and why, one of:
 #   table not printed      a table of the compiler's the CLI does not print
