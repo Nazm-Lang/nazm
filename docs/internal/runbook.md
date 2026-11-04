@@ -111,6 +111,33 @@ the runtime's identity (`runtime-abi`) and, in `nazm runtime build`, for the run
 (`runtime-artifact`). `nazm runtime build` and `verify`, `--lib`, `--runtime` and the provenance files add no
 other kind of process: `clang`, `strip`, `codesign`, `dsymutil` and the command `--attest-with` names.
 
+### The macOS self-build: serial host steps — R8 slice 16 (decided 2026-10-20, applied 2026-11-05)
+
+*Decided by the copyright holder on 2026-10-20 (`openspec/changes/r8-cut-over/`, question 2), as an
+extension of the rule above.*
+
+The self-build on macOS (`toolchain/selfbuild/host-selfbuild.sh aarch64|x86_64 OUT`) runs on the
+host as a **series of single steps**: every program written in Nazm that it builds or runs is
+started by one `host-run`, under the conditions of *What may run on the host*, one after another.
+The script itself is a shell loop: it starts no Nazm-built program except through `host-run`, runs
+nothing in parallel, and stops at the first refusal or withdrawal. A step is a `nazm build` (the
+waiting driver and one checked stage at a time, as accepted for slice 4), a front end, an
+interpreter, `nazm-check`, or a corpus program built with `--heap-limit`. A program that links no
+counted heap is not run on the host; the contained self-build is its evidence.
+
+x86_64 runs under Rosetta, only after aarch64 has passed and never beside it; its peaks are read as
+`host-run` reads every peak, with the same 256 MiB margin.
+
+The withdrawal conditions are unchanged. A withdrawal during the self-build stops it, leaves the
+marker, and puts the macOS self-build back to *not run* until a person has investigated; the Linux
+self-build stays `cargo xtask contained selfbuild`.
+
+**Still contained only:** the Linux self-build, and everything listed above. The macOS self-build is
+not a workload of the contained runner and never runs beside one.
+
+*Evidence at the time of the amendment (2026-11-04/05):* `host-selfbuild.sh aarch64` and `host-selfbuild.sh x86_64` (under Rosetta, with every clang call naming `-target x86_64-apple-darwin`) each ran to the end with stages 1 to 3 byte-identical, the corpus, interpreter and `nazm-check` comparisons agreeing, and the 256 MiB probe stopping with N0406 (`openspec/changes/r8-cut-over/tasks.md` 16.3, 16.4). A release image is stripped, so a linked counted heap is recognised by the heap unit's whole N0406 message when the `nz.heap_malloc` symbol is gone.
+
+
 ### What the runner must enforce
 
 - **Memory and swap set equal.** A cap that can be swapped past is not a cap.

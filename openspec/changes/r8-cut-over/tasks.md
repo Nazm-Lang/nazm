@@ -227,7 +227,7 @@
       2026-11-04/05 passed: `host-selfbuild.sh x86_64 ~/nazm-hostsb-x86_64-3` exit 0, stage3 `nazm` is Mach-O x86_64, stages 1 to 3
       byte-identical, 57 corpus programs agree (9 not run on the host), 68 run by the self-built interpreter as by the seed's,
       `nazm-check` agrees, the 256 MiB heap stops with N0406 (probe peak 6.1 MiB, exit 2); largest stage `nazm` 1561.9 MiB)
-- [ ] 16.5 The runbook amendment (S16.5) applied with 16.3's evidence
+- [x] 16.5 The runbook amendment (S16.5) applied with 16.3's evidence (2026-11-05: `docs/internal/runbook.md`, after *What may run on the host*, with the 16.3 and 16.4 evidence)
 
 ## 17. Slice 17 — Windows x86_64
 - [ ] 17.1 The released set built by Nazm for `x86_64-pc-windows-gnu`; the host-safe suite on the
