@@ -1,0 +1,565 @@
+// `nzx host-run` (S13.2): the port of `xtask/src/host_run.rs`, byte for byte where the reference
+// is observable — the arguments, the order of the refusals and their eleven names, the state
+// directory and its two lock slots, the run under `/usr/bin/time -l` in a process group of its
+// own, the report line, the withdrawal conditions and the statuses.
+//
+// What this runner holds in memory is bounded by its own counted heap (256 MiB, question 5): the
+// stage's two streams are spooled to files in the state directory (kept up to the cap, counted
+// beyond it) and copied out in chunks, where the reference holds them. What differs from the
+// reference, all of it logged in `design.md` (S13.2): a stage that ends but leaves a process
+// holding its pipes is ended with its group after 5 seconds (the reference then reports no
+// output); the usage line names `nzx`; the text of an operating-system error is Nazm's.
+
+use "@std/file";
+use "@std/ioerror";
+use "@std/process";
+use "@std/env";
+use "@std/text";
+use "@std/time";
+use "../lib/run.nz";
+use "../lib/host.nz";
+use "image.nz";
+
+const DEFAULT_DEADLINE: Int = 900;
+const MAX_DEADLINE: Int = 3600;
+const OUTPUT_CAP: Int = 4194304;
+const MAX_OUTPUT_MIB: Int = 256;
+/// How far past its limit a stage's peak resident memory may be before the rule is withdrawn.
+pub const MARGIN: Int = 268435456;
+
+const EXIT_REFUSED: Int = 1;
+const EXIT_DEADLINE: Int = 124;
+const EXIT_SIGNALLED: Int = 125;
+const EXIT_WITHDRAWN: Int = 70;
+const EXIT_TRUNCATED: Int = 126;
+
+/// What the command line asked for.
+struct Options {
+    exe: Str,
+    args: Strs,
+    deadline: Int,
+    margin: Int,
+    has_report: Bool,
+    report_to: Str,
+    output_cap: Int,
+}
+
+fn usage(m: Str) -> Refusal ! {} {
+    refusal("usage", f"{m}\nusage: nzx host-run [--deadline-secs N] [--report FILE] [--max-output-mib N] -- EXECUTABLE [ARGS...]")
+}
+
+/// `n.parse::<u64>()` for a size that fits an `Int`: an optional `+` and digits; `0 - 1` for
+/// anything else (which the callers' range filters refuse).
+fn parse_size(s: Str) -> Int ! {} {
+    let mut i = 0;
+    if str_len(s) > 0 && str_byte(s, 0) == 43 {
+        i = 1;
+    }
+    if i >= str_len(s) || str_len(s) - i > 18 {
+        return 0 - 1;
+    }
+    let mut v = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b < 48 || b > 57 {
+            return 0 - 1;
+        }
+        v = v * 10 + (b - 48);
+        i = i + 1;
+    }
+    v
+}
+
+fn parse_args(args: Strs) -> Result[Options, Refusal] ! {} {
+    let mut deadline = DEFAULT_DEADLINE;
+    let mut margin = MARGIN;
+    let mut has_report = false;
+    let mut report_to = "";
+    let mut cap = OUTPUT_CAP;
+    let mut i = 0;
+    let mut done = false;
+    while i < strs_len(args) && !done {
+        let a = strs_get(args, i);
+        if a == "--" {
+            i = i + 1;
+            done = true;
+        } else {
+            if a == "--deadline-secs" {
+                let n = if i + 1 < strs_len(args) { parse_size(strs_get(args, i + 1)) } else { 0 - 1 };
+                if n < 1 || n > MAX_DEADLINE {
+                    return Result[Options, Refusal].Err(error: usage(f"--deadline-secs takes 1..={MAX_DEADLINE}"));
+                }
+                deadline = n;
+                i = i + 2;
+            } else {
+                if a == "--max-output-mib" {
+                    let n = if i + 1 < strs_len(args) { parse_size(strs_get(args, i + 1)) } else { 0 - 1 };
+                    if n < 1 || n > MAX_OUTPUT_MIB {
+                        return Result[Options, Refusal].Err(error: usage(f"--max-output-mib takes 1..={MAX_OUTPUT_MIB}"));
+                    }
+                    cap = n * 1024 * 1024;
+                    i = i + 2;
+                } else {
+                    if a == "--report" {
+                        if i + 1 >= strs_len(args) {
+                            return Result[Options, Refusal].Err(error: usage("--report takes a file"));
+                        }
+                        has_report = true;
+                        report_to = strs_get(args, i + 1);
+                        i = i + 2;
+                    } else {
+                        if a == "--margin-bytes" {
+                            let n = if i + 1 < strs_len(args) { parse_size(strs_get(args, i + 1)) } else { 0 - 1 };
+                            if n < 0 || n > MARGIN {
+                                return Result[Options, Refusal].Err(error: usage("--margin-bytes takes at most 268435456"));
+                            }
+                            margin = n;
+                            i = i + 2;
+                        } else {
+                            return Result[Options, Refusal].Err(error: usage(f"unknown option `{a}`"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if i >= strs_len(args) {
+        return Result[Options, Refusal].Err(error: usage("no executable named"));
+    }
+    let rest = strs_new();
+    let mut k = i + 1;
+    while k < strs_len(args) {
+        strs_push(rest, strs_get(args, k));
+        k = k + 1;
+    }
+    Result[Options, Refusal].Ok(value: Options(exe: strs_get(args, i), args: rest, deadline: deadline, margin: margin, has_report: has_report, report_to: report_to, output_cap: cap))
+}
+
+/// Peak resident memory in bytes from BSD `time -l`'s report: the line ending in
+/// `maximum resident set size`; `0 - 1` when none.
+pub fn parse_peak_rss(report: Str) -> Int ! {} {
+    parse_counter(report, "maximum resident set size")
+}
+
+/// Instructions retired from the same report; `0 - 1` when none.
+pub fn parse_instructions(report: Str) -> Int ! {} {
+    parse_counter(report, "instructions retired")
+}
+
+fn parse_counter(report: Str, suffix: Str) -> Int ! {} {
+    for l in text_split(report, "\n") {
+        let t = text_trim(l);
+        if text_ends_with(t, suffix) {
+            let n = parse_size(text_trim(str_slice(t, 0, str_len(t) - str_len(suffix))));
+            if n >= 0 {
+                return n;
+            }
+        }
+    }
+    0 - 1
+}
+
+/// The withdrawal condition a finished run shows (`""` for none). `peak` is `0 - 1` when
+/// unreadable, `code` is `0 - 1` when the stage was ended by a signal.
+pub fn withdrawal(limit: Int, margin: Int, peak: Int, n0406: Bool, code: Int) -> Str ! {} {
+    if peak < 0 {
+        return "peak resident memory could not be read, so it cannot be compared";
+    }
+    if peak > limit + margin {
+        return f"peak resident memory {peak} bytes exceeds the heap limit {limit} by more than {margin}";
+    }
+    if n0406 && code != 2 {
+        let shown = if code < 0 { "None" } else { f"Some({code})" };
+        return f"an N0406 was written but the program did not stop with status 2 (it ended {shown})";
+    }
+    ""
+}
+
+/// The status `host-run` exits with: the program's own, passed through (`code` is `0 - 1` for a stage
+/// ended by a signal), 124 past the deadline, 125 for a signal.
+pub fn exit_status(code: Int, timed_out: Bool) -> Int ! {} {
+    if timed_out {
+        return EXIT_DEADLINE;
+    }
+    if code < 0 {
+        return EXIT_SIGNALLED;
+    }
+    code % 256
+}
+
+/// Whether `docker ps -q` output lists a contained workload's container.
+pub fn lists_container(ps_quiet: Str) -> Bool ! {} {
+    for l in text_split(ps_quiet, "\n") {
+        if str_len(text_trim(l)) > 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// `""` when `args` parse, else the name of the refusal they earn.
+pub fn args_problem(args: Strs) -> Str ! {} {
+    match parse_args(args) {
+        Result.Ok(value: o) => "",
+        Result.Err(error: r) => r.name,
+    }
+}
+
+pub fn state_dir(io: IoCap) -> Str ! { io } {
+    match env_get(io, "NAZM_HOST_RUN_DIR") {
+        Option.Some(value: d) => { return d; },
+        Option.None() => {},
+    };
+    let home = match env_get(io, "HOME") {
+        Option.Some(value: h) => h,
+        Option.None() => match env_get(io, "TMPDIR") { Option.Some(value: t) => t, Option.None() => "/tmp" },
+    };
+    f"{home}/.cache/nazm-host-run"
+}
+
+fn env_is_set(io: IoCap, name: Str) -> Bool ! { io } {
+    match env_get(io, name) {
+        Option.Some(value: v) => true,
+        Option.None() => false,
+    }
+}
+
+/// The spooled bytes of one stream.
+pub fn drain(io: IoCap, from: OsHandle, spool: Str, cap: Int, total: Chan[Int]) -> Int ! { io } {
+    let target = match file_create(io, spool) {
+        Result.Ok(value: f) => Option[File].Some(value: f),
+        Result.Err(error: e) => Option[File].None(),
+    };
+    let buf = bytes_new(65536);
+    let src = File(handle: from);
+    let mut kept = 0;
+    let mut all = 0;
+    let mut more = true;
+    while more {
+        let n = match file_read(src, buf) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => 0,
+        };
+        if n <= 0 {
+            more = false;
+        } else {
+            all = all + n;
+            if kept < cap {
+                let room = cap - kept;
+                let take = if n < room { n } else { room };
+                match target {
+                    Option.Some(value: f) => { file_write(f, bytes_slice(buf, 0, take)); },
+                    Option.None() => {},
+                };
+                kept = kept + take;
+            }
+        }
+    }
+    match target {
+        Option.Some(value: f) => { file_close(f); },
+        Option.None() => {},
+    };
+    chan_send_of(total, all);
+    0
+}
+
+/// Whether the file at `path` holds `needle`, read in chunks.
+pub fn file_has(io: IoCap, path: Str, needle: Str) -> Bool ! { io } {
+    let f = match file_open(io, path) {
+        Result.Ok(value: f) => f,
+        Result.Err(error: e) => { return false; },
+    };
+    let keep = str_len(needle);
+    let chunk = bytes_new(1048576);
+    let mut carry = bytes_new(0);
+    let mut found = false;
+    let mut more = true;
+    while more && !found {
+        let n = match file_read(f, chunk) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => 0,
+        };
+        if n <= 0 {
+            more = false;
+        } else {
+            let buf = bytes_new(bytes_len(carry) + n);
+            bytes_copy(bytes_slice(buf, 0, bytes_len(carry)), carry);
+            bytes_copy(bytes_slice(buf, bytes_len(carry), bytes_len(carry) + n), bytes_slice(chunk, 0, n));
+            if bytes_find(buf, needle, 0) >= 0 {
+                found = true;
+            }
+            let k = if bytes_len(buf) < keep { bytes_len(buf) } else { keep };
+            let next = bytes_new(k);
+            bytes_copy(next, bytes_slice(buf, bytes_len(buf) - k, bytes_len(buf)));
+            carry = next;
+        }
+    }
+    file_close(f);
+    found
+}
+
+/// The first `n` bytes of the file at `path` onto `out`.
+pub fn copy_out(io: IoCap, path: Str, n: Int, out: File) -> Int ! { io } {
+    let f = match file_open(io, path) {
+        Result.Ok(value: f) => f,
+        Result.Err(error: e) => { return 0; },
+    };
+    let buf = bytes_new(65536);
+    let mut left = n;
+    while left > 0 {
+        let want = if left < 65536 { left } else { 65536 };
+        let got = match file_read(f, bytes_slice(buf, 0, want)) {
+            Result.Ok(value: g) => g,
+            Result.Err(error: e) => 0,
+        };
+        if got <= 0 {
+            left = 0;
+        } else {
+            file_write(out, bytes_slice(buf, 0, got));
+            left = left - got;
+        }
+    }
+    file_close(f);
+    0
+}
+
+pub fn size_of(io: IoCap, path: Str) -> Int ! { io } {
+    match file_metadata(io, path) {
+        Result.Ok(value: m) => m.size,
+        Result.Err(error: e) => 0,
+    }
+}
+
+/// Whether `docker ps -q` lists a contained workload's container.
+fn contained_running(h: Caps) -> Bool ! { io, spawn } {
+    let a = words("ps -q --filter label=nazm.owner=nazm-contained-runner");
+    let r = run(h, "docker", a, "", env_here(h.io));
+    if r.code != 0 {
+        return false;
+    }
+    lists_container(r.stdout)
+}
+
+/// What one run produced.
+struct Stage {
+    stdout_total: Int,
+    stderr_total: Int,
+    code: Int,
+    peak: Int,
+    instructions: Int,
+    timed_out: Bool,
+}
+
+fn execute(h: Caps, o: Options, dir: Str, pid: Str) -> Result[Stage, Str] ! { io, spawn } {
+    let io = h.io;
+    let sp = h.sp;
+    let v = h.v;
+    let report = str_vouch(f"{dir}/time-{pid}.txt");
+    let out_spool = str_vouch(f"{dir}/out-{pid}.spool");
+    let err_spool = str_vouch(f"{dir}/err-{pid}.spool");
+    let argv = strs_new();
+    strs_push(argv, "-l");
+    strs_push(argv, "-o");
+    strs_push(argv, report);
+    strs_push(argv, o.exe);
+    for a in o.args {
+        strs_push(argv, a);
+    }
+    let c = match process_spawn_with(h.p, str_vouch("/usr/bin/time"), argv, "", env_here(io), true, true) {
+        Result.Ok(value: c) => c,
+        Result.Err(error: e) => { return Result[Stage, Str].Err(error: f"cannot start /usr/bin/time: {io_error_show(e)}"); },
+    };
+    let pgid = process_child_id(c);
+    let outs = chan_new_of[Int](1);
+    let errs = chan_new_of[Int](1);
+    let out = os_child_pipe(c.handle, 1);
+    let err = os_child_pipe(c.handle, 2);
+    let t = h.t;
+    let deadline = time_deadline(t, o.deadline * 1000);
+    let mut status = 0;
+    let mut timed_out = false;
+    let mut waited = "";
+    let mut out_total = 0;
+    let mut err_total = 0;
+    scope {
+        spawn drain(io, out, out_spool, o.output_cap, outs);
+        spawn drain(io, err, err_spool, o.output_cap, errs);
+        status = match process_wait_until(c, deadline) {
+            Result.Ok(value: s) => match s {
+                Option.Some(value: v) => v,
+                Option.None() => {
+                    timed_out = true;
+                    process_kill_group(h.p, pgid, 9);
+                    match process_wait(c) {
+                        Result.Ok(value: v) => v,
+                        Result.Err(error: e) => { waited = f"reaping the stage: {io_error_show(e)}"; 0 },
+                    }
+                },
+            },
+            Result.Err(error: e) => { waited = f"waiting for the stage: {io_error_show(e)}"; process_kill_group(h.p, pgid, 9); 0 },
+        };
+        // The stage has ended; its streams close when every process holding them has. One that
+        // is left holding them is ended with the group after five seconds.
+        let got = vec_new[Int]();
+        let one = vec_new[Chan[Int]]();
+        vec_push(one, outs);
+        if chan_select_until(one, got, 5000) != 0 {
+            process_kill_group(h.p, pgid, 9);
+            chan_recv_of(outs, got);
+        }
+        let two = vec_new[Chan[Int]]();
+        vec_push(two, errs);
+        if chan_select_until(two, got, 5000) != 0 {
+            process_kill_group(h.p, pgid, 9);
+            chan_recv_of(errs, got);
+        }
+        if vec_len(got) > 0 {
+            out_total = vec_get(got, 0);
+        }
+        if vec_len(got) > 1 {
+            err_total = vec_get(got, 1);
+        }
+    }
+    os_close(out);
+    os_close(err);
+    os_close(c.handle);
+    if str_len(waited) > 0 {
+        return Result[Stage, Str].Err(error: waited);
+    }
+    let text = match file_read_all(io, report) {
+        Result.Ok(value: b) => bytes_to_str(b),
+        Result.Err(error: e) => "",
+    };
+    file_remove(io, report);
+    Result[Stage, Str].Ok(value: Stage(stdout_total: out_total, stderr_total: err_total, code: if status >= 256 { 0 - 1 } else { status }, peak: parse_peak_rss(text), instructions: parse_instructions(text), timed_out: timed_out))
+}
+
+fn err_line(io: IoCap, s: Str) -> Int ! { io } {
+    file_write_str(file_stderr(io), f"{s}\n");
+    0
+}
+
+fn refuse(io: IoCap, r: Refusal) -> Int ! { io } {
+    err_line(io, f"host-run: refused [{r.name}]: {r.why}");
+    EXIT_REFUSED
+}
+
+/// `nzx host-run ARGS`: the status to exit with.
+pub fn host_run(h: Caps, args: Strs) -> Int ! { io, spawn } {
+    match admit_and_run(h, args) {
+        Result.Ok(value: code) => code,
+        Result.Err(error: r) => refuse(h.io, r),
+    }
+}
+
+fn admit_and_run(h: Caps, args: Strs) -> Result[Int, Refusal] ! { io, spawn } {
+    let io = h.io;
+    let v = h.v;
+    if uname(h, "-s") != "Darwin" {
+        return Result[Int, Refusal].Err(error: refusal("not-macos", "the host runner is for the macOS host; elsewhere use `nzx contained`"));
+    }
+    for v in words("NAZM_CONTAINED NAZM_ALLOW_UNCONTAINED") {
+        if env_is_set(io, v) {
+            return Result[Int, Refusal].Err(error: refusal("host-environment", f"contained: `{v}` is set in the host's environment; unset it. The runner sets `NAZM_CONTAINED=1` inside the container itself, and nothing sets either on a host."));
+        }
+    }
+    let o = parse_args(args)?;
+    let bad = image_problem(io, o.exe);
+    if str_len(bad) > 0 {
+        return Result[Int, Refusal].Err(error: refusal("no-executable", f"{o.exe}: {bad}"));
+    }
+    let scan = match image_scan(io, o.exe) {
+        Result.Ok(value: s) => s,
+        Result.Err(error: e) => { return Result[Int, Refusal].Err(error: refusal("no-executable", f"{o.exe}: {e}")); },
+    };
+    let limit_digits = limit_of(scan)?;
+    let limit = parse_size(limit_digits);
+
+    let dir = state_dir(io);
+    match dir_create_all(io, dir) {
+        Result.Ok(value: n) => {},
+        Result.Err(error: e) => { return Result[Int, Refusal].Err(error: refusal("usage", f"{dir}: {io_error_show(e)}")); },
+    };
+    let marker = str_vouch(f"{dir}/withdrawn");
+    match file_read_all(io, marker) {
+        Result.Ok(value: b) => {
+            return Result[Int, Refusal].Err(error: refusal("withdrawn", f"the rule is withdrawn: {text_trim(bytes_to_str(b))} (marker: {marker}). Host runs stay refused until it is investigated; then remove the marker file named above"));
+        },
+        Result.Err(error: e) => {},
+    };
+    // Two slots, each a file whose kernel lock a running stage holds until it exits.
+    let mut held = false;
+    let mut slot = 0;
+    let slots = words("lock lock-2");
+    while slot < 2 && !held {
+        let lock = match file_append(io, str_vouch(f"{dir}/{strs_get(slots, slot)}")) {
+            Result.Ok(value: f) => f,
+            Result.Err(error: e) => { return Result[Int, Refusal].Err(error: refusal("usage", f"{dir}: {io_error_show(e)}")); },
+        };
+        held = match file_try_lock(lock, true) {
+            Result.Ok(value: got) => got,
+            Result.Err(error: e) => false,
+        };
+        slot = slot + 1;
+    }
+    if !held {
+        return Result[Int, Refusal].Err(error: refusal("another-stage-running", "two host stages this runner started are running: at most two at once"));
+    }
+    if contained_running(h) {
+        return Result[Int, Refusal].Err(error: refusal("contained-workload-running", "a contained workload is running: no host stage beside it"));
+    }
+
+    let pid = int_to_str(process_id(io));
+    let ran = match execute(h, o, dir, pid) {
+        Result.Ok(value: r) => r,
+        Result.Err(error: m) => { return Result[Int, Refusal].Err(error: refusal("usage", m)); },
+    };
+    let out_spool = str_vouch(f"{dir}/out-{pid}.spool");
+    let err_spool = str_vouch(f"{dir}/err-{pid}.spool");
+    let kept_out = if ran.stdout_total < o.output_cap { ran.stdout_total } else { o.output_cap };
+    let kept_err = if ran.stderr_total < o.output_cap { ran.stderr_total } else { o.output_cap };
+    // The program's standard output is the only thing on this process's standard output; the
+    // report goes with its standard error, after it.
+    copy_out(io, out_spool, kept_out, file_stdout(io));
+    copy_out(io, err_spool, kept_err, file_stderr(io));
+    let n0406 = file_has(io, err_spool, "error[N0406]");
+    file_remove(io, out_spool);
+    file_remove(io, err_spool);
+    let truncated = ran.stdout_total > kept_out || ran.stderr_total > kept_err;
+    let peak_text = if ran.peak < 0 { "unknown" } else { int_to_str(ran.peak) };
+    let ended = if ran.timed_out { "DEADLINE reached, the stage was killed" } else { if ran.code < 0 { "exit None" } else { f"exit Some({ran.code})" } };
+    let mut line = f"host-run: heap limit {limit} bytes; peak resident {peak_text} bytes; {ended}";
+    if ran.instructions >= 0 {
+        line = f"{line}; instructions retired {ran.instructions}";
+    }
+    if truncated {
+        line = f"{line}; OUTPUT TRUNCATED at {o.output_cap} bytes (stdout {ran.stdout_total} bytes, stderr {ran.stderr_total} bytes)";
+    }
+    // With `--report FILE` the report is appended there and standard error is the program's alone.
+    if o.has_report {
+        match file_append(io, str_vouch(o.report_to)) {
+            Result.Ok(value: f) => { file_write_str(f, f"{line}\n"); file_close(f); },
+            Result.Err(error: e) => { return Result[Int, Refusal].Err(error: refusal("usage", f"{o.report_to}: {io_error_show(e)}")); },
+        };
+    } else {
+        err_line(io, line);
+    }
+    // A stage killed at its deadline leaves no resource report to read: not a breach.
+    let unreadable_after_kill = ran.timed_out && ran.peak < 0;
+    let why = withdrawal(limit, o.margin, ran.peak, n0406, ran.code);
+    if str_len(why) > 0 && !unreadable_after_kill {
+        match file_create(io, marker) {
+            Result.Ok(value: f) => { file_write_str(f, f"{why} (running {o.exe})"); file_close(f); },
+            Result.Err(error: e) => {},
+        };
+        err_line(io, f"host-run: WITHDRAWAL CONDITION: {why}. The host rule is withdrawn: only `nzx contained` until it is investigated (marker: {marker})");
+        return Result[Int, Refusal].Ok(value: EXIT_WITHDRAWN);
+    }
+    if truncated && !ran.timed_out {
+        return Result[Int, Refusal].Ok(value: EXIT_TRUNCATED);
+    }
+    if ran.timed_out {
+        return Result[Int, Refusal].Ok(value: exit_status(ran.code, true));
+    }
+    Result[Int, Refusal].Ok(value: exit_status(ran.code, false))
+}

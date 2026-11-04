@@ -1,0 +1,64 @@
+// `fixtures/pairs.txt` read, and `--check` run over it (R8 slice 13, S13.6): the fixed pairs of a baseline
+// and a run that `xtask`'s `judge` and this port are both held to. `pairs.verdict` is what the Rust function
+// says (the Rust test writes it); `pairs_verdicts` writes the same text from the port.
+
+use "@std/text"
+use "stats.nz"
+use "check.nz"
+
+pub struct Case {
+    name: Str,
+    base: Str,
+    now: Vec[Measurement],
+}
+
+/// The cases of `text`: `case NAME`, `base LINE`..., `now PROGRAM STAGE MICROSECONDS...`..., `end`.
+pub fn parse_pairs(text: Str) -> Result[Vec[Case], Str] ! {} {
+    let out = vec_new[Case]();
+    let mut name = "";
+    let mut base = strs_new();
+    let mut now = vec_new[Measurement]();
+    for line in text_lines(text) {
+        if str_len(line) == 0 || text_starts_with(line, "#") {
+            continue;
+        }
+        if text_starts_with(line, "case ") {
+            name = str_slice(line, 5, str_len(line));
+            base = strs_new();
+            now = vec_new[Measurement]();
+        } else if text_starts_with(line, "base ") {
+            strs_push(base, str_slice(line, 5, str_len(line)));
+        } else if text_starts_with(line, "now ") {
+            let w = text_split(str_slice(line, 4, str_len(line)), " ");
+            if strs_len(w) < 3 {
+                return Result[Vec[Case], Str].Err(error: f"a measurement needs a program, a stage and a run: {line}");
+            }
+            let runs = ints_new();
+            let mut i = 2;
+            while i < strs_len(w) {
+                match text_parse_int(strs_get(w, i)) {
+                    Result.Ok(value: us) => { ints_push(runs, us * 1000); 0 },
+                    Result.Err(error: e) => { return Result[Vec[Case], Str].Err(error: f"not a number of microseconds: {strs_get(w, i)}"); },
+                };
+                i = i + 1;
+            }
+            vec_push(now, measurement(strs_get(w, 0), strs_get(w, 1), runs));
+        } else if line == "end" {
+            vec_push(out, Case(name: name, base: str_join(base, "\n"), now: now));
+        } else {
+            return Result[Vec[Case], Str].Err(error: f"unknown line: {line}");
+        }
+    }
+    Result[Vec[Case], Str].Ok(value: out)
+}
+
+/// The verdicts of every case, in `pairs.verdict`'s shape.
+pub fn pairs_verdicts(text: Str) -> Result[Str, Str] ! {} {
+    let cases = parse_pairs(text)?;
+    let out = strs_new();
+    for c in cases {
+        strs_push(out, f"case {c.name}\n");
+        strs_push(out, verdict_text(judge(c.base, c.now)));
+    }
+    Result[Str, Str].Ok(value: str_join(out, ""))
+}

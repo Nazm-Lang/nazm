@@ -1,0 +1,173 @@
+// `nazm-fuzz diff COUNT SEED` (R8 slice 13, S13.5): R7's semantic differential fuzzing, in the
+// campaign's own program. The generator is `lib/gen.nz`, the Rust test's step for step; each program
+// the generator writes is run by `nazm run --interpret` and built at `--opt-level 0` and `2` by LLVM
+// (and, with `--with-nazm-backend`, by Nazm's own code generator, which exists on macOS only: the
+// container the fuzzing runs in has none), and standard output, failure and status are compared. The
+// Rust test's Cranelift and LIR-interpreter legs go with the seed. A disagreement is shrunk by lines
+// and written as `OUT/diff/N.nz` with every leg's outcome; the exit status is 1 on any.
+
+use "@std/text"
+use "@std/env"
+use "@std/file"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+use "../lib/gen.nz"
+
+/// The first line holding `error[N04`, without its `nazm: `.
+fn failure(stderr: Str) -> Str ! {} {
+    for l in text_lines(stderr) {
+        if text_contains(l, "error[N04") {
+            return trim_start_matches(l, "nazm: ");
+        }
+    }
+    ""
+}
+
+/// What each leg did with one program: `name`, `stdout`, `status`, `failure` — four entries a leg.
+fn legs(h: Caps, dir: Str, src: Str, nazm_backend: Bool) -> Result[Strs, Str] ! { io, spawn } {
+    scratch_write(h, dir, "prog.nz", src)?;
+    let out = strs_new();
+    let run_ = nazm(h, dir, words("run --interpret prog.nz"));
+    // The interpreter names the place on the next line; the native legs on the same one.
+    let mut place = "";
+    for l in text_lines(run_.stderr) {
+        let t = trim_start_ws(l);
+        if place == "" && text_starts_with(t, "--> ") {
+            place = trim_start_matches(t, "--> ");
+        }
+    }
+    let line = failure(run_.stderr);
+    strs_push(out, "run");
+    strs_push(out, run_.stdout);
+    strs_push(out, int_to_str(run_.code));
+    strs_push(out, if line == "" { "" } else { f"{line} at {place}" });
+    let backends = if nazm_backend { words("llvm llvm nazm") } else { words("llvm llvm") };
+    let opts = if nazm_backend { words("0 2 2") } else { words("0 2") };
+    let mut i = 0;
+    while i < strs_len(backends) {
+        let backend = strs_get(backends, i);
+        let opt = strs_get(opts, i);
+        let exe = f"{dir}/p-{backend}-{opt}";
+        let a = words(f"build --backend {backend} --opt-level {opt} prog.nz -o");
+        strs_push(a, exe);
+        let b = nazm(h, dir, a);
+        strs_push(out, f"{backend} -O{opt}");
+        if b.code != 0 {
+            strs_push(out, "build failed");
+            strs_push(out, int_to_str(b.code));
+            strs_push(out, failure(b.stderr));
+        } else {
+            let o = run(h, exe, strs_new(), "", suite_env(h));
+            strs_push(out, o.stdout);
+            strs_push(out, int_to_str(o.code));
+            strs_push(out, failure(o.stderr));
+        }
+        i = i + 1;
+    }
+    Result[Strs, Str].Ok(value: out)
+}
+
+/// Whether every leg after the first gives the first's stdout, status and failure.
+pub fn legs_agree(t: Strs) -> Bool ! {} {
+    let mut i = 4;
+    while i < strs_len(t) {
+        if strs_get(t, i + 1) != strs_get(t, 1) || strs_get(t, i + 2) != strs_get(t, 2) || strs_get(t, i + 3) != strs_get(t, 3) {
+            return false;
+        }
+        i = i + 4;
+    }
+    true
+}
+
+pub fn legs_shown(t: Strs) -> Str ! {} {
+    let out = strs_new();
+    let mut i = 0;
+    while i + 3 < strs_len(t) {
+        strs_push(out, f"{strs_get(t, i)}: stdout {strs_get(t, i + 1)} status {strs_get(t, i + 2)} failure {strs_get(t, i + 3)}");
+        i = i + 4;
+    }
+    str_join(out, "\n")
+}
+
+fn checks(h: Caps, dir: Str, src: Str) -> Result[Bool, Str] ! { io, spawn } {
+    scratch_write(h, dir, "prog.nz", src)?;
+    Result[Bool, Str].Ok(value: nazm(h, dir, words("check prog.nz")).code == 0)
+}
+
+/// Remove lines while the program still checks and the legs still disagree: at most `budget` tries.
+fn shrink(h: Caps, dir: Str, src: Str, nazm_backend: Bool) -> Result[Str, Str] ! { io, spawn } {
+    let mut lines = text_lines(src);
+    let mut i = 0;
+    let mut tries = 0;
+    while i < strs_len(lines) && tries < 60 {
+        let candidate = strs_new();
+        let mut j = 0;
+        while j < strs_len(lines) {
+            if j != i {
+                strs_push(candidate, strs_get(lines, j));
+            }
+            j = j + 1;
+        }
+        let text = f"{str_join(candidate, "\n")}\n";
+        tries = tries + 1;
+        if checks(h, dir, text)? && !legs_agree(legs(h, dir, text, nazm_backend)?) {
+            lines = candidate;
+        } else {
+            i = i + 1;
+        }
+    }
+    Result[Str, Str].Ok(value: f"{str_join(lines, "\n")}\n")
+}
+
+/// What one differential run counted.
+pub struct Tally {
+    programs: Int,
+    agree: Int,
+    differ: Int,
+    invalid: Int,
+    failing: Int,
+}
+
+/// `count` generated programs from `seed`: the summary line, and `OUT/diff/N.nz` for each that makes the legs differ.
+pub fn run_diff(h: Caps, count: Int, seed: Int, out: Str, nazm_backend: Bool) -> Result[Tally, Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    if str_len(d) == 0 {
+        return Result[Tally, Str].Err(error: "no scratch directory");
+    }
+    let r = rng_new(seed);
+    let mut agree = 0;
+    let mut differ = 0;
+    let mut invalid = 0;
+    let mut failing = 0;
+    let mut c = 0;
+    while c < count {
+        let src = program(r);
+        if !checks(h, d, src)? {
+            // The generator wrote a program that does not check: a defect of the generator or the checker.
+            invalid = invalid + 1;
+            scratch_write(h, out, f"diff/invalid-{c}.nz", src)?;
+        } else {
+            let results = legs(h, d, src, nazm_backend)?;
+            if legs_agree(results) {
+                agree = agree + 1;
+                if strs_get(results, 2) == "2" {
+                    failing = failing + 1;
+                }
+            } else {
+                differ = differ + 1;
+                let small = shrink(h, d, src, nazm_backend)?;
+                let shrunk = legs(h, d, small, nazm_backend)?;
+                scratch_write(h, out, f"diff/{c}.nz", f"// seed {seed} case {c}\n// {text_replace(legs_shown(shrunk), "\n", "\n// ")}\n{small}")?;
+            }
+        }
+        c = c + 1;
+    }
+    scratch_remove(h, d);
+    Result[Tally, Str].Ok(value: Tally(programs: count, agree: agree, differ: differ, invalid: invalid, failing: failing))
+}
+
+pub fn tally_line(t: Tally, seed: Int, legs: Int) -> Str ! {} {
+    f"{{\"schema\": \"nazm.fuzz-diff/1\", \"programs\": {t.programs}, \"seed\": {seed}, \"legs\": {legs}, \"agree\": {t.agree}, \"differ\": {t.differ}, \"invalid\": {t.invalid}, \"failing\": {t.failing}}}"
+}

@@ -1,0 +1,99 @@
+# Fixed pairs of a baseline and a run, for `--check` (S13.6). A case is `case NAME`, then `base LINE`
+# (a line of the baseline file, verbatim: the lines that name a program and a stage), then `now PROGRAM
+# STAGE MICROSECONDS...` (the runs of one measurement, whole microseconds), then `end`.
+#
+# `xtask`'s `judge` (xtask/src/bench.rs) and `nazm-bench`'s `judge` (toolchain/harness/bench/check.nz)
+# both read this file; `pairs.verdict` is what the Rust function says about it, written by the Rust
+# test with NAZM_BLESS_BENCH_FIXTURES=1, and the Nazm port must say the same. No value here is a
+# measurement: they are numbers chosen for what they exercise.
+case quiet
+base {"program": "sieve", "stage": "native-O2", "min_ms": 1.000, "median_ms": 20.000}
+base {"program": "sieve", "stage": "check", "min_ms": 1.000, "median_ms": 30.000}
+now sieve native-O2 20000 20000 20000
+now sieve check 30000 30000 30000
+end
+case a-regression
+base {"program": "sieve", "stage": "native-O2", "min_ms": 1.000, "median_ms": 10.000}
+now sieve native-O2 20000 20000 20000
+end
+case moved-less-than-the-floor
+base {"program": "sieve", "stage": "native-O2", "min_ms": 1.000, "median_ms": 10.000}
+now sieve native-O2 14000 14000 14000
+end
+case moved-exactly-the-floor-up
+base {"program": "sieve", "stage": "native-O2", "min_ms": 1.000, "median_ms": 10.000}
+now sieve native-O2 15000 15000 15000
+end
+case moved-exactly-the-floor-down
+base {"program": "sieve", "stage": "native-O2", "min_ms": 1.000, "median_ms": 15.000}
+now sieve native-O2 10000 10000 10000
+end
+case an-improvement
+base {"program": "sieve", "stage": "build-O2", "min_ms": 1.000, "median_ms": 20.000}
+now sieve build-O2 10000 10000 10000
+end
+case near-zero-is-not-gated
+base {"program": "arith", "stage": "check", "min_ms": 3.000, "median_ms": 3.301}
+now arith check 5800 5800 5800
+end
+case moved-little-in-ratio
+base {"program": "arith", "stage": "interpret", "min_ms": 90.000, "median_ms": 100.000}
+now arith interpret 120000 120000 120000
+end
+case ratio-exactly-at-the-tolerance
+base {"program": "arith", "stage": "interpret", "min_ms": 90.000, "median_ms": 100.000}
+now arith interpret 125000 125000 125000
+end
+case ratio-just-past-the-tolerance
+base {"program": "arith", "stage": "interpret", "min_ms": 90.000, "median_ms": 100.000}
+now arith interpret 126000 126000 126000
+end
+case an-improvement-exactly-at-the-tolerance
+base {"program": "arith", "stage": "interpret", "min_ms": 90.000, "median_ms": 100.000}
+now arith interpret 75000 75000 75000
+end
+case an-improvement-just-past-the-tolerance
+base {"program": "arith", "stage": "interpret", "min_ms": 90.000, "median_ms": 100.000}
+now arith interpret 74000 74000 74000
+end
+case in-the-run-and-not-the-baseline
+base {"program": "sieve", "stage": "check", "min_ms": 1.000, "median_ms": 30.000}
+now sieve check 30000 30000 30000
+now strings check 30000 30000 30000
+end
+case in-the-baseline-and-not-the-run
+base {"program": "sieve", "stage": "check", "min_ms": 1.000, "median_ms": 30.000}
+base {"program": "gone", "stage": "check", "min_ms": 1.000, "median_ms": 30.000}
+base {"program": "gone", "stage": "native-O2", "bytes": 12345}
+now sieve check 30000 30000 30000
+end
+case a-baseline-of-zero-is-skipped
+base {"program": "floor", "stage": "native-O2", "min_ms": 0.000, "median_ms": 0.000}
+now floor native-O2 40000 40000 40000
+end
+case the-first-version-of-the-record
+base {"program": "sieve", "stage": "native-O2", "min_ms": 1.000, "median_ms": 2.500},
+now sieve native-O2 20000 20000 20000
+end
+case the-median-is-the-lower-middle
+base {"program": "calls", "stage": "interpret", "min_ms": 1.000, "median_ms": 100.000, "p90_ms": 200.000, "max_ms": 300.000, "mad_ms": 0.100, "runs_ms": [1.000, 2.000]}
+now calls interpret 90000 200000 300000 100000
+end
+case several-at-once
+base {"program": "a", "stage": "check", "min_ms": 1.000, "median_ms": 10.000}
+base {"program": "b", "stage": "check", "min_ms": 1.000, "median_ms": 10.000}
+base {"program": "c", "stage": "check", "min_ms": 1.000, "median_ms": 50.000}
+base {"program": "d", "stage": "check", "min_ms": 1.000, "median_ms": 50.000}
+now a check 30000 30000 30000
+now b check 12000 12000 12000
+now c check 20000 20000 20000
+now d check 90000 90000 90000
+now e check 1000 1000 1000
+end
+case a-line-that-is-not-a-number
+base {"program": "sieve", "stage": "native-O2", "min_ms": 1.000, "median_ms": null}
+now sieve native-O2 20000 20000 20000
+end
+case an-empty-baseline
+now sieve native-O2 20000 20000 20000
+end

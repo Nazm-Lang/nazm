@@ -1,0 +1,230 @@
+// `bench/*.nz`'s own tests (R8 slice 13, S13.6): what is pure about `nazm-bench`, verified without a clock.
+// `--check`'s verdicts on the fixed pairs are required to equal the Rust function's (`xtask`'s `judge`,
+// written to `bench/fixtures/pairs.verdict` by the Rust test); the figures of a run are held to what
+// `Measurement`'s own Rust test holds them to; a record's schema is checked on a record the Rust
+// `bench` wrote and on one this port renders. Nothing here times anything:
+//
+//     NAZM_HARNESS_ROOT=$PWD nazm test --interpret-only toolchain/harness/tests/bench_self.nz
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/tree.nz"
+use "../bench/stats.nz"
+use "../bench/check.nz"
+use "../bench/pairs.nz"
+use "../bench/record.nz"
+use "../lib/jsonq.nz"
+use "@std/json"
+
+fn expect(got: Str, want: Str) -> Result[Int, Str] ! {} {
+    if got == want {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    Result[Int, Str].Err(error: f"got {got}, wanted {want}")
+}
+
+fn ints_of_ms(ms: Str) -> Ints ! {} {
+    let out = ints_new();
+    for w in text_split(ms, " ") {
+        match text_parse_int(w) {
+            Result.Ok(value: n) => { ints_push(out, n * 1000000); 0 },
+            Result.Err(error: e) => 0,
+        };
+    }
+    out
+}
+
+@test
+fn the_spread_is_of_runs_that_were_observed() -> Result[Int, Str] ! {} {
+    // `Measurement`'s own Rust test, number for number.
+    let m = measurement("p", "s", ints_of_ms("12 10 11 50 10 13 11"));
+    expect(ns_ms3(m_min(m)), "10.000")?;
+    expect(ns_ms3(m_median(m)), "11.000")?;
+    expect(ns_ms3(m_p90(m)), "50.000")?;
+    expect(ns_ms3(m_max(m)), "50.000")?;
+    expect(ns_ms3(m_mad(m)), "1.000")?;
+    expect(ns_ms3(m_p90(measurement("p", "s", ints_of_ms("5")))), "5.000")?;
+    expect(str_join(runs_ms3(m), " "), "10.000 10.000 11.000 11.000 12.000 13.000 50.000")
+}
+
+@test
+fn an_even_count_has_the_lower_of_the_two_middles_and_no_runs_have_no_figures() -> Result[Int, Str] ! {} {
+    let m = measurement("p", "s", ints_of_ms("4 1 3 2"));
+    expect(ns_ms3(m_median(m)), "2.000")?;
+    // Ten runs: the 9th of 10 is the 90th percentile; one run more and it is the 10th of 11.
+    let ten = measurement("p", "s", ints_of_ms("1 2 3 4 5 6 7 8 9 10"));
+    expect(ns_ms3(m_p90(ten)), "9.000")?;
+    let eleven = measurement("p", "s", ints_of_ms("1 2 3 4 5 6 7 8 9 10 11"));
+    expect(ns_ms3(m_p90(eleven)), "10.000")?;
+    let none = measurement("p", "s", ints_new());
+    check_that(m_min(none) == 0 && m_median(none) == 0 && m_p90(none) == 0 && m_max(none) == 0 && m_mad(none) == 0, "an empty list has zeros")
+}
+
+@test
+fn a_figure_is_printed_in_milliseconds_to_the_microsecond() -> Result[Int, Str] ! {} {
+    expect(ns_ms3(0), "0.000")?;
+    expect(ns_ms3(1), "0.000")?;
+    expect(ns_ms3(499), "0.000")?;
+    expect(ns_ms3(500), "0.001")?;
+    expect(ns_ms3(12345000), "12.345")?;
+    expect(ns_ms3(2500000), "2.500")?;
+    expect(ns_ms3(1005000000), "1005.000")?;
+    expect(ms1(12345), "12.3")?;
+    expect(ms1(12350), "12.4")?;
+    expect(ms1(100000), "100.0")?;
+    expect(ms1(5800), "5.8")
+}
+
+@test
+fn a_baselines_median_is_read_as_decimal_digits() -> Result[Int, Str] ! {} {
+    let a = match parse_us("12") { Option.Some(value: n) => n, Option.None() => 0 - 1 };
+    let b = match parse_us("2.5") { Option.Some(value: n) => n, Option.None() => 0 - 1 };
+    let c = match parse_us("12.345") { Option.Some(value: n) => n, Option.None() => 0 - 1 };
+    let d = match parse_us("12.3456") { Option.Some(value: n) => n, Option.None() => 0 - 1 };
+    let e = match parse_us("0.000") { Option.Some(value: n) => n, Option.None() => 0 - 1 };
+    check_that(a == 12000 && b == 2500 && c == 12345 && d == 12346 && e == 0, f"{a} {b} {c} {d} {e}")?;
+    for bad in text_split("null|abc|1.|-1|1e3||.5|1.2.3", "|") {
+        check_that(match parse_us(bad) { Option.Some(value: n) => false, Option.None() => true }, f"{bad} is not a number")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn check_says_what_the_rust_function_says_on_every_fixed_pair(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let root = repo_root(h);
+    let pairs = read_text(h, f"{root}/toolchain/harness/bench/fixtures/pairs.txt")?;
+    let golden = read_text(h, f"{root}/toolchain/harness/bench/fixtures/pairs.verdict")?;
+    let got = pairs_verdicts(pairs)?;
+    let cases = parse_pairs(pairs)?;
+    check_that(vec_len(cases) >= 20, f"{vec_len(cases)} cases")?;
+    // The cases that must have said something: a regression, an improvement, a missing line each way.
+    for must in text_split("2> slower: |1> faster: |is not in the baseline|is in the baseline and was not measured|exit 1|exit 0", "|") {
+        check_that(text_contains(golden, must), f"the golden file never says {must}")?;
+    }
+    expect(got, golden)
+}
+
+@test
+fn a_regression_needs_both_a_quarter_and_five_milliseconds() -> Result[Int, Str] ! {} {
+    let base = "{\"program\": \"x\", \"stage\": \"s\", \"min_ms\": 1.000, \"median_ms\": 20.000}";
+    let ms = vec_new[Measurement]();
+    vec_push(ms, measurement("x", "s", ints_of_ms("26")));
+    let j = judge(base, ms);
+    check_that(j.failed && strs_len(j.lines) == 2 && ints_get(j.errs, 0) == 1, "26 against 20 is a regression")?;
+    expect(strs_get(j.lines, 0), "slower: x/s: 20.0 -> 26.0 ms")?;
+    let ms2 = vec_new[Measurement]();
+    vec_push(ms2, measurement("x", "s", ints_of_ms("25")));
+    check_that(!judge(base, ms2).failed, "25 against 20 is exactly the tolerance")
+}
+
+fn mad_masked(text: Str) -> Str ! {} {
+    let out = strs_new();
+    for l in text_lines(text) {
+        match text_find(l, "\"mad_ms\": ") {
+            Option.Some(value: at) => {
+                let from = at + 10;
+                let mut end = from;
+                while end < str_len(l) && str_byte(l, end) != 44 { end = end + 1; }
+                strs_push(out, f"{str_slice(l, 0, from)}_{str_slice(l, end, str_len(l))}");
+            },
+            Option.None() => { strs_push(out, l); },
+        };
+    }
+    str_join(out, "\n")
+}
+
+/// The record `text` is, taken apart into what `render_json` is given, and rendered again.
+fn rendered_again(text: Str) -> Result[Str, Str] ! {} {
+    let doc = jparse(text)?;
+    let info = Info(runs: jint(doc, "runs"), host: jstr(doc, "host"), cpus: match text_parse_int(jstr(doc, "cpus")) { Result.Ok(value: n) => n, Result.Err(error: e) => 0 - 1 }, cpu_model: jstr(doc, "cpu_model"), memory_bytes: jint(doc, "memory_bytes"), kernel: jstr(doc, "kernel"), rustc: jstr(doc, "rustc"), clang: jstr(doc, "clang"), commit: jstr(doc, "commit"), clean: jis(doc, "tree_clean", "true"));
+    let ms = vec_new[Measurement]();
+    let mut i = 0;
+    while i < jlen(doc, "measurements") {
+        let at = f"measurements/{i}";
+        let runs = ints_new();
+        let mut j = 0;
+        while j < jlen(doc, f"{at}/runs_ms") {
+            let n = jq(doc, f"{at}/runs_ms/{j}");
+            let us = match json_float(doc, n) { Option.Some(value: x) => Int(x * 1000.0 + 0.5), Option.None() => 0 - 1 };
+            ints_push(runs, us * 1000);
+            j = j + 1;
+        }
+        vec_push(ms, measurement(jstr(doc, f"{at}/program"), jstr(doc, f"{at}/stage"), runs));
+        i = i + 1;
+    }
+    let memory = vec_new[Memory]();
+    i = 0;
+    while i < jlen(doc, "peak_memory") {
+        vec_push(memory, Memory(program: jstr(doc, f"peak_memory/{i}/program"), stage: jstr(doc, f"peak_memory/{i}/stage"), peak: jint(doc, f"peak_memory/{i}/peak_bytes")));
+        i = i + 1;
+    }
+    let sizes = vec_new[Size]();
+    i = 0;
+    while i < jlen(doc, "binary_bytes") {
+        vec_push(sizes, Size(program: jstr(doc, f"binary_bytes/{i}/program"), bytes: jint(doc, f"binary_bytes/{i}/bytes")));
+        i = i + 1;
+    }
+    let absent = vec_new[Absent]();
+    i = 0;
+    while i < jlen(doc, "not_measured") {
+        vec_push(absent, Absent(stage: jstr(doc, f"not_measured/{i}/stage"), why: jstr(doc, f"not_measured/{i}/why")));
+        i = i + 1;
+    }
+    let out = render_json(info, ms, memory, sizes, absent);
+    // Only where a peak comes from differs: the reference's is `/usr/bin/time -l`, this port's the system's.
+    Result[Str, Str].Ok(value: text_replace(out, f"\"peak_memory_source\": \"{PEAK_SOURCE}\"", f"\"peak_memory_source\": {quote(jstr(doc, "peak_memory_source"))}"))
+}
+
+@test
+fn a_record_the_rust_bench_wrote_has_no_schema_problem(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let text = read_text(h, f"{repo_root(h)}/bench/baseline-linux-aarch64.json")?;
+    let problems = record_problems(text);
+    expect(str_join(problems, "; "), "")
+}
+
+@test
+fn a_record_the_rust_bench_wrote_renders_again_byte_for_byte(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let text = read_text(h, f"{repo_root(h)}/bench/baseline-linux-aarch64.json")?;
+    let again = rendered_again(text)?;
+    check_that(str_len(text) > 3000, "a real record")?;
+    // The spread is computed from the runs as the record prints them, to the microsecond; the reference's
+    // is computed from the nanoseconds it timed, so it may differ in the last digit and is left out here.
+    let a = text_lines(mad_masked(again));
+    let b = text_lines(mad_masked(text));
+    let mut i = 0;
+    while i < strs_len(a) && i < strs_len(b) {
+        check_that(strs_get(a, i) == strs_get(b, i), f"line {i + 1}: {strs_get(a, i)} | {strs_get(b, i)}")?;
+        i = i + 1;
+    }
+    check_that(strs_len(a) == strs_len(b), f"{strs_len(a)} lines against {strs_len(b)}")
+}
+
+fn schema_with(text: Str, from: Str, to: Str) -> Str ! {} {
+    text_replace(text, from, to)
+}
+
+@test
+fn a_record_that_breaks_a_rule_is_named(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let text = read_text(h, f"{repo_root(h)}/bench/baseline-linux-aarch64.json")?;
+    let cases = strs_new();
+    strs_push(cases, "\"schema\": \"nazm.bench/2\"|\"schema\": \"nazm.bench/1\"|schema: nazm.bench/1");
+    strs_push(cases, "\"runs\": 5,|\"runs\": 4,|runs_ms: 5 runs, the record says 4");
+    strs_push(cases, "\"warmups_discarded\": 1,|\"warmups_discarded\": 2,|warmups_discarded: not 1");
+    strs_push(cases, "\"tree_clean\"|\"clean\"|the keys are not, in order");
+    strs_push(cases, "\"measurements\": [|\"measurements\": 7, \"z\": [|measurements: not array");
+    strs_push(cases, "\"peak_bytes\": 7286784|\"peak_bytes\": \"7286784\"|peak_memory: peak_bytes: not null-or-integer");
+    strs_push(cases, "\"cpus\": \"1\"|\"cpus\": 1|cpus: not string");
+    for c in cases {
+        let w = text_split(c, "|");
+        let broken = schema_with(text, strs_get(w, 0), strs_get(w, 1));
+        check_that(broken != text, f"the case does not change the record: {strs_get(w, 0)}")?;
+        let problems = str_join(record_problems(broken), "; ");
+        check_that(text_contains(problems, strs_get(w, 2)), f"wanted {strs_get(w, 2)} in: {problems}")?;
+    }
+    check_that(strs_len(record_problems("[]")) == 1 && strs_len(record_problems("{")) == 1, "not an object, not JSON")
+}

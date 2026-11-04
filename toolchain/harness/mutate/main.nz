@@ -10,6 +10,9 @@
 //   nazm-mutate restore ROOT                    put back what `apply` changed
 //   nazm-mutate try ROOT CATALOGUE NAME CMD     CMD (a shell command, run in ROOT) on the tree
 //                                               pristine, mutated and restored: the verdict
+//   nazm-mutate session ROOT --seed NAZM …      the Nazm campaign over ROOT, a disposable tree
+//                                               (S13.4; inside the container: `nzx contained mutate`)
+//   nazm-mutate recover ROOT --confirm-no-writers  repair a tree an interrupted run left mutated
 //
 // The backup is the Rust runner's own record, `ROOT/target/.nazm-mutation-backup` in its version
 // 2 layout — the format line, the file, the FNV-1a digests of the mutated and the original text,
@@ -25,10 +28,11 @@ use "../lib/scratch.nz"
 use "catalogue.nz"
 use "core.nz"
 use "plan.nz"
+use "session.nz"
 use "../check/mutations.nz"
 
 fn usage() -> Str ! {} {
-    "usage: nazm-mutate list CATALOGUE | check ROOT | plan ROOT [--only F]… | apply ROOT CATALOGUE NAME | restore ROOT | try ROOT CATALOGUE NAME CMD [--deadline-secs N]"
+    "usage: nazm-mutate list CATALOGUE | check ROOT | plan ROOT [--only F]… | apply ROOT CATALOGUE NAME | restore ROOT | try ROOT CATALOGUE NAME CMD [--deadline-secs N] | session ROOT --seed NAZM [--copy-from SRC] [--bin DIR] [--only NAME]… [--strategy targeted|full] [--resume] [--resume-from DIR] [--campaign-dir DIR] [--budget-secs N] [--export-journal] [--reset-derived-caches] [--verify-killers] [--verify-killer NAME [--killer FILE::fn]…] | recover ROOT [--confirm-no-writers]"
 }
 
 fn main(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Int ! { io, spawn } {
@@ -121,6 +125,57 @@ fn main(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Int 
                 }
                 1
             },
+        };
+    }
+    if cmd == "session" {
+        let asked = match parse_session(args) {
+            Result.Ok(value: a) => a,
+            Result.Err(error: e) => { eprintln(e); return 1; },
+        };
+        if strs_len(asked.verify) > 0 {
+            let mut failed = false;
+            for name in asked.verify {
+                println(f"verifying killers for {name}");
+                match verify_killer(h, asked.o, name, asked.killers) {
+                    Result.Ok(value: report) => print(report),
+                    Result.Err(error: problems) => {
+                        failed = true;
+                        for pr in problems {
+                            println(f"problem: {pr}");
+                        }
+                        0
+                    },
+                };
+            }
+            if failed {
+                println("FAIL  killer verification");
+                return 1;
+            }
+            println("ok    killer verification");
+            return 0;
+        }
+        let end = run_session(h, asked.o);
+        println(end.head);
+        for pr in end.problems {
+            println(f"problem: {pr}");
+        }
+        return end.code;
+    }
+    if cmd == "recover" {
+        let mut confirmed = false;
+        let mut i = 2;
+        while i < n {
+            if strs_get(args, i) == "--confirm-no-writers" {
+                confirmed = true;
+            } else {
+                eprintln(f"mutate: unknown option {strs_get(args, i)}");
+                return 1;
+            }
+            i = i + 1;
+        }
+        return match recover(h, strs_get(args, 1), confirmed) {
+            Result.Ok(value: what) => { println(what); 0 },
+            Result.Err(error: e) => { println(f"error: {e}"); 1 },
         };
     }
     if cmd == "restore" {

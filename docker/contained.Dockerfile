@@ -20,8 +20,10 @@ FROM rust:1.98.1-slim-trixie
 # apart from "exists but is not yours" — `kill -0` fails for both and offers no errno to
 # separate them, so a live lock would look dead and be stolen. Without `ps` the probe
 # correctly reports Unknown and four tests fail; the slim image simply does not ship it.
+# `libclang-rt-19-dev` is libFuzzer's archive (`-fsanitize=fuzzer`) and SanitizerCoverage's runtime: what
+# `nazm-fuzz` links the instrumented Nazm targets with (R8 slice 13, S13.5). Debian's package, nothing bundled.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends clang ca-certificates procps time \
+ && apt-get install -y --no-install-recommends clang libclang-rt-19-dev ca-certificates procps time \
  && rm -rf /var/lib/apt/lists/*
 
 # Cargo writes here, never into the read-only source mount. The host's `target/` holds

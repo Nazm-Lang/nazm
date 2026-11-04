@@ -1,0 +1,1684 @@
+// The Nazm mutation campaign's session (R8 slice 13, S13.4): `xtask/src/mutate.rs`'s `run_all` and
+// `campaign.rs`'s tier law over the Nazm toolchain.
+//
+// What is under test is one of two toolchains. Built (the S13.4 text, and what the cut-over leaves): the
+// released programs built from the copy with the checkout's `nazm`, the mapped killers run by the
+// Nazm-built `nazm`. Rebuilt (`--rebuild-cmd`): the `nazm` the checkout's Cargo builds from the copy,
+// rebuilt after each injection by that command, runs the mapped killers — what the ported tests
+// need while their Cranelift leg (`lib/tiers.nz`, `agree.nz`, `differential.nz`, `native.nz`,
+// `platform.nz`) names a backend the Nazm-built `nazm` does not carry, as `tests/mutants.sh` ran them (R7).
+//
+// One session is one warm worker (the runbook's law). The tree is a disposable copy; the released
+// programs are built once from it with the checkout's `nazm` (the seed before slice 18); each unique
+// mapped killer — and each file a Focused step runs — is run once on the pristine tree (the mutation
+// baseline); then each selected mutant in turn, bucketed by the programs its file reaches:
+//
+//   apply (exactly once; the v2 backup record)  ->  build the programs whose `use` closure holds
+//   the file  ->  judge by tier (Direct: each mapped killer, one test; Focused: each mapped killer's
+//   whole file; Full: the whole Nazm suite, and only Full may say SURVIVED)  ->  restore and read
+//   back (the digest equal, else NOT RESTORED and the session stops)  ->  journal.
+//
+// Pass 1 decides at Tier 1; a mutant every killer passed on is restored and deferred; the Full
+// baseline is run once, and pass 2 decides the deferred mutants by the unchanged full law. At the end
+// the tree must digest to what it began as. A timeout or runner error is never a verdict.
+
+use "@std/text"
+use "@std/file"
+use "@std/ioerror"
+use "@std/map"
+use "@std/env"
+use "@std/process"
+use "@std/time"
+use "@std/blake3"
+use "@std/toml"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/procs.nz"
+use "catalogue.nz"
+use "core.nz"
+use "plan.nz"
+use "closure.nz"
+use "killers.nz"
+use "campaign.nz"
+
+/// How a session is to be run: every field has a meaning in the campaign's identity or its output
+/// location, and none is a shell fragment.
+pub struct Options {
+    root: Str,
+    copy_from: Str,
+    bin: Str,
+    seed: Str,
+    driver: Str,
+    driver_flags: Strs,
+    only: Strs,
+    strategy: Str,
+    campaign_dir: Str,
+    resume: Bool,
+    resume_from: Str,
+    budget_ms: Int,
+    commit: Str,
+    export: Bool,
+    reset_derived: Bool,
+    cargo_jobs: Int,
+    test_threads: Int,
+    deadlines: Deadlines,
+    verify_killers: Bool,
+    heap: Str,
+    programs: Vec[Program],
+    extra_env: Strs,
+    toolchain_id: Str,
+    rebuild_cmd: Str,
+}
+
+pub fn options_default() -> Options ! {} {
+    Options(root: "", copy_from: "", bin: "", seed: "", driver: "", driver_flags: strs_new(), only: strs_new(), strategy: "targeted", campaign_dir: "", resume: false, resume_from: "", budget_ms: 0, commit: "", export: false, reset_derived: false, cargo_jobs: 1, test_threads: 1, deadlines: deadlines_default(), verify_killers: false, heap: "2G", programs: released_programs(), extra_env: strs_new(), toolchain_id: "", rebuild_cmd: "")
+}
+
+fn say(h: Caps, s: Str) -> Int ! { io } {
+    file_write_str(file_stdout(h.io), f"{s}\n");
+    0
+}
+
+fn elapsed_ms(h: Caps, since: Instant) -> Int ! {} {
+    time_duration_to_ms(time_elapsed(h.t, since))
+}
+
+pub fn catalogue_path(root: Str) -> Str ! {} {
+    f"{root}/xtask/mutations/mutations.toml"
+}
+
+pub fn lock_path(root: Str) -> Str ! {} {
+    f"{root}/target/.nazm-mutation-lock.nz"
+}
+
+fn driver_of(o: Options) -> Str ! {} {
+    if str_len(o.driver) > 0 {
+        return o.driver;
+    }
+    // Rebuilt: the `nazm` the command rebuilds in place is the seed's own path.
+    if str_len(o.rebuild_cmd) > 0 {
+        return o.seed;
+    }
+    f"{o.bin}/nazm"
+}
+
+/// The `nazm` that builds what the tests build: the seed as it was before any mutation. When it is
+/// rebuilt in place it is kept apart at the start.
+fn builder_of(o: Options) -> Str ! {} {
+    if str_len(o.rebuild_cmd) > 0 { f"{o.bin}/builder" } else { o.seed }
+}
+
+fn pristine_dir(o: Options) -> Str ! {} {
+    f"{o.bin}.pristine"
+}
+
+// --- the environment ------------------------------------------------------------------------------
+
+fn exists_at(h: Caps, path: Str) -> Bool ! { io } {
+    let v = h.v;
+    file_exists_at(h.io, str_vouch(path))
+}
+
+/// The environment a killer or a suite file runs in: this process's, plus the toolchain under test
+/// (`NAZM`, its pipeline and code generator, the library of the tree being mutated) and the
+/// harness's variables. `NAZM_USER_CACHE_DIR` is empty: no user-level object store answers for a
+/// mutated toolchain.
+pub fn test_env(h: Caps, o: Options) -> Strs ! { io } {
+    let mut e = env_here(h.io);
+    e = env_set(e, "NAZM", driver_of(o));
+    if exists_at(h, f"{o.bin}/pl") {
+        e = env_set(e, "NAZM_PIPELINE", f"{o.bin}/pl");
+    }
+    if exists_at(h, f"{o.bin}/cg") {
+        e = env_set(e, "NAZM_NZCG", f"{o.bin}/cg");
+        e = env_set(e, "NAZM_HARNESS_NZCG", f"{o.bin}/cg");
+    }
+    if exists_at(h, f"{o.bin}/jtool") {
+        e = env_set(e, "NAZM_HARNESS_JTOOL", f"{o.bin}/jtool");
+    }
+    e = env_set(e, "NAZM_HARNESS_BUILDER", builder_of(o));
+    e = env_set(e, "NAZM_LIBRARY", f"{o.root}/library");
+    e = env_set(e, "NAZM_HARNESS_ROOT", o.root);
+    e = env_set(e, "NAZM_USER_CACHE_DIR", "");
+    for kv in o.extra_env {
+        let at = find(kv, "=");
+        if at > 0 {
+            e = env_set(e, str_slice(kv, 0, at), str_slice(kv, at + 1, str_len(kv)));
+        }
+    }
+    e
+}
+
+fn build_env(h: Caps, o: Options) -> Strs ! { io } {
+    env_set(env_here(h.io), "NAZM_USER_CACHE_DIR", "")
+}
+
+fn sh_run(h: Caps, script: Str, args: Strs, ms: Int) -> Finished ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, "-c");
+    strs_push(a, script);
+    strs_push(a, "nazm-mutate");
+    for x in args {
+        strs_push(a, x);
+    }
+    procs_run(h, "sh", a, "", env_here(h.io), ms)
+}
+
+fn args_of(a: Str, b: Str) -> Strs ! {} {
+    let out = strs_new();
+    strs_push(out, a);
+    strs_push(out, b);
+    out
+}
+
+/// Remove every derived `.nazm/` cache in the disposable tree except the object store (`native`):
+/// a cache keyed by the checker's declared identity answers for the unmutated checker; the object
+/// store is keyed by the generator's digest and the LIR text and cannot.
+pub fn reset_derived(h: Caps, root: Str) -> Int ! { io, spawn } {
+    let script = "find \"$1\" \\( -name .git -o -path \"$1/target\" \\) -prune -o -name .nazm -type d -print | while IFS= read -r d; do for e in \"$d\"/* \"$d\"/.[!.]*; do [ -e \"$e\" ] || continue; [ \"$(basename \"$e\")\" = native ] && continue; rm -rf \"$e\"; done; done";
+    let r = sh_run(h, script, args_of(root, ""), 300000);
+    r.code
+}
+
+// --- the tree's digest ----------------------------------------------------------------------------
+
+fn skipped(rel: Str, top_target: Bool) -> Bool ! {} {
+    if top_target && (rel == "target" || text_starts_with(rel, "target/")) {
+        return true;
+    }
+    for part in text_split(rel, "/") {
+        if part == ".git" || part == ".nazm" {
+            return true;
+        }
+    }
+    false
+}
+
+/// A digest of every file under `dir`, sorted: BLAKE3 over each relative path, its length and its
+/// bytes, skipping `.git`, `.nazm` and (with `top_target`) a top-level `target`.
+pub fn tree_digest(h: Caps, dir: Str, top_target: Bool) -> Result[Str, Str] ! { io } {
+    let io = h.io;
+    let v = h.v;
+    let base = if text_ends_with(dir, "/") { str_slice(dir, 0, str_len(dir) - 1) } else { dir };
+    let all = match file_walk(io, str_vouch(base)) {
+        Result.Ok(value: xs) => xs,
+        Result.Err(error: e) => { return Result[Str, Str].Err(error: f"{base}: {io_error_show(e)}"); },
+    };
+    let hasher = blake3_new();
+    for p in all {
+        let rel = str_slice(p, str_len(base) + 1, str_len(p));
+        if skipped(rel, top_target) {
+            continue;
+        }
+        let m = match file_symlink_metadata(io, str_vouch(p)) {
+            Result.Ok(value: m) => m,
+            Result.Err(error: e) => { return Result[Str, Str].Err(error: f"{p}: {io_error_show(e)}"); },
+        };
+        match m.kind {
+            EntryKind.Directory() => 0,
+            EntryKind.Symlink() => { blake3_update(hasher, bytes_from_str(f"{rel}\0symlink\0")); 0 },
+            EntryKind.Other() => 0,
+            EntryKind.Regular() => {
+                let b = match file_read_all(io, str_vouch(p)) {
+                    Result.Ok(value: b) => b,
+                    Result.Err(error: e) => { return Result[Str, Str].Err(error: f"{p}: {io_error_show(e)}"); },
+                };
+                blake3_update(hasher, bytes_from_str(f"{rel}\0{bytes_len(b)}\0"));
+                blake3_update(hasher, b);
+                0
+            },
+        };
+    }
+    Result[Str, Str].Ok(value: bytes_hex(blake3_finish(hasher)))
+}
+
+fn bytes_hex(b: Bytes) -> Str ! {} {
+    let digits = "0123456789abcdef";
+    let parts = strs_new();
+    let mut i = 0;
+    while i < bytes_len(b) {
+        let x = Int(bytes_get(b, i));
+        strs_push(parts, str_slice(digits, x / 16, x / 16 + 1));
+        strs_push(parts, str_slice(digits, x % 16, x % 16 + 1));
+        i = i + 1;
+    }
+    str_join(parts, "")
+}
+
+fn cpu_quota(h: Caps) -> Str ! { io } {
+    match read_text(h, "/sys/fs/cgroup/cpu.max") {
+        Result.Ok(value: t) => trim_ws(t),
+        Result.Err(error: e) => "unbounded",
+    }
+}
+
+// --- one entry ------------------------------------------------------------------------------------
+
+/// One selected catalogue entry with what the session decided about it before injecting anything.
+pub struct Subject {
+    index: Int,
+    m: Mutation,
+    why: Str,
+    mapped: Vec[Mapped],
+    reach: Strs,
+}
+
+/// What building a mutant's programs produced: `built`, `refused` (the compiler refused the tree),
+/// `timed-out` or `failed`, with seconds and a reason.
+pub struct Built {
+    kind: Str,
+    why: Str,
+    ms: Int,
+}
+
+fn toml_str(t: Toml, key: Str) -> Str ! {} {
+    match toml_get(t, key) {
+        Option.Some(value: v) => match v {
+            Toml.Str(value: x) => x,
+            _ => "",
+        },
+        Option.None() => "",
+    }
+}
+
+fn whys_of(text: Str) -> StrMap[Str] ! {} {
+    let out = map_new[Str]();
+    match toml_parse(text) {
+        Result.Ok(value: doc) => match toml_get(doc, "mutation") {
+            Option.Some(value: a) => match a {
+                Toml.Array(items: items) => {
+                    for e in items {
+                        let name = toml_str(e, "name");
+                        if str_len(name) > 0 {
+                            map_set(out, name, toml_str(e, "why"));
+                        }
+                    }
+                    0
+                },
+                _ => 0,
+            },
+            Option.None() => 0,
+        },
+        Result.Err(error: e) => 0,
+    };
+    out
+}
+
+fn build_program(h: Caps, o: Options, p: Program) -> Built ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, "build");
+    strs_push(a, "--heap-limit");
+    strs_push(a, o.heap);
+    strs_push(a, f"{o.root}/{p.source}");
+    strs_push(a, "-o");
+    strs_push(a, f"{o.bin}/{p.name}");
+    let f = procs_run(h, o.seed, a, o.root, build_env(h, o), o.deadlines.build * 1000);
+    if f.ended == "timed-out" {
+        return Built(kind: "timed-out", why: f"deadline passed after {f.ms / 1000}s", ms: f.ms);
+    }
+    if f.ended == "exited" && f.code == 0 {
+        return Built(kind: "built", why: "", ms: f.ms);
+    }
+    if f.ended == "exited" && f.code >= 256 {
+        return Built(kind: "failed", why: f"{p.name}: nazm build was killed by signal {f.code - 256}", ms: f.ms);
+    }
+    if f.ended == "exited" {
+        return Built(kind: "refused", why: f"{p.name}: {last_nonempty(f.stderr)}", ms: f.ms);
+    }
+    Built(kind: "failed", why: f"{p.name}: {f.ended} {f.why}", ms: f.ms)
+}
+
+fn last_nonempty(s: Str) -> Str ! {} {
+    let mut last = "";
+    for l in lines(s) {
+        let t = trim_ws(l);
+        if str_len(t) > 0 {
+            last = t;
+        }
+    }
+    last
+}
+
+/// The command that rebuilds the toolchain under test after an injection, run in the tree; `built`,
+/// `refused` (it exited non-zero: the tree does not build), `timed-out` or `failed`.
+fn rebuild(h: Caps, o: Options) -> Built ! { io, spawn } {
+    if o.reset_derived {
+        reset_derived(h, o.root);
+    }
+    let a = strs_new();
+    strs_push(a, "-c");
+    strs_push(a, o.rebuild_cmd);
+    let f = procs_run(h, "sh", a, o.root, build_env(h, o), o.deadlines.build * 1000);
+    if f.ended == "timed-out" {
+        return Built(kind: "timed-out", why: f"deadline passed after {f.ms / 1000}s", ms: f.ms);
+    }
+    if f.ended == "exited" && f.code == 0 {
+        return Built(kind: "built", why: "", ms: f.ms);
+    }
+    if f.ended == "exited" && f.code >= 256 {
+        return Built(kind: "failed", why: f"the rebuild was killed by signal {f.code - 256}", ms: f.ms);
+    }
+    if f.ended == "exited" {
+        return Built(kind: "refused", why: last_nonempty(f.stderr), ms: f.ms);
+    }
+    Built(kind: "failed", why: f"{f.ended} {f.why}", ms: f.ms)
+}
+
+/// Build the programs in `names` (all of them when `names` is empty and `all` is set), stopping at
+/// the first that does not build.
+fn build_programs(h: Caps, o: Options, names: Strs, all: Bool) -> Built ! { io, spawn } {
+    let mut total = 0;
+    let mut n = 0;
+    for p in o.programs {
+        let mut want = all;
+        for x in names {
+            if x == p.name {
+                want = true;
+            }
+        }
+        if !want {
+            continue;
+        }
+        if o.reset_derived {
+            reset_derived(h, o.root);
+        }
+        let b = build_program(h, o, p);
+        total = total + b.ms;
+        n = n + 1;
+        if b.kind != "built" {
+            return Built(kind: b.kind, why: b.why, ms: total);
+        }
+    }
+    Built(kind: "built", why: f"{n} program(s)", ms: total)
+}
+
+/// Put the pristine build of `names` back in the bin directory.
+fn restore_programs(h: Caps, o: Options, names: Strs) -> Int ! { io, spawn } {
+    for n in names {
+        sh_run(h, "cp -p \"$1/$3\" \"$2/$3\"", args3(pristine_dir(o), o.bin, n), 300000);
+    }
+    0
+}
+
+fn args3(a: Str, b: Str, c: Str) -> Strs ! {} {
+    let out = strs_new();
+    strs_push(out, a);
+    strs_push(out, b);
+    strs_push(out, c);
+    out
+}
+
+// --- steps ----------------------------------------------------------------------------------------
+
+/// What the session holds for its whole life: what each killer did on the pristine tree (the
+/// mutation baseline), how many tests each file reported there, the whole suite's files and its
+/// count, and the mutants' step logs.
+pub struct State {
+    words: StrMap[Str],
+    expected: StrMap[Int],
+    suite: Strs,
+    full_expected: Ints,
+}
+
+pub fn state_new() -> State ! {} {
+    State(words: map_new[Str](), expected: map_new[Int](), suite: strs_new(), full_expected: ints_new())
+}
+
+fn test_args(o: Options, filter: Str, path: Str) -> Strs ! {} {
+    let a = strs_new();
+    strs_push(a, "test");
+    strs_push(a, "--json");
+    for f in o.driver_flags {
+        strs_push(a, f);
+    }
+    if str_len(filter) > 0 {
+        strs_push(a, "--filter");
+        strs_push(a, filter);
+    }
+    strs_push(a, path);
+    a
+}
+
+/// One test invocation of `path` (relative to the tree), with `filter` when it is one test.
+fn run_test(h: Caps, o: Options, filter: Str, path: Str, secs: Int) -> Finished ! { io, spawn } {
+    if o.reset_derived {
+        reset_derived(h, o.root);
+    }
+    procs_run(h, driver_of(o), test_args(o, filter, path), o.root, test_env(h, o), secs * 1000)
+}
+
+/// One step's observation and milliseconds: tier 1 one killer, tier 2 one whole file, tier 3 the
+/// suite.
+pub struct Stepped {
+    obs: Obs,
+    ms: Int,
+}
+
+fn step_direct(h: Caps, o: Options, k: Mapped) -> Stepped ! { io, spawn } {
+    let f = run_test(h, o, k.filter, k.path, o.deadlines.killer);
+    Stepped(obs: observe(f, 1, false), ms: f.ms)
+}
+
+/// The head of a run's output, for a line that says why a baseline step did not pass.
+fn excerpt(f: Finished) -> Str ! {} {
+    let mut out = f"{f.ended} status {f.code}";
+    let mut shown = 0;
+    for l in lines(f.stdout) {
+        if shown < 6 && str_len(trim_ws(l)) > 0 {
+            out = f"{out}\n      stdout: {str_slice(l, 0, if str_len(l) > 700 { 700 } else { str_len(l) })}";
+            shown = shown + 1;
+        }
+    }
+    let mut kept = 0;
+    for l in lines(f.stderr) {
+        if kept < 6 && str_len(trim_ws(l)) > 0 {
+            out = f"{out}\n      stderr: {str_slice(l, 0, if str_len(l) > 400 { 400 } else { str_len(l) })}";
+            kept = kept + 1;
+        }
+    }
+    out
+}
+
+fn expected_of(st: State, path: Str) -> Int ! {} {
+    match map_get(st.expected, path) {
+        Option.Some(value: n) => n,
+        Option.None() => 1,
+    }
+}
+
+fn step_focused(h: Caps, o: Options, st: State, path: Str) -> Stepped ! { io, spawn } {
+    let f = run_test(h, o, "", path, o.deadlines.focused);
+    Stepped(obs: observe(f, expected_of(st, path), false), ms: f.ms)
+}
+
+/// The whole suite: each file run in turn within one deadline; the observation is the sums.
+fn step_full(h: Caps, o: Options, st: State) -> Stepped ! { io, spawn } {
+    let started = time_now(h.t);
+    let limit = o.deadlines.full * 1000;
+    let mut results = 0;
+    let mut passed = 0;
+    let mut failing = 0;
+    let mut crash = "";
+    for path in st.suite {
+        let left = limit - elapsed_ms(h, started);
+        if left <= 0 {
+            return Stepped(obs: Obs(kind: "timed-out", why: f"deadline passed after {limit / 1000}s", passed: 0, failing: 0, results: 0, crash: ""), ms: elapsed_ms(h, started));
+        }
+        let f = run_test(h, o, "", path, left / 1000 + 1);
+        let ob = observe(f, 0, true);
+        if ob.kind == "timed-out" {
+            return Stepped(obs: ob, ms: elapsed_ms(h, started));
+        }
+        if ob.kind == "completed" {
+            results = results + ob.results;
+            passed = passed + ob.passed;
+            failing = failing + ob.failing;
+            if str_len(ob.crash) > 0 {
+                crash = ob.crash;
+            }
+        } else {
+            // A file that produced nothing at all is a file that did not run: its tests are missing.
+            if str_len(crash_signature(f.stdout, f.stderr)) > 0 {
+                crash = crash_signature(f.stdout, f.stderr);
+            }
+        }
+    }
+    Stepped(obs: Obs(kind: "completed", why: "", passed: passed, failing: failing, results: results, crash: if results < ints_get(st.full_expected, 0) { crash } else { "" }), ms: elapsed_ms(h, started))
+}
+
+/// The files the full tier runs: every `toolchain/harness/cli/*.nz` and every `.nz` file under
+/// `toolchain/*/tests/` that declares a `@test`, sorted.
+pub fn suite_files(h: Caps, root: Str) -> Strs ! { io } {
+    let io = h.io;
+    let v = h.v;
+    let out = strs_new();
+    let all = match file_walk(io, str_vouch(f"{root}/toolchain")) {
+        Result.Ok(value: xs) => xs,
+        Result.Err(error: e) => strs_new(),
+    };
+    for p in all {
+        if !text_ends_with(p, ".nz") {
+            continue;
+        }
+        let rel = str_slice(p, str_len(root) + 1, str_len(p));
+        let parts = text_split(rel, "/");
+        let in_cli = strs_len(parts) == 4 && strs_get(parts, 1) == "harness" && strs_get(parts, 2) == "cli";
+        let in_tests = strs_len(parts) >= 4 && strs_get(parts, 2) == "tests";
+        if !in_cli && !in_tests {
+            continue;
+        }
+        match read_text(h, p) {
+            Result.Ok(value: t) => {
+                if text_contains(t, "@test") {
+                    strs_push(out, rel);
+                }
+                0
+            },
+            Result.Err(error: e) => 0,
+        };
+    }
+    out
+}
+
+// --- the mutation baseline -------------------------------------------------------------------------
+
+/// Run each unique killer and each Focused file of `entries` once on the pristine tree. The labels
+/// of those that did not pass.
+fn establish(h: Caps, o: Options, st: State, entries: Vec[Subject]) -> Strs ! { io, spawn } {
+    let failing = strs_new();
+    for e in entries {
+        for k in e.mapped {
+            let key = f"killer {k.filter}";
+            if map_has(st.words, key) {
+                continue;
+            }
+            let f1 = run_test(h, o, k.filter, k.path, o.deadlines.killer);
+            let w = killer_word(observe(f1, 1, false));
+            map_set(st.words, key, w);
+            if w != "passes" {
+                strs_push(failing, f"{k.filter} ({w})");
+                say(h, f"  pristine killer {k.filter}: {w}: {excerpt(f1)}");
+            }
+            let f2 = f"file {k.path}";
+            if !map_has(st.expected, k.path) {
+                let sf = run_test(h, o, "", k.path, o.deadlines.focused);
+                let ob = observe(sf, 1, false);
+                if ob.kind == "completed" && ob.failing == 0 && ob.results > 0 {
+                    map_set(st.expected, k.path, ob.results);
+                } else {
+                    say(h, f"  pristine file {k.path}: {excerpt(sf)}");
+                    map_set(st.expected, k.path, 0 - 1);
+                    strs_push(failing, f"{k.path} (the whole file does not pass: {ob.kind} {ob.why}, {ob.failing} failing)");
+                }
+            }
+        }
+    }
+    failing
+}
+
+fn baseline_suite(h: Caps, o: Options, st: State) -> Result[Int, Str] ! { io, spawn } {
+    let s = step_full(h, o, st);
+    if s.obs.kind == "timed-out" {
+        return Result[Int, Str].Err(error: f"the baseline suite timed out ({s.obs.why}). Every verdict below would be meaningless.");
+    }
+    if s.obs.kind == "failed" {
+        return Result[Int, Str].Err(error: f"the baseline suite did not run to completion ({s.obs.why}). Every verdict below would be meaningless.");
+    }
+    if s.obs.failing > 0 {
+        return Result[Int, Str].Err(error: f"{s.obs.failing} test(s) already fail before any mutation. A mutation cannot be shown to be caught by a suite that is not green.");
+    }
+    Result[Int, Str].Ok(value: s.obs.results)
+}
+
+// --- deciding one mutant ----------------------------------------------------------------------------
+
+/// One killer's three observations around one injection.
+pub struct Check {
+    lab: Str,
+    pristine: Str,
+    mutant: Str,
+    restored: Str,
+}
+
+fn check_verified(c: Check) -> Bool ! {} {
+    c.pristine == "passes" && c.mutant == "fails" && c.restored == "passes"
+}
+
+fn check_states(c: Check) -> Str ! {} {
+    f"pristine {c.pristine}, mutant {c.mutant}, restored {c.restored}"
+}
+
+fn check_line(c: Check) -> Str ! {} {
+    let head = if check_verified(c) { "VERIFIED    " } else { "NOT A KILLER" };
+    f"    {head} {c.lab}: {check_states(c)}"
+}
+
+/// What deciding one mutant produced: `final` (a record and its checks), `deferred` (every killer
+/// passed on it, restored; with its milliseconds), or `stopped` (the restoration failed: fatal).
+pub struct One {
+    kind: Str,
+    record: Record,
+    checks: Vec[Check],
+    ms: Int,
+    why: Str,
+}
+
+fn dummy_record() -> Record ! {} {
+    Record(index: 0, name: "", file: "", strategy: "", verdict: "", detail: "", tier: 0, by: "", failing: 0, steps: vec_new[StepRun](), original_digest: "", mutated_digest: "", restored_digest: "", apply_ms: 0, build_ms: 0, tests_ms: 0, restore_ms: 0, total_ms: 0, candidates: strs_new())
+}
+
+fn not_injected(o: Options, e: Subject, why: Str, original: Str, total_ms: Int) -> One ! {} {
+    let d = blake_hex(original);
+    let r = Record(index: e.index, name: e.m.name, file: e.m.file, strategy: o.strategy, verdict: "not-injected", detail: why, tier: 0, by: "", failing: 0, steps: vec_new[StepRun](), original_digest: d, mutated_digest: "", restored_digest: d, apply_ms: 0, build_ms: 0, tests_ms: 0, restore_ms: 0, total_ms: total_ms, candidates: strs_new());
+    One(kind: "final", record: r, checks: vec_new[Check](), ms: total_ms, why: "")
+}
+
+/// What a decision reached before restoration: the verdict (when it decides), the build's
+/// milliseconds, the steps run and what each observed.
+struct Decision {
+    decided: Bool,
+    verdict: Verdict,
+    build_ms: Int,
+    steps: Vec[StepRun],
+    seen_filters: Strs,
+    seen_words: Strs,
+}
+
+fn decision_stop(v: Verdict, build_ms: Int, steps: Vec[StepRun], sf: Strs, sw: Strs) -> Decision ! {} {
+    Decision(decided: true, verdict: v, build_ms: build_ms, steps: steps, seen_filters: sf, seen_words: sw)
+}
+
+/// The tier state machine. `full` runs every tier and may say SURVIVED; otherwise Tier 1 alone.
+fn decide(h: Caps, o: Options, st: State, e: Subject, full: Bool, baseline: Int) -> Decision ! { io, spawn } {
+    let steps = vec_new[StepRun]();
+    let sf = strs_new();
+    let sw = strs_new();
+    let b = if str_len(o.rebuild_cmd) > 0 { rebuild(h, o) } else { build_programs(h, o, e.reach, false) };
+    if b.kind == "refused" {
+        return decision_stop(verdict_plain("unusable", "the mutated tree does not build (tests included)"), b.ms, steps, sf, sw);
+    }
+    if b.kind == "timed-out" {
+        return decision_stop(verdict_plain("timeout", f"build: {b.why}"), b.ms, steps, sf, sw);
+    }
+    if b.kind == "failed" {
+        return decision_stop(verdict_plain("runner-error", f"build: {b.why}"), b.ms, steps, sf, sw);
+    }
+    let mut last_full = false;
+    // Tier 1: each mapped killer.
+    for k in e.mapped {
+        let s = step_direct(h, o, k);
+        let j = judge(1, k.filter, s.obs, 1, true);
+        vec_push(steps, StepRun(tier: 1, selector: k.filter, outcome: j.outcome, ms: s.ms, compile_ms: 0));
+        strs_push(sf, k.filter);
+        strs_push(sw, killer_word(s.obs));
+        if j.decided {
+            return decision_stop(j.verdict, b.ms, steps, sf, sw);
+        }
+    }
+    if !full {
+        return Decision(decided: false, verdict: verdict_plain("", ""), build_ms: b.ms, steps: steps, seen_filters: sf, seen_words: sw);
+    }
+    if o.strategy == "targeted" {
+        // Tier 2: each mapped killer's whole file, once.
+        let done = strs_new();
+        for k in e.mapped {
+            let mut again = false;
+            for d in done {
+                if d == k.path {
+                    again = true;
+                }
+            }
+            if again {
+                continue;
+            }
+            strs_push(done, k.path);
+            let s = step_focused(h, o, st, k.path);
+            let j = judge(2, k.path, s.obs, expected_of(st, k.path), false);
+            vec_push(steps, StepRun(tier: 2, selector: k.path, outcome: j.outcome, ms: s.ms, compile_ms: 0));
+            if j.decided {
+                return decision_stop(j.verdict, b.ms, steps, sf, sw);
+            }
+        }
+    }
+    // Tier 3: the whole suite.
+    let s = step_full(h, o, st);
+    let j = judge(3, "full suite", s.obs, baseline, false);
+    vec_push(steps, StepRun(tier: 3, selector: "full suite", outcome: j.outcome, ms: s.ms, compile_ms: 0));
+    if j.decided {
+        return decision_stop(j.verdict, b.ms, steps, sf, sw);
+    }
+    decision_stop(verdict_plain("survived", "every step passed, the full suite last"), b.ms, steps, sf, sw)
+}
+
+fn sum_steps(steps: Vec[StepRun]) -> Int ! {} {
+    let mut n = 0;
+    for s in steps {
+        n = n + s.ms;
+    }
+    n
+}
+
+fn word_of(d: Decision, filter: Str) -> Str ! {} {
+    let mut i = 0;
+    while i < strs_len(d.seen_filters) {
+        if strs_get(d.seen_filters, i) == filter {
+            return strs_get(d.seen_words, i);
+        }
+        i = i + 1;
+    }
+    ""
+}
+
+/// One mutant: inject once, decide, restore, verify, record. `stopped` only for a failed
+/// restoration, which is fatal to the run.
+fn run_one(h: Caps, o: Options, st: State, e: Subject, full: Bool, baseline: Int, verify: Bool) -> One ! { io, spawn } {
+    let t0 = time_now(h.t);
+    let v = h.v;
+    let path = f"{o.root}/{e.m.file}";
+    let original = match read_text(h, path) {
+        Result.Ok(value: t) => t,
+        Result.Err(error: x) => { return not_injected(o, e, f"cannot read {e.m.file}", "", elapsed_ms(h, t0)); },
+    };
+    match apply(h, o.root, e.m) {
+        Result.Ok(value: f) => 0,
+        Result.Err(error: why) => { return not_injected(o, e, why, original, elapsed_ms(h, t0)); },
+    };
+    let mutated = match read_text(h, path) {
+        Result.Ok(value: t) => t,
+        Result.Err(error: x) => "",
+    };
+    let apply_ms = elapsed_ms(h, t0);
+    let d = decide(h, o, st, e, full, baseline);
+    let verifying = verify && vec_len(e.mapped) > 0;
+    let mutant_words = strs_new();
+    if verifying {
+        for k in e.mapped {
+            let w0 = word_of(d, k.filter);
+            if str_len(w0) > 0 {
+                strs_push(mutant_words, w0);
+            } else {
+                strs_push(mutant_words, killer_word(step_direct(h, o, k).obs));
+            }
+        }
+    }
+    // Restore, and read back: the file must hold its original bytes again, or the run stops.
+    let r0 = time_now(h.t);
+    let restored = restore(h, o.root);
+    let back = match read_text(h, path) {
+        Result.Ok(value: t) => t,
+        Result.Err(error: x) => "",
+    };
+    let backup_gone = !exists_at(h, backup_path(o.root));
+    let bad = match restored {
+        Result.Ok(value: s) => back != original || !backup_gone,
+        Result.Err(error: x) => true,
+    };
+    if bad {
+        let reason = match restored {
+            Result.Ok(value: s) => "the restored file does not hold the original bytes",
+            Result.Err(error: x) => x,
+        };
+        return One(kind: "stopped", record: dummy_record(), checks: vec_new[Check](), ms: 0, why: f"{e.m.file} was mutated and could not be restored ({reason}). Its original is preserved at {backup_path(o.root)} and has deliberately been kept. Recover with `nazm-mutate recover ROOT --confirm-no-writers` once nothing is still writing to this tree.");
+    }
+    let restore_ms = elapsed_ms(h, r0);
+    // The programs a mutant rebuilt go back to their pristine bytes: the next mutant's killers run
+    // against the unmutated toolchain except where it rebuilds.
+    if str_len(o.rebuild_cmd) > 0 {
+        // Cargo rebuilds from the bytes on disk: the restored build is the next build's, and only an
+        // observation of the restored tree needs it now.
+        if verifying {
+            rebuild(h, o);
+        }
+    } else {
+        restore_programs(h, o, e.reach);
+    }
+    let checks = vec_new[Check]();
+    if verifying {
+        let mut i = 0;
+        for k in e.mapped {
+            let after = killer_word(step_direct(h, o, k).obs);
+            let before = match map_get(st.words, f"killer {k.filter}") {
+                Option.Some(value: w) => w,
+                Option.None() => "unclear",
+            };
+            vec_push(checks, Check(lab: k.filter, pristine: before, mutant: strs_get(mutant_words, i), restored: after));
+            i = i + 1;
+        }
+    }
+    if !d.decided {
+        return One(kind: "deferred", record: dummy_record(), checks: checks, ms: elapsed_ms(h, t0), why: "");
+    }
+    let ok = blake_hex(original);
+    let rec = Record(index: e.index, name: e.m.name, file: e.m.file, strategy: o.strategy, verdict: d.verdict.word, detail: d.verdict.detail, tier: d.verdict.tier, by: d.verdict.by, failing: d.verdict.failing, steps: d.steps, original_digest: ok, mutated_digest: blake_hex(mutated), restored_digest: ok, apply_ms: apply_ms, build_ms: d.build_ms, tests_ms: sum_steps(d.steps), restore_ms: restore_ms, total_ms: elapsed_ms(h, t0), candidates: strs_new());
+    One(kind: "final", record: rec, checks: checks, ms: rec.total_ms, why: "")
+}
+
+// --- the stranded record, the lock, recovery --------------------------------------------------------
+
+pub fn stranded_refusal(root: Str) -> Str ! {} {
+    f"a previous mutation run was interrupted and left a recovery record at {backup_path(root)}. \n\nThis run will not start, and recovery is not automatic. Killing a run releases its lock immediately, but its build and test descendants are not killed with it and keep writing to this tree. Nothing here can establish that they have stopped: a pid may have been reused, a matching digest only describes the instant it was read, and a delay proves nothing at all. Restoring the source while one of them is still running, and then injecting the next mutation on top, would produce verdicts about a file two processes are editing.\n\nTo recover:\n\n1. Establish that nothing is still writing to this tree (the interrupted run's process group, or any process whose command line names {root}, will help you look, but neither is proof).\n2. Run `nazm-mutate recover {root} --confirm-no-writers`, which restores the original bytes only if the file still matches what the record describes, and refuses if it does not.\n3. Re-run the campaign.\n\nThe flag in step 2 is your attestation that the tree is quiet, not a check this tool performs. It has no way to perform one."
+}
+
+/// Take the tree's lock: `Ok(file)` held until it is closed, `Err` saying who has it.
+pub fn take_lock(h: Caps, root: Str) -> Result[File, Str] ! { io } {
+    let io = h.io;
+    let v = h.v;
+    match dir_create_all(io, str_vouch(f"{root}/target")) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => { return Result[File, Str].Err(error: f"cannot make {root}/target: {io_error_show(e)}"); },
+    };
+    let f = match file_create_new_or_open(io, str_vouch(lock_path(root))) {
+        Result.Ok(value: f) => f,
+        Result.Err(error: e) => { return Result[File, Str].Err(error: f"cannot open the lock at {lock_path(root)}: {io_error_show(e)}"); },
+    };
+    match file_try_lock(f, true) {
+        Result.Ok(value: got) => {
+            if got {
+                return Result[File, Str].Ok(value: f);
+            }
+            file_close(f);
+            Result[File, Str].Err(error: f"another mutation run holds the lock on {root} ({lock_path(root)}). Two campaigns on one tree would measure each other's mutations; wait for it to end.")
+        },
+        Result.Err(error: e) => {
+            file_close(f);
+            Result[File, Str].Err(error: f"cannot lock {lock_path(root)}: {io_error_show(e)}")
+        },
+    }
+}
+
+fn file_create_new_or_open(io: IoCap, path: Str) -> Result[File, IoError] ! { io } {
+    file_append(io, path)
+}
+
+/// Recover an interrupted run: the operator's action, not the runner's. Without `confirmed` this
+/// prints the procedure and changes nothing.
+pub fn recover(h: Caps, root: Str, confirmed: Bool) -> Result[Str, Str] ! { io } {
+    let lock = take_lock(h, root)?;
+    if !confirmed && exists_at(h, backup_path(root)) {
+        file_close(lock);
+        return Result[Str, Str].Err(error: stranded_refusal(root));
+    }
+    let r = restore(h, root);
+    file_close(lock);
+    let said = r?;
+    if said == "nothing to restore" {
+        return Result[Str, Str].Ok(value: "nothing to recover");
+    }
+    if text_ends_with(said, " was already restored") {
+        return Result[Str, Str].Ok(value: f"already-restored {str_slice(said, 0, str_len(said) - 21)}");
+    }
+    if text_ends_with(said, " restored") {
+        return Result[Str, Str].Ok(value: f"repaired {str_slice(said, 0, str_len(said) - 9)}");
+    }
+    Result[Str, Str].Ok(value: said)
+}
+
+// --- the session -------------------------------------------------------------------------------------
+
+/// How a session ended: 0 clean, 1 problems or refused, 3 incomplete.
+pub struct End {
+    code: Int,
+    head: Str,
+    problems: Strs,
+}
+
+fn end_of(code: Int, head: Str, problems: Strs) -> End ! {} {
+    End(code: code, head: head, problems: problems)
+}
+
+fn refused(why: Str) -> End ! {} {
+    let p = strs_new();
+    strs_push(p, why);
+    end_of(1, "FAIL  mutation coverage", p)
+}
+
+fn copy_tree(h: Caps, from: Str, to: Str) -> Finished ! { io, spawn } {
+    sh_run(h, "rm -rf \"$2\" && mkdir -p \"$2\" && tar -C \"$1\" -cf - --exclude=./target --exclude=./.git --exclude=.nazm . | tar -C \"$2\" -xmf -", args_of(from, to), 1800000)
+}
+
+/// The order a session injects its mutants in: by the programs the mutated file reaches, then the
+/// first mapped killer's file, then the catalogue's order. Deterministic, a sort on structured keys.
+pub fn bucket_order(entries: Vec[Subject]) -> Ints ! {} {
+    let order = ints_new();
+    let n = vec_len(entries);
+    let mut i = 0;
+    while i < n {
+        ints_push(order, i);
+        i = i + 1;
+    }
+    // Insertion sort over (reach, first killer's file, catalogue index).
+    let mut a = 1;
+    while a < n {
+        let mut b = a;
+        while b > 0 && earlier(vec_get(entries, ints_get(order, b)), vec_get(entries, ints_get(order, b - 1))) {
+            let t = ints_get(order, b);
+            ints_set(order, b, ints_get(order, b - 1));
+            ints_set(order, b - 1, t);
+            b = b - 1;
+        }
+        a = a + 1;
+    }
+    order
+}
+
+fn bucket_key(e: Subject) -> Str ! {} {
+    let first = if vec_len(e.mapped) > 0 { vec_get(e.mapped, 0).path } else { "" };
+    f"{str_join(e.reach, ",")}|{first}"
+}
+
+fn earlier(x: Subject, y: Subject) -> Bool ! {} {
+    let c = text_compare(bucket_key(x), bucket_key(y));
+    if c != 0 {
+        return c < 0;
+    }
+    x.index < y.index
+}
+
+fn bucket_names(entries: Vec[Subject], order: Ints) -> Strs ! {} {
+    let out = strs_new();
+    for i in order {
+        let e = vec_get(entries, i);
+        let k = bucket_key(e);
+        let shown = if str_len(e.m.file) > 0 { k } else { k };
+        let mut have = false;
+        for x in out {
+            if x == shown {
+                have = true;
+            }
+        }
+        if !have {
+            strs_push(out, shown);
+        }
+    }
+    out
+}
+
+/// Run a campaign. The tree at `o.root` is the disposable copy (made from `o.copy_from` first when
+/// that is given): the session mutates it, builds in it and restores it.
+pub fn run_session(h: Caps, o: Options) -> End ! { io, spawn } {
+    let started = time_now(h.t);
+    let io = h.io;
+    if str_len(o.copy_from) > 0 {
+        let c = copy_tree(h, o.copy_from, o.root);
+        if !finished_ok(c) {
+            return refused(f"cannot copy {o.copy_from} to {o.root}: {c.ended} {c.code} {last_nonempty(c.stderr)}");
+        }
+    }
+    let cpath = catalogue_path(o.root);
+    let text = match read_rust(h, cpath) {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => { return refused(f"{cpath}: {e}"); },
+    };
+    let plan = match plan_load(text, cpath) {
+        Result.Ok(value: p) => p,
+        Result.Err(error: e) => { return refused(e); },
+    };
+    let cat = match catalogue_read(text, cpath) {
+        Result.Ok(value: c) => c,
+        Result.Err(error: e) => { return refused(e); },
+    };
+    if vec_len(plan.entries) != vec_len(cat.mutations) {
+        return refused("internal: the catalogue's two readings disagree on how many entries it has");
+    }
+    // The selection: the filters' (any entry), or, with none, every Nazm entry. An entry that
+    // mutates the seed is the Rust campaign's and is refused here by name.
+    let mut selected = ints_new();
+    if strs_len(o.only) == 0 {
+        let mut i = 0;
+        for d in plan.entries {
+            if is_nazm_entry(d.file) {
+                ints_push(selected, i);
+            }
+            i = i + 1;
+        }
+        if ints_len(selected) == 0 {
+            return refused("the catalogue has no entry under compiler/, library/ or toolchain/");
+        }
+    } else {
+        selected = match select(plan, o.only) {
+            Result.Ok(value: s) => s,
+            Result.Err(error: e) => { return refused(e); },
+        };
+        let seeds = strs_new();
+        for i in selected {
+            let d = vec_get(plan.entries, i);
+            if !is_nazm_entry(d.file) {
+                strs_push(seeds, d.name);
+            }
+        }
+        if strs_len(seeds) > 0 {
+            return refused(f"{strs_len(seeds)} selected entr(ies) mutate the seed, not the Nazm toolchain, and are the Rust campaign's (`nzx contained mutate-seed`): {str_join(seeds, ", ")}");
+        }
+        say(h, f"running {ints_len(selected)} of the catalogue, selected by {debug_list(o.only)}");
+    }
+    let lock = match take_lock(h, o.root) {
+        Result.Ok(value: f) => f,
+        Result.Err(error: e) => { return refused(e); },
+    };
+    let end = run_locked(h, o, started, text, plan, cat, selected);
+    file_close(lock);
+    end
+}
+
+fn debug_list(xs: Strs) -> Str ! {} {
+    let parts = strs_new();
+    for x in xs {
+        strs_push(parts, f"\"{x}\"");
+    }
+    f"[{str_join(parts, ", ")}]"
+}
+
+fn run_locked(h: Caps, o: Options, started: Instant, text: Str, plan: Plan, cat: Catalogue, selected: Ints) -> End ! { io, spawn } {
+    let v = h.v;
+    // A previous run may have been killed mid-mutation: recovery is an operator's action.
+    if exists_at(h, backup_path(o.root)) {
+        return refused(stranded_refusal(o.root));
+    }
+    // Identity, from the tree as it is now: pristine, because nothing is stranded.
+    let tree = match tree_digest(h, o.root, true) {
+        Result.Ok(d) => d,
+        Result.Err(e) => { return refused(f"cannot digest the tree: {e}"); },
+    };
+    let whys = whys_of(text);
+    let stays = match read_text(h, f"{o.root}/toolchain/harness/tests/stays-rust.txt") {
+        Result.Ok(value: t) => stays_of(t),
+        Result.Err(error: e) => strs_new(),
+    };
+    let files = map_new[Str]();
+    let entries = vec_new[Subject]();
+    let names = strs_new();
+    let closures = vec_new[Strs]();
+    for p in o.programs {
+        vec_push(closures, closure_of(h, o.root, p.source));
+    }
+    let mut unmapped = 0;
+    for i in selected {
+        let m = vec_get(cat.mutations, i);
+        let d = vec_get(plan.entries, i);
+        let mapped = map_killers(h, o.root, m.killers, stays, files);
+        let reach = strs_new();
+        let mut pi = 0;
+        for p in o.programs {
+            if in_closure(vec_get(closures, pi), m.file) {
+                strs_push(reach, p.name);
+            }
+            pi = pi + 1;
+        }
+        let why = match map_get(whys, m.name) {
+            Option.Some(value: w) => w,
+            Option.None() => "",
+        };
+        if vec_len(mapped) == 0 {
+            unmapped = unmapped + 1;
+        }
+        strs_push(names, m.name);
+        vec_push(entries, Subject(index: i, m: m, why: why, mapped: mapped, reach: reach));
+    }
+    // The toolchain's identity: the digest of the `nazm` that builds the session's programs (or the
+    // text a caller that cannot hash a binary gives, `--toolchain-id`: the interpreted tests).
+    let toolchain = if str_len(o.toolchain_id) > 0 {
+        o.toolchain_id
+    } else {
+        match file_read_all(h.io, str_vouch(o.seed)) {
+            Result.Ok(value: b) => blake3_hex(b),
+            Result.Err(error: e) => "unknown",
+        }
+    };
+    let harness = match tree_digest(h, f"{o.root}/toolchain/harness", false) {
+        Result.Ok(d) => d,
+        Result.Err(e) => "unknown",
+    };
+    let identity = Identity(tree: tree, catalogue: blake_hex(text), harness: harness, toolchain: toolchain, strategy: o.strategy, selected: names, deadlines: o.deadlines, reset_derived: o.reset_derived, cargo_jobs: o.cargo_jobs, test_threads: o.test_threads, cpu_quota: cpu_quota(h));
+    let key = identity_key(identity);
+    // Resume: only an identical identity's journal, and only the five semantic verdicts.
+    let prior = map_new[Prior]();
+    if o.resume {
+        let from = if str_len(o.resume_from) > 0 { o.resume_from } else { o.campaign_dir };
+        let jp = f"{from}/{key}/journal.jsonl";
+        if str_len(from) > 0 && exists_at(h, jp) {
+            match journal_read(h, jp, key) {
+                Result.Ok(value: ps) => {
+                    for p in ps {
+                        if is_semantic(p.verdict) {
+                            map_set(prior, p.name, p);
+                        }
+                    }
+                    say(h, f"resuming campaign {key}: {map_len(prior)} finalized entries in {jp}");
+                    0
+                },
+                Result.Err(error: e) => { return refused(e); },
+            };
+        } else {
+            say(h, f"resume: no journal for campaign {key} under {from}. Nothing is reused; a journal recorded against any other tree, catalogue, harness, toolchain, strategy, selection, deadline set or execution profile has a different key and is never read.");
+        }
+    }
+    let journal = match journal_open(h, o.campaign_dir, identity, o.commit, o.export) {
+        Result.Ok(value: j) => j,
+        Result.Err(error: e) => { return refused(f"cannot open the campaign journal: {e}"); },
+    };
+    say(h, f"campaign {key}: strategy {o.strategy}, {vec_len(entries)} selected, root {o.root}");
+    say(h, f"  unmapped             {unmapped} of {vec_len(entries)} selected entries have no killer that maps to a Nazm test (decided by the full tier alone)");
+    let mut pending = 0;
+    for e in entries {
+        if !map_has(prior, e.m.name) {
+            pending = pending + 1;
+        }
+    }
+    let st = state_new();
+    let mut setup = strs_new();
+    let mut baseline = 0;
+    let mut have_baseline = false;
+    for sf in suite_files(h, o.root) {
+        strs_push(st.suite, sf);
+    }
+    if pending > 0 {
+        let t = time_now(h.t);
+        // The pristine build of every program, kept apart so a rebuilt program can be put back.
+        let b = pristine_build(h, o);
+        if b.kind != "built" {
+            return refused(f"the unmutated toolchain does not build: {b.why}. Fix that first: every mutation would otherwise be reported as SURVIVED.");
+        }
+        strs_push(setup, f"pristine build {elapsed_ms(h, t) / 1000}s");
+        match tree_digest(h, o.root, true) {
+            Result.Ok(after) => {
+                if after != tree {
+                    return refused("building the pristine tree changed it, so the campaign identity taken before the build does not describe what was tested. Commit what the build writes and run again.");
+                }
+                0
+            },
+            Result.Err(e) => { return refused(f"cannot digest the tree: {e}"); },
+        };
+        if o.strategy == "targeted" {
+            let t2 = time_now(h.t);
+            let pend = vec_new[Subject]();
+            for e in entries {
+                if !map_has(prior, e.m.name) {
+                    vec_push(pend, e);
+                }
+            }
+            let failing = establish(h, o, st, pend);
+            strs_push(setup, f"pristine killers {elapsed_ms(h, t2) / 1000}s");
+            say(h, f"  mutation baseline    {map_len(st.words)} unique killer(s) run once on the pristine tree");
+            if strs_len(failing) > 0 {
+                return refused(f"{strs_len(failing)} declared killer(s) do not pass on the pristine tree, so no mutant can be shown to be caught by them: {str_join(failing, ", ")}");
+            }
+        } else {
+            let t2 = time_now(h.t);
+            match full_baseline(h, o, st) {
+                Result.Ok(n) => { baseline = n; have_baseline = true; 0 },
+                Result.Err(e) => { return refused(e); },
+            };
+            strs_push(setup, f"baseline suite {elapsed_ms(h, t2) / 1000}s");
+        }
+    }
+    let summary = summary_new(vec_len(entries));
+    let problems = strs_new();
+    let finalized = strs_new();
+    let not_reached = strs_new();
+    let mut stopped = false;
+    let mut checked = 0;
+    let mut verified = 0;
+    let unverified = strs_new();
+    let deferred = vec_new[Subject]();
+    let order = bucket_order(entries);
+    let buckets = bucket_names(entries, order);
+    say(h, f"  execution order      {strs_len(buckets)} bucket(s)");
+    let setup_ms = elapsed_ms(h, started);
+    // Pass 1: Tier 1 for every targeted mutant with mapped killers; the rest wait.
+    for oi in order {
+        let e = vec_get(entries, oi);
+        match map_get(prior, e.m.name) {
+            Option.Some(value: r) => {
+                say(h, f"  {word(r.verdict)} {e.m.name}  (reused from journal {key}: {r.detail})");
+                if o.verify_killers && vec_len(e.mapped) > 0 {
+                    strs_push(unverified, e.m.name);
+                }
+                summary_add_prior(summary, r);
+                strs_push(finalized, e.m.name);
+                let pr = problem_of(r.verdict, r.detail, e.m.name, e.why);
+                if str_len(pr) > 0 {
+                    strs_push(problems, pr);
+                }
+                continue;
+            },
+            Option.None() => 0,
+        };
+        if o.strategy != "targeted" || vec_len(e.mapped) == 0 {
+            vec_push(deferred, e);
+            continue;
+        }
+        if stopped || over_budget(h, o, started) {
+            strs_push(not_reached, e.m.name);
+            continue;
+        }
+        let one = run_one(h, o, st, e, false, 0, o.verify_killers);
+        if one.kind == "final" {
+            finish(h, journal, summary, problems, one.record, one.checks, e);
+            for c in one.checks {
+                checked = checked + 1;
+                if check_verified(c) { verified = verified + 1; }
+            }
+            strs_push(finalized, e.m.name);
+            // A journal that cannot be written is not a finalized verdict.
+        } else if one.kind == "deferred" {
+            say(h, f"  deferred     {e.m.name}  (every declared killer passed on the mutant)");
+            vec_push(deferred, e);
+        } else {
+            say(h, f"  NOT RESTORED {e.m.name}");
+            strs_push(problems, f"{e.m.name}: {one.why} The run stopped here: every later verdict would have been measured against a file still holding this mutation.");
+            strs_push(not_reached, e.m.name);
+            stopped = true;
+        }
+    }
+    // Pass 2: the full law — the suite baseline, then every tier — for what Tier 1 left.
+    let mut waiting = vec_new[Subject]();
+    for e in deferred {
+        let mut gone = false;
+        for n in not_reached {
+            if n == e.m.name {
+                gone = true;
+            }
+        }
+        if !gone {
+            vec_push(waiting, e);
+        }
+    }
+    if vec_len(waiting) > 0 && !stopped && !have_baseline {
+        say(h, f"  baseline suite       {vec_len(waiting)} mutant(s) need a tier beyond the killers");
+        match full_baseline(h, o, st) {
+            Result.Ok(n) => { baseline = n; have_baseline = true; 0 },
+            Result.Err(e) => { return refused(e); },
+        };
+    }
+    for e in waiting {
+        if stopped || over_budget(h, o, started) {
+            strs_push(not_reached, e.m.name);
+            continue;
+        }
+        let one = run_one(h, o, st, e, true, baseline, o.verify_killers);
+        if one.kind == "final" {
+            finish(h, journal, summary, problems, one.record, one.checks, e);
+            for c in one.checks {
+                checked = checked + 1;
+                if check_verified(c) { verified = verified + 1; }
+            }
+            strs_push(finalized, e.m.name);
+        } else if one.kind == "deferred" {
+            strs_push(problems, f"internal: {e.m.name} was deferred by the full law");
+            strs_push(not_reached, e.m.name);
+        } else {
+            say(h, f"  NOT RESTORED {e.m.name}");
+            strs_push(problems, f"{e.m.name}: {one.why} The run stopped here: every later verdict would have been measured against a file still holding this mutation.");
+            strs_push(not_reached, e.m.name);
+            stopped = true;
+        }
+    }
+    // The tree the session ends on is the tree it started from, byte for byte, or nothing it
+    // decided can be trusted.
+    if !stopped && pending > 0 {
+        match tree_digest(h, o.root, true) {
+            Result.Ok(t) => {
+                if t != tree {
+                    strs_push(problems, "the tree does not digest to the one the session began with: a restoration left something behind");
+                    stopped = true;
+                }
+                0
+            },
+            Result.Err(e) => {
+                strs_push(problems, f"cannot digest the tree: {e}");
+                stopped = true;
+                0
+            },
+        };
+    }
+    let wall = elapsed_ms(h, started);
+    file_write_str(file_stdout(h.io), summary_render(summary, key, o.strategy, strs_len(not_reached), unmapped, setup_ms, wall));
+    say(h, f"  setup phases         {str_join(setup, ", ")}");
+    if o.verify_killers {
+        let mut tail = "";
+        if strs_len(unverified) > 0 {
+            tail = f"; {strs_len(unverified)} reused, not verified here: {str_join(unverified, ", ")}";
+            strs_push(problems, f"{strs_len(unverified)} mutation(s) had their verdict reused from the journal, so their killers were not verified in this session: {str_join(unverified, ", ")}");
+        }
+        say(h, f"  killer verification  {verified} of {checked} verified in this session{tail}");
+    }
+    if !accounted(names, finalized, not_reached) {
+        strs_push(problems, "internal: the campaign's accounting does not cover every selected mutation");
+    }
+    if stopped {
+        return end_of(1, "FAIL  mutation coverage", problems);
+    }
+    if strs_len(not_reached) > 0 || strs_len(unverified) > 0 {
+        strs_push(problems, f"{strs_len(not_reached)} of {vec_len(entries)} selected mutations were not reached this session: {str_join(not_reached, ", ")}. Resume with `--resume`; nothing about them has been established.");
+        return end_of(3, "INCOMPLETE mutation coverage", problems);
+    }
+    if strs_len(problems) == 0 {
+        return end_of(0, "ok    mutation coverage", problems);
+    }
+    end_of(1, "FAIL  mutation coverage", problems)
+}
+
+/// The pristine build: every program (kept apart so a rebuilt one can be put back), or the rebuild
+/// command once, with the seed kept apart as the builder of what the tests build.
+fn pristine_build(h: Caps, o: Options) -> Built ! { io, spawn } {
+    if str_len(o.rebuild_cmd) == 0 {
+        let b = build_programs(h, o, strs_new(), true);
+        if b.kind == "built" {
+            sh_run(h, "rm -rf \"$2\" && mkdir -p \"$2\" && cp -p \"$1\"/* \"$2\"/", args_of(o.bin, pristine_dir(o)), 600000);
+        }
+        return b;
+    }
+    let b = rebuild(h, o);
+    if b.kind == "built" {
+        sh_run(h, "mkdir -p \"$2\" && cp -p \"$1\" \"$2/builder\"", args_of(o.seed, o.bin), 600000);
+    }
+    b
+}
+
+fn full_baseline(h: Caps, o: Options, st: State) -> Result[Int, Str] ! { io, spawn } {
+    // The count a later full step must match: the suite once, pristine and green.
+    ints_clear_one(st.full_expected);
+    let n = baseline_suite(h, o, st)?;
+    ints_set(st.full_expected, 0, n);
+    Result[Int, Str].Ok(value: n)
+}
+
+fn ints_clear_one(xs: Ints) -> Int ! {} {
+    if ints_len(xs) == 0 {
+        ints_push(xs, 0);
+    }
+    ints_set(xs, 0, 0);
+    0
+}
+
+fn over_budget(h: Caps, o: Options, started: Instant) -> Bool ! {} {
+    o.budget_ms > 0 && elapsed_ms(h, started) >= o.budget_ms
+}
+
+/// Print, journal and count one finalized mutant.
+fn finish(h: Caps, j: Journal, s: Summary, problems: Strs, r: Record, checks: Vec[Check], e: Subject) -> Int ! { io } {
+    say(h, f"  {word(r.verdict)} {r.name}  ({r.detail})");
+    for st in r.steps {
+        say(h, f"      tier {st.tier} {st.selector}: {st.outcome} ({secs_text(st.ms)}s)");
+    }
+    for c in checks {
+        say(h, check_line(c));
+        if !check_verified(c) {
+            strs_push(problems, f"{r.name}: {c.lab} is not a killer ({check_states(c)})");
+        }
+    }
+    match journal_append(h, j, r) {
+        Result.Ok(value: n) => 0,
+        Result.Err(error: why) => { strs_push(problems, f"{r.name}: the verdict could not be journaled ({why})"); 0 },
+    };
+    let pr = problem_of(r.verdict, r.detail, e.m.name, e.why);
+    if str_len(pr) > 0 {
+        strs_push(problems, pr);
+    }
+    summary_add(s, r, false);
+    0
+}
+
+// --- verifying a killer ------------------------------------------------------------------------------
+
+/// The Rust test binary that declares `mod STEM;` (`crates/nazm-cli/tests/cli_*.rs`), or `""`.
+fn rust_binary_of(h: Caps, root: Str, stem: Str) -> Str ! { io } {
+    let io = h.io;
+    let v = h.v;
+    let dir = f"{root}/crates/nazm-cli/tests";
+    let names = match dir_list(io, str_vouch(dir)) {
+        Result.Ok(value: xs) => xs,
+        Result.Err(error: e) => strs_new(),
+    };
+    for n in names {
+        if text_starts_with(n, "cli_") && text_ends_with(n, ".rs") {
+            match read_text(h, f"{dir}/{n}") {
+                Result.Ok(value: t) => {
+                    for l in lines(t) {
+                        if trim_ws(l) == f"mod {stem};" {
+                            return str_slice(n, 0, str_len(n) - 3);
+                        }
+                    }
+                    0
+                },
+                Result.Err(error: e) => 0,
+            };
+        }
+    }
+    ""
+}
+
+/// Establish that each candidate killer observes this mutant, the only way a killer is allowed to
+/// become catalogue metadata: pristine, the test passes; mutant, the same test fails; restored, it
+/// passes again. `candidates` are `FILE::fn`; none given, the entry's own mapped killers. Returns the
+/// report and the `killers = [...]` text to paste, or the problems.
+pub fn verify_killer(h: Caps, o: Options, name: Str, candidates: Strs) -> Result[Str, Strs] ! { io, spawn } {
+    let v = h.v;
+    let cpath = catalogue_path(o.root);
+    let text = match read_rust(h, cpath) {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => { return one_err(f"{cpath}: {e}"); },
+    };
+    let cat = match catalogue_read(text, cpath) {
+        Result.Ok(value: c) => c,
+        Result.Err(error: e) => { return one_err(e); },
+    };
+    let mut found = false;
+    let mut m = Mutation(name: "", file: "", find: "", replace: "", killers: vec_new[Killer](), problem: "");
+    let mut index = 0;
+    let mut at = 0;
+    for x in cat.mutations {
+        if str_len(x.problem) == 0 && x.name == name {
+            found = true;
+            m = x;
+            index = at;
+        }
+        at = at + 1;
+    }
+    if !found {
+        return one_err(f"no mutation is named exactly `{name}`");
+    }
+    if !is_nazm_entry(m.file) {
+        return one_err(f"`{name}` mutates the seed ({m.file}); its killers are verified by the Rust runner (`nzx contained mutate-seed --verify-killer`)");
+    }
+    let stays = match read_text(h, f"{o.root}/toolchain/harness/tests/stays-rust.txt") {
+        Result.Ok(value: t) => stays_of(t),
+        Result.Err(error: e) => strs_new(),
+    };
+    let files = map_new[Str]();
+    let killers = vec_new[Killer]();
+    if strs_len(candidates) > 0 {
+        for c in candidates {
+            vec_push(killers, Killer(package: "nazm-cli", target: "", name: c));
+        }
+    } else {
+        for k in m.killers {
+            vec_push(killers, k);
+        }
+    }
+    let mapped = map_killers(h, o.root, killers, stays, files);
+    if vec_len(mapped) == 0 {
+        return one_err(f"`{name}` has no killer that maps to a Nazm test. Name a candidate with `--killer FILE::fn`.");
+    }
+    if vec_len(mapped) != vec_len(killers) {
+        return one_err(f"{vec_len(killers) - vec_len(mapped)} of the killers named for `{name}` do not map to a Nazm test (the file or function is absent, or the test stays Rust)");
+    }
+    let lock = match take_lock(h, o.root) {
+        Result.Ok(value: f) => f,
+        Result.Err(error: e) => { return one_err(e); },
+    };
+    if exists_at(h, backup_path(o.root)) {
+        file_close(lock);
+        return one_err(stranded_refusal(o.root));
+    }
+    let closures = vec_new[Strs]();
+    let reach = strs_new();
+    for p in o.programs {
+        if in_closure(closure_of(h, o.root, p.source), m.file) {
+            strs_push(reach, p.name);
+        }
+    }
+    let b = pristine_build(h, o);
+    if b.kind != "built" {
+        file_close(lock);
+        return one_err(f"pristine: the toolchain did not build ({b.why})");
+    }
+    let before = strs_new();
+    for k in mapped {
+        strs_push(before, killer_word(step_direct(h, o, k).obs));
+    }
+    let original = match read_text(h, f"{o.root}/{m.file}") {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => { file_close(lock); return one_err(f"{m.file}: {e}"); },
+    };
+    match apply(h, o.root, m) {
+        Result.Ok(value: f) => 0,
+        Result.Err(error: why) => { file_close(lock); return one_err(f"`{name}`: {why}"); },
+    };
+    let under = strs_new();
+    let mb = if str_len(o.rebuild_cmd) > 0 { rebuild(h, o) } else { build_programs(h, o, reach, false) };
+    if mb.kind == "built" {
+        for k in mapped {
+            strs_push(under, killer_word(step_direct(h, o, k).obs));
+        }
+    }
+    let restored = restore(h, o.root);
+    let back = match read_text(h, f"{o.root}/{m.file}") {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => "",
+    };
+    if back != original || !restored_ok(restored) {
+        file_close(lock);
+        return one_err(f"{m.file} could not be restored; its original is at {backup_path(o.root)}");
+    }
+    if str_len(o.rebuild_cmd) > 0 {
+        rebuild(h, o);
+    } else {
+        restore_programs(h, o, reach);
+    }
+    let after = strs_new();
+    for k in mapped {
+        strs_push(after, killer_word(step_direct(h, o, k).obs));
+    }
+    file_close(lock);
+    if mb.kind != "built" {
+        return one_err(f"mutant: the toolchain did not build ({mb.why}): a mutant that does not build cannot verify a killer");
+    }
+    let report = strs_new();
+    let failed = strs_new();
+    let good = strs_new();
+    let mut i = 0;
+    for k in mapped {
+        let b0 = strs_get(before, i);
+        let u0 = strs_get(under, i);
+        let a0 = strs_get(after, i);
+        let ok = b0 == "passes" && u0 == "fails" && a0 == "passes";
+        let head = if ok { "VERIFIED   " } else { "NOT A KILLER" };
+        strs_push(report, f"  {head} {k.filter}: pristine {b0}, mutant {u0}, restored {a0}");
+        if ok {
+            strs_push(good, f"    {{ package = \"nazm-cli\", test = \"{rust_binary_of(h, o.root, k.stem)}\", name = \"{k.filter}\" }},");
+        } else {
+            strs_push(failed, f"{name}: {k.filter} is not a killer (pristine {b0}, mutant {u0}, restored {a0})");
+        }
+        i = i + 1;
+    }
+    let mut text_out = f"{str_join(report, "\n")}\n";
+    if strs_len(good) > 0 {
+        text_out = f"{text_out}\ncatalogue metadata for `{name}`:\nkillers = [\n{str_join(good, "\n")}\n]\n";
+    }
+    if strs_len(failed) > 0 {
+        file_write_str(file_stdout(h.io), text_out);
+        return Result[Str, Strs].Err(error: failed);
+    }
+    Result[Str, Strs].Ok(value: text_out)
+}
+
+fn one_err(why: Str) -> Result[Str, Strs] ! {} {
+    Result[Str, Strs].Err(error: strs_of(why))
+}
+
+fn strs_of(s: Str) -> Strs ! {} {
+    let out = strs_new();
+    strs_push(out, s);
+    out
+}
+
+fn restored_ok(r: Result[Str, Str]) -> Bool ! {} {
+    match r {
+        Result.Ok(value: s) => true,
+        Result.Err(error: e) => false,
+    }
+}
+
+// --- the command line --------------------------------------------------------------------------------
+
+/// What `session` was asked: the options, the `--verify-killer` names and the `--killer` candidates.
+pub struct Asked {
+    o: Options,
+    verify: Strs,
+    killers: Strs,
+}
+
+fn number(s: Str, lo: Int, hi: Int, what: Str) -> Result[Int, Str] ! {} {
+    match text_parse_int(s) {
+        Result.Ok(value: n) => if n >= lo && n <= hi { Result[Int, Str].Ok(value: n) } else { Result[Int, Str].Err(error: f"mutate: {what} needs a whole number from {lo} to {hi}") },
+        Result.Err(error: e) => Result[Int, Str].Err(error: f"mutate: {what} needs a whole number"),
+    }
+}
+
+/// `program=source` pairs, comma-separated, for `--programs`.
+fn programs_of(s: Str) -> Vec[Program] ! {} {
+    let out = vec_new[Program]();
+    for pair in text_split(s, ",") {
+        let at = find(pair, "=");
+        if at > 0 {
+            vec_push(out, Program(name: str_slice(pair, 0, at), source: str_slice(pair, at + 1, str_len(pair))));
+        }
+    }
+    out
+}
+
+/// The arguments of `session ROOT …` from index 2 on, strictly: a typo that silently ran the whole
+/// catalogue, or none of it, would waste hours either way.
+pub fn parse_session(args: Strs) -> Result[Asked, Str] ! {} {
+    let mut o = options_default();
+    o.root = strs_get(args, 1);
+    let verify = strs_new();
+    let killers = strs_new();
+    let n = strs_len(args);
+    let mut i = 2;
+    while i < n {
+        let a = strs_get(args, i);
+        let has_value = i + 1 < n;
+        let val = if has_value { strs_get(args, i + 1) } else { "" };
+        if a == "--reset-derived-caches" { o.reset_derived = true; i = i + 1; continue; }
+        if a == "--export-journal" { o.export = true; i = i + 1; continue; }
+        if a == "--resume" { o.resume = true; i = i + 1; continue; }
+        if a == "--verify-killers" { o.verify_killers = true; i = i + 1; continue; }
+        if !has_value {
+            return Result[Asked, Str].Err(error: f"mutate: {a} needs a value");
+        }
+        if a == "--copy-from" { o.copy_from = val; }
+        else if a == "--bin" { o.bin = val; }
+        else if a == "--seed" { o.seed = val; }
+        else if a == "--driver" { o.driver = val; }
+        else if a == "--driver-flag" { strs_push(o.driver_flags, val); }
+        else if a == "--only" { strs_push(o.only, val); }
+        else if a == "--env" { strs_push(o.extra_env, val); }
+        else if a == "--campaign-dir" { o.campaign_dir = val; }
+        else if a == "--resume-from" { o.resume_from = val; }
+        else if a == "--source-commit" { o.commit = val; }
+        else if a == "--heap" { o.heap = val; }
+        else if a == "--toolchain-id" { o.toolchain_id = val; }
+        else if a == "--rebuild-cmd" { o.rebuild_cmd = val; }
+        else if a == "--programs" { o.programs = programs_of(val); }
+        else if a == "--verify-killer" { strs_push(verify, val); }
+        else if a == "--killer" { strs_push(killers, val); }
+        else if a == "--strategy" {
+            if val != "targeted" && val != "full" {
+                return Result[Asked, Str].Err(error: "mutate: --strategy is `targeted` or `full`");
+            }
+            o.strategy = val;
+        }
+        else if a == "--budget-secs" { o.budget_ms = number(val, 1, 86400, a)? * 1000; }
+        else if a == "--cargo-jobs" { o.cargo_jobs = number(val, 1, 16, a)?; }
+        else if a == "--test-threads" { o.test_threads = number(val, 1, 16, a)?; }
+        else if a == "--build-deadline-secs" { o.deadlines = Deadlines(build: number(val, 1, 86400, a)?, killer: o.deadlines.killer, focused: o.deadlines.focused, full: o.deadlines.full); }
+        else if a == "--killer-deadline-secs" { o.deadlines = Deadlines(build: o.deadlines.build, killer: number(val, 1, 86400, a)?, focused: o.deadlines.focused, full: o.deadlines.full); }
+        else if a == "--focused-deadline-secs" { o.deadlines = Deadlines(build: o.deadlines.build, killer: o.deadlines.killer, focused: number(val, 1, 86400, a)?, full: o.deadlines.full); }
+        else if a == "--full-deadline-secs" { o.deadlines = Deadlines(build: o.deadlines.build, killer: o.deadlines.killer, focused: o.deadlines.focused, full: number(val, 1, 86400, a)?); }
+        else { return Result[Asked, Str].Err(error: f"mutate: unknown option {a}"); }
+        i = i + 2;
+    }
+    if str_len(o.bin) == 0 {
+        o.bin = f"{o.root}/../mut-bin";
+    }
+    if str_len(o.seed) == 0 {
+        return Result[Asked, Str].Err(error: "mutate: session needs --seed, the `nazm` that builds the toolchain");
+    }
+    if strs_len(killers) > 0 && strs_len(verify) != 1 {
+        return Result[Asked, Str].Err(error: "mutate: --killer names candidates for exactly one --verify-killer");
+    }
+    Result[Asked, Str].Ok(value: Asked(o: o, verify: verify, killers: killers))
+}

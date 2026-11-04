@@ -1,0 +1,116 @@
+// The programs a campaign rebuilds, and which of them a mutated file can change (R8 slice 13,
+// S13.4): a program's `use` closure — the `use "…"` lines followed transitively from its root —
+// holds the files its build reads, so a mutant of a file outside the closure cannot change the
+// program and is not rebuilt for.
+//
+// A `use "@std/NAME"` is `library/std/NAME.nz`, a `use "@core/F"` is `library/core/F`, any other is
+// relative to the file that says it. The core prelude is every program's own and is in every
+// closure. (The design's first wording put every `library/` file in every closure; this follows the
+// `use` lines through `library/` too, which is the same rule applied to its files — a program that
+// does not reach `library/std/hash.nz` is not built from it. Logged in the decisions log.)
+
+use "@std/text"
+use "@std/path"
+use "@std/map"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+
+/// One program the session builds: its name (the file it is built to in the bin directory) and its
+/// root source, relative to the tree.
+pub struct Program {
+    name: Str,
+    source: Str,
+}
+
+/// The released set (`nazm`, `nazm-pipeline`, `nzcg`, `nazm-mcp`) and the harness tools a killer
+/// needs, as `toolchain/selfbuild/selfbuild.sh` names them.
+pub fn released_programs() -> Vec[Program] ! {} {
+    let out = vec_new[Program]();
+    vec_push(out, Program(name: "nazm", source: "toolchain/commands/nazm.nz"));
+    vec_push(out, Program(name: "pl", source: "toolchain/pipeline/main.nz"));
+    vec_push(out, Program(name: "cg", source: "toolchain/codegen/main.nz"));
+    vec_push(out, Program(name: "mcp", source: "toolchain/commands/mcp.nz"));
+    vec_push(out, Program(name: "jtool", source: "toolchain/harness/tools/jtool.nz"));
+    vec_push(out, Program(name: "check", source: "toolchain/harness/check/main.nz"));
+    out
+}
+
+/// The files named by `use "…"` lines of `text`, in order: a line that, after its indentation,
+/// begins `use "`, up to the closing quote.
+pub fn use_targets(text: Str) -> Strs ! {} {
+    let out = strs_new();
+    for l in lines(text) {
+        let t = trim_start_ws(l);
+        if text_starts_with(t, "use \"") {
+            let rest = str_slice(t, 5, str_len(t));
+            let end = find(rest, "\"");
+            if end > 0 {
+                strs_push(out, str_slice(rest, 0, end));
+            }
+        }
+    }
+    out
+}
+
+/// The tree-relative path a `use` in the file `from` names: `library/std/NAME.nz` for `@std/NAME`,
+/// `library/core/F` for `@core/F`, else relative to `from`'s directory and normalised.
+pub fn resolve_use(from: Str, target: Str) -> Str ! {} {
+    if text_starts_with(target, "@std/") {
+        let name = str_slice(target, 5, str_len(target));
+        let file = if text_ends_with(name, ".nz") { name } else { f"{name}.nz" };
+        return f"library/std/{file}";
+    }
+    if text_starts_with(target, "@core/") {
+        return f"library/core/{str_slice(target, 6, str_len(target))}";
+    }
+    if text_starts_with(target, "@") {
+        return "";
+    }
+    let dir = path_dir(from);
+    let joined = if dir == "." { target } else { path_join(dir, target) };
+    path_normalize(joined)
+}
+
+/// The set of tree-relative files `source`'s build reads: itself, everything its `use` lines reach
+/// that exists, and the core prelude. A file that cannot be read is left out (the build says so).
+pub fn closure_of(h: Caps, root: Str, source: Str) -> Strs ! { io } {
+    let seen = map_new[Int]();
+    let order = strs_new();
+    let todo = strs_new();
+    strs_push(todo, "library/core/prelude.nz");
+    strs_push(todo, source);
+    let mut at = 0;
+    while at < strs_len(todo) {
+        let f = strs_get(todo, at);
+        at = at + 1;
+        if map_has(seen, f) {
+            continue;
+        }
+        map_set(seen, f, 1);
+        strs_push(order, f);
+        match read_text(h, f"{root}/{f}") {
+            Result.Ok(value: t) => {
+                for u in use_targets(t) {
+                    let r = resolve_use(f, u);
+                    if str_len(r) > 0 {
+                        strs_push(todo, r);
+                    }
+                }
+                0
+            },
+            Result.Err(error: e) => 0,
+        };
+    }
+    order
+}
+
+/// Whether `file` is in the closure `cl`.
+pub fn in_closure(cl: Strs, file: Str) -> Bool ! {} {
+    for f in cl {
+        if f == file {
+            return true;
+        }
+    }
+    false
+}

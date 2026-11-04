@@ -1,0 +1,112 @@
+// What `nazm-bench` computes from a list of runs (R8 slice 13, S13.6): the port of `Measurement` in
+// `xtask/src/bench.rs`. A run is a whole number of nanoseconds; every figure is a run that was observed
+// (the minimum, the lower of the two middles, the nearest-rank 90th percentile, the maximum) or the median
+// absolute deviation from the median. Nothing here reads a clock.
+
+use "@std/text"
+
+/// One timed thing: a program's stage and the time of each run, in nanoseconds.
+pub struct Measurement {
+    program: Str,
+    stage: Str,
+    runs: Ints,
+}
+
+pub fn measurement(program: Str, stage: Str, runs: Ints) -> Measurement ! {} {
+    Measurement(program: program, stage: stage, runs: runs)
+}
+
+pub fn key(m: Measurement) -> Str ! {} {
+    f"{m.program}/{m.stage}"
+}
+
+/// `xs` in ascending order (a copy).
+pub fn ints_sorted(xs: Ints) -> Ints ! {} {
+    let out = ints_new();
+    for x in xs {
+        ints_push(out, x);
+        let mut j = ints_len(out) - 1;
+        while j > 0 && ints_get(out, j - 1) > ints_get(out, j) {
+            let a = ints_get(out, j - 1);
+            let b = ints_get(out, j);
+            ints_set(out, j - 1, b);
+            ints_set(out, j, a);
+            j = j - 1;
+        }
+    }
+    out
+}
+
+/// The lower of the two middles of the sorted `s` (never their mean: an average of two timings was never
+/// observed); `0` for none.
+fn lower_middle(s: Ints) -> Int ! {} {
+    if ints_len(s) == 0 { 0 } else { ints_get(s, (ints_len(s) - 1) / 2) }
+}
+
+pub fn m_min(m: Measurement) -> Int ! {} {
+    let s = ints_sorted(m.runs);
+    if ints_len(s) == 0 { 0 } else { ints_get(s, 0) }
+}
+
+pub fn m_median(m: Measurement) -> Int ! {} {
+    lower_middle(ints_sorted(m.runs))
+}
+
+/// The nearest-rank 90th percentile: a run that was observed, never an interpolation.
+pub fn m_p90(m: Measurement) -> Int ! {} {
+    let s = ints_sorted(m.runs);
+    let n = ints_len(s);
+    if n == 0 { return 0; }
+    let rank = if (n * 9 + 9) / 10 < 1 { 1 } else { (n * 9 + 9) / 10 };
+    ints_get(s, rank - 1)
+}
+
+pub fn m_max(m: Measurement) -> Int ! {} {
+    let s = ints_sorted(m.runs);
+    if ints_len(s) == 0 { 0 } else { ints_get(s, ints_len(s) - 1) }
+}
+
+/// The median absolute deviation from the median: a spread one slow run cannot inflate.
+pub fn m_mad(m: Measurement) -> Int ! {} {
+    let median = m_median(m);
+    let d = ints_new();
+    for x in m.runs {
+        ints_push(d, if x > median { x - median } else { median - x });
+    }
+    lower_middle(ints_sorted(d))
+}
+
+/// Nanoseconds as whole microseconds, half up: the unit every figure is printed in (`{:.3}` of
+/// milliseconds).
+pub fn us_of(ns: Int) -> Int ! {} {
+    (ns + 500) / 1000
+}
+
+fn pad3(n: Int) -> Str ! {} {
+    text_pad_left(int_to_str(n), 3, "0")
+}
+
+/// Microseconds as milliseconds with three decimals: `12.345`.
+pub fn ms3(us: Int) -> Str ! {} {
+    f"{us / 1000}.{pad3(us % 1000)}"
+}
+
+/// Microseconds as milliseconds with one decimal, half up: `12.3`.
+pub fn ms1(us: Int) -> Str ! {} {
+    let t = (us + 50) / 100;
+    f"{t / 10}.{t % 10}"
+}
+
+/// `ms3` of a nanosecond figure.
+pub fn ns_ms3(ns: Int) -> Str ! {} {
+    ms3(us_of(ns))
+}
+
+/// Every run, in milliseconds with three decimals, sorted: the record's `runs_ms`.
+pub fn runs_ms3(m: Measurement) -> Strs ! {} {
+    let out = strs_new();
+    for x in ints_sorted(m.runs) {
+        strs_push(out, ns_ms3(x));
+    }
+    out
+}
