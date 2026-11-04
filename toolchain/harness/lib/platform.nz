@@ -43,12 +43,12 @@ pub fn prepared(h: Caps, files: Strs, script: Str) -> Result[Str, Str] ! { io, s
 }
 
 fn runs_built(h: Caps, build: Str, files: Strs, script: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
-    let whos = text_split("llvm -O0|llvm -O2|cranelift", "|");
-    let backends = words("llvm llvm cranelift");
-    let opts = words("0 2 0");
+    let whos = leg_names(h.io);
+    let backends = leg_backends(h.io);
+    let opts = leg_opts(h.io);
     let exes = strs_new();
     let mut k = 0;
-    while k < 3 {
+    while k < strs_len(opts) {
         let who = strs_get(whos, k);
         let exe = f"{build}/{text_replace(text_replace(who, " ", ""), "-", "")}";
         let b = nazm(h, build, words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)} prog.nz -o {exe}"));
@@ -64,7 +64,7 @@ fn runs_built(h: Caps, build: Str, files: Strs, script: Str) -> Result[Vec[Label
     vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), ia, d, env)));
     scratch_remove(h, d);
     k = 0;
-    while k < 3 {
+    while k < strs_len(opts) {
         let dk = prepared(h, files, script)?;
         vec_push(out, Labeled(label: strs_get(whos, k), ran: bounded_exe(h, strs_get(exes, k), dk, env)));
         scratch_remove(h, dk);
