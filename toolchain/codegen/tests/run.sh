@@ -90,6 +90,7 @@ fi
 MIX=${NZCG_MIX:-}
 agree=0; differ=0; refused=0; skipped=0; mixed=0
 for src in "${inputs[@]}"; do
+  case $src in /*) ;; *) src=$PWD/$src ;; esac
   rel=${src#"$ROOT"/}
   name=$(echo "$rel" | tr '/.' '__')
   W=$WORK/$name
@@ -105,7 +106,9 @@ for src in "${inputs[@]}"; do
   if ! "$REF" build --target "$TARGET" ${link[@]+"${link[@]}"} "$src" -o "$W/ref" >"$W/ref.build" 2>&1; then
     echo "skipped  $rel (the reference does not build)"; skipped=$((skipped+1)); continue
   fi
-  if ! "$REF" build --target "$TARGET" ${link[@]+"${link[@]}"} --objects "$W/obj" "$src" >"$W/obj.build" 2>&1 ||
+  # `build --objects` writes its scratch directory (`NAME.nazm`) into the current directory: the work
+  # directory, so a checkout mounted read-only (the contained runner's) does not refuse it.
+  if ! (cd "$W" && "$REF" build --target "$TARGET" ${link[@]+"${link[@]}"} --objects "$W/obj" "$src") >"$W/obj.build" 2>&1 ||
      ! "$REF" lir --target "$TARGET" --ops "$src" >"$W/lir.txt" 2>"$W/lir.err"; then
     echo "skipped  $rel (no objects or LIR)"; skipped=$((skipped+1)); continue
   fi
