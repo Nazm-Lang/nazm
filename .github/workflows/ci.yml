@@ -128,8 +128,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Every test binary of the workspace is built; this shard runs its slice of them, except those
-      # whose source calls the containment guard, which the step names as NOT RUN. Doc-tests run in
-      # shard 1.
+      # whose source calls the containment guard, which the step names as NOT RUN. Doc-tests, the
+      # lifecycle test and the selftest run in shard 4, which the weights leave the lightest.
       - name: test (host-safe subset, shard ${{ matrix.shard }}/4)
         env:
           NAZM_REQUIRE_NONUTF8: "1"
@@ -139,11 +139,11 @@ jobs:
       # project and kill real process groups. They touch no compiler stage, so they are
       # host-safe, and they are ignored by default only for their cost.
       - name: mutation-runner lifecycle
-        if: matrix.shard == 1
+        if: matrix.shard == 4
         run: cargo test -p xtask --test lifecycle -- --ignored --test-threads=1
 
       - name: accounting selftest
-        if: matrix.shard == 1
+        if: matrix.shard == 4
         run: cargo run -p nazm-bench -- selftest
 
   # R1.5 7.2 (design D16): the release archive is reproducible. `nazm` is built in release twice,
