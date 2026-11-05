@@ -1783,3 +1783,52 @@ nine on the Dell, a fixpoint there); a source path given with `\` on the command
 any of this. `compiler/package.nz` now calls `os_family()`: the bootstrap checker and selfhost that
 read it are contained-only and were not run here. The runbook does not yet name `win-run.ps1` as the
 way a Nazm-built program runs on the Windows host: that amendment is the copyright holder's to accept.
+
+## Slice 18 — the release path ships the Nazm-built binaries (2026-11-05)
+
+### S18.1 What ships, and the choice of seed or Nazm
+The released targets of 0.11.0 are `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-pc-windows-gnu`.
+For these the archive's `bin/nazm`, `bin/nazm-mcp`, `libexec/nazm/nazm-pipeline` and `libexec/nazm/nzcg`
+(programs `nazm`, `mcp`, `pl`, `cg` of `toolchain/selfbuild/programs.txt`) are Nazm-built; the other five of the
+nine (`fe`, `check`, `interp`, `jtool`, `mutate`) are built and compared by the self-build but are the harness's and
+front end's own programs, not shipped. There is no switch between seed and Nazm: `scripts/release-archive.sh` is the
+only archiver of a cut-over target, it takes a self-build record and nothing else, and it has no code path that
+copies a seed binary. `scripts/host-archive.sh` (the seed's archive) stays for internal, non-release targets only and
+is refused for none of them by itself; the release gates (`scripts/release-candidate.sh`) are unchanged and still
+run on the seed, which stays frozen as the seed (slice 19) and is never packaged.
+### S18.2 The record: `fixpoint.txt`
+`host-selfbuild.sh` and `windows-selfbuild.sh` write `OUT/fixpoint.txt` last, only after every check passed
+(a smoke or reused Windows run writes none): `schema nazm.selfbuild-record/1`, script, arch, target, backend, heap
+limit, stages, `source-commit`, `source-tree-clean`, `build-input-digest` (`scripts/source-digest.sh`, taken at the start
+and again at the end: a tree that changed in between fails the run), the seed's SHA-256, `environment.txt`'s SHA-256,
+one `sha256 STAGE NAME DIGEST` line per built file and a summary; `result passed` is the last line. The Windows record
+also names its builder (a macOS stage 3 of the same commit, with that record's digest).
+### S18.3 What ships from which stage
+macOS: stage 3 (equal to stage 2, equal to stage 1: the fixpoint of S16). Windows: the first of the two builds made
+by the macOS stage 3 (equal to the second). The Windows archive claims reproducibility, not a Windows-native
+fixpoint (none was made); this is stated in its `SELFBUILD.txt`. The release configuration is the self-build's:
+`--release` (canaries, PIE, stripped, ad hoc signed on macOS), `--heap-limit 2G`, LLVM backend.
+### S18.4 Refusals, archive, checksum, verification
+`release-archive.sh` refuses (exit 2, naming `[why]`) unless: the record passed, is for this target, script and
+backend, 2G, stages 3; names this checkout's commit and build-input digest and a clean tree (`--allow-dirty` only for a
+dry run, written into `SELFBUILD.txt`); every digest in it equals the file on disk; stages agree byte for byte; each
+shipped image is a Mach-O (or PE32+) of the right architecture, on macOS ad hoc signed with a verifying signature and
+without a debug map, and carries the counted heap at exactly 2 GiB. It runs no Nazm-built program. The archive is
+`nazm-TRIPLE.tar.gz` made by `scripts/reproducible-tar.py` (shared with the seed's archive: sorted entries, time =
+`SOURCE_DATE_EPOCH` or the commit's, owner 0, no gzip name or time), with `SELFBUILD.txt` (the shipped files with
+digests, the whole record, the builder's record on Windows, the environment without `PATH`). `SHA256SUMS` lists every
+archive; signing is as 0.10.0 (`scripts/sign-release.sh`: Sigstore over `SHA256SUMS`, the copyright holder's step), which now
+first runs `scripts/verify-selfbuild.sh` on every `nazm-*.tar.gz`. `verify-selfbuild.sh ARCHIVE [OUT]` unpacks and
+reads, running nothing: each shipped file is its line's digest, is the last stage of the embedded record and equals
+the stage before it; with a reader's own self-build `OUT` of the same commit and target, the bytes are identical to its stage 3.
+Reproducing across machines or toolchains is not claimed (`environment.txt` names the SDK and clang).
+### S18.5 Tests
+`toolchain/selfbuild/tests/release-archive.sh`: synthetic record of nine copies of a signed C stub; a good archive,
+its reproducibility, SHA256SUMS, shipped set, verification, a tampered archive, and ten refusals. Runs no Nazm program.
+### S18.6 Windows names
+A Windows `nazm.exe` finds `nazm-pipeline.exe`/`nzcg.exe` in `libexec\nazm` beside the `bin\` on `PATH` (`;`-separated):
+`ut_exe_name`, `ut_libexec`, and the two stage lookups in `build.nz` and `coreir.nz`.
+### For the copyright holder
+Signing and publishing (Sigstore, tag, upload, Homebrew bump) are not done. Whether the x86_64 macOS and Windows
+archives are produced on this Mac at the release gate (10.3) from fresh self-builds of the release commit is
+proposed, not decided here. The Windows archive's lack of a Windows-native fixpoint is a stated shortfall.
