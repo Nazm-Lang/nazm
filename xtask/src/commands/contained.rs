@@ -148,6 +148,36 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
                 )),
             )
         }
+        // R9 6.3: the generator's ELF objects linked with the container's `cc` and run in the
+        // container, each program compared with the same program built by the seed's LLVM
+        // backend. The container's own architecture is the target (aarch64 natively; with
+        // `--platform amd64`, x86_64 under emulation). The seed is built here for the reason the
+        // bootstrap's is. Inputs after `elfrun` (repository-relative `.nz` paths) narrow a run.
+        Some("elfrun") => {
+            bounds.deadline = Duration::from_secs(3600);
+            let mut inputs = String::new();
+            for a in args.get(1..).unwrap_or_default() {
+                let ok = a.ends_with(".nz")
+                    && !a.starts_with('/')
+                    && !a.contains("..")
+                    && a.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b));
+                if !ok {
+                    eprintln!("contained: elfrun takes repository-relative `.nz` paths, not {a:?}");
+                    return ExitCode::FAILURE;
+                }
+                inputs.push_str(" /src/");
+                inputs.push_str(a);
+            }
+            (
+                "elfrun",
+                shell(&format!(
+                    "cargo build --locked -p nazm-cli --jobs {j} \
+                     && NZCG_OUT=/work/elfrun NAZM_REF=/work/target/debug/nazm \
+                        bash toolchain/codegen/tests/run.sh{inputs}"
+                )),
+            )
+        }
         // A scheduled profile runs the same binaries through `xtask workspace-tests`, built
         // here in the same target; any other runs `cargo test --workspace` as it always did.
         // Either way the container's memory peak is reported after the suite (N32-H3).
@@ -496,7 +526,7 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
         }
         other => {
             eprintln!(
-                "contained: unknown workload {:?}\n  probe | tests | selfhost | bootstrap | selfbuild | bench | mutate | fuzz [SECONDS] [TARGET...] | archive | run <command>",
+                "contained: unknown workload {:?}\n  probe | tests | selfhost | bootstrap | selfbuild | elfrun | bench | mutate | fuzz [SECONDS] [TARGET...] | archive | run <command>",
                 other.unwrap_or("<none>")
             );
             return ExitCode::FAILURE;
