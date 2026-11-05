@@ -40,6 +40,22 @@ fn pk_starts(s: Str, p: Str) -> Bool {
     str_slice(s, 0, str_len(p)) == p
 }
 
+// A Windows drive prefix (R8 slice 17, design S17.5): the length of `X:/` (or `X:\`) that begins `p`, else 0.
+// By the path's shape alone, not by asking the host: the Nazm checker's table has no `os_family` (the
+// compiler's sources keep to what it carries), and a build for Windows made on another host must read
+// `C:/Users/x` as absolute in the program it builds. On macOS and Linux no real path starts so; a relative
+// directory named `c:` would be the one difference.
+pub fn pk_drive(p: Str) -> Int {
+    if str_len(p) < 3 { return 0; }
+    let c = str_byte(p, 0);
+    let letter = (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+    if letter && str_byte(p, 1) == 58 && (str_byte(p, 2) == 47 || str_byte(p, 2) == 92) { return 3; }
+    0
+}
+
+// Whether `p` is absolute on this host: `/` first, or a Windows drive's root.
+pub fn pk_absolute(p: Str) -> Bool { pk_starts(p, "/") || pk_drive(p) > 0 }
+
 fn pk_ends(s: Str, p: Str) -> Bool {
     if str_len(p) > str_len(s) { return false; }
     str_slice(s, str_len(s) - str_len(p), str_len(s)) == p
@@ -637,7 +653,7 @@ fn pk_version(text: Str) -> Int {
 
 // A relative path that stays where it starts (`contained`): not empty, no root, no `..`.
 fn contained(rel: Str) -> Bool {
-    if str_len(rel) == 0 || pk_starts(rel, "/") { return false; }
+    if str_len(rel) == 0 || pk_absolute(rel) { return false; }
     let mut from = 0;
     let mut i = 0;
     while i <= str_len(rel) {
@@ -655,10 +671,13 @@ fn contained(rel: Str) -> Bool {
 // `path`'s directory: "" for none, "/" for the root's own.
 pub fn pk_parent(path: Str) -> Str {
     if path == "/" { return ""; }
+    let drive = pk_drive(path);
+    if drive > 0 && str_len(path) == drive { return ""; }
     let mut i = str_len(path);
     while i > 0 {
         if str_byte(path, i - 1) == 47 {
             if i - 1 == 0 { return "/"; }
+            if drive > 0 && i == drive { return str_slice(path, 0, drive); }
             return str_slice(path, 0, i - 1);
         }
         i = i - 1;
@@ -667,7 +686,7 @@ pub fn pk_parent(path: Str) -> Str {
 }
 
 pub fn pk_join(dir: Str, rel: Str) -> Str {
-    if pk_starts(rel, "/") { return rel; }
+    if pk_absolute(rel) { return rel; }
     if dir == "" { return rel; }
     if str_byte(dir, str_len(dir) - 1) == 47 { return str_concat(dir, rel); }
     pk_cat3(dir, "/", rel)
@@ -676,9 +695,10 @@ pub fn pk_join(dir: Str, rel: Str) -> Str {
 // `.` and `..` folded away, as `root::absolute` folds an absolute path.
 pub fn pk_normalise(path: Str) -> Str {
     let parts = strs_new();
-    let absolute = pk_starts(path, "/");
-    let mut from = 0;
-    let mut i = 0;
+    let drive = pk_drive(path);
+    let absolute = pk_starts(path, "/") || drive > 0;
+    let mut from = drive;
+    let mut i = drive;
     while i <= str_len(path) {
         if i == str_len(path) || str_byte(path, i) == 47 {
             let seg = str_slice(path, from, i);
@@ -697,6 +717,7 @@ pub fn pk_normalise(path: Str) -> Str {
         i = i + 1;
     }
     let body = str_join(parts, "/");
+    if drive > 0 { return str_concat(str_concat(str_slice(path, 0, 2), "/"), body); }
     if absolute { return str_concat("/", body); }
     body
 }
@@ -706,6 +727,7 @@ pub fn pk_normalise(path: Str) -> Str {
 pub fn pk_under(path: Str, root: Str) -> Bool {
     if path == root { return true; }
     if root == "/" { return pk_starts(path, "/"); }
+    if pk_drive(root) > 0 && str_len(root) == 3 { return pk_starts(path, root); }
     pk_starts(path, str_concat(root, "/"))
 }
 
@@ -752,7 +774,7 @@ fn root_of(how: Int, path: Str, why: Str) -> Root {
 // `is_dir` says whether `given` is a directory: the caller asks the file system (`ld_is_directory`),
 // so this module stays free of handles and the bootstrap checker can read it on its own.
 pub fn pk_given(module: Str, given: Str, is_dir: Bool) -> Root {
-    if pk_starts(given, "/") == false { return root_of(0 - 2, "", "a relative source root"); }
+    if pk_absolute(given) == false { return root_of(0 - 2, "", "a relative source root"); }
     if is_dir == false { return root_of(0 - 1, "", pk_cat3("`", given, "` is not a directory")); }
     let want = pk_normalise(given);
     let abs = pk_normalise(module);

@@ -1,0 +1,11 @@
+// R8 slice 17 (S17.3): a probe of win-run.ps1's limits on the Windows host; see windows-selfbuild.sh.
+fn main(out: OutCap) -> Int {
+    let mut s = "x"
+    let mut n = 0
+    while n < 20 { s = str_concat(s, s); n += 1 }
+    let v = vec_new[Str]()
+    let mut i = 0
+    while i < 1500 { vec_push(v, str_concat(s, int_to_str(i))); i += 1 }
+    print(int_to_str(vec_len(v)))
+    0
+}

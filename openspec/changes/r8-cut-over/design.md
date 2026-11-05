@@ -1585,3 +1585,201 @@ instruction mnemonic, did you mean: ld2, udf?" on `movq %rbx, %rdi`).
   Nazm pipeline asks the machine's architecture instead of the target's (`fe_host_arch` is used by `bd_host` and the
   core-IR step, which the script gives `macos aarch64` explicitly). Re-run: `cd ~/nazm-r8-s15 &&
   toolchain/selfbuild/host-selfbuild.sh x86_64 ~/nazm-hostsb-x86_64-3`.
+
+## Slice 17 — Windows x86_64 (design, 2026-11-05)
+
+Task 17.1: the released set — the nine programs of `toolchain/selfbuild/programs.txt` — built by
+Nazm for `x86_64-pc-windows-gnu`, and the Nazm-built toolchain's host-safe suite run on the Windows
+host (`windows-toolchain` W3 3.1, 3.2). The builder is a macOS stage a passed host self-build left
+(16.3: `~/nazm-hostsb-aarch64-2/stage3`); the Windows host is the Dell (`ssh win-dell`, Windows 10
+1903, 8 GB, 4 CPUs, a standard account; no Rust, git or Python; llvm-mingw 20261006 unpacked under
+`C:\Users\nazmci\nazm-tools`, W2). One script, `toolchain/selfbuild/windows-selfbuild.sh HOST OUT`,
+does all of it from the Mac; one runner, `toolchain/selfbuild/win-run.ps1`, is the only way a
+Nazm-built program is started on the Dell.
+
+### S17.1 How the Windows binaries are built: on the Mac, cross, as `--objects`
+
+The Nazm `nazm build` already carries `x86_64-pc-windows-gnu` (`bd_carried`; the runtime's Windows
+layer is in the pipeline's texts), but a macOS host has no Windows linker of its own: it refuses
+a link for a target it cannot link and builds `--objects DIR` instead — every object in link order
+and `DIR/link.txt` (`target`, `objects`, `libraries`). That is what `scripts/windows-host.sh` has
+done since 2026-10-15, linked here by Homebrew's MinGW-w64 `x86_64-w64-mingw32-gcc` (16.2.0) with
+the libraries `link.txt` names (`-static -pthread -lws2_32 -lbcrypt -Wl,--stack,8388608
+-Wl,--no-insert-timestamp`). The seed cross-builds the same way (`crates/nazm-cli/src/build/`,
+`windows_libraries`); W1's Rust `nazm.exe` was cargo's cross-build with the same MinGW-w64.
+
+- **Builder and configuration.** `STAGE/nazm build --backend llvm --no-cache --target
+  x86_64-pc-windows-gnu --heap-limit 2G SRC --objects DIR -o NAME`, one `host-run` per program, with
+  `NAZM_LIBRARY`, `NAZM_PIPELINE=STAGE/pl`, `NAZM_NZCG=STAGE/cg` (as `host-selfbuild.sh`). Not
+  `--release`: it is refused with `--objects` and for any target but macOS ("another target is not
+  hardened yet", `build.nz`); hardening Windows images is W4's. The optimisation level is the
+  default, as the macOS release set's is, so the two sets differ only in target.
+- **Checked before anything is copied.** Each `.exe` is a PE32+ x86-64 console program (`file`),
+  carries the counted heap and exactly the limit it was built with (the N0406 message's number,
+  read as `host-run` reads it), and the nine are built **twice** and compared byte for byte —
+  objects and executables (`--no-insert-timestamp` keeps the PE header's date out).
+- **Why not build on the Dell.** A Windows-native `nazm build` of the nine needs the Nazm-built
+  `nazm.exe` itself first; building with it on Windows is part of the suite (S17.4, the corpus), but
+  the released set's evidence is the cross-build from the qualified macOS stage, which keeps the
+  heavy builds (1.5 GiB for `nazm`) on the 32 GB Mac under `host-run` and off the 8 GB laptop.
+
+### S17.2 Copying to the Dell
+
+`scp` of the `.exe`s, `win-run.ps1`, a tar of the tree (`git ls-files` of the checkout, working
+copies: what the programs were built from), the Core IR documents and the fixtures, into
+`C:\Users\nazmci\nazm-w17` (the script refuses if it exists: it is a run's own scratch); the tree is
+unpacked there by Windows' own `tar.exe`. Results come back as one tar. The directory is removed at
+the end of the run, and on any failure after it was made.
+
+### S17.3 Containment on the Dell: `win-run.ps1`
+
+The Dell is a dedicated test machine, but the R6 rule is kept as on the Mac, and made stronger
+where Windows allows it. `win-run.ps1 -Steps FILE -Report FILE` runs a file of steps one after
+another and, for each, does what `host-run` does:
+
+- **Admission:** the image links the counted heap (`nz.heap_malloc`, or a stripped image's whole
+  N0406 message) and names exactly one heap limit, at most 2 GiB (refusals by name, as
+  `host-run`'s: `no-executable`, `no-counted-heap`, `no-heap-limit`, `ambiguous-heap-limit`,
+  `heap-limit-too-large`, `withdrawn`, `another-stage-running`).
+- **One at a time:** an exclusive lock file for the whole run; steps are sequential.
+- **A real ceiling:** each program runs inside a fresh **job object** (`cmd /d /s /c` created
+  suspended, assigned, resumed, so nothing escapes it): each process at most limit + 512 MiB of
+  committed memory, the job at most 2 × limit + 512 MiB (at most 4.5 GiB of the laptop's 8),
+  at most 64 live processes, every descendant killed when the job closes, no error dialog. macOS
+  cannot cap a child; Windows can, so the Dell's runs are bounded from outside as well as by the
+  counted heap.
+- **A deadline** per step (at most 3600 s): past it the job is ended (status 124). **Output
+  bounded:** the redirected files are polled; past the cap (192 MiB) the job is ended (126).
+- **Peak memory recorded:** the job's peak commit of one process and of the job (Windows counts
+  commit, stricter than resident memory), in the report.
+- **Withdrawal conditions,** as `host-run`'s: a peak past the limit by more than 256 MiB, or an N0406
+  that did not end the program with status 2, writes the marker and every later run refuses.
+- **Stop at the first anomaly:** a refusal, a withdrawal, the deadline, the output cap, the ceiling
+  reached, or a process still alive when the program ended (after the console host's moment).
+
+Before the suite, the runner is **probed on the Dell** (as `contained probe` is): a program that
+spins (stopped at a 5 s deadline), one that floods its output (stopped at 8 MiB), one that fills
+1.5 GiB of counted heap under a lowered 300 MiB ceiling (stopped at the ceiling), and one built with
+a 3 GiB limit (refused). A probe that does not stop for its own reason ends the run before anything
+else runs there.
+
+### S17.4 The host-safe suite on Windows, for the Nazm-built toolchain
+
+In this repository *host-safe* is `cargo xtask workspace-tests --host-safe` (CI's `platforms` job,
+`windows-latest` included): the Rust workspace's test binaries less those that call the containment
+guard. Those binaries test **the seed**: every one finds `nazm` by `env!("CARGO_BIN_EXE_nazm")`,
+fixed at compile time, and no test reads a `NAZM` override (S14). W1 1.2 already ran them on the
+Dell. The Nazm-built toolchain's own black-box suite is `toolchain/harness/tests/contract.sh`
+(S14), which is contained-only: `nazm test` builds its programs without a heap limit and runs them
+in parallel. Neither is the suite for 17.1. The host-safe suite here is what may run on a host under
+the R6 rule, for each released program, compared with **the same program built from the same tree
+for this Mac** (in the release configuration, by the same stage, through `host-run`):
+
+| program | what runs on the Dell (and the same on the Mac) |
+| --- | --- |
+| `nazm` | `run --interpret`, `check`, `fmt --check` and `build --heap-limit 256M` of every file `scripts/windows-toolchain.sh` takes (`bench/compare/nazm`, `examples`) and of the corpus (`compiler/conformance`, `tests/compat/v1/run`, `toolchain/codegen/tests/programs`): the build on Windows by llvm-mingw's clang and LLD (TOOLS), with `pl.exe` as its stage (not for the two programs with C beside them, `ffi` and `fail_callback`, as `scripts/windows-host.sh` skips them); then every built program that carries the counted heap is run |
+| `pl`, `cg` | as `nazm build`'s stages on Windows (the default LLVM backend runs `pl` only; `cg` is copied, `--backend nazm` is not part of this suite) |
+| `interp` | the corpus's Core IR (made by the seed on the Mac, as `host-selfbuild.sh` makes it) run by `interp.exe` |
+| `fe` | `--coredoc-sources` of the nine sources, the same arguments (`macos aarch64`) on both hosts, so the documents must be identical |
+| `check` | `nazm-check` over the tree |
+| `jtool` | `same` (equal, unequal, not JSON), `lines`, `get` on small documents |
+| `mutate` | `list`, `check` and `plan` over the tree (nothing applied) |
+| `mcp` | `initialize`, `ping`, `tools/list` and a `nazm.diagnostics` call, which runs `nazm.exe`; held to the **Rust** server (`crates/nazm-mcp`, the reference the port answers as) run directly on the Mac with the seed as its `nazm`, because `host-run` gives a Nazm-built program no standard input |
+| the bound | the front end built with a 256 MiB heap stops with N0406, status 2, on Windows |
+
+Not run on the Dell: `nazm test` (unbounded builds, parallel: contained-only), `--backend nazm`,
+the mutation campaign, anything TLS (`N0830` until the copyright holder lifts it for Windows).
+
+### S17.5 Windows paths in the Nazm front end (found by the first run, fixed)
+
+The first `nazm.exe` refused every file: `not carried: the loader stops at a relative path`.
+The Nazm front end's paths are POSIX text: `fx_check` requires a leading `/` (`compiler/facts.nz`),
+`pk_normalise`, `pk_parent`, `pk_join`, `pk_under` and `pk_given` (`compiler/package.nz`) and the
+driver's `fe_prefix` (`toolchain/commands/front.nz`) treat only `/` as the root, and Windows'
+`os_realpath` answers `C:\Users\...`. The seed's Rust `Path` reads both forms.
+
+**Fix (detail-level, decided here).** A path is absolute on a Windows host also when it begins with
+a drive's root, `X:/` (or `X:\`): `pk_drive` answers the length of that prefix by the path's shape alone
+(amended 2026-11-05: the Nazm checker has no `os_family`, so the contained selfhost gate refused the first form; see the decisions log), `pk_absolute` is `/` or a drive, and the functions above use
+them (the drive's root is the root: `pk_parent("C:/x")` is `C:/`, `pk_parent("C:/")` is empty, and
+`..` never climbs above it). `fe_canonical`'s answer has every `\` made `/` on Windows
+(`fe_host_path`), so a canonical path is `C:/Users/...`, which Windows opens as it is. On macOS and
+Linux every function answers exactly as before (`os_family()` is 0 or 1 there), so no macOS result
+changes. The driver's own path helpers (`toolchain/commands/util.nz`: `ut_file_name`,
+`ut_parent`, `ut_with_extension`) read `\` as a separator on Windows too (`ut_is_sep`), as Rust's
+`Path` does there: the first corpus build with `-o C:\...\x.exe` linked into
+`x.exe.nazm-N/C:\...\x.exe`. Not done: the front end's loader still reads only `/` inside a path, so
+a source path given with `\` on the command line (`p\x.nz`) is not one it splits; the suite gives
+`/` forms, and that remains to fix before Windows users are told to type paths natively.
+
+### S17.6 What is compared, and how
+
+Each Windows answer — standard output, standard error, exit status — is held to the Mac build's,
+**byte for byte first**. Where it differs only in the line ending (`\r\n`), the tree's absolute path
+(Mac `OUT/tree`, Windows `C:/Users/nazmci/nazm-w17/tree`), the path separator, or the `.exe` of a
+built program's name, it is counted **apart**, as "equal after normalising", and listed — never as
+identical. Anything else is a difference and fails the run. How many agreeing answers have status 0
+is reported too, so that two identical refusals are not read as two working commands.
+
+### S17.7 TLS on Windows: the Nazm `build` refuses it by name (found by the first full run, fixed)
+
+TLS on Windows is refused by decision until the SChannel engine has run on a Windows host
+(`N0830`, `docs/user/support.md`). The seed refuses in lowering (`tls::no_binding`). The Nazm
+pipeline leaves the `tls` unit out where `emit_tls` has no engine for the target, but `build.nz`
+did not refuse: `httpd.nz` reached the link on Windows and failed there (`undefined symbol:
+nz_tls_config`, status 4). `bd_build` now refuses, after the plan is read and before anything is
+linked, when the plan says `tls` and the runtime has no `tls` unit: the seed's diagnostic, byte for
+byte (checked on the Mac with `--target x86_64-pc-windows-gnu --objects`, status 1), so the
+comparison counts it apart as "refused on Windows by decision", never as agreeing.
+
+### Slice 17 — as built (2026-11-05)
+
+`toolchain/selfbuild/windows-selfbuild.sh win-dell ~/nazm-winsb-2` (log `~/nazm-winsb-2.log`, exit 0),
+the builder `~/nazm-hostsb-aarch64-2/stage3/nazm` (sha256 `1e7841f0…`), the tree `9af7870d` with this
+slice's changes (S17.5, S17.7) in the working copy, Homebrew MinGW-w64 gcc 16.2.0, the Dell's Windows
+10.0.18362.1256 with llvm-mingw 20261006:
+
+- **S17.1:** the nine built for `x86_64-pc-windows-gnu` twice: 9 of 9 identical, objects and
+  executables; each a PE32+ x86-64 console program carrying the counted heap at 2 GiB. The same nine
+  built for this Mac from the same tree (`--release`) as the reference.
+- **S17.3:** the runner's probes on the Dell, 4 of 4 stopped for their own reason: the spinning
+  program at its 5 s deadline, the flood at 8 MiB, the 1.5 GiB fill at a lowered 300 MiB ceiling
+  (peak commit 303,685,632 bytes: the job object's ceiling holds inside the ssh session's own job),
+  the 3 GiB image refused `heap-limit-too-large`.
+- **S17.4/S17.6:** 434 steps in phase 1 and 75 built programs in phase 2 on the Dell, one at a time,
+  no refusal, no withdrawal, no anomaly; 508 answers held to the Mac's: **414 identical byte for
+  byte, 93 equal after normalising** (84 `build`s, whose words name the output path `@R/cb/…` and
+  `.exe`; the 9 Core IR documents, which embed the tree's absolute path and are otherwise identical),
+  **0 differ**, 1 refused on Windows by decision (`httpd.nz`'s build, N0830). 340 of the agreeing
+  answers have status 0. Per program: `nazm` `run --interpret`, `check`, `fmt --check` on 87 files,
+  `build` on 85 (and its 75 programs with a counted heap run; 9 corpus programs link none and were run
+  on neither host); `interp.exe` on 68 corpus programs; `fe.exe`'s Core IR of the nine sources;
+  `nazm-check` (11 gates; the 5 that run `cargo metadata` left out on both); `jtool` 5 cases;
+  `mutate` `list`, `check`, `plan`; `mcp` identical to the Rust server's answers. The heap probe on
+  Windows: the front end built at 256 MiB stopped with N0406, status 2.
+- **Memory:** the largest peak commit on the Dell 920.7 MiB (the front end on `nazm.nz`'s Core IR);
+  on the Mac the largest `host-run` peak 1626.2 MiB (the Mac `nazm` build). No withdrawal marker on
+  either host; `C:\Users\nazmci\nazm-w17` removed by the run.
+- **Defects the runs found, fixed in this slice:** Windows paths in the front end and the driver
+  (S17.5); the TLS refusal (S17.7). The first full run (`~/nazm-winsb-1`) also showed the script's
+  own faults (the `mcp` reference without standard input, `.exe` stripped inside JSON, the C
+  programs), fixed in the script before the second.
+
+- **The host suite after S17.5/S17.7** (`cargo nextest run --workspace`, log `~/nazm-s17-nextest.log`):
+  3144 run, 3101 passed, 43 failed: selfhost's 41 refusals (contained-only, expected), the MIR timing
+  test (passed alone, 1.2 s: a timing test under a loaded machine), and
+  `the_carried_documentation_corpus_is_the_checkouts`, which fails on the base commit too:
+  `docsdata.nz` was not regenerated after `9af7870d`'s runbook amendment (S16.5); its 27 missing lines
+  are that section's, none this slice's. Doctests pass. `cargo xtask check`: every gate but `mutations
+  apply`, which also fails on the base (`r6-host-run-links-no-counted-heap` lost its pattern in
+  `0e004c0f`).
+
+**Not verified, and not claimed:** the Windows images are not hardened (`--release` is macOS-only)
+and not signed; `--backend nazm` on Windows (`cg.exe` was copied, never run); `nazm test`, the
+contract suite (`contract.sh`) and `workspace-tests --host-safe` against the Nazm `nazm.exe` (the first
+two are contained-only, the third tests the seed); a Windows-native self-build (`nazm.exe` building the
+nine on the Dell, a fixpoint there); a source path given with `\` on the command line (S17.5); TLS
+(N0830 by decision); the five `cargo metadata` gates of `nazm-check`; Windows CI (`windows-latest`) for
+any of this. `compiler/package.nz` now calls `os_family()`: the bootstrap checker and selfhost that
+read it are contained-only and were not run here. The runbook does not yet name `win-run.ps1` as the
+way a Nazm-built program runs on the Windows host: that amendment is the copyright holder's to accept.
