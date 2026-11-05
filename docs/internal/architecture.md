@@ -51,6 +51,22 @@ is which, area by area, with evidence.
 
 ---
 
+## After the R8 cut-over (2026-11-05)
+
+*A dated addition; the overview above describes the Rust pipeline, which is now the seed.* From 0.11.0 the
+`nazm` that is released is built by Nazm (`toolchain/commands/nazm.nz`, with the pipeline `toolchain/pipeline/`
+and the code generator `toolchain/codegen/`) for `aarch64-apple-darwin`, `x86_64-apple-darwin` and
+`x86_64-pc-windows-gnu`. The Rust workspace under `crates/` is **frozen as the seed**: the stage-0 compiler that
+builds the first Nazm-built stage, never shipped, changed only by a recorded exemption (`cargo xtask check`,
+*seed freeze*). The Cranelift backend (`nazm-codegen-clif`) lives only in the seed. The chain, the fixpoint
+and the release path are in [`bootstrap.md`](bootstrap.md), section 0. The Linux triples are accepted by the
+Nazm-written pipeline for the contained self-build only, with no user-facing claim, until 1.0. What the
+released binaries have been shown to do is `capability-matrix.md`'s to say; this note records the shape, not
+evidence. Until the 0.11.0 release gate has made and signed the archives, the released binary remains the 0.10.0
+preview built by the Rust implementation.
+
+---
+
 ## 1. Does Nazm need a new compiler design?
 
 The question that started the project. Answered layer by layer:
