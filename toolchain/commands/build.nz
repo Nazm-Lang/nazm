@@ -65,6 +65,11 @@ fn bd_summary(io: IoCap, o: Opts, status: Str, code: Int, with_map: Bool, artifa
 
 // The same, going on afterwards (the provenance is written after a summary) unless `stop`.
 fn bd_summary_then(io: IoCap, o: Opts, status: Str, code: Int, with_map: Bool, artifact: Str, stop: Bool) -> Int {
+    bd_summary_extra(io, o, status, code, with_map, artifact, stop, strs_new())
+}
+
+// The same with the codes of errors the build itself made (`sm_summary_with`).
+fn bd_summary_extra(io: IoCap, o: Opts, status: Str, code: Int, with_map: Bool, artifact: Str, stop: Bool, extra: Strs) -> Int {
     let library = os_env_get("NAZM_LIBRARY")
     let abs = fe_prefix(io, o.file) + o.file
     let g = fx_check_module_in(abs, "", library, fe_host_os(), fe_host_arch(), io)
@@ -72,7 +77,7 @@ fn bd_summary_then(io: IoCap, o: Opts, status: Str, code: Int, with_map: Bool, a
         eprint("nazm: not carried: " + fx_why(g) + nl())
         exit_with(6)
     }
-    print(sm_summary_for("build", artifact, g, g, ints_new(), status, code, bd_readable(io, abs), with_map) + nl())
+    print(sm_summary_with("build", artifact, g, g, ints_new(), status, code, bd_readable(io, abs), with_map, extra) + nl())
     if stop { exit_with(code) }
     0
 }
@@ -1518,6 +1523,24 @@ pub fn bd_build(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, v: Vouch
         strs_push(pargs, nzcg)
     }
     let pr = bd_stage_run(io, o, proc, sp, pipeline, pipeline_limit, pargs)
+    if pr.started && pr.status == 3 && ut_starts(pr.err, "pipeline: refused: ") {
+        bd_remove(io, work)
+        let shown = strs_new()
+        let mut n = 0
+        for line in text_split(pr.err, nl()) {
+            if ut_starts(line, "pipeline: refused: ") {
+                strs_push(shown, bd_synthetic("N0101", str_slice(line, 19, str_len(line)) + " is not in `nazm build`'s subset yet", "`nazm build` compiles `fn main() -> Int` as the entry point; `nazm run --interpret` runs everything else", o.json))
+                n += 1
+            }
+        }
+        if o.summary {
+            let codes = strs_new()
+            for q in 0..n { strs_push(codes, "N0101") }
+            bd_summary_extra(io, o, "rejected", 1, true, "null", true, codes)
+        }
+        eprint(str_join(shown, ""))
+        bd_fail(io, o, "nazm: " + int_to_str(n) + " construct" + ut_plural(n) + " outside `nazm build`'s subset. Nothing was written; `nazm run --interpret` still executes this program.", 1)
+    }
     if !pr.started || pr.status != 0 {
         bd_remove(io, work)
         let said = if pr.started { ut_trim_end(pr.err) } else { "it did not start: " + pr.err }
