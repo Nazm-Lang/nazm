@@ -19,8 +19,8 @@
       *On Windows*)
 
 ## W3 — the Nazm-written toolchain on Windows (after the cut-over)
-- [x] 3.1 R9 writes PE/COFF objects (`r9-code-generator` 8.1-8.5: `coff.nz`, `tests/coff.sh`; its Windows programs run on a Windows host)
-- [ ] 3.2 The released `nazm` built for Windows by Nazm, passing the gate on Windows: `r8-cut-over` 17.1 (open; the self-build ran on macOS only). Blocks 0.11.0
+- [x] 3.1 R9 writes PE/COFF objects (`r9-code-generator` 8.1-8.5: `coff.nz`, `tests/coff.sh`). Not claimed: that R9's own writer built the programs that ran on Windows; `r8-cut-over` 17.1 built them with LLVM (llvm-mingw), and the Windows objects from R9's writer wait for 1.0
+- [x] 3.2 The released `nazm` built for Windows by Nazm, passing the gate on Windows: `r8-cut-over` 17.1, accepted by the copyright holder 2026-11-05 as satisfying this for 0.11.0 with the shortfalls stated in its design S17 (the self-build ran on macOS and cross-built the nine; no Windows-native self-build, no `--backend nazm`, no `nazm test` on Windows: 1.0)
 ## W4 — release
 - [ ] 4.1 A signed, reproducible Windows x86_64 archive: 1.0 (the signature is the copyright holder's)
 - [ ] 4.2 An installer and a winget or Scoop entry: 1.0; not started
