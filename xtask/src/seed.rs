@@ -75,11 +75,47 @@ fn walk(dir: &Path, base: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> 
     Ok(())
 }
 
+/// The files git tracks under `dir` (root-relative), or `None` where `root` is not a git work tree
+/// or git cannot say. The seed is what is committed: a test run leaves ignored cache directories
+/// inside the crates (`crates/nazm-cli/tests/*/.nazm/`), and a digest of the disk would change with
+/// every such run and differ on every host.
+fn tracked(root: &Path, dir: &Path) -> Option<Vec<PathBuf>> {
+    if !root.join(".git").exists() {
+        return None;
+    }
+    let rel = dir.strip_prefix(root).ok()?;
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "-z", "--"])
+        .arg(rel)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(out.stdout).ok()?;
+    let files: Vec<PathBuf> = text
+        .split('\0')
+        .filter(|f| !f.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    if files.is_empty() {
+        None
+    } else {
+        Some(files)
+    }
+}
+
 /// Every seed file, root-relative, sorted.
 pub(crate) fn seed_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     let mut out = Vec::new();
     for c in closure(root)? {
-        walk(&root.join("crates").join(c), root, &mut out).map_err(|e| e.to_string())?;
+        let dir = root.join("crates").join(c);
+        match tracked(root, &dir) {
+            Some(files) => out.extend(files),
+            None => walk(&dir, root, &mut out).map_err(|e| e.to_string())?,
+        }
     }
     out.extend(
         FILES
@@ -230,7 +266,7 @@ mod tests {
         let files: Vec<String> = seed_files(d.path())
             .unwrap()
             .iter()
-            .map(|f| f.to_string_lossy().into_owned())
+            .map(|f| f.to_string_lossy().replace('\\', "/"))
             .collect();
         assert!(files.contains(&"crates/nazm-core/src/lib.rs".to_owned()));
         assert!(!files
