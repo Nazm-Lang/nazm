@@ -135,7 +135,7 @@ fn check_with(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os:
     let d = f.d;
     // The source root, as `root::decide` finds it: the first manifest upward whose source root holds
     // the file, or the first `nazm.root` marker, or the file's own directory.
-    if str_len(path) == 0 || str_byte(path, 0) != 47 { return give_up(f, "the loader stops at a relative path"); }
+    if str_len(path) == 0 || pk_absolute(path) == false { return give_up(f, "the loader stops at a relative path"); }
     strs_set(f.dir, 0, pk_parent(pk_normalise(path)));
     let mut root = pk_decide(path, io);
     if given != "" { root = pk_given(path, given, ld_is_directory(given, io)); }

@@ -34,16 +34,33 @@ pub fn fe_canonical(io: IoCap, path: Str) -> Str {
     while room <= 1048576 {
         let out = bytes_new(room)
         let n = os_realpath(path, out)
-        if n >= 0 { return bytes_to_str(bytes_slice(out, 0, n)) }
+        if n >= 0 { return fe_host_path(bytes_to_str(bytes_slice(out, 0, n))) }
         room = room * 4
     }
     ""
 }
 
+// A path as the system gave it, in the form the front end reads (R8 slice 17, design S17.5): on
+// Windows (`os_family()` 2) every `\` a `/`, so `C:\Users\x` is `C:/Users/x`, which Windows
+// opens as it is and `pk_absolute` knows; unchanged elsewhere.
+pub fn fe_host_path(p: Str) -> Str {
+    if os_family() != 2 { return p }
+    let parts = strs_new()
+    let mut from = 0
+    for i in 0..str_len(p) {
+        if str_byte(p, i) == 92 {
+            strs_push(parts, str_slice(p, from, i))
+            from = i + 1
+        }
+    }
+    strs_push(parts, str_slice(p, from, str_len(p)))
+    str_join(parts, "/")
+}
+
 // The prefix a relative path is given to make it absolute: the working directory and a `/`; ""
 // for an absolute path.
 pub fn fe_prefix(io: IoCap, path: Str) -> Str {
-    if fe_starts(path, "/") { return "" }
+    if pk_absolute(path) { return "" }
     let cwd = fe_canonical(io, ".")
     if cwd == "/" { return "/" }
     cwd + "/"
