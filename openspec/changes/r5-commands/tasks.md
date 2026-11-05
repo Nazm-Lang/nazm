@@ -15,9 +15,9 @@
 - [x] 2.5 clap's usage errors and `--help` for `fmt`: the shared parser (`toolchain/commands/cli.nz`,
       design D8); a directory named as a file is `cannot read` (D4); every command line of
       `tests/args/fmt.txt` agrees (2026-10-15)
-- [ ] 2.6 Future: drop a statement's `;` once the repository's sources may use the new syntax
-      (design, *Future work*) — in both formatters together
-
+- [ ] 2.6 Drop a statement's `;` in both formatters once the repository's sources may use the new syntax (design,
+      *Future work*). Still open: `library/std` and `compiler/` still end statements with `;`. Does not block
+      0.11.0; when: after 0.11.0 before 1.0 (the date of the "may use" decision is not recorded)
 ## 3. `doc`
 - [x] 3.1 `nazm.api-doc/2` and `-o DIR` (`api.json`, `api.md`), from R2's published facts
       (`compiler/facts.nz`) and package resolution (design D13): `toolchain/commands/doc.nz`.
@@ -49,7 +49,7 @@
       `--source-root` (`fx_check` takes no root), `--summary-json` (N30's diagnostic ids and
       `state.source`), `nazm.root` markers (the loader stops there)
 
-- [x] 5.3 The pattern-`let` refusal lifted (R2's checker holds epoch 88 since `ff1dce6a`) from `check`, `doc`
+- [x] 5.3 The pattern-`let` refusal lifted (R2's checker holds epoch 88 since `d97b9b35`) from `check`, `doc`
       and `fix`, and `check --source-root` carried (`fx_check_in`, design D15). 2026-10-19, 3,349
       inputs of `check`: 3,348 agree, 0 differ, 1 refused (not UTF-8); `doc` 3,356: 3,354 agree, 0
       differ, 2 refused; `fix` 3,339: 3,338 agree, 0 differ, 1 refused (not UTF-8; 17 applied);
@@ -96,48 +96,21 @@
       with hover at seven positions: 3,151 inputs, 2,147 agree, 0 differ, 1,003 refused (hover of
       what the facts do not index, a compilation that does not load, pattern `let`s …), 1 not
       UTF-8; `tests/args/lsp.txt` 8 of 8 agree
-- [ ] 8.2 What 8.1 refused, part done (2026-10-19, design D16): the editor's unsaved buffers
-      (`fx_check_over`), hover of any type (`fx_show`), definition of anything `fx_declaration_at`
-      indexes (types named in signatures too), `--source-root`. `tests/lsp/` 15 sessions: 14 agree,
-      0 differ, 1 refused (two open documents); every input opened, hover at seven positions: 3,340
-      inputs, 2,602 agree, 0 differ, 737 refused (375 hover of a name the facts publish no binding
-      for, 303 a compilation that does not load, 24 a position in a document that does not lex, 21
-      a source root the reference refuses, 10 hover of a method, closure, generic or foreign
-      function, 2 a warning beside a syntax error, 2 a call through a value or with effects the facts
-      do not know), 1 not UTF-8. Still refused: two open documents, completion, references,
-      signature help, rename, symbols, semantic tokens, code actions, call hierarchy
-
-- [ ] 8.3 The reference index's navigation (design D23, 2026-10-19): `definition` of anything `fx_ref_*` indexes,
-      `references`, `prepareRename` and `rename` (with the candidate program re-checked and its occurrences
-      partitioned as before), `documentSymbol` and `workspace/symbol`, nested and flat. `tests/lsp/` 18 sessions: 17
-      agree, 0 differ, 1 refused (two open documents); 3,378 inputs in six sessions each: 2,730 agree, 0 differ, 647
-      refused (named in D23), 1 not UTF-8. Still refused: completion, signature help, semantic tokens, code actions, call
-      hierarchy, a rename of an exported name in a declared workspace, every index query in a compilation with errors
-      the facts' index is not promised for (hand-back to R2: after `N0203`, `N0305`, `N0334`, `N0386`, `N0610`, `N0101`
-      the index differs from the reference's; and the facts record a trait method's uses inside its own default
-      methods, which the reference does not)
-
+- [x] 8.2 What 8.1 refused: unsaved buffers (`fx_check_over`), hover of any type (`fx_show`), definition of anything
+      `fx_declaration_at` indexes, `--source-root` (design D16, 2026-10-19). The refusals that were left (two open
+      documents, completion, signature help, ...) are closed by `r8-cut-over` slice 11 (design S11.3: every one of
+      the 14 `lsp-*` modes, 2,846 inputs each, 0 differ, 0 refused, completion included)
+- [x] 8.3 The reference index's navigation (design D23, 2026-10-19): `definition`, `references`, `prepareRename`,
+      `rename`, `documentSymbol`, `workspace/symbol`. The refusals left then (completion, signature help, code
+      actions, a rename of an exported name in a declared workspace) are closed by `r8-cut-over` slice 11 (S11.3,
+      0 differ, 0 refused). Not re-checked here: the hand-back to R2 on the index after N0203, N0305, N0334,
+      N0386, N0610 and N0101
 ## 9. The agent commands and the MCP server
-- [ ] 9.1 `context`, `snapshot`, `delta`, `diagnostics`, `docs`, `repo`, `patch`, `resolve`,
-      `references`, `inspect`, `interface`, the MCP server. Part done (2026-10-19): `interface` (design
-      D19; 3,342 inputs, `--hash` too: 3,342 agree, 0 differ, 0 refused; 28 command lines agree) and
-      `docs` (D20; every one of the 1,498 sections by id and every form of the index: 1,652 runs
-      agree; 13 corpora each with one thing wrong: 39 runs agree; 36 command lines agree) and
-      `patch` (7.2) and, since R2 publishes the reference index, the call graph, provenance and the
-      diagnostic ids (design D24, R5d), `snapshot`, `delta`, `diagnostics`, `resolve` and `references`:
-      `run.sh agent` over 3,399 inputs, 2,954 agree, 0 differ, 445 refused; by command, runs agree / differ /
-      refused: `snapshot` 3,399 (compact and indented each) 3,277 / 0 / 122, `diagnostics` 3,399 (each form)
-      2,987 / 0 / 412, `diagnostics --detail` 2,094 1,182 / 0 / 912, `delta` against the reference's snapshot and
-      two baselines made wrong 3,396 each 3,279 / 0 / 117, `resolve` 3,393 / 0 / 6, `references` of the first
-      three definitions 6,152 runs 6,135 / 0 / 17; `tests/args/{snapshot,delta,diagnostics,resolve,references}.txt`
-      agree (the whole of `tests/args/`: 966 of 981 command lines agree, 0 differ, 15 refused). `resolve` and
-      `references` equal the reference's with a cold check cache, as they are asked in the comparison: the
-      reference's answer is the cache's, which keeps no module that warns, writes a closure or has no durable
-      key. Not ported: `context` (a function's `effects`: what it requires, what a caller must assume and
-      the first call that requires each, are not published), `inspect` (MIR digests and the backend's static
-      tables) and `repo` (`nazm-repo`: the map and the task planner, 3.8k lines over the repository's manifests,
-      catalogue and schemas)
-
+- [x] 9.1 `context`, `snapshot`, `delta`, `diagnostics`, `docs`, `repo`, `patch`, `resolve`, `references`, `inspect`,
+      `interface`, the MCP server. `interface`, `docs`, `patch`, `snapshot`, `delta`, `diagnostics`, `resolve`,
+      `references` agree with the reference (R5d, 2026-10-19: `run.sh agent`, 3,399 inputs, 0 differ); `context`
+      and `repo` are ported by `r8-cut-over` 9.1 and 9.2 (`context` 3,635 agree, 0 differ; `repo --map` and 568
+      `--task` requests agree) and `inspect` by its `tests/inspect.sh` (`toolchain/commands/inspect.nz`)
 - [x] 9.2 `nazm-mcp`, the MCP server over stdio, in Nazm (design D25, 2026-10-19, R5d): `toolchain/commands/mcp.nz`
       with `mcptools.nz` (the eleven tools' listing, generated by `tests/gen-mcptools.py` from the reference), over the
       commands of 9.1, 9.2's own protocol (`initialize` with the SDK's version negotiation, `ping`, `tools/list`,
@@ -167,14 +140,11 @@
       refuses the rest; every line of `tests/args/nazm.txt` agrees (2026-10-15). Left in `cli.nz`:
       a command's own subcommands (`runtime`, `attest`, `patch`), aliases, possible values, groups,
       `requires` — each with the first command that declares it
-- [ ] 11.2 `bindgen`, `contract`, `accel`, `bench`, `profile`, `explain-cost`, `explain-flow`,
-      `obligations`, `trace`, `reload-check`, `repl`, `comptime`, `capabilities`. Part done
-      (design D22, 2026-10-19): `bindgen` (every header of `tests/bindgen` and `bench/compare`, with
-      and without `-o`: 28 runs agree; 30 command lines agree), `reload-check` (every pair of 37
-      programs, itself included, records and enums compared by their layout since R2 publishes the type of each
-      field and payload (design D24): 1,225 agree, 0 differ, 144 refused (a generic record or enum, which the
-      reference lists once for every instance it makes); 53 command lines agree) and `doctor` (5 command lines, and with `PATH`
-      and `TMPDIR` made wrong: agree). Not ported: `contract`, `accel`, `obligations`,
-      `explain-cost`, `explain-flow`, `profile`, `trace` (MIR, LIR, Core IR digests and the
-      runtimes), `bench` (timings), `repl`, `comptime` (the interpreter in-process),
-      `capabilities` (the backend's own table)
+- [ ] 11.2 `bindgen`, `contract`, `accel`, `bench`, `profile`, `explain-cost`, `explain-flow`, `obligations`, `trace`,
+      `reload-check`, `repl`, `comptime`, `capabilities`, `doctor`. Ported and agreeing: `bindgen`, `reload-check`,
+      `doctor` (design D22, 2026-10-19) and `bench`, `accel` (run included), `contract` (`r8-cut-over` 10.1, 10.2,
+      slice 11). Open (`r8-cut-over` design S11.3, 2026-10-24/25): `obligations`, `explain-flow`, `explain-cost`
+      differ on `patterns-001`, `flow_v3-015` and `native_units-032` (the last agrees since 11b); `lir` of
+      `ffi_v2-012`; `contract --upgrade-check` of `patterns-001`; `contract --evm`/`--wasm` refused (deferred
+      targets, decision 2026-10-22). Does not block 0.11.0 as a set of known differences (confirm with
+      `r8-cut-over` 11.1, still open); the deferred targets: after 1.0
