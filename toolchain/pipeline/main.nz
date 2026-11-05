@@ -232,6 +232,11 @@ fn pipeline_main(io: IoCap, v: VouchCap) -> Int ! { io } {
         return 1
     }
     if mode == "build" {
+        // `lower` (the reference's LIR lowering) refuses a `main` the platform wrapper cannot print.
+        if !fl.lib && p.entry >= 0 && vec_get(p.fns, p.entry).ret != "Int" {
+            eprint("pipeline: refused: a `main` that does not return `Int`\n")
+            return 3
+        }
         let store = if strs_len(args) == 7 { strs_get(args, 5) } else { "-" }
         let generator = if strs_len(args) == 7 { strs_get(args, 6) } else { "-" }
         return build(io, v, c, tt, p, target, strs_get(args, 2), bytes_arg(strs_get(args, 3)), bytes_arg(strs_get(args, 4)), store, generator, fl)

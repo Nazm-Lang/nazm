@@ -179,6 +179,12 @@ pub fn sm_summary(f: Facts, g: Facts, which: Ints, status: Str, code: Int, opene
 
 // The same for command `command` (`check` or `build`), `artifact` the JSON of what it wrote (`null` for nothing).
 pub fn sm_summary_for(command: Str, artifact: Str, f: Facts, g: Facts, which: Ints, status: Str, code: Int, opened: Bool, with_map: Bool) -> Str {
+    sm_summary_with(command, artifact, f, g, which, status, code, opened, with_map, strs_new())
+}
+
+// The same with `extra`: codes of errors the command itself made (the backend's refusal of a construct), each a diagnostic of the
+// command's own scope with no place and no fixes, after the compilation's.
+pub fn sm_summary_with(command: Str, artifact: Str, f: Facts, g: Facts, which: Ints, status: Str, code: Int, opened: Bool, with_map: Bool, extra: Strs) -> Str {
     let current = opened && sm_current(g)
     let linked = current && with_map && sm_same_sources(f, g)
     let d = fx_diags(f)
@@ -245,10 +251,14 @@ pub fn sm_summary_for(command: Str, artifact: Str, f: Facts, g: Facts, which: In
                 + "\",\"primary\":" + sm_place_json(s.primary) + ",\"fixes\":{\"total\":" + int_to_str(total) + ",\"automatic\":" + int_to_str(a)
                 + ",\"needs_review\":" + int_to_str(nr) + "}}")
     }
+    for x in 0..strs_len(extra) {
+        errors += 1
+        strs_push(rows, "{\"id\":null,\"scope\":\"command\",\"code\":" + json_str(strs_get(extra, x)) + ",\"severity\":\"error\",\"primary\":null,\"fixes\":{\"total\":0,\"automatic\":0,\"needs_review\":0}}")
+    }
     let root = if current { json_str(fx_module_key(g, 0)) } else { "null" }
     let state = if linked { json_str(fx_state_source(g)) } else { "null" }
     "{\"schema\":\"nazm.command-summary/1\",\"command\":\"" + command + "\",\"status\":\"" + status + "\",\"exit_code\":" + int_to_str(code) + ",\"root\":" + root
-            + ",\"state\":" + state + ",\"counts\":{\"diagnostics\":" + int_to_str(n) + ",\"error\":" + int_to_str(errors) + ",\"with_fixes\":"
+            + ",\"state\":" + state + ",\"counts\":{\"diagnostics\":" + int_to_str(n + strs_len(extra)) + ",\"error\":" + int_to_str(errors) + ",\"with_fixes\":"
             + int_to_str(with_fixes) + ",\"automatic_fixes\":" + int_to_str(automatic) + ",\"needs_review_fixes\":" + int_to_str(review)
             + "},\"diagnostics\":[" + str_join(rows, ",") + "],\"artifact\":" + artifact + "}"
 }

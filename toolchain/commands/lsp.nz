@@ -2535,7 +2535,29 @@ fn completion_hole(io: IoCap, s: Server, f: Facts, text: Str, at: Int) -> Str {
     completion_json(text, at, at, names, ckinds, details)
 }
 
+// Whether the parameters are not a `TextDocumentPositionParams` (a text document with a string `uri`, a position with `line` and
+// `character` that are `u32`s), or lack the `context` of a `ReferenceParams` where `refs`: the reference answers `InvalidParams`.
+fn position_params_bad(j: J, refs: Bool) -> Bool {
+    let p = j_get(j, 0, "params")
+    if j_kind(j, p) != 6 { return true }
+    let td = j_get(j, p, "textDocument")
+    if j_kind(j, td) != 6 || j_kind(j, j_get(j, td, "uri")) != 4 { return true }
+    let pos = j_get(j, p, "position")
+    if j_kind(j, pos) != 6 { return true }
+    if !j_int_in(j, j_get(j, pos, "line"), 0, 4294967295) || !j_int_in(j, j_get(j, pos, "character"), 0, 4294967295) { return true }
+    if refs {
+        let ctx = j_get(j, p, "context")
+        let inc = j_get(j, ctx, "includeDeclaration")
+        if j_kind(j, ctx) != 6 || (j_kind(j, inc) != 1 && j_kind(j, inc) != 2) { return true }
+    }
+    false
+}
+
 fn request(io: IoCap, s: Server, j: J, method: Str, id: Str) -> Int {
+    let positional = method == "textDocument/hover" || method == "textDocument/definition" || method == "textDocument/prepareRename"
+    if (positional || method == "textDocument/references") && position_params_bad(j, method == "textDocument/references") {
+        return respond_error(io, id, 0 - 32602, "invalid params")
+    }
     if method == "textDocument/hover" { return respond(io, id, hover(io, s, j)) }
     if method == "textDocument/definition" { return respond(io, id, definition(io, s, j)) }
     if method == "textDocument/references" { return respond(io, id, references(io, s, j)) }
