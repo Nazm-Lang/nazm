@@ -21,6 +21,7 @@ mod notices;
 mod plan;
 mod procs;
 mod rules;
+mod seed;
 mod suite;
 mod supply;
 
