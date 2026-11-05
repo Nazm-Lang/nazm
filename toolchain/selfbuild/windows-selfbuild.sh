@@ -12,7 +12,7 @@
 #   - the same nine for this Mac from the same tree (the reference each Windows answer is held to);
 #   - the heap probe (the front end at 256 MiB) and the runner's probes (`winprobe/`).
 # The Windows programs are copied to HOST (an ssh destination whose shell is cmd.exe) under REMOTE
-# (default C:\Users\nazmci\nazm-w17, which must not exist) and run there only by `win-run.ps1`: one
+# (default C:\Users\nazmci\nazm-w17, which must not exist; any path under C:\Users is normalised alike) and run there only by `win-run.ps1`: one
 # at a time, each in a job object with a memory ceiling, under a deadline, its output bounded, the
 # run stopped at the first anomaly. Every Nazm-built program run here is one `host-run`
 # (`toolchain/lib/stage-run.sh`), strictly one after another. REMOTE is removed at the end.
@@ -112,6 +112,17 @@ programs=$(grep -v '^[[:space:]]*#' "$root/toolchain/selfbuild/programs.txt" | g
     echo "tools on host: $TOOLS"
     echo "heap limit: $heap"
 } > "$out/environment.txt" 2>&1
+
+# What the run is built from (R8 slice 18, S18.2), as host-selfbuild.sh records it; checked again at the end.
+src_commit=$(git -C "$root" rev-parse HEAD 2> /dev/null || echo unknown)
+if [ -z "$(git -C "$root" status --porcelain 2> /dev/null)" ]; then src_clean=yes; else src_clean=no; fi
+src_digest=$(sh "$root/scripts/source-digest.sh" --root "$root" 2> /dev/null) || src_digest=unknown
+sha256_of() { shasum -a 256 "$1" 2> /dev/null | cut -d' ' -f1; }
+{
+    echo "source-commit: $src_commit"
+    echo "source-tree-clean: $src_clean"
+    echo "build-input-digest: $src_digest"
+} >> "$out/environment.txt"
 
 # --- S17.1: the nine programs for Windows, twice; the same nine for this Mac --------------------------
 wcfg=(--backend llvm --no-cache --target "$target")
@@ -353,7 +364,7 @@ say "S17.4: $REMOTE removed from $host"
 # Only a path under the scratch directory has its separators made `/` (a JSON `\n` is not a path).
 norm() { # FILE SIDE [exe] -> normalised text on stdout
     if [ "$2" = mac ]; then sed -e "s|$tree|@R/tree|g" -e "s|$out/cb/|@R/cb/|g" "$1"
-    else tr -d '\r' < "$1" | perl -pe 's{C:(?:\\\\|\\|/)Users(?:\\\\|\\|/)nazmci(?:\\\\|\\|/)nazm-w17((?:(?:\\\\|\\|/)[A-Za-z0-9_.\-]+)*)}{my $p = $1; $p =~ s/\\\\|\\/\//g; "\@R$p"}ge; s/\.exe\b//g if $ENV{NORM_EXE}'; fi
+    else tr -d '\r' < "$1" | NORM_PARTS=$(printf "%s" "$REMOTE" | tr '\\' '|') perl -pe 'BEGIN { $re = join(q{(?:\\\\\\\\|\\\\|/)}, map { quotemeta } split /\|/, $ENV{NORM_PARTS}) } s{$re((?:(?:\\\\|\\|/)[A-Za-z0-9_.\-]+)*)}{my $p = $1; $p =~ s/\\\\|\\/\//g; "\@R$p"}ge; s/\.exe\b//g if $ENV{NORM_EXE}'; fi
 }
 exact=0; normal=0; diff_n=0; zero=0; tlsref=0
 : > "$out/differences.txt"; : > "$out/agreements.txt"
@@ -391,4 +402,31 @@ say "S17.6: $exact answers identical to the Mac's byte for byte, $normal equal a
 grep '^DIFFER\|^MISSING' "$out/differences.txt" | head -40
 say "memory on $host (win-run, peak commit of one process, MiB): largest $(grep -o 'peak commit [0-9]*' "$out/win-peaks.txt" | awk '{ if ($3 > m) m = $3 } END { printf "%.1f", m / 1048576 }')"
 [ "$diff_n" -eq 0 ] || fail "$diff_n answers differ"
+[ "$(git -C "$root" rev-parse HEAD 2> /dev/null || echo unknown)" = "$src_commit" ] \
+    && [ "$(sh "$root/scripts/source-digest.sh" --root "$root" 2> /dev/null || echo unknown)" = "$src_digest" ] \
+    || fail "the tree changed during the run (commit or build-input digest); nothing it built is a record of one tree"
+# The record the release path reads (S18.2): written last, only by a whole run that passed; a smoke run
+# (WSB_REUSE, WSB_LIMIT) writes none.
+if [ -z "${WSB_REUSE:-}" ] && [ -z "${WSB_LIMIT:-}" ]; then
+    {
+        echo "schema nazm.selfbuild-record/1"
+        echo "script windows-selfbuild.sh"
+        echo "target $target"
+        echo "backend llvm"
+        echo "heap-limit $heap"
+        echo "source-commit $src_commit"
+        echo "source-tree-clean $src_clean"
+        echo "build-input-digest $src_digest"
+        echo "seed-sha256 $(sha256_of "$seed")"
+        echo "builder $STAGE/nazm"
+        echo "builder-sha256 $(sha256_of "$STAGE/nazm")"
+        echo "builder-record-sha256 $(sha256_of "$STAGE/../fixpoint.txt" || true)"
+        echo "environment-sha256 $(sha256_of "$out/environment.txt")"
+        for d in win win2; do
+            for p in $programs; do n=${p%%:*}; echo "sha256 $d $n.exe $(sha256_of "$out/$d/$n.exe")"; done
+        done
+        echo "summary the nine built for $target twice, identical; $exact answers on $host identical to the Mac's, $normal equal after normalising, 0 differ, $tlsref refused by decision; the heap probe stopped with N0406"
+        echo "result passed"
+    } > "$out/fixpoint.txt.part" && mv "$out/fixpoint.txt.part" "$out/fixpoint.txt" || fail "could not write $out/fixpoint.txt"
+fi
 say "windows-selfbuild complete: the nine built for $target reproducibly; every answer agrees"

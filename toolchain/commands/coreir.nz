@@ -375,7 +375,7 @@ fn ci_stage(io: IoCap, command: Str) -> Str {
     }
     let dir = ut_libexec(io)
     if dir == "" { sr_fail(io, "nazm: `" + command + "` runs nazm-pipeline: set `NAZM_PIPELINE`, or `NAZM_LIBEXEC` to the directory holding it", 4) }
-    let p = ut_join(dir, "nazm-pipeline")
+    let p = ut_join(dir, ut_exe_name("nazm-pipeline"))
     if ut_kind(io, p) != 0 { sr_fail(io, "nazm: `" + command + "` runs nazm-pipeline: it is not installed at `" + p + "`", 4) }
     p
 }

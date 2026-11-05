@@ -106,8 +106,20 @@ heap=$STAGE_HEAP
 STAGE_MAX_OUTPUT_MIB=${STAGE_MAX_OUTPUT_MIB:-192}
 export STAGE_MAX_OUTPUT_MIB
 
+# What the run is built from (R8 slice 18, S18.2): the commit, whether the tree was clean, and the build-input
+# digest (`scripts/source-digest.sh`, every tracked file as it is on disk), taken now and again at the end: a tree
+# that changed during the run fails it. The release path (`scripts/release-archive.sh`) packages a stage 3 only
+# when `OUT/fixpoint.txt`, written last and only by a run that passed, names the commit it is asked to release.
+src_commit=$(git -C "$root" rev-parse HEAD 2> /dev/null || echo unknown)
+if [ -z "$(git -C "$root" status --porcelain 2> /dev/null)" ]; then src_clean=yes; else src_clean=no; fi
+src_digest=$(sh "$root/scripts/source-digest.sh" --root "$root" 2> /dev/null) || src_digest=unknown
+sha256_of() { shasum -a 256 "$1" 2> /dev/null | cut -d' ' -f1; }
+
 # environment.txt: the toolchain the fixpoint claims (one machine, one toolchain).
 {
+    echo "source-commit: $src_commit"
+    echo "source-tree-clean: $src_clean"
+    echo "build-input-digest: $src_digest"
     echo "script: host-selfbuild.sh $arch (backend $backend, target $target)"
     echo "SDKROOT=$SDKROOT"
     echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET"
@@ -121,6 +133,7 @@ export STAGE_MAX_OUTPUT_MIB
     echo "ld -v: $(ld -v 2>&1 | head -1)"
     if [ "$arch" = x86_64 ]; then echo "rosetta: arch -x86_64 /usr/bin/true answers; clang target $(arch -x86_64 sh -c 'clang -target x86_64-apple-darwin -print-target-triple' 2>&1)"; else echo "rosetta: not used"; fi
     echo "seed: $("$seed" --version 2> /dev/null)"
+    echo "seed sha256: $(sha256_of "$seed")"
     echo "heap limit: $heap"
 } > "$out/environment.txt" 2>&1
 
@@ -384,4 +397,30 @@ awk '/^# / { label = substr($0, 3); next }
 [ "$disagree" -eq 0 ] && [ "$unbuilt" -eq 0 ] || fail "the last stage's builds do not all run as the seed's do"
 [ "$idisagree" -eq 0 ] || fail "the self-built interpreter does not run the corpus as the seed's does"
 [ "$cagree" -eq 1 ] || fail "the self-built nazm-check does not report the tree as the seed's build does"
+[ "$(git -C "$root" rev-parse HEAD 2> /dev/null || echo unknown)" = "$src_commit" ] \
+    && [ "$(sh "$root/scripts/source-digest.sh" --root "$root" 2> /dev/null || echo unknown)" = "$src_digest" ] \
+    || fail "the tree changed during the run (commit or build-input digest); nothing it built is a record of one tree"
+summary="stages 1 to $stages byte-identical; $agree corpus programs agree ($noheap not run on the host); $iagree run by the self-built interpreter as by the seed's; nazm-check agrees; the 256 MiB heap stops with N0406"
+# The record the release path reads (S18.2): written last, only here, after every check above passed.
+{
+    echo "schema nazm.selfbuild-record/1"
+    echo "script host-selfbuild.sh"
+    echo "arch $arch"
+    echo "target $target"
+    echo "backend $backend"
+    echo "heap-limit $heap"
+    echo "stages $stages"
+    echo "source-commit $src_commit"
+    echo "source-tree-clean $src_clean"
+    echo "build-input-digest $src_digest"
+    echo "seed-sha256 $(sha256_of "$seed")"
+    echo "environment-sha256 $(sha256_of "$out/environment.txt")"
+    for s in $(seq 0 "$stages"); do
+        for name in $names; do
+            [ -f "$out/stage$s/$name" ] && echo "sha256 stage$s $name $(sha256_of "$out/stage$s/$name")"
+        done
+    done
+    echo "summary $summary"
+    echo "result passed"
+} > "$out/fixpoint.txt.part" && mv "$out/fixpoint.txt.part" "$out/fixpoint.txt" || fail "could not write $out/fixpoint.txt"
 say "host-selfbuild complete ($arch, $backend backend): stages 1 to $stages byte-identical; $agree corpus programs agree ($noheap not run on the host); $iagree run by the self-built interpreter as by the seed's; nazm-check agrees; the 256 MiB heap stops with N0406"
