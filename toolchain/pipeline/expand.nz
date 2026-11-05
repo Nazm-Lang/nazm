@@ -170,7 +170,7 @@ pub fn expansions(c: Cir) -> Strs ! {} {
     out
 }
 
-fn spaces_of(n: Int) -> Str ! {} {
+pub fn spaces_of(n: Int) -> Str ! {} {
     let out = strs_new()
     for i in 0..n { strs_push(out, " ") }
     str_join(out, "")
