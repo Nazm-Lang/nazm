@@ -8,9 +8,8 @@
 - [x] 1.5 The last stage's Core IR equal to the reference's (whole, since `r8-cut-over` slice 3); 66 programs
       it builds run as the seed's builds do; the heap probe stops with `N0406`
 - [x] 1.6 Peak resident memory of every step recorded
-- [ ] 1.7 The interpreter and `nazm-check` in the self-build, once their tracks move from 0.10.0 to
-      the checkout's language (`design.md`, *Gaps*). Moved and added to the self-build's programs
-      by `r8-cut-over` slice 1 (2026-10-20); closed when its contained run passes there (1.4)
+- [x] 1.7 The interpreter and `nazm-check` in the self-build: added to `toolchain/selfbuild/programs.txt` by `r8-cut-over`
+      slice 1 (2026-10-20); the nine programs build to a fixpoint on the host (`r8-cut-over` 16.3, 16.4, 2026-11-04)
 - [x] 1.8 `callee_at` and a payload binding's `at` in `--coredoc-sources` (R2)
 
 ## 2. The containment rule (`rewrite-in-nazm` 7.2)
@@ -19,4 +18,5 @@
       (`docs/internal/runbook.md`, *What may run on the host*) and the host runner written
       (`cargo xtask host-run`, `xtask/src/host_run.rs`; refuses a binary without the counted heap or
       with a limit over 2 GiB; tests in `xtask/tests/host_run.rs`, 13 mutants `r6-host-run-*`)
-- [ ] 2.3 The first host runs of the builder on macOS, their resident peaks recorded
+- [x] 2.3 The first host runs of the builder on macOS, their resident peaks recorded: `host-selfbuild.sh` on aarch64 and on
+      x86_64 under Rosetta passed (`r8-cut-over` 16.3, 16.4, 2026-11-04/05; largest stage `nazm` 1561.9 MiB, 2 GiB limit)
