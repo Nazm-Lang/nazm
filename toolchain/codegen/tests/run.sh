@@ -6,7 +6,9 @@
 #     NZCG_MIX=even|odd toolchain/codegen/tests/run.sh [FILE.nz ...]
 #
 # The target is aarch64-apple-darwin unless NZCG_TARGET says otherwise; x86_64-apple-darwin runs
-# under Rosetta on an arm64 Mac.
+# under Rosetta on an arm64 Mac. On Linux (contained only: `cargo xtask contained elfrun`, R9 6.3)
+# it is the container's own `ARCH-unknown-linux-gnu`, linked with the container's `cc` and run
+# there; `NZCG_NO_GROWTH=1` is implied (no Python in the image).
 #
 # Builds the generator with the checkout's `nazm` ($NAZM, heap limit 2 GiB); the reference is the Rust `nazm` built from
 # this checkout ($NAZM_REF, by default CARGO_TARGET_DIR=~/.cache/nazm-target-track9). For each input (by default
@@ -36,16 +38,28 @@ NAZM=${NAZM:-$(stage_checkout_nazm "$stage_root")}
 REF=${NAZM_REF:-$HOME/.cache/nazm-target-track9/debug/nazm}
 # `--one-thread` when the reference made the program one thread: its runtime then defines the
 # stack limit as a plain global, not a thread-local one (the generator inlines the check, 7.3).
-one_thread() { nm -m "$1"/*.o 2>/dev/null | grep -qE "\(__DATA,__(common|bss|data)\) .*_nz\.stack_limit\$" && echo --one-thread; }
+if [ "$(uname -s)" = Linux ]; then
+  # ELF: a plain (non-TLS) `nz.stack_limit` object means the runtime was built one-thread.
+  one_thread() { readelf -sW "$1"/*.o 2>/dev/null | grep -E ' OBJECT .* nz\.stack_limit$' | grep -qv ' TLS ' && echo --one-thread; }
+else
+  one_thread() { nm -m "$1"/*.o 2>/dev/null | grep -qE "\(__DATA,__(common|bss|data)\) .*_nz\.stack_limit\$" && echo --one-thread; }
+fi
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 OUT=${NZCG_OUT:-$HERE/out}
-WORK=$OUT/work-${NZCG_TARGET:-aarch64-apple-darwin}
+if [ "$(uname -s)" = Linux ]; then DEFAULT_TARGET=$(uname -m)-unknown-linux-gnu; else DEFAULT_TARGET=aarch64-apple-darwin; fi
+WORK=$OUT/work-${NZCG_TARGET:-$DEFAULT_TARGET}
 NZCG=$OUT/nzcg
 TIMEOUT=${NZCG_TIMEOUT:-60}
-TARGET=${NZCG_TARGET:-aarch64-apple-darwin}
+TARGET=${NZCG_TARGET:-$DEFAULT_TARGET}
 ARCH=${TARGET%%-*}
 [ "$ARCH" = aarch64 ] && ARCH=arm64
+# `cc`'s architecture flag: Apple's driver takes `-arch`; a Linux one links for its own machine.
+ARCHFLAG=(-arch "$ARCH")
+if [ "$(uname -s)" = Linux ]; then
+  ARCHFLAG=()
+  [ "$TARGET" = "$(uname -m)-unknown-linux-gnu" ] || { echo "run.sh: $TARGET does not run on this $(uname -m) Linux"; exit 2; }
+fi
 mkdir -p "$OUT"
 if ! stage_build "$NAZM" "$HERE/main.nz" -o "$NZCG" >"$OUT/build.log" 2>&1; then
   echo "nzcg did not build:"; cat "$OUT/build.log"; exit 2
@@ -83,7 +97,7 @@ for src in "${inputs[@]}"; do
   # A program with C beside it (FILE.c) is linked with it, as `nazm build --link` does.
   link=()
   if [ -f "${src%.nz}.c" ]; then
-    if ! cc -arch "$ARCH" -c "${src%.nz}.c" -o "$W/c.o" >"$W/c.build" 2>&1; then
+    if ! cc ${ARCHFLAG[@]+"${ARCHFLAG[@]}"} -c "${src%.nz}.c" -o "$W/c.o" >"$W/c.build" 2>&1; then
       echo "skipped  $rel (its C does not compile)"; skipped=$((skipped+1)); continue
     fi
     link=(--link "$W/c.o")
@@ -139,7 +153,7 @@ for src in "${inputs[@]}"; do
   if [ "$k" -ne "$(ls "$W/gen" | wc -l)" ]; then
     echo "differ   $rel: $k unit objects in link.txt, $(ls "$W/gen" | wc -l | tr -d ' ') written"; differ=$((differ+1)); continue
   fi
-  if ! cc -arch "$ARCH" -o "$W/gen.exe" "${list[@]}" $libs >"$W/link.log" 2>&1; then
+  if ! cc ${ARCHFLAG[@]+"${ARCHFLAG[@]}"} -o "$W/gen.exe" "${list[@]}" $libs >"$W/link.log" 2>&1; then
     echo "differ   $rel: the link failed: $(head -3 "$W/link.log")"; differ=$((differ+1)); continue
   fi
   (cd "$W" && limited ./ref >ref.stdout 2>ref.stderr; echo $? >ref.status)
@@ -168,6 +182,7 @@ done
 # to what is live — it grew as blocks × names a pass, with more passes the deeper the nesting.
 grown=0
 for g in "nest 25" "chain 60"; do
+  [ "$(uname -s)" = Linux ] && break
   python3 "$ROOT/bench/complexity/growth.py" "nzcg" $g 10 ops "$REF" "$OUT/growth" -- "$NZCG" "{in}" "{dir}" ||
     grown=$((grown+1))
 done
