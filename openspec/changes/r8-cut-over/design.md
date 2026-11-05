@@ -1860,6 +1860,14 @@ names `support.md` and `licensing.md`; they are the published pages under `docs/
 No row's status changed and no new verification is claimed.
 
 ### For the copyright holder (slices 19 and 20)
+**Decided by the copyright holder, 2026-11-05** (the recommendations of the coordinator were accepted): item 1 accepted
+(`runbook.md` amended); item 2 the notices file ships with the Nazm-built archives for 0.11.0 as a precaution, its header
+says which build it describes, and counsel's confirmation stays open; item 3 `xtask/` stays unfrozen (it is the gate and
+CI machinery and changes with them; freezing `nazm-mcp`, which ships but is outside the seed's build closure, is a
+possible follow-up that re-records the digest and so is the holder's edit, not done); and 17.1 is accepted as
+satisfying `windows-toolchain` W3 3.2 for 0.11.0 with the shortfalls stated (S17: LLVM, not R9's writer, built the
+Windows objects; no Windows-native self-build, no `--backend nazm`, no `nazm test` there; those wait for 1.0).
+The items as first stated:
 1. The runbook amendment for running Nazm-built programs on Windows through `win-run.ps1` (S17) remains proposed, not accepted.
 2. Whether a Nazm-built archive owes `THIRD-PARTY-NOTICES.md` (it links no Rust crate); `licensing.md` says only that the archives
    carry it until you decide.

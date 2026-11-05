@@ -106,6 +106,9 @@ stays in the separate evidence bundle.
    `crates/nazm-cli/src/backend.rs`) carries no notice, while a backend linked in, as Cranelift is
    today, would. *For the 0.9.0 preview (2026-10-12):* the archive carries
    `THIRD-PARTY-NOTICES.md` (*What a release archive contains*), which discharges the duty for it.
+   *For 0.11.0 (2026-11-05):* the archives built by Nazm itself link no Rust crate, so the duty may not
+   arise for them; the archive carries `THIRD-PARTY-NOTICES.md` anyway, as a precaution, and whether it
+   is owed is for counsel to confirm.
 
 **Still open:**
 
