@@ -1,0 +1,7 @@
+// R8 slice 17 (S17.3): a probe of win-run.ps1's limits on the Windows host; see windows-selfbuild.sh.
+fn main(out: OutCap) -> Int {
+    let line = str_concat("0123456789012345678901234567890123456789012345678901234567890123456789", str_from_byte(10))
+    let mut i = 0
+    while i >= 0 { print(line); i = (i + 1) % 1000 }
+    0
+}
