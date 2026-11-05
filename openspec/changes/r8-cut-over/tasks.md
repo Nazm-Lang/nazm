@@ -237,7 +237,8 @@
 
 ## 17. Slice 17 — Windows x86_64
 - [x] 17.1 The released set built by Nazm for `x86_64-pc-windows-gnu`; the host-safe suite on the
-      Windows host (`windows-toolchain` W3 3.1, 3.2) — done 2026-11-05 with the shortfall stated in
+      Windows host (`windows-toolchain` W3 3.1, 3.2; accepted by the copyright holder 2026-11-05 as satisfying W3 3.2
+      for 0.11.0, and the runner `win-run.ps1` accepted in the runbook) — done 2026-11-05 with the shortfall stated in
       `design.md`, *Slice 17 — as built*: `toolchain/selfbuild/windows-selfbuild.sh win-dell ~/nazm-winsb-2`
       exit 0 (log `~/nazm-winsb-2.log`): the nine of `programs.txt` built for `x86_64-pc-windows-gnu` by
       `~/nazm-hostsb-aarch64-2/stage3/nazm` through `host-run` (`--objects`, MinGW-w64 gcc), twice, 9 of 9
