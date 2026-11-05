@@ -24,8 +24,7 @@
 
 - [x] 4.1 Ownership and cleanup (MIR), LIR, the runtime generator, the object cache, debug info (`r3-pipeline`, 37 of 38 boxes; the 38th is the deferred 8.3)
 - [x] 4.2a macOS (aarch64 and x86_64-apple-darwin), narrowed by the copyright holder 2026-10-15, done in R3 8.2
-- [ ] 4.2b The other targets of `docs/user/support.md` (Linux, WebAssembly, WASI, Android, iOS, the boards): deferred until after 1.0 by the
-      copyright holder (2026-10-15); Windows x86_64 is `r8-cut-over` 17.1, `windows-toolchain` W3, before 1.0
+- [ ] 4.2b The other targets of `docs/user/support.md`: Linux, WebAssembly and WASI are in scope for 0.11.0 (the copyright holder, 2026-11-05); Android, iOS and the boards stay deferred until after 1.0 (2026-10-15); Windows x86_64 is `r8-cut-over` 17.1, `windows-toolchain` W3, before 1.0
 ## 5. R4 — the interpreter
 - [x] 5.1 The interpreter in Nazm (`r4-interpreter`, 30 of 30 boxes; `toolchain/interp`, in the self-build's nine programs); the interpreter-driven suites pass (r4 evidence)
 ## 6. R5 — every command
