@@ -10,6 +10,12 @@ use crate::{campaign, procs, suite};
 /// each run once over W workers, longest first by the timing history for NAME; then the
 /// doc-tests. The report is in canonical order and a failure cancels nothing. N32-H3.
 ///
+/// `--shard I/N` runs only the I-th of N disjoint, deterministic slices of the binaries (the whole
+/// workspace is still built, and the doc-tests run in slice 1 only), so CI can spread one suite
+/// over N runners; the split balances by `xtask/ci-weights.txt` when it exists
+/// ([`suite::shard`]). Each run binary prints a `workspace-tests: time ID SECONDS` line, the
+/// source of that file.
+///
 /// `--host-safe` (R1) builds every binary and runs every one except those that build and run
 /// generated compiler stages ([`suite::needs_containment`]), naming each it leaves out. It is
 /// what may run where no contained runner exists — GitHub's CI — and it is a subset: the
@@ -35,6 +41,19 @@ pub(crate) fn workspace_tests(rest: &[String]) -> ExitCode {
     );
     let shape = value("--shape", "default");
     let host_safe = rest.iter().any(|a| a == "--host-safe");
+    let shard = match value("--shard", "").as_str() {
+        "" => None,
+        v => match v
+            .split_once('/')
+            .map(|(i, n)| (i.parse::<usize>(), n.parse::<usize>()))
+        {
+            Some((Ok(i), Ok(n))) if n >= 1 && (1..=n).contains(&i) => Some((i, n)),
+            _ => {
+                eprintln!("workspace-tests: --shard wants I/N with 1 <= I <= N, not `{v}`");
+                return ExitCode::FAILURE;
+            }
+        },
+    };
     let Some(root) = workspace_root() else {
         eprintln!("workspace-tests: could not locate the workspace root");
         return ExitCode::FAILURE;
@@ -66,10 +85,20 @@ pub(crate) fn workspace_tests(rest: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
     let built = started.elapsed().as_secs_f64();
-    let (bins, contained_only): (Vec<suite::Binary>, Vec<suite::Binary>) =
+    let (mut bins, contained_only): (Vec<suite::Binary>, Vec<suite::Binary>) =
         suite::binaries(&build.stdout)
             .into_iter()
             .partition(|b| !(host_safe && suite::needs_containment(b)));
+    if let Some((index, count)) = shard {
+        let weights = suite::read_weights(&root.join("xtask").join("ci-weights.txt"));
+        let mine = suite::shard(&bins, &weights, index, count);
+        let total = bins.len();
+        bins = mine.iter().filter_map(|&i| bins.get(i).cloned()).collect();
+        eprintln!(
+            "workspace-tests: shard {index}/{count}: {} of {total} binaries",
+            bins.len()
+        );
+    }
     for b in &contained_only {
         eprintln!(
             "workspace-tests: NOT RUN {} — it builds generated compiler stages, which run only \
@@ -97,6 +126,7 @@ pub(crate) fn workspace_tests(rest: &[String]) -> ExitCode {
                 print!("{}", r.stdout);
                 eprint!("{}", r.stderr);
                 now.insert(b.id(), r.secs);
+                eprintln!("workspace-tests: time {} {:.1}", b.id(), r.secs);
                 if !r.passed() {
                     failed.push(format!("{} ({:?})", b.id(), r.ended));
                 }
@@ -105,34 +135,39 @@ pub(crate) fn workspace_tests(rest: &[String]) -> ExitCode {
         }
     }
     suite::write_history(&history_file, &shape, &now);
-    let doc = procs::run(&procs::Invocation {
-        program: campaign::cargo(),
-        args: vec![
-            "test".to_owned(),
-            "--locked".to_owned(),
-            "--workspace".to_owned(),
-            "--doc".to_owned(),
-            "--jobs".to_owned(),
-            jobs.to_string(),
-            "--".to_owned(),
-            "--test-threads".to_owned(),
-            threads.to_string(),
-        ],
-        cwd: root,
-        env: Vec::new(),
-        deadline: std::time::Duration::from_secs(1200),
-    });
-    print!("{}", doc.stdout);
-    eprint!("{}", doc.stderr);
-    if !matches!(&doc.ended, procs::Ended::Exited(s) if s.success()) {
-        failed.push(format!("doc-tests ({:?})", doc.ended));
+    let run_docs = shard.is_none_or(|(index, _)| index == 1);
+    let mut doc_secs = 0.0;
+    if run_docs {
+        let doc = procs::run(&procs::Invocation {
+            program: campaign::cargo(),
+            args: vec![
+                "test".to_owned(),
+                "--locked".to_owned(),
+                "--workspace".to_owned(),
+                "--doc".to_owned(),
+                "--jobs".to_owned(),
+                jobs.to_string(),
+                "--".to_owned(),
+                "--test-threads".to_owned(),
+                threads.to_string(),
+            ],
+            cwd: root,
+            env: Vec::new(),
+            deadline: std::time::Duration::from_secs(1200),
+        });
+        print!("{}", doc.stdout);
+        eprint!("{}", doc.stderr);
+        if !matches!(&doc.ended, procs::Ended::Exited(s) if s.success()) {
+            failed.push(format!("doc-tests ({:?})", doc.ended));
+        }
+        doc_secs = doc.elapsed.as_secs_f64();
     }
     let mut slowest: Vec<(&String, &f64)> = now.iter().collect();
     slowest.sort_by(|a, b| b.1.total_cmp(a.1).then(a.0.cmp(b.0)));
     eprintln!(
         "workspace-tests: {} binaries over {workers} worker(s) × {threads} thread(s): build {built:.1}s, run {ran:.1}s, doc-tests {:.1}s; history {}",
         bins.len(),
-        doc.elapsed.as_secs_f64(),
+        doc_secs,
         if history.is_empty() { "none (canonical order)" } else { "used" }
     );
     if host_safe {

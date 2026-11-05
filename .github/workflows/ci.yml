@@ -19,12 +19,79 @@ name: ci
 on:
   push:
     branches: [main]
+  # `labeled`: adding the `ci-all-platforms` label to a pull request starts the macOS, Windows and
+  # Linux-arm jobs for it (see `platforms` below).
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+# A newer push to a pull request cancels that pull request's older run; a push to main never
+# cancels another.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
+# Speed (2026-11-05): the test step was one serial run of 97 binaries, 55-75 minutes on every host,
+# against a build of about a minute. It is now split into SHARDS slices (`cargo xtask
+# workspace-tests --shard I/N`, balanced by `xtask/ci-weights.txt`), run in parallel; the
+# formatter, lint and project checks run once, in `quick`; the other three hosts run on main and
+# on a pull request that carries the `ci-all-platforms` label; and a pull request that changes only
+# `openspec/` skips the test jobs (everything it can break, the docs checks, is in `quick`).
 jobs:
+  # What this run has to run. A pull request whose every changed file is under `openspec/` needs no
+  # test job; a push, a manual run and an empty or unreadable diff always run everything.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.what.outputs.code }}
+      platforms: ${{ steps.what.outputs.platforms }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: what
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          code=true
+          platforms=true
+          if [ "$EVENT" = pull_request ]; then
+            files=$(git diff --name-only "origin/$BASE...HEAD" || true)
+            if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qv '^openspec/'; then code=false; fi
+            case ",$LABELS," in *,ci-all-platforms,*) ;; *) platforms=false ;; esac
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "platforms=$platforms" >> "$GITHUB_OUTPUT"
+          echo "event=$EVENT code=$code platforms=$platforms"
+
+  # Format, lint and the project checks (docs, claims, seed freeze, ...), once, on Linux: they read the
+  # tree and do not depend on the host. Always runs, including for a docs-only pull request.
+  quick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: quick
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: lint
+        run: cargo lint
+      - name: project checks
+        run: cargo xtask check
+
   host-safe:
     # Linux on purpose, and not only for cost. Some behaviour cannot be exercised on
     # macOS at all: APFS refuses to create a filename that is not valid UTF-8, so the
@@ -35,38 +102,43 @@ jobs:
     # The runner is x86_64. That does not make `x86_64-unknown-linux-gnu` run-verified:
     # `docs/user/support.md` names what that would take, and the target stays compile-only until a
     # recorded run says otherwise.
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    name: host-safe (${{ matrix.shard }}/4)
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           # Matches rust-toolchain.toml. Pinned because cranelift declares MSRV 1.95.0.
           toolchain: "1.98.1"
-          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: host-safe
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: fmt
-        run: cargo fmt --all -- --check
-
-      - name: lint
-        run: cargo lint
-
-      - name: project checks
-        run: cargo xtask check
-
-      # Every test binary of the workspace is built; each is run except those whose source
-      # calls the containment guard, which the step names as NOT RUN. Doc-tests run too.
-      - name: test (host-safe subset)
+      # Every test binary of the workspace is built; this shard runs its slice of them, except those
+      # whose source calls the containment guard, which the step names as NOT RUN. Doc-tests run in
+      # shard 1.
+      - name: test (host-safe subset, shard ${{ matrix.shard }}/4)
         env:
           NAZM_REQUIRE_NONUTF8: "1"
-        run: cargo xtask workspace-tests --host-safe --jobs 4 --workers 1 --test-threads 4 --shape ci
+        run: cargo xtask workspace-tests --host-safe --jobs 4 --workers 1 --test-threads 4 --shape ci --shard ${{ matrix.shard }}/4
 
       # `cargo test` does not run these: they drive nested cargo builds of a disposable
       # project and kill real process groups. They touch no compiler stage, so they are
       # host-safe, and they are ignored by default only for their cost.
       - name: mutation-runner lifecycle
+        if: matrix.shard == 1
         run: cargo test -p xtask --test lifecycle -- --ignored --test-threads=1
 
       - name: accounting selftest
+        if: matrix.shard == 1
         run: cargo run -p nazm-bench -- selftest
 
   # R1.5 7.2 (design D16): the release archive is reproducible. `nazm` is built in release twice,
@@ -76,6 +148,7 @@ jobs:
   reproducible:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -93,11 +166,20 @@ jobs:
   # 39308569358, 69a5f780; Windows from 844 failing tests over CI rounds 2-5). A green job here is a
   # recorded host-safe run on that host, not a target made run-verified: `docs/user/support.md` names what
   # that takes, and the release gate is unchanged.
+  #
+  # Since 2026-11-05 these run on pushes to main, on a manual run, and on a pull request that carries
+  # the `ci-all-platforms` label; the Linux x86_64 `host-safe` job runs on every pull request. Each
+  # host's suite is split into four shards.
   platforms:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.platforms == 'true'
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-24.04-arm, macos-latest]
+        shard: [1, 2, 3, 4]
+    name: platforms (${{ matrix.os }}, ${{ matrix.shard }}/4)
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -105,6 +187,10 @@ jobs:
         with:
           toolchain: "1.98.1"
           components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: platforms-${{ matrix.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Apple's clang has no WebAssembly target, which the wasm tests build for; Homebrew's
       # LLVM, as on the developer's Mac, does.
@@ -145,17 +231,19 @@ jobs:
           clang -dumpmachine
 
       - name: build
+        if: matrix.shard == 1
         run: cargo build --workspace --locked
 
       - name: project checks
+        if: matrix.shard == 1
         run: cargo xtask check
 
-      - name: test (host-safe subset)
+      - name: test (host-safe subset, shard ${{ matrix.shard }}/4)
         # The suite rebuilds the workspace, xtask included, and Windows refuses to replace the file
         # of a running program ("failed to remove file … xtask.exe: Access is denied"); so xtask is
         # built into a target directory of its own. It still runs through cargo, so the [env] of
         # .cargo/config.toml reaches the suite, as `cargo xtask` gives it.
-        run: cargo run --locked --target-dir target/xtask-runner --package xtask -- workspace-tests --host-safe --jobs 4 --workers 1 --test-threads 4 --shape ci
+        run: cargo run --locked --target-dir target/xtask-runner --package xtask -- workspace-tests --host-safe --jobs 4 --workers 1 --test-threads 4 --shape ci --shard ${{ matrix.shard }}/4
 
   # The Windows TLS engine (SChannel, C1b) on a real Windows host, the server side included.
   # SChannel keeps a server's key in the user's key storage, which needs a loaded user profile:
@@ -170,12 +258,19 @@ jobs:
   # builds (lifting `N0830`, `emit_tls` binding the unit) is a separate decision, deferred by the
   # copyright holder; until then a Windows build refuses TLS.
   windows-tls:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.platforms == 'true'
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-tls
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: MinGW-w64's gcc and OpenSSL 3 (MSYS2)
         shell: pwsh

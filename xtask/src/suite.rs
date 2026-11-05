@@ -117,6 +117,72 @@ pub(crate) fn schedule(bins: &[Binary], history: &BTreeMap<String, f64>) -> Vec<
     order
 }
 
+/// Which of `bins` shard `index` of `count` (1-based) runs, as indices into `bins`, in canonical
+/// order. Longest-processing-time first over `weights` (seconds by [`Binary::id`]; a binary with no
+/// weight counts as the mean of the known ones, or 1 when none is known), each to the shard with
+/// the least load so far, ties to the lowest shard: so the shards are disjoint, together they hold
+/// every binary, and the same inputs give the same split on every host. With no weights this is a
+/// round-robin over the canonical order.
+pub(crate) fn shard(
+    bins: &[Binary],
+    weights: &BTreeMap<String, f64>,
+    index: usize,
+    count: usize,
+) -> Vec<usize> {
+    let count = count.max(1);
+    let known: Vec<f64> = bins
+        .iter()
+        .filter_map(|b| weights.get(&b.id()).copied())
+        .collect();
+    let mean = if known.is_empty() {
+        1.0
+    } else {
+        known.iter().sum::<f64>() / f64::from(u32::try_from(known.len()).unwrap_or(u32::MAX))
+    };
+    let weight = |i: usize| {
+        bins.get(i)
+            .and_then(|b| weights.get(&b.id()).copied())
+            .unwrap_or(mean)
+    };
+    let mut order: Vec<usize> = (0..bins.len()).collect();
+    order.sort_by(|&a, &b| weight(b).total_cmp(&weight(a)).then(a.cmp(&b)));
+    let mut load = vec![0.0_f64; count];
+    let mut owner = vec![0_usize; bins.len()];
+    for i in order {
+        let least = (0..count)
+            .min_by(|&x, &y| {
+                load.get(x)
+                    .copied()
+                    .unwrap_or(0.0)
+                    .total_cmp(&load.get(y).copied().unwrap_or(0.0))
+                    .then(x.cmp(&y))
+            })
+            .unwrap_or(0);
+        if let (Some(l), Some(o)) = (load.get_mut(least), owner.get_mut(i)) {
+            *l += weight(i);
+            *o = least;
+        }
+    }
+    (0..bins.len())
+        .filter(|&i| owner.get(i).copied() == Some(index.saturating_sub(1)))
+        .collect()
+}
+
+/// The committed per-binary weights (`xtask/ci-weights.txt`: `ID<TAB>SECONDS` per line, `#` starts a
+/// comment), empty when the file is absent or a line is not one.
+pub(crate) fn read_weights(path: &Path) -> BTreeMap<String, f64> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return BTreeMap::new();
+    };
+    text.lines()
+        .filter(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+        .filter_map(|l| {
+            let (id, secs) = l.rsplit_once('\t')?;
+            Some((id.to_owned(), secs.trim().parse::<f64>().ok()?))
+        })
+        .collect()
+}
+
 /// One binary's run.
 #[derive(Debug, Clone)]
 pub(crate) struct Ran {
@@ -242,6 +308,52 @@ pub(crate) fn exited_with(code: u8) -> std::process::ExitStatus {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
+    #[test]
+    fn shards_are_disjoint_complete_and_deterministic() {
+        let bins: Vec<Binary> = (0..23).map(|i| bin("p", &format!("t{i:02}"))).collect();
+        let mut w = BTreeMap::new();
+        w.insert(bins[3].id(), 500.0);
+        w.insert(bins[7].id(), 90.0);
+        w.insert(bins[9].id(), 40.0);
+        for count in [1, 2, 3, 4, 7] {
+            let mut all: Vec<usize> = Vec::new();
+            for index in 1..=count {
+                let a = shard(&bins, &w, index, count);
+                assert_eq!(a, shard(&bins, &w, index, count));
+                all.extend(a);
+            }
+            all.sort_unstable();
+            assert_eq!(all, (0..bins.len()).collect::<Vec<_>>(), "count {count}");
+        }
+    }
+
+    #[test]
+    fn the_heaviest_binaries_land_in_different_shards() {
+        let bins: Vec<Binary> = (0..8).map(|i| bin("p", &format!("t{i}"))).collect();
+        let mut w = BTreeMap::new();
+        w.insert(bins[0].id(), 100.0);
+        w.insert(bins[1].id(), 90.0);
+        w.insert(bins[2].id(), 80.0);
+        let owners: Vec<usize> = (1..=3)
+            .map(|k| {
+                let s = shard(&bins, &w, k, 3);
+                [0, 1, 2].into_iter().find(|i| s.contains(i)).unwrap_or(99)
+            })
+            .collect();
+        assert_eq!(owners, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn weights_are_read_and_a_bad_line_is_skipped() {
+        let d = std::env::temp_dir().join(format!("nazm-weights-{}", std::process::id()));
+        std::fs::write(&d, "# c\np test:a\t12.5\nbroken\n\np test:b\tx\n").unwrap();
+        let w = read_weights(&d);
+        std::fs::remove_file(&d).ok();
+        assert_eq!(w.len(), 1);
+        assert_eq!(w.get("p test:a"), Some(&12.5));
+        assert!(read_weights(Path::new("/no/such/file")).is_empty());
+    }
+
     use super::*;
 
     fn bin(package: &str, target: &str) -> Binary {
