@@ -138,6 +138,11 @@ not a workload of the contained runner and never runs beside one.
 *Evidence at the time of the amendment (2026-11-04/05):* `host-selfbuild.sh aarch64` and `host-selfbuild.sh x86_64` (under Rosetta, with every clang call naming `-target x86_64-apple-darwin`) each ran to the end with stages 1 to 3 byte-identical, the corpus, interpreter and `nazm-check` comparisons agreeing, and the 256 MiB probe stopping with N0406 (`openspec/changes/r8-cut-over/tasks.md` 16.3, 16.4). A release image is stripped, so a linked counted heap is recognised by the heap unit's whole N0406 message when the `nz.heap_malloc` symbol is gone.
 
 
+*Windows x86_64 (R8 slice 17, 2026-11-05):* the nine programs are built for `x86_64-pc-windows-gnu` on the Mac,
+one `host-run` at a time, and the Windows executables are run on a Windows host by a bounded runner, one at a time.
+Running Nazm-built programs on Windows by that runner is **proposed, not accepted**: this document does not
+amend the rule for it (`openspec/changes/r8-cut-over/design.md`, *For the copyright holder*).
+
 ### What the runner must enforce
 
 - **Memory and swap set equal.** A cap that can be swapped past is not a cap.
@@ -348,6 +353,10 @@ $ rustc --version  → 1.98.1 (pinned in rust-toolchain.toml)
 The local `stable` was 1.93.1 (seven months behind) when this project started; the pin is
 what makes that irrelevant. `cranelift` 0.135 declares MSRV 1.95.0, so the pin is
 load-bearing for Stage 7 even though nothing depends on Cranelift yet.
+
+Since the R8 cut-over (2026-11-05) this Rust toolchain builds the **seed**, the frozen stage-0 compiler
+(`bootstrap.md`, section 0); `cargo xtask check`'s *seed freeze* gate fails when a seed path changes without
+a recorded exemption (`docs/internal/seed-freeze.txt`).
 
 ---
 

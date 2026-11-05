@@ -1,0 +1,6 @@
+# The Rust seed is frozen (R8 slice 19; rewrite-in-nazm decision 4). `cargo xtask check` ("seed freeze")
+# recomputes the digest of the seed's paths (see xtask/src/seed.rs) and requires it to equal the last
+# line below. Only the copyright holder edits this file. A change to a seed path is accepted by
+# appending: exempt YYYY-MM-DD | PATH | REASON | NEW-DIGEST
+frozen-at d7fab19b
+base d21b08d9df11c220cc2a9cc6f460ddeb6f66813fcd8019cdad3b153673cb0737

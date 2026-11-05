@@ -25,6 +25,12 @@ for f in "$dir"/*.tar.gz "$dir"/*.zip; do
   grep -q " $(basename "$f")\$" "$dir/SHA256SUMS" || { echo "$(basename "$f") is not in SHA256SUMS" >&2; exit 3; }
 done
 
+# A Nazm-built archive (R8 slice 18) is signed only if it verifies as what its self-build made.
+for f in "$dir"/nazm-*.tar.gz; do
+  [ -e "$f" ] || continue
+  "$(dirname "$0")/verify-selfbuild.sh" "$f" >/dev/null || { echo "$(basename "$f") does not verify as a self-build's output" >&2; exit 3; }
+done
+
 cosign sign-blob --yes --bundle "$dir/SHA256SUMS.sigstore.json" "$dir/SHA256SUMS"
 
 # The identity the certificate names, for verifiers to pin.

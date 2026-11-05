@@ -119,3 +119,10 @@ licences above apply to `.nz` source as to Rust; the third-party crates of *What
 contains* leave the binary as they are replaced, which shrinks item 7; Rust code translated into
 Nazm is a derivative work of it, so contributors' rights in the Rust code carry over to the
 translation.
+
+**After the R8 cut-over (2026-11-05, a statement of fact, no change of terms):** the binaries of 0.11.0
+are built by Nazm; the Rust implementation, with its third-party crates, is the seed that builds the first stage
+and is never packaged (`scripts/release-archive.sh` has no code path that copies a seed binary). The licences above are
+unchanged and apply to the `.nz` source as to Rust. Which notices a Nazm-built archive owes is for the copyright
+holder (`openspec/changes/r8-cut-over/design.md`, *For the copyright holder*); until then the archives carry
+what `THIRD-PARTY-NOTICES.md` carries.
