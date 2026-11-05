@@ -408,12 +408,11 @@ Group 2 of `build`'s flags on the default backend: `--backend llvm` (now the def
   `-flto=thin` for whole-program), the link as `Backend::link` (`-flto=thin -Wl,-mcpu,CPU` at `-O2` and
   above on macOS, `-Wl,-pie` for `--release`, then `strip` and `codesign --force --sign - --options
   runtime`), `dsymutil` for `--debug`, `--emit-ir` beside the output. `--release` conflicts, its
-  usage refusals (exit 5) and `--layout`'s are the Rust build's. The LLVM backend's objects are not
-  filed in the object store (derived data), and the whole-program link keeps no ThinLTO cache.
+  usage refusals (exit 5) and `--layout`'s are the Rust build's. This slice filed no LLVM object and kept no ThinLTO cache; slice 6 does both (*Slice 6*, *The object stores*).
 - **A `--debug` executable is not reproducible between two processes**, Rust or Nazm: its debug map holds
   the build's working directory (`prog.nazm-PID/`), so the comparison does the units' text and objects
   byte for byte and the executable through `dwarfdump`.
-- **Not carried** (still status 6): `--build-report`, `--summary-json`, `--timings`, `--lib`, the
+- **Not carried by slice 5** (done in slice 6): `--build-report`, `--summary-json`, `--timings`, `--lib`, the
   flags of groups 3 and 4.
 
 ### Slice 5 — the evidence
