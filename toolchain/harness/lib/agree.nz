@@ -5,6 +5,7 @@
 // sequences, strings and channels.
 
 use "@std/text"
+use "@std/env"
 use "run.nz"
 use "scratch.nz"
 use "strings.nz"
@@ -92,4 +93,59 @@ pub fn agrees_prog(h: Caps, src: Str, expected: Str) -> Result[Int, Str] ! { io,
     strs_push(f, "prog.nz");
     strs_push(f, src);
     agrees_files(h, f, expected, 0)
+}
+
+/// `everywhere_at` with the environment `extra` (name, value, name, value, …) added to every run's, the
+/// interpreter's too, and the memory report on for all of them (`differential::everywhere_with_env`).
+pub fn everywhere_at_env(h: Caps, dir: Str, main: Str, extra: Strs) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let mut env = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
+    let mut i = 0;
+    while i + 1 < strs_len(extra) {
+        env = env_set(env, strs_get(extra, i), strs_get(extra, i + 1));
+        i = i + 2;
+    }
+    let out = vec_new[Labeled]();
+    let ia = words("run --interpret");
+    strs_push(ia, main);
+    vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), ia, dir, env)));
+    let whos = leg_names(h.io);
+    let backends = leg_backends(h.io);
+    let opts = leg_opts(h.io);
+    let mut k = 0;
+    while k < strs_len(opts) {
+        let who = strs_get(whos, k);
+        let exe = f"{dir}/{text_replace(text_replace(who, " ", ""), "-", "")}";
+        let a = words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)}");
+        strs_push(a, main);
+        strs_push(a, "-o");
+        strs_push(a, exe);
+        let b = nazm(h, dir, a);
+        check_that(b.code == 0, f"{who}: {b.stderr}")?;
+        vec_push(out, Labeled(label: who, ran: bounded_exe(h, exe, dir, env)));
+        k = k + 1;
+    }
+    Result[Vec[Labeled], Str].Ok(value: out)
+}
+
+/// Every run, the interpreter's included, exits 0, prints `expected` and reclaims every kind of storage it allocated
+/// (`service_ops.rs`'s `agrees_reclaimed`: allocation counts may differ for programs that talk over sockets).
+pub fn agrees_reclaimed(h: Caps, files: Strs, extra: Strs, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let d = files_dir(h, files)?;
+    let runs = everywhere_at_env(h, d, strs_get(files, 0), extra);
+    scratch_remove(h, d);
+    for run_ in runs? {
+        let who = run_.label;
+        let r = run_.ran;
+        check_that(r.code == 0, f"{who}: {r.stderr}")?;
+        check_that(text_trim_end(r.stdout) == expected, f"{who}: {r.stdout}")?;
+        let line = memory_line(r);
+        for kind in words("sequences strings channels closures") {
+            let parts = text_split(line, kind);
+            let part = if strs_len(parts) > 1 { strs_get(parts, 1) } else { "" };
+            let fields = words(text_replace(part, "\t", " "));
+            let live = if strs_len(fields) > 2 { strs_get(fields, 2) } else { "" };
+            check_that(live == "live=0", f"{who}: {kind} not all reclaimed: {line}")?;
+        }
+    }
+    ok()
 }
