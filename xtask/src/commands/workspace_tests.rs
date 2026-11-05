@@ -11,7 +11,7 @@ use crate::{campaign, procs, suite};
 /// doc-tests. The report is in canonical order and a failure cancels nothing. N32-H3.
 ///
 /// `--shard I/N` runs only the I-th of N disjoint, deterministic slices of the binaries (the whole
-/// workspace is still built, and the doc-tests run in slice 1 only), so CI can spread one suite
+/// workspace is still built, and the doc-tests run in the last slice only), so CI can spread one suite
 /// over N runners; the split balances by `xtask/ci-weights.txt` when it exists
 /// ([`suite::shard`]). Each run binary prints a `workspace-tests: time ID SECONDS` line, the
 /// source of that file.
@@ -135,7 +135,7 @@ pub(crate) fn workspace_tests(rest: &[String]) -> ExitCode {
         }
     }
     suite::write_history(&history_file, &shape, &now);
-    let run_docs = shard.is_none_or(|(index, _)| index == 1);
+    let run_docs = shard.is_none_or(|(index, count)| index == count);
     let mut doc_secs = 0.0;
     if run_docs {
         let doc = procs::run(&procs::Invocation {
