@@ -23,41 +23,50 @@
       code, span and message, with the reference's recovery, cascade muting and nesting limit — and
       as whole `nazm.diagnostic/1` objects, labels, help and fixes included (`syntax`;
       `compiler/diag.nz`, `compiler/diagnose.nz`)
-- [ ] 2.8 The checker and emitter read `syntax.nz`'s tree; `parse.nz` retired
+- [x] 2.8a The new checker (`sema.nz`) and the Core IR lowering (`core.nz`) read `syntax.nz`'s tree (D13)
+- [ ] 2.8b `parse.nz`, `analyse.nz`, `check.nz`, `emit.nz`, `module.nz` and `lex.nz` (the bootstrap chain) retired
+      together (D13). All still exist and are read by `crates/nazm-cli/tests/selfhost.rs` (the parity record,
+      `NOT_CARRIED`), `compiler/bootstrap.sh` and toolchain/harness programs; none is in the self-build's
+      nine programs (`toolchain/selfbuild/programs.txt`). Does not block 0.11.0 (cleanup of code duplicated
+      beside a working front end); when: after 0.11.0 before 1.0, with 4.3b
 
 ## 3. Names and types
 
-- [ ] 3.1 Modules: `as`, `::`, re-exports, packages and manifests — the loader is done (`load.nz`: the
+Audit 2026-11-05: every box below was ticked on evidence, see `stops-audit.md`. The counts inside a box are
+as measured when it landed; the last full measure is 7.8/7.9 (3,247 inputs: check, render, facts and
+keys 0 differ, the checker carries every one; core: every function carried, 1,895 whole documents the
+reference's bytes), and the self-build's Core IR is 9/9 identical (`r8-cut-over` 16.3, 16.4).
+
+- [x] 3.1 Modules: `as`, `::`, re-exports, packages and manifests — the loader is done (`load.nz`: the
       root, its imports depth-first, `@std/`, the core prelude, global offsets, every loader
-      diagnostic but a package's); packages since 3.1ze (path dependencies), re-exports since 3.1zh;
-      derives are not
+      diagnostic but a package's); packages since 3.1ze (path dependencies), re-exports since 3.1zh,
+      derives since 7.8 (D27)
 - [x] 3.1a The `check` comparison (`run.sh check`): loader, every file's syntax diagnostics at their
       global offsets, and the missing `main` — every difference left is a checker diagnostic
-- [ ] 3.1b The checker's first stages (`compiler/sema.nz`, D13): one module and the prelude; type
+- [x] 3.1b The checker's first stages (`compiler/sema.nz`, D13): one module and the prelude; type
       names, fields, function declarations, bodies of the core subset, the `main` rules; the built-in
       table generated (D14). `run.sh check`: 1,908 agree before, 2,112 after; the checker carries
       922 inputs and all 922 agree (the loader stops at a package, which it does not resolve)
-- [ ] 3.1c Effects and authority (`effects::analyse`): declared sets (N0366, N0367, N0368), each body's
+- [x] 3.1c Effects and authority (`effects::analyse`): declared sets (N0366, N0367, N0368), each body's
       authority (N0369, R1.5 D8's output authority held), the generated table's sinks; a call that
-      writes to a path stops the checker until provenance (N38) is carried, and so does a module of a
-      package. `run.sh check`: 2,159 agree, 577 differ; the checker carries 1,247, all agree
-- [ ] 3.1d Generics (`check_generic_call`, D15): type parameters of functions, records and enums
+      writes to a path and a module of a package were carried later (3.1r, 3.1ze). `run.sh check`: 2,159 agree, 577 differ; the checker carries 1,247, all agree
+- [x] 3.1d Generics (`check_generic_call`, D15): type parameters of functions, records and enums
       (N0331, N0350, N0101, N0365), `Equality` requirements (N0364, N0304's help), calls by
       written or inferred type arguments (N0353, N0354, N0355, N0351), the generic built-ins by
       class, generic enums' arguments inferred — the prelude's `Some`/`None`/`Ok`/`Err` — and
       constructions with written arguments (N0352), `main` generic (N0356), the nesting bound
       (N0338), `List[T]`; `Vec`s and applications of any type. `run.sh check`: 2,238 agree, 498
       differ; the checker carries 1,436, all agree
-- [ ] 3.1e `match` and patterns (`check_match`, `usefulness`): every pattern form but a tuple's
+- [x] 3.1e `match` and patterns (`check_match`, `usefulness`): every pattern form but a tuple's
       (N0342, N0345, N0341, N0333, N0332, N0334, N0629, N0300, N0202), guards, `if let`,
       `while let`, `let … else` (N0630) and `let` of a pattern, arm types (N0302), reachability
       (N0344) and exhaustiveness with the reference's witness (N0343), and N0632's warning,
       published only where there is no error. `run.sh check`: 2,307 agree, 429 differ; the
       checker carries 1,598, all agree
-- [ ] 3.1f `?` (`check_propagate`): the prelude's `Result` and `Option` by definition (N0360,
+- [x] 3.1f `?` (`check_propagate`): the prelude's `Result` and `Option` by definition (N0360,
       N0361, N0362, N0300). `run.sh check`: 2,342 agree, 394 differ; the checker carries 1,648,
       all agree
-- [ ] 3.1g Imports and module graphs (D16): every stage over every module in load order, each
+- [x] 3.1g Imports and module graphs (D16): every stage over every module in load order, each
       module against its direct imports' interfaces — `pub` visibility, plain imports and imports
       under a name (`alias::f`, `alias::T`, qualified constructions, variants and patterns), their
       collisions (N0207, N0208, N0209), private and unimported names (N0206, N0201 and N0305 with
@@ -65,33 +74,30 @@
       assumed, a standard module's authority; re-exports stop. Hand-written cases in
       `toolchain/frontend-tests/inputs/modules/`. `run.sh check`: 2,369 agree, 392 differ; the
       checker carries 1,704, all agree
-- [ ] 3.1h Interpolation (`check_hole`): `f"…"` and what `print(x)` is written as — a precision only
+- [x] 3.1h Interpolation (`check_hole`): `f"…"` and what `print(x)` is written as — a precision only
       on a float (N0006), a `Str`, a number or a `Bool` written as it is, anything else refused
       (N0300: no compilation the checker carries has a trait, so none has a `Show`). `run.sh check`:
       2,375 agree, 388 differ; the checker carries 1,793, all agree
-- [ ] 3.1i A compilation with a syntax error (`analyse`): the checker checks what the parser
+- [x] 3.1i A compilation with a syntax error (`analyse`): the checker checks what the parser
       recovered, every module, a function whose body did not parse declared and its body skipped;
       its errors follow the parser's, without the missing `main` and without warnings.
       `run.sh check`: 2,392 agree, 375 differ; the checker carries 1,890, all agree
-- [ ] 3.1j Constants of `Int`, `Bool` and `Str` (`constants::evaluate`, L8): stage 1b in dependency
+- [x] 3.1j Constants of `Int`, `Bool` and `Str` (`constants::evaluate`, L8): stage 1b in dependency
       order, each module's refusals (N0622, N0623, N0003, N0300, N0203) and its `pub` ones exported to
-      its importers, plainly and as `alias::NAME`; a constant named in a body is its type. A
-      constant of another type, a static, a float, a shift, a bit operator or a conversion in a
-      constant stops the checker. `run.sh check`: 2,399 agree, 371 differ; the checker carries
+      its importers, plainly and as `alias::NAME`; a constant named in a body is its type. Constants of the other types, statics, floats, shifts, bit operators and conversions were carried
+      later (3.1p, 3.1t, 3.1za). `run.sh check`: 2,399 agree, 371 differ; the checker carries
       1,899, all agree
-- [ ] 3.1k Rebased on R1.5 D9 (D16): where the prelude gives a program module a standard module
-      the checker stops — two carried inputs differed once the reference had D9 — until the
-      implicit edges are carried. `run.sh check` against `main` at `4b060478`: 2,399 agree, 371
+- [x] 3.1k Rebased on R1.5 D9 (D16): where the prelude gives a program module a standard module the checker stopped — two carried inputs differed once the reference had D9 — until the implicit edges were carried (3.1n). `run.sh check` against `main` at `5e18a9b6`: 2,399 agree, 371
       differ; the checker carries 1,897, all agree
-- [ ] 3.1l Function types and closures (N50): `fn(T…) -> R ! {e}` written, shown, assignable by
+- [x] 3.1l Function types and closures (N50): `fn(T…) -> R ! {e}` written, shown, assignable by
       effect inclusion and unified structurally; a named function as a value (N0387, and N0366
       where an undeclared one does more than its value's type says); calls through a value
       (N0303, N0300); closures, short ones included (N0635), their result (N0300), their
       captures — a `let mut` shared, refused where it can hold a function value (N0386), and a
       capture of what can hold one refused (N0616) — and each closure a function of its own in
-      effects and authority ("this closure in `f`"). An effect parameter still stops the checker.
+      effects and authority ("this closure in `f`"). An effect parameter was carried later (3.1v, 5.1f).
       `run.sh check`: 2,443 agree, 329 differ; the checker carries 1,983, all agree
-- [ ] 3.1m Traits and impls (N78, `check/traits.rs`): traits in the type namespace (N0330), their
+- [x] 3.1m Traits and impls (N78, `check/traits.rs`): traits in the type namespace (N0330), their
       methods with `Self` (N0203, N0609), a trait where a type is written (N0607); each module's
       trait scope, plain and `alias::Trait` (N0207); impl headers (N0610, N0305, N0604) and their
       methods declared as `Trait/Type/m` with `Self` and the trait's effects; `register_impl` —
@@ -106,7 +112,7 @@
       309 differ; the checker carries 2,036, all agree — with default methods 2,473 agree, 305
       differ; the checker carries 2,044, all agree — with generic impls 2,478 agree, 301 differ;
       the checker carries 2,050, all agree
-- [ ] 3.1n R1.5 D9's implicit edges (D16): the loader loads the prelude's standard modules a
+- [x] 3.1n R1.5 D9's implicit edges (D16): the loader loads the prelude's standard modules a
       program module names, after its written imports; the checker adds them as
       `import_implicit` does, their names yielding to the module's own and to written imports'.
       `@std/hash`'s `Hash` is derived (L6, `Traits::derives`): found as a method, satisfying a
@@ -114,12 +120,12 @@
       inputs that stopped at D9 now stop at `@std/hash`'s `UInt64` constants (a constant of
       this type); `inputs/modules/prelude-text.nz` is carried. `run.sh check`: 2,478 agree,
       301 differ; the checker carries 2,051, all agree (2,479 agree with the new case)
-- [ ] 3.1o `for` (`check_for`): an `Ints`, a `Strs` or a `Vec[T]` iterated (N0628 otherwise), or
+- [x] 3.1o `for` (`check_for`): an `Ints`, a `Strs` or a `Vec[T]` iterated (N0628 otherwise), or
       `Int` bounds `a..b` (N0300); the binding the element, in the body's scope, a loop for
-      `break` and `continue`, its last line discarded. A `for` over `Bytes` stops the checker.
+      `break` and `continue`, its last line discarded. A `for` over `Bytes` stopped the checker (carried with 3.1zf).
       `inputs/check/for-loops.nz`. `run.sh check`: 2,489 agree, 292 differ; the checker carries
       2,073, all agree
-- [ ] 3.1p Numbers (Gate 2, D17): every integer width and both floats — a literal of the type
+- [x] 3.1p Numbers (Gate 2, D17): every integer width and both floats — a literal of the type
       expected and its range (N0003), `-128` as one literal, wide integers, `Float32` where one is
       expected; the bit operators, `~` and shifts, a constant amount out of range (N0617);
       conversions `T(x)`, `try_convert`/`wrap_convert`/`saturate_convert[T](x)` and `Text(s)`
@@ -127,9 +133,9 @@
       of every number type computed exactly (N0003, N0622, N0623) — `@std/hash`'s `UInt64`
       constants included. A float compared or converted to an integer in a constant stops the
       checker. `inputs/check/numeric-body.nz`, `inputs/check/numeric-consts.nz`. `run.sh check`
-      (reference rebuilt at `deca183c`): 2,503 agree, 280 differ; the checker carries 2,132, all
+      (reference rebuilt at `c4c24ba5`): 2,503 agree, 280 differ; the checker carries 2,132, all
       agree
-- [ ] 3.1q Tasks (N53): `Chan[T]` written (N0353, N0390), shown, unified and inferred through its
+- [x] 3.1q Tasks (N53): `Chan[T]` written (N0353, N0390), shown, unified and inferred through its
       element, the generic channel built-ins (`chan_new_of`'s element refused as N0390,
       `chan_select_of` over a `Vec[Chan[T]]`); `scope` (N0300 for a value) and `spawn` — inside a
       scope only (N0320, a closure's body its own), the callee by the ordinary rule (N0201,
@@ -137,7 +143,7 @@
       (`task_safety`, N0321, with the path to what may not cross); `spawn`'s effect and its
       `SpawnCap` authority (N0366, N0369). `inputs/check/tasks.nz`. `run.sh check`: 2,543 agree,
       241 differ; the checker carries 2,289, all agree
-- [ ] 3.1r Provenance (N38, N80, D18): `write_file`, `os_open_write`, `os_spawn*` and the other path
+- [x] 3.1r Provenance (N38, N80, D18): `write_file`, `os_open_write`, `os_spawn*` and the other path
       sinks checked as built-ins; every body reduced to flows from what the checker resolved, the
       program solved and `N0372` reported with its witness chain — records and variants field by
       field, `match` and `?`, summaries and parameters handed on, closures and their captures,
@@ -145,25 +151,25 @@
       `inputs/check/provenance-flows.nz`. `run.sh check`: 2,549 agree, 235 differ, carried 2,314
       where `N0372` cannot fire; with the flows 2,649 agree, 143 differ; the checker carries
       2,480, all agree
-- [ ] 3.1s Attributes (D19, `attributes::configure`): the vocabulary, the board's shapes, one hook
+- [x] 3.1s Attributes (D19, `attributes::configure`): the vocabulary, the board's shapes, one hook
       and one handler for each interrupt, `@codec` without a derive, and `@cfg` over the host —
-      what it drops gone before the checker; a `@derive` stops the checker.
+      what it drops gone before the checker; a `@derive` stopped the checker (carried by 7.8).
       `inputs/check/attributes-board.nz`, `inputs/modules/attributes-across.nz`. `run.sh check`:
       2,612 agree, 176 differ; the checker carries 2,386, all agree
-- [ ] 3.1t Statics (Gate 3, `constants::evaluate` and `check_assign`): a static of a number or a
+- [x] 3.1t Statics (Gate 3, `constants::evaluate` and `check_assign`): a static of a number or a
       `Bool` computed as a constant is, an `Atomic` a cell started by `atomic_new(c)` (N0300,
       N0622), named in a body as an `Atomic` and never read by a constant; a static of another
       type (N0622), exported (N0101) or assigned (N0625), and never among a module's exports.
       `inputs/check/statics.nz`, `inputs/modules/statics-across.nz`. `run.sh check`: 2,619
       agree, 172 differ; the checker carries 2,412, all agree
-- [ ] 3.1u Tuples (L5, `tuple_of`): the generic record of each arity, `(,)` with fields `0`, `1`, …,
+- [x] 3.1u Tuples (L5, `tuple_of`): the generic record of each arity, `(,)` with fields `0`, `1`, …,
       made the first time it is asked for — written `(A, B)`, built `(a, b)` against the tuple
       expected, read and assigned by `.0`, shown `(A, B)`, inferred through generic calls, compared
       element by element; tuple patterns and their exhaustiveness (the one constructor, the witness
       `(…)`). A field run is written once all its types are resolved, since resolving one may make a
       tuple's record. `inputs/check/tuples.nz`. `run.sh check`: 2,654 agree, 139 differ; the checker
       carries 2,497, all agree
-- [ ] 3.1v Effect parameters (N51): `[effects E]` declared once (N0388 for a second, for one
+- [x] 3.1v Effect parameters (N51): `[effects E]` declared once (N0388 for a second, for one
       without a declared set and on `main`), named in function types written in its function
       and refused inside a type's arguments (N0388); a function type's effects naming its owner's
       parameter (`row`), shown by its name or `*`; a polymorphic callee called as a generic one
@@ -172,7 +178,7 @@
       function types bound, and the call performing the callee's set bound; never assignable by
       inclusion, never a value (N0387); N0366 naming the parameter. `@std/seq`'s programs are
       carried. `run.sh check`: 2,665 agree, 128 differ; the checker carries 2,533, all agree
-- [ ] 3.1w Arrays and indexing (Gate 2, `check/operators.rs`, `check/layout.rs`): `[T; N]` written,
+- [x] 3.1w Arrays and indexing (Gate 2, `check/operators.rs`, `check/layout.rs`): `[T; N]` written,
       its length a literal or an `Int` constant (N0622, N0618), held to the element and size rules
       after the field types and after the constants (N0621, N0618 by `data_bytes`); an array a
       leaf to every walk over type arguments, as the reference's `type_args` makes it, and stripped
@@ -182,7 +188,7 @@
       `xs[i] = v` on a sequence or a map by name (`element_by_name`), and `x.m(…)` as
       `<type>_m(x, …)` (`named_method`, R1 5b.15). `inputs/check/arrays.nz`. `run.sh check`:
       2,677 agree, 116 differ; the checker carries 2,571, all agree (2,678 and 2,572 with the new case)
-- [ ] 3.1x `Box`, `Chain` and `Cell` (R1a, R1b) and layouts (`UserTypes::ownership_cycles`):
+- [x] 3.1x `Box`, `Chain` and `Cell` (R1a, R1b) and layouts (`UserTypes::ownership_cycles`):
       the three written (N0352), shown, unified and inferred as a `Vec` is, each with its own kind;
       their generic built-ins; equality through a `Box` or `Chain`, neither ordered nor crossing
       into a task; a `Cell` a mutable holder of a function value, the others not; `for` over a
@@ -192,14 +198,14 @@
       that closes each, and the nesting bound of declarations (N0338).
       `inputs/check/box-cell.nz`. `run.sh check`: 2,727 agree, 67 differ; the checker carries
       2,633, all agree (2,728 and 2,634 with the new case)
-- [ ] 3.1y Contracts (N87, `check_contracts`, `prove_preconditions`): each clause a `Bool` (N0300),
+- [x] 3.1y Contracts (N87, `check_contracts`, `prove_preconditions`): each clause a `Bool` (N0300),
       `ensures` over `result` in a scope of its own, each made only of literals, names, operators,
       field reads, indices and calls of pure functions (N0614, with what it may not contain); a
       call of this module's function whose arguments are all literals evaluated against its
       `requires` clauses as `clauses::literal` does — checked `Int` arithmetic, bit operators and
       shifts — and a false one refuted (N0615). `inputs/check/contracts.nz`. `run.sh check`:
       2,740 agree, 56 differ; the checker carries 2,667, all agree
-- [ ] 3.1z The C boundary (N42, N55, N85; `check/foreign.rs`, the C-struct rules of
+- [x] 3.1z The C boundary (N42, N55, N85; `check/foreign.rs`, the C-struct rules of
       `check/layout.rs`): `extern "C" struct`s — opaque handles (one unnamed pointer field) and
       C layouts (N0380, N0384, N0381), never built or taken apart (N0611), with no equality, order
       or crossing into a task; foreign functions — ABI, symbol and the runtime's reserved ones
@@ -210,7 +216,7 @@
       argument) and its step in the chain. `inputs/check/foreign.nz`,
       `inputs/check/foreign-flows.nz`. `run.sh check`: 2,759 agree, 37 differ; the checker
       carries 2,717, all agree (2,761 and 2,719 with the new cases)
-- [ ] 3.1za Constant tables (L8, `constants::evaluate_aggregates`): constants of record, enum,
+- [x] 3.1za Constant tables (L8, `constants::evaluate_aggregates`): constants of record, enum,
       tuple and array types — their types resolved in a second phase (one error where one does
       not resolve), held to being values (N0622), each built of constant parts by its type
       (`agg`: constructions and variants by the type's own name, fields each once or all by
@@ -220,26 +226,26 @@
       body its type. `inputs/check/const-tables.nz`, `inputs/modules/const-tables.nz`.
       `run.sh check`: 2,771 agree, 27 differ; the checker carries 2,732, all agree (2,774 and
       2,735 with the new cases)
-- [ ] 3.1zb `defer` (R1b, L12; `check/stmt.rs`): a body checked as a block whose last line is
+- [x] 3.1zb `defer` (R1b, L12; `check/stmt.rs`): a body checked as a block whose last line is
       discarded, where the loop depth it begins at is its floor — `return` and `?` anywhere in
       it, and `break` and `continue` at its floor, refused (N0631), a closure in it a function
       of its own; its flows already walked at each exit (provenance). `inputs/check/defer.nz`.
       `run.sh check`: 2,779 agree, 22 differ; the checker carries 2,747, all agree (2,780 and
       2,748 with the new case)
-- [ ] 3.1zc Result types from the body (R1.5, D2; `check/infer.rs`): a `pub` function's or a
+- [x] 3.1zc Result types from the body (R1.5, D2; `check/infer.rs`): a `pub` function's or a
       method's refused (N0634); the inferred bodies checked first, each after the inferred
       functions it calls by name (`called_names`' walk, ported), a cycle's members refused
       (N0634) and placed where met; each body's value its function's result type, one with none
       refused (N0634); a `return` or `?` in such a body stops the checker.
       `inputs/check/inferred-results.nz`. `run.sh check`: 2,785 agree, 17 differ; the checker
       carries 2,754, all agree (2,786 and 2,755 with the new case)
-- [ ] 3.1zd The prelude's names and authority (`type_environment`, `forged`): a module's own
+- [x] 3.1zd The prelude's names and authority (`type_environment`, `forged`): a module's own
       `Result` or `Option` refused where it is declared (N0363) and still the type its name
       finds, while `?` keeps the prelude's; a capability built or called as a function refused
       (N0370), its arguments still checked. `inputs/check/prelude-names.nz`. `run.sh check`:
       2,793 agree, 10 differ; the checker carries 2,762, all agree (2,794 and 2,763 with the
       new case)
-- [ ] 3.1ze Packages (N46; `root::decide`, `package_context`, `nazm-package`'s `Manifest::parse` and
+- [x] 3.1ze Packages (N46; `root::decide`, `package_context`, `nazm-package`'s `Manifest::parse` and
       `resolve`, `load_packaged`; `compiler/package.nz`, D22): the source root found upward from
       the root module — the first manifest whose source root holds it — a manifest read as the
       reference reads it (an invalid one publishes nothing), the root package and its path
@@ -250,14 +256,14 @@
       modules given). Registry dependencies, features, profiles, `heap-limit` and markers stop.
       `inputs/packages/`. `run.sh check`: 2,802 agree, 3 differ; the checker carries 2,794, all
       agree (2,812 and 2,804 with the new cases)
-- [ ] 3.1zf Map literals and `for` over `Bytes`: the calls the parser writes for a map literal
+- [x] 3.1zf Map literals and `for` over `Bytes`: the calls the parser writes for a map literal
       (`hashmap_single`, `hashmap_set`) found by `called_names` (now `syntax.nz`'s
       `sx_called_names`) and given to `prelude_named`, so `@std/hashmap` is the module's as in the
       reference, and checked as written; a `for` over a `Bytes` binds each byte as a `UInt8`, its
       flows read through the `Bytes` cell. `inputs/check/map-literals.nz`,
       `inputs/check/bytes-flows.nz`. `run.sh check`: 2,813 agree, 2 differ; the checker carries
       2,807, all agree (2,815 and 2,809 with the new cases)
-- [ ] 3.1zg A trap fixed (found by R5 on `toolchain/interp`): provenance's walk read a tuple
+- [x] 3.1zg A trap fixed (found by R5 on `toolchain/interp`): provenance's walk read a tuple
       pattern's `alts`, which only an or-pattern has (`w_bind`), and trapped on the missing field
       wherever a compilation both reads a restricted origin and writes to a path. A root module
       that is not UTF-8 is refused by the loader as the reference refuses it (N0205, "stream did
@@ -266,14 +272,14 @@
       comparisons skip a file that is not UTF-8 (the reference lexes text) and say so.
       `inputs/check/trap-tuple-let.nz`. `run.sh check`: 2,958 agree, 2 differ; the checker
       carries 2,952, all agree (tokens, tree, syntax: 2,959 agree, 0 differ, 1 skipped)
-- [ ] 3.1zh Re-exports (N103, D23): `pub use` of every name or of the names chosen, `as` for
+- [x] 3.1zh Re-exports (N103, D23): `pub use` of every name or of the names chosen, `as` for
       functions and types, chains of re-exports applied in order, a cycle refused (N0213), a name
       not offered (N0211, a trait renamed included) or offered twice (N0212); importers see them
       plainly, as `alias::name` and `alias::T`, in collisions (N0207, N0208), as a renamed enum's
       variants, and an impl of a re-exported module usable. `inputs/modules/reexport-*.nz`.
       `run.sh check`: 2,977 agree, 2 differ; the checker carries 2,973, all agree (with the 19 new
-      inputs). Only `@derive` stops the checker now (6 inputs), left for last.
-- [ ] 3.1zi The facts `nazm doc` reads (D24; R5 D10's seven items): `compiler/facts.nz` — the whole
+      inputs). Only `@derive` stopped the checker then (6 inputs); carried by 7.8.
+- [x] 3.1zi The facts `nazm doc` reads (D24; R5 D10's seven items): `compiler/facts.nz` — the whole
       front end as one call, the checker's tables, durable identities, required effects, spans and
       attributes, `pub use` resolutions, whether the compilation is carried, its diagnostics and
       their text over every file (`dg_render`). A manifest's unknown field worded as serde words it
@@ -282,7 +288,7 @@
       facts 2,977 agree, 6 differ (carried 2,977, all agree — 5,619 functions, 516 records, 121
       enums and 20 re-exports documented by the reference among them); tokens, tree, syntax 2,982
       agree, 0 differ
-- [ ] 3.1zj R1.5 4.5 and 4.6 followed: `@std/option` and `@std/result` among the prelude's standard
+- [x] 3.1zj R1.5 4.5 and 4.6 followed: `@std/option` and `@std/result` among the prelude's standard
       modules, in `stdlib::PRELUDE`'s order (hash, hashmap, option, ordmap, result, sort, text), and
       an interpolation's holes scanned for the names and methods they hold (`named_in`); a line
       break separates two `match` arms as it ends a statement. `inputs/check/prelude-option-*.nz`,
@@ -290,19 +296,23 @@
       3,045 agree, 0 differ (1 not UTF-8, skipped), syntax likewise; check 3,044 agree, 2 differ
       (the checker carries 3,040, all agree); render likewise; facts 3,040 agree, 6 differ (carried
       3,040, all agree)
-- [ ] 3.2 Every type of group C resolved and typed
-- [ ] 3.3 Generics, traits, impls, default methods, closures and effects
+- [x] 3.2 Every type of group C resolved and typed
+- [x] 3.3 Generics, traits, impls, default methods, closures and effects
 
 ## 4. The checker's rules
 
-- [ ] 4.1 Group by group, every diagnostic identical as `nazm check --json` (D4), with recovery
+- [x] 4.1 Group by group, every diagnostic identical as `nazm check --json` (D4), with recovery
 - [x] 4.2 The text rendering compared — `run.sh render`, every carried input (3.1zi)
-- [ ] 4.3 Built-ins of group F; `selfhost.rs`'s `NOT_CARRIED` emptied (asked of the coordinator)
+- [x] 4.3a Built-ins of group F in the new checker: `builtins.nz` is generated from the reference's table (D14); a
+      call of a built-in whose signature the checker cannot shape is the one stop left (`stops-audit.md`)
+- [ ] 4.3b `selfhost.rs`'s `NOT_CARRIED` (about 90 built-ins) emptied: it guards the bootstrap checker `analyse.nz`
+      (see 2.8b), not `sema.nz`, and empties when that chain retires. Does not block 0.11.0; when: after 0.11.0
+      before 1.0
 
 ## 5. Core IR
 
-- [ ] 5.1 `nazm.core-ir/3` identical with `nazm core-ir` on every accepted input (D5, D25)
-- [ ] 5.1a The lowering's first constructs (D25, `compiler/core.nz`), compared function by function
+- [x] 5.1 `nazm.core-ir/3` identical with `nazm core-ir` on every accepted input (D5, D25)
+- [x] 5.1a The lowering's first constructs (D25, `compiler/core.nz`), compared function by function
       without digests (`run.sh core`): functions with a body and no type or effect parameters,
       contracts or attributes but `@deprecated`; `let` of a name, assignment to a binding,
       `while`, `return`, `break`, `continue`, expression statements, `if` and blocks; literals of
@@ -312,7 +322,7 @@
       `run.sh core`: 2,984 inputs agree, 0 differ; of 41,353 functions the lowering carries
       22,595, all agree (the most frequent stops: a variant, a construction, a generic function,
       an impl's method, `match`)
-- [ ] 5.1b The digests (`digest.rs`: the canonical encoding, BLAKE3): `compiler/digest.nz`, from
+- [x] 5.1b The digests (`digest.rs`: the canonical encoding, BLAKE3): `compiler/digest.nz`, from
       each function's printed object (D25), BLAKE3 by `@std/blake3`; `run.sh core` compares each
       function with its `digest`. `run.sh core`: 3,047 inputs agree, 0 differ; of 56,435
       functions the lowering carries 29,774, all agree, digests included
@@ -325,19 +335,19 @@
       agree, 0 differ; of 56,727 functions the lowering carries 43,510, all agree; of the
       document's other parts 10,374 carried — every one — all agree; 944 whole documents, all the
       reference's bytes
-- [ ] 5.1d The first stops (D25): variants and records built (by name, by position, `Dot` alone),
+- [x] 5.1d The first stops (D25): variants and records built (by name, by position, `Dot` alone),
       generic functions and generic calls with their settled type arguments (written or not),
       impls' methods, and `match` of plain arms as a value and as a statement. `run.sh core`:
       3,047 inputs agree, 0 differ; of 56,681 functions the lowering carries 43,473, all agree;
       of the document's other parts 10,349 carried, all agree. check 3,045 agree, 2 differ
       (carried 3,041, all agree), render likewise, facts 3,041 agree, 6 differ (carried 3,041,
       all agree)
-- [ ] 5.1e The whole document, byte for byte, wherever every function and part is carried:
+- [x] 5.1e The whole document, byte for byte, wherever every function and part is carried:
       `cr_core` prints it as `print.rs` does (`cdg_pretty`), and `run.sh core` compares it with
       `nazm core-ir`'s output. `run.sh core`: 3,047 inputs agree, 0 differ; of 56,701 functions
       the lowering carries 43,490, all agree; of the other parts 10,349 carried, all agree; 944
       whole documents carried, all 944 the reference's bytes
-- [ ] 5.1f The remaining stops, in the order of their frequency (D25), one group a commit:
+- [x] 5.1f The remaining stops, in the order of their frequency (D25), one group a commit:
   - [x] `for` (`for_loop`, `split_loop`): over a range, a `Vec`, a `Chain`, a `Bytes`, and
         `@std/text`'s `text_split` without the list, its hidden locals (`temp i`, `seq`, `end`)
         made as the reference makes them. `run.sh core`: 3,048 inputs agree, 0 differ; of 56,772
@@ -362,7 +372,7 @@
   - [x] Interpolation (`interpolation`, `hole_text`): each piece joined left to right by
         `str_concat`, an integer's unpadded digits by `str_concat_num`; a hole's text by its type
         (`Str` itself, `Bool` by an `if`, a number by `num_to_str`), padded by `str_pad_start` or
-        `str_pad_end`. Not yet: a hole read through `show()`, a float's with a precision. `run.sh
+        `str_pad_end`. (A hole read through `show()` and a float's precision were carried by the last two groups below.) `run.sh
         core`: 3,048 agree, 0 differ; of 56,811 functions the lowering carries 50,980, all agree;
         the other parts 10,374, all agree; 1,126 whole documents, all the reference's bytes
   - [x] General `match` patterns (`matching_general`, `pattern_test`, `extract`, `guarded`):
@@ -374,10 +384,10 @@
         all agree; the other parts 10,374, all agree; 1,133 whole documents, all the
         reference's bytes
   - [x] Constants and conversions: a constant's use is its value written as a literal of its type
-        (`const_value`; a record's, enum's, tuple's or array's, and a float's, still stop), a
+        (`const_value`; a record's, enum's, tuple's or array's, and a float's, stopped then; carried by the groups below), a
         static `Atomic`'s its cell (`Const::Cell`, with its `static` key); `T(x)`,
         `wrap_convert` and `saturate_convert` as `convert`, `try_convert` as `{ let c = x;
-        if fits(c) { Some(T(c)) } else { None } }` (a conversion to `Text` still stops). The
+        if fits(c) { Some(T(c)) } else { None } }` (a conversion to `Text` stopped then; carried below). The
         checker records each constant's use with its value, and each conversion. `run.sh core`:
         3,048 agree, 0 differ; of 56,919 functions the lowering carries 53,517, all agree; the
         other parts 10,374, all agree; 1,164 whole documents, all the reference's bytes. check,
@@ -391,7 +401,7 @@
   - [x] Method calls (`method_call`): by name, the call the checker read (the receiver first;
         `x.m` without parentheses too); an impl's method, or a trait's default body at the
         receiver's type, as a call of it; a receiver naming no value is no argument. A call
-        through a trait's bound (`CallTrait`) still stops. `run.sh core`: 3,048 agree, 0 differ;
+        through a trait's bound (`CallTrait`) stopped then; carried by the group after it. `run.sh core`: 3,048 agree, 0 differ;
         of 56,937 functions the lowering carries 53,959, all agree; the other parts 10,374, all
         agree; 1,195 whole documents, all the reference's bytes
   - [x] String constants of any text (`text`, then `quote`): UTF-8 printed as it is, its
@@ -421,7 +431,7 @@
         (`made_holding`), read by `vec_get` and assigned by `vec_set` at 0. sema.nz records
         where each capture's copy is made (`capat`), each closure's type, a closure
         parameter's declaration and a closure's settled effects. `run.sh core` (reference
-        rebuilt at 5dd044c4): 3,094 inputs agree, 0 differ; of 76,929 functions the lowering
+        rebuilt at 6eeb2550): 3,094 inputs agree, 0 differ; of 76,929 functions the lowering
         carries 75,937, all agree; the other parts 10,662, all agree; 1,488 whole documents,
         all the reference's bytes. check 3,092 agree, 2 differ (carried 3,088, all agree);
         facts 3,088 agree, 6 differ (carried 3,088, all agree). Remaining stops, most frequent
@@ -431,13 +441,13 @@
         a function used as a value (65), aggregate constants (51), foreign functions (49, 15
         calls), array literals (24), contracts (23), `defer` (12), `~` (10), the built-ins
         `checked_*`/`box_new`/`cell_*`/`chain_from_vec` (35)
-  - [x] The reference's checker followed (main's aa9f22e9 and c02d12e5, epoch 88): a desugared
+  - [x] The reference's checker followed (main's 44c1e4b2 and 1b98cae4, epoch 88): a desugared
         call no longer checks its operands twice — `s + t` on `Str`s checks them once, and
         `x.m()` by name and `xs[i]` hand the call the receiver or sequence checked already
         (`check_again`, `take_checked` by span); a pattern `let`'s arm and the rest of its
         block are joined to the scope the `let` is written in (`open_joined_scope`), so a name
         bound there already is N0202, "already defined in this scope", once per name.
-        `inputs/check/pattern-let-rebinds.nz`. Reference rebuilt at f90693fb. `run.sh`: core
+        `inputs/check/pattern-let-rebinds.nz`. Reference rebuilt at 12a21d4c. `run.sh`: core
         3,095 agree, 0 differ; of 76,198 functions the lowering carries 75,206, all agree (a
         closure in `s + t` is now declared once, as there); the other parts 10,644, all agree;
         1,485 whole documents, all the reference's bytes. check 3,093 agree, 2 differ (carried
@@ -491,7 +501,7 @@
         keeps it). A call of an effect-polymorphic function has the result the checker formed,
         its effect parameter bound. `core-ir.py` now quotes the reference's side as `print.rs`
         does (`\b` and `\f` as `\u0008`, `\u000c`, not Python's short forms). Rebased on main
-        e7effe0e, reference rebuilt there. `run.sh`: core 3,153 agree, 0 differ; of 93,517
+        5465f302, reference rebuilt there. `run.sh`: core 3,153 agree, 0 differ; of 93,517
         functions the lowering carries 93,369, all agree; the other parts 10,992, all agree;
         1,749 whole documents, all the reference's bytes. check 3,151 agree, 2 differ (carried
         3,147, all agree); facts 3,147 agree, 6 differ (carried 3,147, all agree)
@@ -566,7 +576,7 @@
       tests re-extracted (`extract-inputs.py` writes `toolchain/frontend-tests/inputs/rs` again:
       2,392 programs). The tree dump now escapes the space separators but the ASCII space
       (`\u{a0}`, `\u{3000}`, …) as Rust's `Debug` does — a regex test's literal showed it.
-      `run.sh` on main dfda47ac (reference rebuilt at 91f3da0a, no Rust change since): tokens,
+      `run.sh` on main 77311ae7 (reference rebuilt at cb18b73f, no Rust change since): tokens,
       tree, syntax 3,240 agree, 0 differ (1 not UTF-8, skipped); check 3,240 agree, 1 differ
       (the checker carries 3,235, all agree), render likewise; facts 3,235 agree, 6 differ
       (carried 3,235, all agree); core 3,241 agree, 0 differ, of 96,495 functions every one
@@ -603,11 +613,11 @@
       lowering carries every one, all agree; the other parts 10,992, all agree; 1,832 whole
       documents, all the reference's bytes; check 3,151 agree, 2 differ (carried 3,147, all
       agree), render likewise, facts 3,147 agree, 6 differ (carried 3,147, all agree)
-- [x] 7.6 C1's TLS (main's 98e271e0, epoch 89): the eleven `os_tls_*` built-ins in
+- [x] 7.6 C1's TLS (main's 22ce371d, epoch 89): the eleven `os_tls_*` built-ins in
       `compiler/builtins.nz` (regenerated by `builtins.sh` from `Intrinsic`), and the engine's
       ten `nz_tls_*` C symbols reserved (N0383). `inputs/check/tls-builtins.nz` (a reserved
       symbol declared) and `tls-builtins-run.nz` (`@std/tls` and `os_tls_info` lowered).
-      Reference rebuilt at 98e271e0. `run.sh`: core 3,156 agree, 0 differ; of 95,595
+      Reference rebuilt at 22ce371d. `run.sh`: core 3,156 agree, 0 differ; of 95,595
       functions the lowering carries every one, all agree; the other parts 11,004, all agree;
       1,834 whole documents, all the reference's bytes; check 3,154 agree, 2 differ (carried
       3,150, all agree), render likewise, facts 3,150 agree, 6 differ (carried 3,150, all
@@ -624,7 +634,7 @@
 - [x] 7.8 `@derive(json)` and `@derive(toml)` (D27): the expansion ported (`compiler/derive.nz`,
       applied by the loader to every project file), its refusals in `configure.nz`, and the
       checker's stop at a derived encoding removed. `inputs/check/derive-refusals.nz` holds the
-      refusals. `run.sh` on 5b132e5e (reference rebuilt there): tokens, tree, syntax 3,246
+      refusals. `run.sh` on dcabce7a (reference rebuilt there): tokens, tree, syntax 3,246
       agree, 0 differ (1 not UTF-8, skipped); check 3,247 agree, 0 differ (the checker carries
       every one), render likewise, facts likewise; core 3,247 agree, 0 differ, every one of
       105,232 functions carried and agreeing, the other parts 11,370, all agree, 1,895 whole
@@ -632,6 +642,6 @@
 - [x] 7.9 The keys of the cache (D28): the published interface (`ck_interface_json`, a port of
       `wire.rs`, `published` and its JSON), the identity of the checker (its fields generated into
       `builtins.nz`), the source fingerprint and the check key (`fx_keys`), and `run.sh keys`
-      against the `keys` mode of the reference dumper. On 75895e00 (reference rebuilt at
-      5b132e5e, no Rust change since): keys 3,247 agree, 0 differ, for every module its key,
+      against the `keys` mode of the reference dumper. On 70f8e4d1 (reference rebuilt at
+      dcabce7a, no Rust change since): keys 3,247 agree, 0 differ, for every module its key,
       source fingerprint, interface, interface hash and check key; check 3,247 agree, 0 differ

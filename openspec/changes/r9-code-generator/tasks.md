@@ -62,7 +62,7 @@
 
 ## 7. On main after R1.5, 3.3 and failures by unwinding (macOS only: aarch64-apple-darwin, x86_64-apple-darwin under Rosetta)
 
-- [x] 7.1 Re-established on main `a23a1fe9`, the reference the Rust `nazm` built from the same
+- [x] 7.1 Re-established on main `019cf5e8`, the reference the Rust `nazm` built from the same
       checkout (`NAZM_REF`, `CARGO_TARGET_DIR=~/.cache/nazm-target-track9`), the 0.10.0 release
       only building the generator. Hosted LLVM now unwinds on a failure while the generator keeps
       the bit (performance-leadership 4.2, answer 3), so a program may no longer mix the two
@@ -177,7 +177,7 @@
       `build_provenance::a_program_nazms_own_generator_built_names_it_by_its_digest`). Mutants
       `r9-7-9-the-record-does-not-name-the-generator` and
       `r9-7-9-profile-refuses-the-nazm-backend`, applied by hand, killed, restored
-- [x] 7.10 Coverage re-measured (`tests/cover.sh`, after `run.sh` on main `dcdde864` plus 7.6):
+- [x] 7.10 Coverage re-measured (`tests/cover.sh`, after `run.sh` on main `afb88c1a` plus 7.6):
       393 of 485 forms on each target, as at 7.2. Which of the 92 the lowering emits was
       established by printing the LIR of every one of the repository's 2,110 `.nz` files with a
       `main` and taking their forms, and by probes per construct: two — `addr import func` (a

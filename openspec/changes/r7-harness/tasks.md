@@ -50,7 +50,7 @@
         test's xorshift) are ported on the same library;
       - `#[ignore]`d tests that start a container, need a GPU or open a window stay Rust, each named
         in its file (design decision 10).
-- [x] 4.6 Re-run `tests/mutants.sh` over the files ported since the rebase onto `613047d2`: the 45
+- [x] 4.6 Re-run `tests/mutants.sh` over the files ported since the rebase onto `365cd9e8`: the 45
       of them a catalogued mutation names a killer in, the catalogue's first such mutation each
       (`MUTANTS_PER_FILE=1`; 281 mutation-killer pairs in all, each a rebuild of `nazm` and a test
       binary): 45 agree, 0 differ, every one caught by the Rust killer and the Nazm test alike
@@ -71,8 +71,6 @@
       reach and unsafe policy read `cargo metadata --no-deps --locked`, run in the root as a child;
       network reach and emission reach, the other two reach gates, read files. The rules are
       `xtask/src/rules.rs`, read from the tree being checked (decision 21)
-- [ ] 6.2 `bench`, `fuzz` — not ported in this pass (design, decision 22): every mode of `bench`
-      measures and runs only under the contained runner's ceiling, and `fuzz` is the compiler's
-      in-process entry points under SanitizerCoverage, a Rust API, run only by
-      `cargo xtask contained fuzz` (6.3)
-- [ ] 6.3 The contained runner — when the coordinator moves it
+- [x] 6.2 `bench`, `fuzz` ported by `r8-cut-over` slice 13 (13.5, 13.6): `nazm-fuzz` with `toolchain/harness/tests/fuzz_self.nz` and
+      `nazm-bench` with `toolchain/harness/tests/bench_self.nz`, run only under `nzx contained` (decision 22 stands)
+- [x] 6.3 The contained runner moved: `toolchain/harness/nzx` and `nzx contained` (`r8-cut-over` 13.3, 2026-11-01)
