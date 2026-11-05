@@ -247,6 +247,7 @@
 
 ## 18. Slice 18 — the cut-over
 - [ ] 18.1 The release path builds and archives the Nazm-built binaries (`rewrite-in-nazm` 10.1)
+      NOT TICKED: partly done (2026-11-05, design S18). Built: `scripts/release-archive.sh`, `scripts/verify-selfbuild.sh`, the `fixpoint.txt` record in both self-build scripts, `sign-release.sh` verifying first, Windows exe names in `ut_libexec`; `toolchain/selfbuild/tests/release-archive.sh` prints ok (good archive, reproducible, SHA256SUMS, tamper, 10 refusals; synthetic stubs, no Nazm program run). DRY RUN, aarch64, clean tree at 7be036c7: `host-selfbuild.sh aarch64 ~/nazm-hostsb-s18` passed (stages 1-3 byte-identical, 57 corpus agree, 68 interpreter agree, largest peak 1619 MiB, log ~/nazm-hostsb-s18.log), then `release-archive.sh aarch64-apple-darwin` wrote ~/nazm-s18-out/nazm-aarch64-apple-darwin.tar.gz (sha256 4e8387f4...9924, 4 shipped files from stage3, twice-identical bytes) and `verify-selfbuild.sh ARCHIVE OUT` printed `ok ... 4 shipped files ... same bytes as the self-build`. NOT run: the x86_64-apple-darwin and Windows archives (a fresh x86_64 self-build and a Windows build from this commit's macOS stage 3 are needed; the Windows branch of `release-archive.sh` is untested), running the shipped `nazm` from the archive, `sign-release.sh` (holder's step), the version in the source is still 0.10.0 (10.3).
 
 ## 19. Slice 19 — the seed frozen
 - [ ] 19.1 A gate on the seed's paths; `docs/internal/bootstrap.md`'s chain
