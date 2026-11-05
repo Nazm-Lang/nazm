@@ -32,7 +32,7 @@
       (`toolchain/lib/stage.sh`, `stage-run.sh`; the scripts that run programs in parallel, built
       without a limit, or as a campaign refuse to start uncontained; host smoke: a built program
       through `stage-run.sh` and the port's `check` under a 2 GiB limit; the suites themselves
-      unexecuted here)
+      unexecuted here; the full release gate (10.3) re-runs build.sh in llvm, cached, report-cached, lib, summary and timings modes and with BUILD_ARGS=1, and a difference reopens this box)
 
 ## 3. Slice 3 — R6 gap 2
 - [x] 3.1 `callee_at` (`call`, `call_indirect`, `call_trait`) and a payload binding's `at` in
@@ -48,9 +48,12 @@
       see *Slice 4 — the evidence* in `design.md`)
 - [x] 4.3 `selfbuild.sh` builds through the stage's `nazm build` instead of its glue —
       `cargo xtask contained selfbuild` passed 2026-10-20 (`design.md`, *Slice 4 — the evidence*)
-- [ ] 4.4 Left by 4.2: the runtime's units through the object store (clang's `-###` probe, R3's
-      keys) and the user cache for shared units; `build --help` and clap's usage errors; Rust's
-      exact refusal texts for the targets it names
+- [x] 4.4 Closed by slice 6 (`6.1`, `design.md` *Slice 6*): the runtime's and the standard modules' units through the
+      object store and the user cache under R3's keys (the `clang -###` probe, `bd_*` in `build.nz`), `build --help`
+      and clap's usage errors (`buildcli.nz`, `tests/args/build.txt`, `BUILD_ARGS=1`: 158 agree, 0 differ), Rust's
+      refusal texts where it refuses; the 16 refused inputs are the Linux/WASM/iOS/board targets the cut-over removes
+      (R8 cut-over decisions), where the Rust build goes on to build. Evidence is 6.1's run; not re-run in this
+      checkout (a heavy host workload was not allowed while the 14.1 run owned the machine): unexecuted here; re-run by the full release gate (10.3), and a difference reopens this box
 
 ## 5. Slice 5 — the LLVM path
 - [x] 5.1 LIR → LLVM IR text (`toolchain/pipeline/{llvm,lldebug,llpost}.nz`, `--layout soa` in `ops.nz`), byte for
@@ -67,8 +70,11 @@
       identical (`nazm`, `pl`, `cg` of stage 0 equal stage 1's: Nazm's text is the Rust build's), 9 programs
       per stage identical, 66 corpus programs run as the seed's, the interpreter and `nazm-check` agree;
       the default (`backend=nazm`) self-build passes again
-- [ ] 5.4 Left: the LLVM objects through the object store and the ThinLTO cache (derived data),
-      `--build-report`, `--summary-json`, `--timings`, `--lib`; the released set's backend is slice 15's
+- [x] 5.4 Closed by slice 6 (`6.1`, `design.md` *Slice 6*): the LLVM objects through the object store (project store, user
+      cache for shared units), the ThinLTO cache (`STORE/lto`, `-Wl,-cache_path_lto`), `--build-report` (`reused` and
+      `stored` agree: mode `report-cached`), `--summary-json`, `--timings`, `--lib` (`lib`, `lib-shared`, `lib-objects`):
+      6.1's comparison 4585 agree, 0 differ. Only the relink cache (`link/`, derived data, no output differs) is not
+      carried. The released set's backend is slice 15's. Not re-run in this checkout: unexecuted here; re-run by the full release gate (10.3), and a difference reopens this box
 
 ## 6. Slice 6 — the rest of `build`
 - [x] 6.1 `build` group 3; `nazm runtime build` and `verify`
@@ -246,11 +252,13 @@
       `--backend nazm`, `nazm test`, a Windows-native self-build, hardening/signing (W4)
 
 ## 18. Slice 18 — the cut-over
-- [ ] 18.1 The release path builds and archives the Nazm-built binaries (`rewrite-in-nazm` 10.1)
+- [x] 18.1a The release path built and dry-run for aarch64 (2026-11-05, design S18; the detail is under 18.1b): `release-archive.sh`, `verify-selfbuild.sh`, `fixpoint.txt` in both self-build scripts; contained selfhost (119 s) and bootstrap (82 s) pass after the change; `release-archive.sh aarch64-apple-darwin` twice, identical bytes, `verify-selfbuild.sh` ok
+- [ ] 18.1b The archives of all three targets (aarch64 and x86_64 macOS, Windows x86_64) from the self-builds of the final release commit, run last because `fixpoint.txt` records a digest that any later commit invalidates; the Windows archive's lack of a Windows-native fixpoint stays a stated shortfall. When: the 0.11.0 release gate (`rewrite-in-nazm` 10.3)
+      NOT TICKED: partly done (2026-11-05, design S18). Built: `scripts/release-archive.sh`, `scripts/verify-selfbuild.sh`, the `fixpoint.txt` record in both self-build scripts, `sign-release.sh` verifying first, Windows exe names in `ut_libexec`; `toolchain/selfbuild/tests/release-archive.sh` prints ok (good archive, reproducible, SHA256SUMS, tamper, 10 refusals; synthetic stubs, no Nazm program run). DRY RUN, aarch64, clean tree at 7be036c7: `host-selfbuild.sh aarch64 ~/nazm-hostsb-s18` passed (stages 1-3 byte-identical, 57 corpus agree, 68 interpreter agree, largest peak 1619 MiB, log ~/nazm-hostsb-s18.log), then `release-archive.sh aarch64-apple-darwin` wrote ~/nazm-s18-out/nazm-aarch64-apple-darwin.tar.gz (sha256 4e8387f4...9924, 4 shipped files from stage3, twice-identical bytes) and `verify-selfbuild.sh ARCHIVE OUT` printed `ok ... 4 shipped files ... same bytes as the self-build`. NOT run: the x86_64-apple-darwin and Windows archives (a fresh x86_64 self-build and a Windows build from this commit's macOS stage 3 are needed; the Windows branch of `release-archive.sh` is untested), running the shipped `nazm` from the archive, `sign-release.sh` (holder's step), the version in the source is still 0.10.0 (10.3).
 
 ## 19. Slice 19 — the seed frozen
-- [ ] 19.1 A gate on the seed's paths; `docs/internal/bootstrap.md`'s chain
+- [x] 19.1 A gate on the seed's paths; `docs/internal/bootstrap.md`'s chain (2026-11-05, design S19.1: `cargo xtask check` prints `ok    seed freeze` on the tree; `cargo test -p xtask --bin xtask seed::` 3 passed, among them a seed edit refused, an edit outside the seed accepted, a recorded exemption accepted, a malformed one refused; `cargo test -p xtask` 171 + integration passed, clippy `-D warnings` clean; `bootstrap.md` section 0 is the real chain. Not mechanised: holder-only edits of `seed-freeze.txt`, stated)
 
 ## 20. Slice 20 — the authorities (`rewrite-in-nazm` 10.2)
-- [ ] 20.1 `docs/internal/architecture.md`, `bootstrap.md`, `capability-matrix.md`, `support.md`,
+- [x] 20.1 (2026-11-05, design S20.1: factual additions only, no terms, no status and no new verification claimed; `docs/user/support.md` and `licensing.md` are the published pages; `cargo xtask check` all ok, `cargo test -p nazm-cli --test docs` passed, `docsdata.nz` regenerated) `docs/internal/architecture.md`, `bootstrap.md`, `capability-matrix.md`, `support.md`,
       `licensing.md`, `runbook.md`
