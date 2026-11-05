@@ -1832,3 +1832,38 @@ A Windows `nazm.exe` finds `nazm-pipeline.exe`/`nzcg.exe` in `libexec\nazm` besi
 Signing and publishing (Sigstore, tag, upload, Homebrew bump) are not done. Whether the x86_64 macOS and Windows
 archives are produced on this Mac at the release gate (10.3) from fresh self-builds of the release commit is
 proposed, not decided here. The Windows archive's lack of a Windows-native fixpoint is a stated shortfall.
+
+## Slices 19 and 20 — the seed frozen, the authorities (2026-11-05)
+
+### S19.1 The seed gate (as built)
+`cargo xtask check` gains *seed freeze* (`xtask/src/seed.rs`). **Seed paths** are read, not listed: the closure of
+`nazm-cli`'s normal and build dependencies under `crates/` (18 crates: `nazm-cache`, `-cir`, `-cli`, `-codegen-clif`,
+`-codegen-nazm`, `-core`, `-diag`, `-docs`, `-iface`, `-lir`, `-mir`, `-package`, `-repo`, `-runtime`, `-sema`, `-service`,
+`-span`, `-syntax`) plus `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `.cargo/config.toml`. Not seed paths:
+`xtask/` (the gate lives there; it builds and tests the seed but is not in it), `fuzz/`, and the five crates outside the
+closure (`nazm-agent-bench`, `-bench`, `-formal`, `-mcp`, `-tokens`): tools and tests of the seed. A change to a crate
+added to the closure later is then caught without editing the gate.
+**The mechanism, kept minimal:** `docs/internal/seed-freeze.txt` holds `base DIGEST` (BLAKE3 over every seed file's
+path, length and hash, taken at `d7fab19b`) and one `exempt DATE | PATH | REASON | DIGEST` line per accepted change,
+each carrying the digest it produced. The gate recomputes the digest and requires the last line's value: a change with no
+exemption fails, an exemption with no change fails, a malformed line fails. **Not mechanised:** that only the copyright holder
+edits the file, and the refusal of a record edit and a seed edit in one commit; the gate sees a tree, not a commit or an
+author, so those stay review rules (stated in the file and in `bootstrap.md` section 0). Tests: the repository passes; the
+closure excludes `nazm-bench` and `xtask`; a seed edit is refused with the digest, an edit outside the seed is not, a
+recorded exemption accepts it, a malformed one is refused.
+
+### S20.1 The authorities (as built)
+Factual additions only: `bootstrap.md` section 0 (the chain, the nine programs, the scripts, the record, the gate),
+`architecture.md` (a dated note after the overview), `capability-matrix.md` (a pointer in area 33 to the self-build
+records), `docs/user/support.md` and `docs/user/licensing.md` (the Nazm-built toolchain, Linux internal until 1.0; no
+terms changed), `runbook.md` (the seed under *Toolchain*; the Windows runner marked proposed, not accepted). The task list
+names `support.md` and `licensing.md`; they are the published pages under `docs/user/`, there is no `docs/internal/` copy.
+No row's status changed and no new verification is claimed.
+
+### For the copyright holder (slices 19 and 20)
+1. The runbook amendment for running Nazm-built programs on Windows through `win-run.ps1` (S17) remains proposed, not accepted.
+2. Whether a Nazm-built archive owes `THIRD-PARTY-NOTICES.md` (it links no Rust crate); `licensing.md` says only that the archives
+   carry it until you decide.
+3. Whether `xtask/` and the five tool crates should also be frozen (the design's wording, "every crate under `crates/`",
+   was narrowed to the build closure of the seed). One line in `seed.rs` widens it.
+4. `support.md`'s header still says the 0.10.0 preview is released for `aarch64-apple-darwin` only, true until the release gate.
