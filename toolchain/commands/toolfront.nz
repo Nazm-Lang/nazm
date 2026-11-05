@@ -73,7 +73,10 @@ pub fn tf_front(io: IoCap, file: Str, inputs: Strs, texts: Strs, st: Ints, diagn
         strs_push(texts, read_file(p))
     }
     let n = dg_len(d)
-    if n > 0 {
+    // Warnings alone are no refusal: the reference's loads for these commands go on past them and print none.
+    let mut errors = false
+    for i in 0..n { if strs_get(d.severity, i) != "warning" { errors = true } }
+    if errors {
         if diagnose {
             for i in 0..n { strs_push(out, dg_render(d, i, names, sources, bases)) }
             // `emit` writes the diagnostics and no count: these commands do not add one.

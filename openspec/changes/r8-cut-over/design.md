@@ -1866,3 +1866,10 @@ No row's status changed and no new verification is claimed.
 3. Whether `xtask/` and the five tool crates should also be frozen (the design's wording, "every crate under `crates/`",
    was narrowed to the build closure of the seed). One line in `seed.rs` widens it.
 4. `support.md`'s header still says the 0.10.0 preview is released for `aarch64-apple-darwin` only, true until the release gate.
+
+## Slice 13.8 / 11.1 follow-up (b13, 2026-11-05; code done, contained evidence NOT yet gathered)
+
+**11.1.** Fixed in the Nazm toolchain (verified by interpreting the sources with the seed, output byte for byte with the reference; not yet by the contained gates):
+`lir`/`ops`/`tables` of `ffi_v2-012` refuse a C symbol defined twice (`N0383`, `toolchain/pipeline/foreign.nz`, status 3 rendered like `N0357`; also export vs import across modules); `explain-flow` of `flow_v3-015` carries the "exported to C, which may call it with anything" step (`compiler/sema.nz`, `tr_param`); `contract --upgrade-check` no longer fails on a contract whose check has only warnings (`toolfront.nz`: the reference prints none and exits 0), which also closes `patterns-001`'s message. Not closed, deliberately: `check --cache-report` without `--no-cache` (the check cache is not carried, R5), `[registry]`/registry dependencies/dependency `features`/`default` (registry solver, N90). Open: `nazm build` of two exports of one symbol goes through the checker/pipeline `build` mode, where the new check is not wired (status 3 text vs `--json`); to verify with the Nazm-built `nazm`.
+
+**13.8.** Of 237 non-seed catalogue entries, 99 mapped before; 104 are `selfhost` whole-test killers of `compiler/*.nz` (stay the seed's: no Nazm port, decided by the full tier), 10 are `http`/`tls` (unported files), 9 macOS-only `nazm_backend` tests (not runnable in the container). Ported `service_ops.rs` whole (5 tests) and `a_for_over_file_lines...`: 15 more entries now map (114). Gaps: the comparison over at least 20 mapped entries and `--verify-killer` of the new mappings need a contained slot; not run.

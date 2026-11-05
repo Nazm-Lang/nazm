@@ -78,6 +78,7 @@ use "rtext.nz"
 use "mir.nz"
 use "cost.nz"
 use "expand.nz"
+use "foreign.nz"
 use "bounds.nz"
 use "vectorize.nz"
 use "llvm.nz"
@@ -268,6 +269,12 @@ fn pipeline_main(io: IoCap, v: VouchCap) -> Int ! { io } {
         return 0
     }
     if mode == "lir" || mode == "ops" || mode == "tables" {
+        // The lowering's refusal of a C symbol defined twice (`N0383`): rendered, on standard error and status 3.
+        let conflicts = foreign_conflicts(p, spans_of(c, p))
+        if strs_len(conflicts) > 0 {
+            for e in conflicts { eprint(e) }
+            return 3
+        }
         let printed = if mode == "ops" { lir_ops(c, tt, p) } else if mode == "tables" { lir_document(c, tt, p, target, strs_new()) } else {
             match lir_texts(c, tt, p) {
                 Ok(ts) => lir_document(c, tt, p, target, ts),

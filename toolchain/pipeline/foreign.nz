@@ -1,0 +1,96 @@
+// Two definitions or declarations of one C symbol (`N0383`): `crates/nazm-lir/src/lower.rs`'s `report_foreign_conflicts`, over MIR.
+//
+// An export's symbol is defined by Nazm: once in the program, and never one the program also imports from C. Two foreign
+// declarations of one symbol must agree about its signature (the linker binds them to one definition without comparing them).
+// `nazm lir` lowers the program, so it is its refusal; `mir` and the checks do not make it.
+
+use "mir.nz"
+use "text.nz"
+use "lir.nz"
+use "expand.nz"
+use "@std/hashmap"
+use "@std/text"
+
+/// A diagnostic as `Diagnostic::render` writes one with a primary span (`FILE:START..END`), one secondary label in the same file or
+/// another, and a help line.
+fn render_two(ms: MirSpans, code: Str, msg: Str, at: Str, other: Str, other_msg: Str, help: Str) -> Str ! {} {
+    let lc = span_pos(ms, at)
+    let file = span_file_of(at)
+    let text = match hashmap_get(ms.sources, file) { Some(t) => t, None => "" }
+    let path = match hashmap_get(ms.paths, file) { Some(t) => t, None => file }
+    let rest = str_slice(at, str_len(file) + 1, str_len(at))
+    let dots = match text_find(rest, "..") { Some(i) => i, None => str_len(rest) }
+    let start = match text_parse_int(str_slice(rest, 0, dots)) { Ok(v) => v, Err(_) => 0 }
+    let end = if dots < str_len(rest) { match text_parse_int(str_slice(rest, dots + 2, str_len(rest))) { Ok(v) => v, Err(_) => start } } else { start }
+    let line = if ints_len(lc) == 2 { ints_get(lc, 0) } else { 1 }
+    let col = if ints_len(lc) == 2 { ints_get(lc, 1) } else { 1 }
+    let mut from = start
+    while from > 0 && str_byte(text, from - 1) != 10 { from -= 1 }
+    let mut to = start
+    while to < str_len(text) && str_byte(text, to) != 10 { to += 1 }
+    let shown = str_slice(text, from, to)
+    // The caret spans the offending text, clamped to the line (width in bytes, the room left in characters).
+    let mut width = end - start
+    if width < 1 { width = 1 }
+    let mut room = 0
+    for i in start..to { let b = str_byte(text, i); if b < 128 || b >= 192 { room += 1 } }
+    if room < 1 { room = 1 }
+    if width > room { width = room }
+    let gutter = int_to_str(line)
+    let pad = spaces_of(str_len(gutter))
+    let nl = str_from_byte(10)
+    let carets = strs_new()
+    for i in 0..width { strs_push(carets, "^") }
+    let olc = span_pos(ms, other)
+    let ofile = span_file_of(other)
+    let opath = match hashmap_get(ms.paths, ofile) { Some(t) => t, None => ofile }
+    let ol = if ints_len(olc) == 2 { int_to_str(ints_get(olc, 0)) + ":" + int_to_str(ints_get(olc, 1)) } else { "1:1" }
+    let there = if ofile == file { ol } else { opath + ":" + ol }
+    "error[" + code + "]: " + msg + nl + "  --> " + path + ":" + int_to_str(line) + ":" + int_to_str(col) + nl
+        + pad + " |" + nl + gutter + " | " + shown + nl + pad + " | " + spaces_of(col - 1) + str_join(carets, "") + " " + msg + nl
+        + pad + " = at " + there + ": " + other_msg + nl + pad + " = help: " + help + nl
+}
+
+/// The rendered `N0383` diagnostics of the program, in the order the reference makes them: the exports first, then the declarations.
+pub fn foreign_conflicts(p: MirProgram, ms: MirSpans) -> Strs ! {} {
+    let out = strs_new()
+    let defined: HashMap[Str, Int] = hashmap_new()
+    let n = vec_len(p.fns)
+    for i in 0..n {
+        let f = vec_get(p.fns, i)
+        if f.export == "" { continue }
+        let sym = f.export
+        let mut imported = 0 - 1
+        for j in 0..n {
+            if imported < 0 && vec_get(p.fns, j).foreign == sym { imported = j }
+        }
+        let first = match hashmap_get(defined, sym) { Some(k) => k, None => imported }
+        if first >= 0 {
+            strs_push(out, render_two(ms, "N0383", "the C symbol `" + sym + "` is exported here and defined or declared elsewhere", strs_get(ms.fn_ats, i), strs_get(ms.fn_ats, first), "also here", "a C symbol has one definition in a program"))
+            continue
+        }
+        hashmap_set(defined, sym, i)
+    }
+    let seen: HashMap[Str, Int] = hashmap_new()
+    for i in 0..n {
+        let f = vec_get(p.fns, i)
+        if f.foreign == "" { continue }
+        let sym = f.foreign
+        match hashmap_get(seen, sym) {
+            None => { hashmap_set(seen, sym, i) },
+            Some(k) => {
+                let first = vec_get(p.fns, k)
+                let a = params_of(first)
+                let b = params_of(f)
+                let mut same = first.ret == f.ret && strs_len(a) == strs_len(b)
+                if same {
+                    for x in 0..strs_len(a) { if strs_get(a, x) != strs_get(b, x) { same = false } }
+                }
+                if !same {
+                    strs_push(out, render_two(ms, "N0383", "the C symbol `" + sym + "` is declared here with a signature another declaration of it does not have", strs_get(ms.fn_ats, i), strs_get(ms.fn_ats, k), "declared differently here", "a C function has one signature; declare it once, or declare it the same way everywhere"))
+                }
+            },
+        }
+    }
+    out
+}
