@@ -148,7 +148,6 @@ fn check_with(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os:
         strs_set(f.refusal, 0, pk_root_why(root));
         return f;
     }
-    if how == 2 { return give_up(f, "the loader stops at a `nazm.root` marker"); }
     let source_root = pk_root_path(root);
     strs_set(f.sroot, 0, pk_normalise(source_root));
     // A package's compilation (N46): the package and its dependencies, resolved.
