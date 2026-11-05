@@ -1529,6 +1529,22 @@ pub fn bd_build(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, v: Vouch
     let runtime = bd_plan(plan, "runtime")
     let one_thread = strs_get(bd_plan(plan, "one-thread"), 0) == "yes"
     let tls = strs_get(bd_plan(plan, "tls"), 0) == "yes"
+    // A program reaching TLS for a target the runtime has no engine for (the pipeline left the `tls` unit out,
+    // `emit_tls`): refused before anything is linked, `N0830`, as the seed's lowering refuses it (`tls::no_binding`).
+    if tls {
+        let mut engine = false
+        for i in 0..strs_len(runtime) { if strs_get(runtime, i) == "tls" { engine = true } }
+        if !engine {
+            bd_remove(io, work)
+            let why = "TLS has no binding for `" + target + "`"
+            let text = read_file(o.file)
+            let mut end = 0
+            while end < str_len(text) && str_byte(text, end) != 10 { end += 1 }
+            bd_fail(io, o, "error[N0830]: " + why + nl() + "  --> " + o.file + ":1:1" + nl() + "  |" + nl() + "1 | " + str_slice(text, 0, end) + nl()
+                    + "  | ^ " + why + nl() + "  = help: TLS is a runtime part with a binding per target: OpenSSL 3 on macOS (with the Security framework's trust) and on Linux. "
+                    + "On WebAssembly the host terminates TLS; a board has none" + nl() + "nazm: 1 error", 1)
+        }
+    }
     let foreign = bd_plan(plan, "foreign")
     let cached = bd_plan(plan, "cached")
     // A runtime artifact (N82) is checked against this compiler, the target and everything the program reached before any
