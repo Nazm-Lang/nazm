@@ -74,7 +74,7 @@
       — 2026-10-15 (D4): records too (`Point(1, 2)`), bare unit variants (`Dot`), `N0636`, epoch 79
 - [x] 6.6 `use std.json` without quotes or `@`; `List[Int]` taught for `Ints`/`Strs` (the old names
       keep working)
-      — 2026-10-15 (D7): `use std.json`, epoch 81 (dc2e0974); `List[T]` is `Vec[T]`, R1a's sequence
+      — 2026-10-15 (D7): `use std.json`, epoch 81 (f70f318f); `List[T]` is `Vec[T]`, R1a's sequence
       `Chain[T]` with `chain_*`, `N0637` for a `list_` built-in, epoch 83
 - [x] 6.7 Printing in your own program: its functions may print without being passed `out: OutCap`;
       a library or package function still needs it passed, and files, the network and processes stay
@@ -94,21 +94,21 @@
       hardened-runtime signing on macOS — 2026-10-15 (D15): `build/release.rs`, architecture
       §7.117, `tests/release_build.rs` (a test per property), four mutants; macOS and the LLVM
       backend only, the rest refused by name
-- [ ] 7.2 Every release archive signed (minisign or Sigstore) and checked reproducible in CI — 2026-10-15:
-      Sigstore chosen; `scripts/sign-release.sh` and `scripts/verify-release.sh` written (D16); the
-      first real signature is at 1.0. 2026-10-16: the reproducibility check is in CI —
-      `scripts/reproducible-check.sh` builds `nazm` twice in two target directories (paths
-      remapped), packages each, and compares the bytes; `host-archive.sh` writes a deterministic
-      archive (sorted entries, `SOURCE_DATE_EPOCH`, owner 0, no gzip name or time); the `reproducible`
-      job runs it on each push to main; on this Mac (aarch64-apple-darwin) both builds and archives
-      were the same bytes; a test, two mutants. Open: the signature itself, the copyright holder's at 1.0
-
+- [x] 7.2a Release archives reproducible, checked in CI: `scripts/reproducible-check.sh` builds `nazm` twice in two target
+      directories and compares the archives (`scripts/host-archive.sh`: deterministic), run by the `reproducible` job of
+      `.github/workflows/ci.yml` on each push to main (2026-10-16); signing scripts written (`scripts/sign-release.sh`,
+      `scripts/verify-release.sh`; Sigstore chosen 2026-10-15, D16)
+- [ ] 7.2b The first real signature of a release archive: the copyright holder's, at 1.0 (tagging and publishing stay his). Does not block 0.11.0
 ## 8. Faster verification (the copyright holder's choices, 2026-10-14)
-- [ ] 8.1 A faster linker (mold or lld) for the contained image's Rust builds; measured against the
-      current image on the build, suite and mutation cells of `docs/internal/performance-log.md`
+- [ ] 8.1 A faster linker (mold or lld) for the contained image's Rust builds, measured against the current image on the build,
+      suite and mutation cells of `docs/internal/performance-log.md`. Not started: `docker/contained.Dockerfile` names neither.
+      Does not block 0.11.0 (build speed); when: after 0.11.0 before 1.0
 - [x] 8.2 An eight-CPU profile calibrated like P4T4: approved by the copyright holder, and adopted only
       where it stays inside a memory ceiling the calibration justifies (P6 crossed 4 GiB, 2026-09)
-- [ ] 8.3 Mutants scheduled by crate, leaf crates together, so consecutive mutants rebuild less
-- [ ] 8.4 The baseline suite a contained mutate session runs before its suite tier is kept across
-      `--resume`, so a mutant its killers miss costs one suite run, not a whole session per resume
-      (the R1 close lesson: such a mutant used up a 50-minute session and repeated on each resume)
+- [x] 8.3a Mutants scheduled by the package that owns the mutated file, then by killer target (`bucket_order`, `xtask/src/mutate.rs`, a5177059)
+- [ ] 8.3b Leaf crates together, so consecutive mutants rebuild less: not evidenced (the grouping is by owning package, not by
+      dependency depth). Does not block 0.11.0; when: after 0.11.0 before 1.0
+- [ ] 8.4 The baseline suite a contained mutate session runs before its suite tier is kept across `--resume`, so a mutant its
+      killers miss costs one suite run, not a whole session per resume. `baseline_suite` still runs in each session
+      (`xtask/src/mutate.rs`, 848 and 972); whether a resume skips it was not verified. Does not block 0.11.0; when: after
+      0.11.0 before 1.0
