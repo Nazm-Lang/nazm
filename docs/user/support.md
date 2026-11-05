@@ -41,12 +41,20 @@ No cell says just "supported".
 | `aarch64-linux-android` | run-verified on a Linux kernel | unsupported | static Bionic executables, linked by the NDK r27c's `clang` for API level 30, run on an aarch64 Linux kernel in a Debian container; no Android device or emulator (Gate 3) | not exercised |
 | `aarch64-apple-ios` | compile-only | unsupported | linked against Xcode 27's iOS SDK, an archive and a program; never run — no simulator runtime is installed (Gate 3) | not exercised |
 
+**The Nazm-built toolchain (R8, 2026-11-05).** For `aarch64-apple-darwin`, `x86_64-apple-darwin` and
+`x86_64-pc-windows-gnu` the toolchain 0.11.0 ships is built by Nazm; the Rust implementation is the seed that
+builds its first stage and is not shipped. The self-builds that record this ran on a macOS host (both
+architectures, the second under Rosetta 2) and, for the Windows executables, on a Windows 10 host (build 10.0.18362)
+through a bounded runner; the evidence and its limits (no Windows-native self-build, no `--backend nazm` or
+`nazm test` there) are in `openspec/changes/r8-cut-over/tasks.md` 16 and 17. The 0.11.0 archives are made at its
+release gate; until then the released preview is the one above.
+
 **Linux triples inside the Nazm toolchain are internal.** The pipeline written in Nazm accepts the
 Linux triples so that the contained self-build (`cargo xtask contained selfbuild`, Linux aarch64 in
 the container) can run; that is an implementation detail of that build, decided 2026-10-20
 (`openspec/changes/r6-host-qualification`), and **no user-facing support claim**. The rows above
 are the whole claim: no Linux target is supported *by the Nazm-written toolchain*, and
-`x86_64-unknown-linux-gnu` stays compile-only.
+`x86_64-unknown-linux-gnu` stays compile-only. The Linux triples are not among the 0.11.0 release targets and come back for 1.0.
 
 Cranelift's two `unsupported` reasons: its object writer has no format for a target without an
 operating system, and this Cranelift is built without a WebAssembly backend.
