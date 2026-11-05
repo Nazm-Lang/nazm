@@ -230,8 +230,20 @@
 - [x] 16.5 The runbook amendment (S16.5) applied with 16.3's evidence (2026-11-05: `docs/internal/runbook.md`, after *What may run on the host*, with the 16.3 and 16.4 evidence)
 
 ## 17. Slice 17 — Windows x86_64
-- [ ] 17.1 The released set built by Nazm for `x86_64-pc-windows-gnu`; the host-safe suite on the
-      Windows host (`windows-toolchain` W3 3.1, 3.2)
+- [x] 17.1 The released set built by Nazm for `x86_64-pc-windows-gnu`; the host-safe suite on the
+      Windows host (`windows-toolchain` W3 3.1, 3.2) — done 2026-11-05 with the shortfall stated in
+      `design.md`, *Slice 17 — as built*: `toolchain/selfbuild/windows-selfbuild.sh win-dell ~/nazm-winsb-2`
+      exit 0 (log `~/nazm-winsb-2.log`): the nine of `programs.txt` built for `x86_64-pc-windows-gnu` by
+      `~/nazm-hostsb-aarch64-2/stage3/nazm` through `host-run` (`--objects`, MinGW-w64 gcc), twice, 9 of 9
+      identical; on the Dell (Windows 10.0.18362.1256) only through `win-run.ps1` (job-object ceiling,
+      probes 4 of 4 held): 434 + 75 steps, no refusal, withdrawal or anomaly; 508 answers against the
+      same nine built for the Mac: 414 identical, 93 equal after normalising paths and `.exe` (84 builds,
+      9 Core IR documents), 0 differ, 1 refused by decision (`httpd` build, N0830); the 256 MiB heap probe
+      stopped with N0406 on Windows; largest peak commit 920.7 MiB. Needed two fixes found by the runs:
+      Windows paths (S17.5, `6a1a4aff`) and the TLS refusal (S17.7, `49926579`). The suite is design
+      S17.4's (every released program exercised), not `workspace-tests --host-safe` (it tests the seed)
+      nor `contract.sh` (contained-only); W3 3.1 is served by LLVM (llvm-mingw) on Windows; not run there:
+      `--backend nazm`, `nazm test`, a Windows-native self-build, hardening/signing (W4)
 
 ## 18. Slice 18 — the cut-over
 - [ ] 18.1 The release path builds and archives the Nazm-built binaries (`rewrite-in-nazm` 10.1)

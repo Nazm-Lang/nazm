@@ -211,6 +211,10 @@ pub fn ut_kind(io: IoCap, path: Str) -> Int {
     if k == 0 { 0 } else if k == 1 { 1 } else { 2 }
 }
 
+// A path separator, as `Path` reads one on this host (R8 slice 17, design S17.5): `/`, and on
+// Windows (`os_family()` 2) `\` too.
+pub fn ut_is_sep(b: Int) -> Bool { b == 47 || (b == 92 && os_family() == 2) }
+
 // `Path::join` with a relative component.
 pub fn ut_join(base: Str, name: Str) -> Str {
     if str_len(base) == 0 { return name }
@@ -222,9 +226,9 @@ pub fn ut_join(base: Str, name: Str) -> Str {
 // them: trailing slashes do not count. "" for no file name (`..`, `/`, empty).
 pub fn ut_file_name(path: Str) -> Str {
     let mut end = str_len(path)
-    while end > 0 && str_byte(path, end - 1) == 47 { end -= 1 }
+    while end > 0 && ut_is_sep(str_byte(path, end - 1)) { end -= 1 }
     let mut from = end
-    while from > 0 && str_byte(path, from - 1) != 47 { from -= 1 }
+    while from > 0 && !ut_is_sep(str_byte(path, from - 1)) { from -= 1 }
     let name = str_slice(path, from, end)
     if name == ".." || name == "." { "" } else { name }
 }
@@ -259,7 +263,7 @@ pub fn ut_with_extension(path: Str, ext: Str) -> Str {
     let name = ut_file_name(path)
     if name == "" { return path }
     let mut end = str_len(path)
-    while end > 0 && str_byte(path, end - 1) == 47 { end -= 1 }
+    while end > 0 && ut_is_sep(str_byte(path, end - 1)) { end -= 1 }
     let d = dot_at(name)
     let cut = if d < 0 { end } else { end - (str_len(name) - d) }
     str_slice(path, 0, cut) + "." + ext
@@ -306,7 +310,7 @@ pub fn ut_find(s: Str, p: Str, from: Int) -> Int {
 // The directory part of a path (`Path::parent`), "" where there is none.
 pub fn ut_parent(path: Str) -> Str {
     let mut at = 0 - 1
-    for i in 0..str_len(path) { if str_byte(path, i) == 47 { at = i } }
+    for i in 0..str_len(path) { if ut_is_sep(str_byte(path, i)) { at = i } }
     if at < 0 { "" } else { str_slice(path, 0, at) }
 }
 
