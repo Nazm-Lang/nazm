@@ -182,7 +182,11 @@ fn the_runner_is_admitted_only_with_a_counted_heap_of_at_most_256_mib(io: IoCap,
     expect(runner_outcome(h, image("1048576", true)), "ok")?;
     // Built without a heap limit: no counted heap, no message.
     expect(runner_outcome(h, "just a program"), "runner-unbounded")?;
-    expect(runner_outcome(h, image("268435456", false)), "runner-unbounded")?;
+    // A stripped image (the heap unit's whole message, no symbol: slice 16) is admitted at the limit and refused over it;
+    // a line that only mentions a limit is no counted heap.
+    expect(runner_outcome(h, image("268435456", false)), "ok")?;
+    expect(runner_outcome(h, image("268435457", false)), "runner-unbounded")?;
+    expect(runner_outcome(h, "the heap limit of 4194304 bytes is reached"), "runner-unbounded")?;
     expect(runner_outcome(h, image("268435457", true)), "runner-unbounded")?;
     expect(runner_outcome(h, image("2147483648", true)), "runner-unbounded")?;
     expect(runner_outcome(h, f"{image("1048576", true)}{image("2097152", true)}"), "runner-unbounded")
