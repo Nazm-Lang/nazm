@@ -57,14 +57,19 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.base_ref }}
-          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          PR: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           code=true
           platforms=true
           if [ "$EVENT" = pull_request ]; then
             files=$(git diff --name-only "origin/$BASE...HEAD" || true)
             if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qv '^openspec/'; then code=false; fi
-            case ",$LABELS," in *,ci-all-platforms,*) ;; *) platforms=false ;; esac
+            # The labels as they are now, from the API: the event's own copy is stale when a label is
+            # added just after the pull request is opened.
+            labels=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '[.labels[].name] | join(",")' || true)
+            echo "labels: $labels"
+            case ",$labels," in *,ci-all-platforms,*) ;; *) platforms=false ;; esac
           fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
           echo "platforms=$platforms" >> "$GITHUB_OUTPUT"
