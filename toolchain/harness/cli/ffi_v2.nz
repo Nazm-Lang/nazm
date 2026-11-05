@@ -129,9 +129,12 @@ fn an_export_symbol_is_defined_once_in_a_program(io: IoCap, p: ProcessCap, sp: S
     let h = caps(io, p, sp, v, t);
     let d = prog_dir(h, "prog.nz", "pub extern \"C\" fn f(x: Int) -> Int ! {} = \"nz_same\" { x }\npub extern \"C\" fn g(x: Int) -> Int ! {} = \"nz_same\" { x + 1 }\nfn main() -> Int { f(1) + g(1) }\n")?;
     let o = nazm(h, d, words("build --json prog.nz -o prog"));
+    // `lir` lowers the program as `build` does: the same refusal (R8 11.1), in text.
+    let l = nazm(h, d, words("lir prog.nz"));
     scratch_remove(h, d);
     check_that(o.code != 0, ran_show(o))?;
-    check_that(codes_in(o) == "N0383", o.stderr)
+    check_that(codes_in(o) == "N0383", o.stderr)?;
+    check_that(l.code != 0 && text_contains(l.stderr, "error[N0383]: the C symbol `nz_same` is exported here and defined or declared elsewhere"), ran_show(l))
 }
 
 @test

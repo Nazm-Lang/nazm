@@ -14396,6 +14396,11 @@ fn tr_param(c: Ck, ps: Ps, pf: Pf, t: Tr, g: Int, p: Int, o: Int, depth: Int) ->
     if depth > 32 { return 0; }
     if tr_insert(t, g, 2, p) == false { return 0; }
     let pname = pv_param_name(c, g, p);
+    // A function exported to C is called with anything: the chain ends at its name.
+    if ints_get(c.fnexp, g) == 1 && o == 3 {
+        tr_step(t, ints_get(c.fnns, g), ints_get(c.fnne, g), str_concat(fn_named(c, g), " is exported to C, which may call it with anything"));
+        return 0;
+    }
     let base = ints_get(ps.ar, g);
     let mut j = 0;
     while j < ints_len(pf.ffn) {
