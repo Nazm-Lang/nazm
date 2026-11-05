@@ -54,7 +54,6 @@ fn ct_refuse(io: IoCap, why: Str) -> Int {
 // program with a `main`; a program that does not load, does not check or is warned of is left to the command, which says why.
 fn ct_enforce(io: IoCap, proc: ProcessCap, sp: SpawnCap, file: Str, profile: Str) -> Int {
     let library = os_env_get("NAZM_LIBRARY")
-    if library == "" { return 0 }
     let prefix = fe_prefix(io, file)
     let abs = prefix + file
     let f = fx_check_in(abs, "", library, fe_host_os(), fe_host_arch(), io)

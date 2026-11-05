@@ -238,6 +238,12 @@ fn pipeline_main(io: IoCap, v: VouchCap) -> Int ! { io } {
             eprint("pipeline: refused: a `main` that does not return `Int`\n")
             return 3
         }
+        // The lowering's refusal of a C symbol defined twice (`N0383`), as `lir` renders it: the build says it, not `clang`.
+        let conflicts = foreign_conflicts(p, spans_of(c, p))
+        if strs_len(conflicts) > 0 {
+            for e in conflicts { eprint(e) }
+            return 3
+        }
         let store = if strs_len(args) == 7 { strs_get(args, 5) } else { "-" }
         let generator = if strs_len(args) == 7 { strs_get(args, 6) } else { "-" }
         return build(io, v, c, tt, p, target, strs_get(args, 2), bytes_arg(strs_get(args, 3)), bytes_arg(strs_get(args, 4)), store, generator, fl)

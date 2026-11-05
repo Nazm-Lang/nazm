@@ -48,6 +48,7 @@ use "buildrt.nz"
 use "buildprov.nz"
 use "harness.nz"
 use "profile.nz"
+use "doctor.nz"
 use "runexe.nz"
 use "@std/file"
 use "@std/blake3"
@@ -788,6 +789,10 @@ fn bd_front(io: IoCap, proc: ProcessCap, sp: SpawnCap, o: Opts, packages: Packag
     let files = strs_new()
     for m in 0..fx_modules(f) { strs_push(files, fx_module_name(f, m)) }
     bd_clobbers(io, o, abs, files, output)
+    // A shared library names itself to the linker as `-Wl,…,NAME`, which splits at every comma (Q1-A1-06).
+    if o.lib && o.shared && ut_contains(ut_file_name(output), ",") {
+        bd_end(io, o, "refused", true, "nazm: a shared library's file name may not contain a comma (" + output + "): the linker would read what follows it as another argument", 1)
+    }
     let warnings = ints_new()
     let errors = ints_new()
     let mut unsupported = false
@@ -836,6 +841,17 @@ fn bd_front(io: IoCap, proc: ProcessCap, sp: SpawnCap, o: Opts, packages: Packag
 // document are this function's, and go when it returns.
 fn bd_started(io: IoCap, proc: ProcessCap, sp: SpawnCap, o: Opts, packages: Packages, target: Str, output: Str) -> Strs {
     let fr = bd_front(io, proc, sp, o, packages, target, output)
+    // A device register exists only on a board (`machine_only_call`, N0392): a hosted build refuses the built-in that reaches one.
+    let reg = bd_machine_only(fr.doc)
+    if reg != "" {
+        eprint(bd_synthetic("N0392", "a build for `" + target + "` cannot perform the built-in `" + reg + "`: it has no device registers", "device registers exist only in a board's build: `nazm build --target aarch64-unknown-none` or `--target riscv64gc-unknown-none-elf`", o.json))
+        if o.summary {
+            let codes = strs_new()
+            strs_push(codes, "N0392")
+            bd_summary_extra(io, o, "rejected", 1, true, "null", true, codes)
+        }
+        bd_fail(io, o, "nazm: 1 error", 1)
+    }
     let work = bd_workdir(io, o, output)
     if write_file(work + "/core.json", fr.doc) < 0 {
         bd_remove(io, work)
@@ -848,6 +864,28 @@ fn bd_started(io: IoCap, proc: ProcessCap, sp: SpawnCap, o: Opts, packages: Pack
     strs_push(out, int_to_str(fr.modules))
     strs_push(out, fr.how)
     out
+}
+
+// The first device-register built-in the Core IR document `doc` calls (`""` for none): a built-in call is written `"builtin": "NAME"` (spaces or not),
+// which no string constant can spell (its quotes are escaped).
+fn bd_machine_only(doc: Str) -> Str {
+    let pat = "\"builtin\":"
+    let mut from = 0
+    while true {
+        let at = ut_find(doc, pat, from)
+        if at < 0 { return "" }
+        let mut start = at + str_len(pat)
+        while start < str_len(doc) && (str_byte(doc, start) == 32 || str_byte(doc, start) == 10) { start += 1 }
+        from = start
+        if start < str_len(doc) && str_byte(doc, start) == 34 {
+            let end = ut_find(doc, "\"", start + 1)
+            if end < 0 { return "" }
+            let name = str_slice(doc, start + 1, end)
+            if ut_starts(name, "mmio_") || name == "watchdog_feed" { return name }
+            from = end
+        }
+    }
+    ""
 }
 
 // `same_file`: canonical paths when both exist, else the paths as written.
@@ -1050,7 +1088,8 @@ fn bd_toolchain_failure(said: Str) -> Bool {
 fn bd_report_clang(io: IoCap, o: Opts, r: Ran, kept: Str, work: Str, keep: Bool) -> Int {
     if !r.started {
         bd_remove(io, work)
-        bd_fail(io, o, "nazm: `clang` was not found on PATH, and `nazm build` needs it to assemble the LLVM IR it generates.", 4)
+        bd_fail(io, o, "nazm: `clang` was not found on PATH, and `nazm build` needs it to assemble the LLVM IR it generates." + nl()
+                + "nazm: " + advice(fe_host_os()) + " `nazm doctor` says what else is missing; `nazm run --interpret` needs none of this.", 4)
     }
     if !keep { bd_remove(io, work) }
     eprint(r.err)
@@ -1540,6 +1579,25 @@ pub fn bd_build(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, v: Vouch
         }
         eprint(str_join(shown, ""))
         bd_fail(io, o, "nazm: " + int_to_str(n) + " construct" + ut_plural(n) + " outside `nazm build`'s subset. Nothing was written; `nazm run --interpret` still executes this program.", 1)
+    }
+    // A C symbol defined or declared twice (`N0383`): the lowering's refusal, rendered by the pipeline.
+    if pr.started && pr.status == 3 && ut_starts(pr.err, "error[N0383]: ") {
+        bd_remove(io, work)
+        let mut n = 0
+        let shown = strs_new()
+        for line in text_split(pr.err, nl()) {
+            if ut_starts(line, "error[N0383]: ") {
+                n += 1
+                if o.json { strs_push(shown, bd_synthetic("N0383", str_slice(line, 14, str_len(line)), "a C symbol has one definition in a program", true)) }
+            }
+        }
+        if o.summary {
+            let codes = strs_new()
+            for q in 0..n { strs_push(codes, "N0383") }
+            bd_summary_extra(io, o, "rejected", 1, true, "null", true, codes)
+        }
+        eprint(if o.json { str_join(shown, "") } else { pr.err })
+        bd_fail(io, o, "nazm: " + int_to_str(n) + " error" + ut_plural(n), 1)
     }
     if !pr.started || pr.status != 0 {
         bd_remove(io, work)

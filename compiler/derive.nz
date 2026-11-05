@@ -290,7 +290,7 @@ fn dv_a6(a: Str, b: Str, c: Str, d: Str, e: Str, f: Str) -> Strs {
 // --- `@codec` (`type_codec`, `field_codec`, `recase`, `empty_value`) ----------------------------
 
 // A type's `@codec`: `rename_all` ("" for none), `tag` ("" for none, with `has_tag`), and the words.
-fn dv_codec_pair(t: Tree, attrs: Ints, key: Str) -> Str {
+pub fn dv_codec_pair(t: Tree, attrs: Ints, key: Str) -> Str {
     let mut found = "";
     let mut i = 0;
     while i < ints_len(attrs) {
@@ -326,7 +326,7 @@ fn dv_codec_word(t: Tree, attrs: Ints, word: Str) -> Bool {
     false
 }
 // A pair's value without its marker `=`; "" for none.
-fn dv_val(p: Str) -> Str {
+pub fn dv_val(p: Str) -> Str {
     if p == "" { return ""; }
     str_slice(p, 1, str_len(p))
 }
@@ -699,7 +699,7 @@ fn dv_binds(t: Tree, fields: Ints) -> Str {
 }
 
 // A variant's name in the document (`variant_key`).
-fn dv_variant_key(t: Tree, attrs: Ints, name: Str, rename_all: Str) -> Str {
+pub fn dv_variant_key(t: Tree, attrs: Ints, name: Str, rename_all: Str) -> Str {
     let rename = dv_codec_pair(t, attrs, "rename");
     if rename != "" { return dv_val(rename); }
     if rename_all != "" { return dv_recase(name, dv_val(rename_all)); }
