@@ -140,8 +140,12 @@ not a workload of the contained runner and never runs beside one.
 
 *Windows x86_64 (R8 slice 17, 2026-11-05):* the nine programs are built for `x86_64-pc-windows-gnu` on the Mac,
 one `host-run` at a time, and the Windows executables are run on a Windows host by a bounded runner, one at a time.
-Running Nazm-built programs on Windows by that runner is **proposed, not accepted**: this document does not
-amend the rule for it (`openspec/changes/r8-cut-over/design.md`, *For the copyright holder*).
+Running Nazm-built programs on Windows by that runner is **accepted** (copyright holder, 2026-11-05): the
+runner is `toolchain/selfbuild/win-run.ps1`, and it is the only way a Nazm-built program is started on the Windows
+host. It applies this rule's own conditions where Windows allows it, with a real ceiling from outside (a job
+object: memory per process and per job, 64 processes, every descendant killed, a deadline per step); its design
+is `openspec/changes/r8-cut-over/design.md`, S17.3, and the slice 17 runs under it (508 answers, no refusal,
+withdrawal or anomaly) are the evidence.
 
 ### What the runner must enforce
 
