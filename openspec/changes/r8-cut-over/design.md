@@ -1699,8 +1699,8 @@ driver's `fe_prefix` (`toolchain/commands/front.nz`) treat only `/` as the root,
 `os_realpath` answers `C:\Users\...`. The seed's Rust `Path` reads both forms.
 
 **Fix (detail-level, decided here).** A path is absolute on a Windows host also when it begins with
-a drive's root, `X:/` (or `X:\`): `pk_drive` answers the length of that prefix where `os_family()`
-is 2 (Windows) and 0 everywhere else, `pk_absolute` is `/` or a drive, and the functions above use
+a drive's root, `X:/` (or `X:\`): `pk_drive` answers the length of that prefix by the path's shape alone
+(amended 2026-11-05: the Nazm checker has no `os_family`, so the contained selfhost gate refused the first form; see the decisions log), `pk_absolute` is `/` or a drive, and the functions above use
 them (the drive's root is the root: `pk_parent("C:/x")` is `C:/`, `pk_parent("C:/")` is empty, and
 `..` never climbs above it). `fe_canonical`'s answer has every `\` made `/` on Windows
 (`fe_host_path`), so a canonical path is `C:/Users/...`, which Windows opens as it is. On macOS and
