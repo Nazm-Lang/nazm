@@ -687,3 +687,82 @@ fn main() {
     let once = calls(r2.stdout, "text_split");
     check_that(in_loops + 1 == once, "no list is built")
 }
+
+/// How many times the Core IR calls `@std/file`'s function `name`.
+fn file_calls(ir: Str, name: Str) -> Int ! {} {
+    count_matches(ir, f"\"callee\": \"@std/file::fn {name}\"")
+}
+
+/// `n` copies of the text `s`.
+fn repeated(s: Str, n: Int) -> Str ! {} {
+    let parts = strs_new();
+    let mut i = 0;
+    while i < n {
+        strs_push(parts, s);
+        i += 1;
+    }
+    str_join(parts, "")
+}
+
+@test
+fn a_for_over_file_lines_reads_a_chunk_at_a_time_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // R1.5, 3.5: `for line in file_lines(io, path)` is lowered through `@std/file`'s reader,
+    // which reads 64 KiB at a time and builds no list; its lines are `text_lines(read_file(path))`'s
+    // - a carriage return cut at a chunk's edge, a line longer than a chunk, empty lines, a last
+    // line without a newline - `break` and `continue` are the list's, and every reader is closed.
+    let h = caps(io, p, sp, v, t);
+    let mut input = repeated("x", 65535) + "\r\n";
+    let mut i = 0;
+    while i < 3000 {
+        input = input + f"line {i}" + (if i % 3 == 0 { "\r\n" } else { "\n" });
+        if i % 7 == 0 {
+            input = input + "\n";
+        }
+        i += 1;
+    }
+    input = input + "skip\nstop\n";
+    input = input + repeated("y", 200000);
+    input = input + "\nend";
+    let mut count = 0;
+    let mut total = 0;
+    for piece in text_split(input, "\n") {
+        let l = if text_ends_with(piece, "\r") { str_slice(piece, 0, str_len(piece) - 1) } else { piece };
+        count += 1;
+        total += str_len(l);
+    }
+    let src = r#"use "@std/file"
+
+fn main(io: IoCap) {
+    let mut n = 0
+    let mut total = 0
+    for line in file_lines(io, "in.txt") {
+        if line == "skip" { continue }
+        n += 1
+        total += line.len()
+    }
+    let all = text_lines(read_file("in.txt"))
+    let mut sum = 0
+    for l in all { sum += l.len() }
+    println(f"{n} {total} {all.len()} {sum}")
+    let mut seen = 0
+    for line in file_lines(io, "in.txt") {
+        if line == "stop" { break }
+        seen += 1
+    }
+    println(f"{seen} {file_lines(io, "in.txt").len()}")
+}
+"#;
+    let expected = f"{count - 1} {total - 4} {count} {total}\n{count - 3} {count}\n0";
+    let names = strs_new();
+    strs_push(names, "prog.nz");
+    strs_push(names, "in.txt");
+    let texts = strs_new();
+    strs_push(texts, src);
+    strs_push(texts, input);
+    agrees_on(h, names, texts, expected, 0)?;
+    let r = on_p(h, src, "core-ir p.nz")?;
+    check_that(r.code == 0, ran_show(r))?;
+    check_that(file_calls(r.stdout, "file_lines_close") == 2, "each loop closes its reader")?;
+    // `file_lines` itself is called once, for the list: the loops build none.
+    check_that(file_calls(r.stdout, "file_lines") == 1, "only the list is built")
+}

@@ -259,13 +259,50 @@ fn bk_bound(c: Cir, f: Int, stmts: Int, k: Int) -> Str {
     if by <= 0 || !steps_right { return "the counter does not step towards its limit" }
     if bk_continues(c, body, id) { return "a `continue` to the loop skips the counter's step" }
     let lim = ints_get(limit, 1)
-    // Beyond 62 bits the span does not fit one word: not computed here.
-    let big = 4611686018427387904
-    if start > big || start < 0 - big || lim > big || lim < 0 - big { return "unsupported: a bound beyond 62 bits" }
-    let span = if ascending { lim - start } else { start - lim }
     let inclusive = o == "<=" || o == ">="
-    let turns = if span < 0 || (span == 0 && !inclusive) { 0 } else if inclusive { span / by + 1 } else { (span + by - 1) / by }
-    bk_ok(turns)
+    // The span is computed as the reference does, in 128 bits: it can be as wide as 2^64 - 1, so it
+    // is never formed as one `Int` where the two ends straddle zero.
+    let x = if ascending { lim } else { start }
+    let y = if ascending { start } else { lim }
+    if x < y || (x == y && !inclusive) { return bk_ok_text("0") }
+    if x >= 0 && y < 0 { return bk_straddle(x, 0 - (y + 1), by, inclusive) }
+    let sp = x - y
+    let q = sp / by
+    let extra = if inclusive { 1 } else if sp % by > 0 { 1 } else { 0 }
+    bk_ok(q + extra)
+}
+
+/// `ok N` for `N` the unsigned sum `p + q` of two non-negative `Int`s, which may be 2^63 or more.
+fn bk_sum_ok(p: Int, q: Int) -> Str {
+    let max = 9223372036854775807
+    if p <= max - q { return bk_ok(p + q) }
+    let tens = p / 10 + q / 10 + (p % 10 + q % 10) / 10
+    "ok " + int_to_str(tens) + int_to_str((p % 10 + q % 10) % 10)
+}
+
+fn bk_ok_text(n: Str) -> Str { "ok " + n }
+
+/// The turns of a span `a + b + 1` (both non-negative `Int`s: the part from 0 up and the part from the start up to -1)
+/// stepped by `by`: `floor(span / by)` plus one where the span is inclusive or not a multiple of `by`.
+fn bk_straddle(a: Int, b: Int, by: Int, inclusive: Bool) -> Str {
+    let qa = a / by
+    let qb = b / by
+    let rb1 = b % by + 1
+    let ra = a % by
+    let mut carry = 0
+    let mut rem = 0
+    if ra > 9223372036854775807 - rb1 {
+        carry = 1
+        rem = ra - (by - rb1)
+    } else {
+        carry = (ra + rb1) / by
+        rem = (ra + rb1) % by
+    }
+    let extra = if inclusive { 1 } else if rem > 0 { 1 } else { 0 }
+    // qa + qb + carry + extra: the carry and the extra are at most 1 each and are folded into the smaller part.
+    let small = carry + extra
+    if qa == 9223372036854775807 && qb == 9223372036854775807 && small == 2 { return "ok 18446744073709551616" }
+    if qa <= 9223372036854775807 - small { bk_sum_ok(qa + small, qb) } else { bk_sum_ok(qa, qb + small) }
 }
 
 fn bk_block(c: Cir, f: Int, fname: Str, b: Int, out: Strs) -> Int {
