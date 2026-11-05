@@ -113,6 +113,9 @@ still to write, and the list says which.
 **D13. Scope before 1.0: macOS.** The copyright holder narrowed every target to macOS before 1.0
 (2026-10-15): `aarch64-apple-darwin`, and `x86_64-apple-darwin` run under Rosetta. The ELF writer
 and `tests/elf.sh` stay as built and are not extended; Linux is after 1.0.
+*Update 2026-11-05:* the copyright holder put R9 6.3 back in scope for 0.11.0; the differential suite ran on
+`aarch64-unknown-linux-gnu` in Docker (129 agree, tasks 6.3); `x86_64-unknown-linux-gnu` and every other Linux
+item stay after the cut-over (6.3b).
 
 **D14. The failure convention: LLVM's, by target.** On the hosted targets the LLVM backend
 unwinds on a failure (performance-leadership 4.2, `docs/internal/architecture.md` §7.115). Until 7.5 this

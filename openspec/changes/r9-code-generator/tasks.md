@@ -56,9 +56,17 @@
 - [x] 6.2 The x86-64 encoder and System V convention; Mach-O and ELF
       (`NZCG_TARGET=x86_64-apple-darwin tests/run.sh` runs under Rosetta: 106 agree, 0 differ,
       0 refused)
-- [ ] 6.3 The ELF objects linked and run on a Linux host — **deferred until after 1.0**: the
-      copyright holder narrowed every target to macOS before 1.0 (2026-10-15). The ELF writer and
-      `tests/elf.sh` stay as built; no further work on ELF or Linux until then
+- [x] 6.3 The ELF objects linked and run on a Linux host — done 2026-11-05 for `aarch64-unknown-linux-gnu`
+      (the copyright holder put R9 6.3 back in scope for 0.11.0, 2026-11-05): `cargo xtask contained elfrun`
+      (`toolchain/codegen/tests/run.sh` in the contained runner: the seed `nazm` builds each program as the
+      reference, `--objects` and `lir --ops`; the Nazm generator writes the unit objects; they are linked with
+      `cc` and run beside the reference's executable) gave **129 agree, 0 differ, 0 refused, 0 skipped**, 53.6 s,
+      on the Linux kernel of the Docker Desktop VM (aarch64, native, not emulated; 1 CPU, 4 GiB, no network).
+      The first run of this workload skipped all 129 (`build --objects` writes `NAME.nazm` into the current
+      directory, which the contained runner mounts read-only; `run.sh` now builds from the work directory).
+      Not run: `x86_64-unknown-linux-gnu` (6.3b)
+- [ ] 6.3b The same on `x86_64-unknown-linux-gnu`: needs an amd64 contained image (`--platform amd64`,
+      emulated on this Mac), none built; not claimed
 
 ## 7. On main after R1.5, 3.3 and failures by unwinding (macOS only: aarch64-apple-darwin, x86_64-apple-darwin under Rosetta)
 
