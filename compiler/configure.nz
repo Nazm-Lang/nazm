@@ -763,8 +763,11 @@ fn codec_members(c: Cf, decl: Int, is_enum: Bool) -> Int {
     if is_enum == false && (codec_says(c, attrs, "tag", true) || codec_says(c, attrs, "untagged", false)) && a >= 0 {
         refuse(c, field(c, a, "span"), "`tag` and `untagged` shape an enum", "a record is an object already");
     }
+    let rename_all = dv_val(dv_codec_pair(c.t, attrs, "rename_all"));
+    let tag = dv_val(dv_codec_pair(c.t, attrs, "tag"));
     if is_enum {
         let variants = items(c, decl, "variants");
+        let variant_keys = strs_new();
         let mut i = 0;
         while i < ints_len(variants) {
             let v = ints_get(variants, i);
@@ -779,16 +782,27 @@ fn codec_members(c: Cf, decl: Int, is_enum: Bool) -> Int {
                 }
                 k = k + 1;
             }
-            codec_fields(c, items(c, v, "fields"));
+            // Names collide only in an encoding (`variant_key`).
+            if derived {
+                let key = dv_variant_key(c.t, vattrs, text_of(c, v, "name"), if rename_all == "" { "" } else { str_concat("=", rename_all) });
+                if strs_index(variant_keys, key) >= 0 {
+                    refuse(c, field(c, decl, "name_span"), cf_cat3("two variants of `", name, cf_cat3("` are both named `", key, "`")), "rename one of them");
+                }
+                strs_push(variant_keys, key);
+            }
+            codec_fields(c, items(c, v, "fields"), derived, "", tag);
             i = i + 1;
         }
     } else {
-        codec_fields(c, items(c, decl, "fields"));
+        codec_fields(c, items(c, decl, "fields"), derived, rename_all, "");
     }
     0
 }
 
-fn codec_fields(c: Cf, fields: Ints) -> Int {
+// A field list's `@codec`s held to what the field allows, and (for a derived type) its members' names distinct from one
+// another and from the tag; `rename_all` is the record's, "" for a payload's fields.
+fn codec_fields(c: Cf, fields: Ints, derived: Bool, rename_all: Str, tag: Str) -> Int {
+    let keys = strs_new();
     let mut i = 0;
     while i < ints_len(fields) {
         let f = ints_get(fields, i);
@@ -813,6 +827,13 @@ fn codec_fields(c: Cf, fields: Ints) -> Int {
             refuse(c, field(c, ty, "span"), cf_cat3("`default` gives a missing `", fname, "` its type's empty value, and this type has none"),
                     "a number, `Bool`, `Str`, `Option`, `Vec` (`List`) or `Chain` has one");
         }
+        let rename = dv_val(dv_codec_pair(c.t, fattrs, "rename"));
+        let mut key = fname;
+        if rename != "" { key = rename; } else { if rename_all != "" { key = dv_recase(fname, rename_all); } }
+        if derived && (strs_index(keys, key) >= 0 || (tag != "" && tag == key)) {
+            refuse(c, field(c, f, "name_span"), cf_cat3("`", key, "` names two members of one object"), "rename one of them");
+        }
+        strs_push(keys, key);
         i = i + 1;
     }
     0
