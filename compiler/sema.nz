@@ -6422,6 +6422,13 @@ fn check_var_named(c: Ck, name: Str, span: Int, expected: Int) -> Int {
     }
     let callee = callee_of(c, name);
     if callee != 0 - 1 { return function_value(c, name, callee, span, expected); }
+    // `alias::name` as a value: a function the module imported under `alias` exports (N50, L8).
+    let mut sep = 0;
+    while sep + 1 < str_len(name) && str_slice(name, sep, sep + 2) != "::" { sep = sep + 1; }
+    if sep + 1 < str_len(name) {
+        let q = qualified_callee(c, str_slice(name, 0, sep), str_slice(name, sep + 2, str_len(name)));
+        if q != 0 - 1 { return function_value(c, name, q, span, expected); }
+    }
     if starts_upper(name) && ints_len(variant_owners(c, name)) > 0 {
         let t = check_construction(c, name, span, 0 - 1, no_inits(), span, expected);
         if t < 0 { return or_int(expected); }
