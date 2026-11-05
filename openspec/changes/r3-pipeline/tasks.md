@@ -116,7 +116,7 @@
 - [x] 8.1 Failures by unwinding (performance-leadership 4.2): `rtext.nz` regenerated — runtime
       ABI 34, `nz.exc` among the one-thread globals; LIR's text and digests unchanged, and no LIR
       validator here to take the reference's new rule (design.md). `run.sh` against the reference
-      built at `ce24bcd0`: MIR 1453 of 1453, LIR tables and ops 1007 of 1007 (document, digests
+      built at `468bf446`: MIR 1453 of 1453, LIR tables and ops 1007 of 1007 (document, digests
       and `--debug` included), runtime units 982 of 982, object cache 982 of 982 inputs (4546
       units), the runtime digest equal, 39924 of 39924 mutants caught
 - [x] 8.2 Every target (`rewrite-in-nazm` 4.2), narrowed by the copyright holder's decision to
@@ -128,30 +128,30 @@
       (the probe is the host's); an x86_64 `fib` built by the reference runs under Rosetta. The
       host run is unchanged (8.1's numbers)
 - [x] 8.4 Plain reference counts in a program of one thread (performance-leadership,
-      `501b9538`): `rtgen.nz`'s `plain_reference_counts` over the runtime unit under `single`,
+      `8f38cb15`): `rtgen.nz`'s `plain_reference_counts` over the runtime unit under `single`,
       `PLAIN_IN_ONE_THREAD` as `rt_plain_in_one_thread()` from `runtime_text.py`. `run.sh`
-      against the reference built at `501b9538`: MIR 1469 of 1469, LIR tables, ops and
+      against the reference built at `8f38cb15`: MIR 1469 of 1469, LIR tables, ops and
       `--debug` 1009 of 1009, runtime units 984 of 984 (25 refused by `nazm build`; 485 compared
       files carry the plain counts), object cache 984 of 984 inputs (4559 units), the runtime
       digest equal, 56362 of 56362 mutants caught
-- [x] 8.5 One pool worker per processor (`09289a54`, runtime ABI 35) and `realpath` into the
-      runtime's own buffer (`12fbaf75`): `rtext.nz` regenerated; `rtgen.nz`'s `posix_cpus`
+- [x] 8.5 One pool worker per processor (`07f12749`, runtime ABI 35) and `realpath` into the
+      runtime's own buffer (`78c8b8b1`): `rtext.nz` regenerated; `rtgen.nz`'s `posix_cpus`
       writes each POSIX stack unit's `nz.os_cpus` by `sysconf`'s name (58 Darwin, 84 glibc and
       musl, 0x61 Bionic). LIR's text unchanged. `run.sh` against the reference built at
-      `c02d12e5`: MIR 1475 of 1475, LIR tables, ops (document and digests) and `--debug` 1014 of
+      `1b98cae4`: MIR 1475 of 1475, LIR tables, ops (document and digests) and `--debug` 1014 of
       1014, runtime units 989 of 989 (25 refused by `nazm build`), object cache 989 of 989 inputs
       (4599 units), the runtime digest equal, 58739 of 58739 mutants caught
-- [x] 8.6 M1's microcontroller boards (`f1570703`, runtime ABI 36): `rtext.nz` regenerated — ABI
+- [x] 8.6 M1's microcontroller boards (`8b799ece`, runtime ABI 36): `rtext.nz` regenerated — ABI
       36 and `board.rs`'s new texts (`THUMBV8M_FLOAT_RUNTIME`, `RISCV32_RUNTIME`). The boards stay
       deferred (8.3): their units, `_start`, flash linker script, `init` and `[image]` are not
       ported, and `thumbv8m.main-none-eabihf` and `riscv32imc-unknown-none-elf` are refused by name
       as the other boards are; MIR and LIR are unchanged on macOS (`board_init` is set only by a
-      board's build). `run.sh` against the reference built at `f1570703`, on the host and with
+      board's build). `run.sh` against the reference built at `8b799ece`, on the host and with
       `TARGET=x86_64-apple-darwin`: MIR 1475 of 1475, LIR tables, ops (document and digests) and
       `--debug` 1014 of 1014, runtime units 989 of 989 (25 refused by `nazm build`), object cache
       989 of 989 inputs (4599 units; host only), the runtime digest equal, 58739 of 58739 mutants
       caught
-- [x] 8.7 TLS (v1 track C1, `98e271e0`, runtime ABI 37; C1b's `SCHANNEL`, `91f3da0a`, generated
+- [x] 8.7 TLS (v1 track C1, `22ce371d`, runtime ABI 37; C1b's `SCHANNEL`, `cb18b73f`, generated
       but not yet bound): `runtime_text.py` reads `tls.rs` (`TLS_RUNTIME`, and the engine
       `OPENSSL` with `SECTRUST` or `OPENSSL_TRUST`), `rtext.nz` and `runtime.nz` regenerated (the
       eleven `nz.os_tls_*` imports, part `Tls`); `rtgen.nz`'s `Needs` gains `tls`, the runtime
@@ -164,7 +164,7 @@
       and the `tls` unit included (all eleven built-ins lowered); with
       `TARGET=x86_64-apple-darwin` MIR and LIR agree, `nazm build` refuses them at the link (no
       x86_64 OpenSSL here), and the units it kept agree with `pipeline runtime`'s. `run.sh`
-      against the reference built at `dfda47ac`, on the host and with
+      against the reference built at `77311ae7`, on the host and with
       `TARGET=x86_64-apple-darwin`: MIR 1476 of 1476, LIR tables, ops (document and digests) and
       `--debug` 1015 of 1015, runtime units 990 of 990 on the host (25 refused by `nazm build`)
       and 989 of 989 for x86_64 (26 refused), object cache 990 of 990 inputs (4610 units; host
@@ -175,7 +175,7 @@
       build --emit-ir` with `--objects` writes the IR beside `-o` (`write_ir`, a test in
       `tests/cross.rs`), so `run.sh` compares a target this host cannot link; `probe.sh` probes
       for `TARGET`, so the object cache is compared for every target. `run.sh` against the
-      reference at `e27b861c` (runtime ABI 39, epoch 90): for Windows MIR 1535 of 1535, LIR
+      reference at `303736b4` (runtime ABI 39, epoch 90): for Windows MIR 1535 of 1535, LIR
       tables, ops (document and digests) and `--debug` 1065 of 1065, runtime units 1045 of 1045
       (20 refused by `nazm build`), object cache 1045 of 1045 inputs (6981 units); on the host
       1039 of 1039 runtime units (26 refused) and 1039 inputs (5925 units); for x86_64 macOS 1037
@@ -185,7 +185,7 @@
       under the key computed here on each of the three targets. Run on a Windows 10 host: 13
       programs (`examples/*.nz`, `examples/tour/*.nz`) linked with this pipeline's runtime units
       in place of the reference's print and exit as natively built ones do
-- [x] 8.9 R1.5's small-block heap (`0b7f8749`) wrote `nz.seq_new`'s import as `[],Some(...)`,
+- [x] 8.9 R1.5's small-block heap (`c6ef7fe4`) wrote `nz.seq_new`'s import as `[],Some(...)`,
       which `runtime_table.py`'s pattern skipped, so `runtime.nz` lost it and a program that
       makes a sequence (`examples/worker-pool.nz`) stopped at `ops`; the pattern takes any
       spacing and the script now asserts it read every import (179)
