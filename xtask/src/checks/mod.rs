@@ -23,7 +23,7 @@ use crate::checks::reach::{
     check_tokenizer_reach, check_unsafe_policy,
 };
 use crate::checks::runtime_parity::check_runtime_parity;
-use crate::{claims, governance, guide, supply};
+use crate::{claims, governance, guide, seed, supply};
 
 pub(crate) fn run_checks() -> ExitCode {
     report(&[
@@ -51,6 +51,7 @@ pub(crate) fn run_checks() -> ExitCode {
         ("dependency sources", supply::check(&guide::root())),
         ("third-party notices", crate::notices::check(&guide::root())),
         ("module boundaries", check_module_boundaries(&guide::root())),
+        ("seed freeze", seed::check(&guide::root())),
     ])
 }
 

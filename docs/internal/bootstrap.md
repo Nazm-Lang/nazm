@@ -7,6 +7,62 @@ to two files that each answered half.
 
 ---
 
+## 0. The chain after the cut-over — R8, 2026-11-05
+
+*This section is the current chain. Sections 1 to 6 below are the earlier bootstrap of the compiler
+written in Nazm (`compiler/`), kept as the record of what that chain established; they are not the
+release path.*
+
+**The Rust implementation (`crates/`) is frozen as the seed.** It is stage 0: it is never shipped, and
+it changes only by a recorded exemption (*The seed gate* below). Everything a release ships is built by
+Nazm.
+
+```
+seed (Rust nazm, LLVM backend, --release)
+  └─ stage 0 builds nazm, pl, cg               (the builder: `nazm build`, the pipeline, the code generator)
+       └─ stage 1: the stage-0 builder builds the nine programs of toolchain/selfbuild/programs.txt
+            └─ stage 2: the stage-1 builder builds the nine
+                 └─ stage 3: the stage-2 builder builds the nine      stage 1 = stage 2 = stage 3, byte for byte
+```
+
+**The nine programs** (`toolchain/selfbuild/programs.txt`, read by both self-build scripts): `nazm`
+(`toolchain/commands/nazm.nz`), `pl` (pipeline), `cg` (code generator), `fe` (`compiler/diagnose.nz`),
+`mcp`, `mutate`, `jtool`, `interp`, `check`. A release ships four of them (`nazm`, `mcp`, `pl`, `cg`: `bin/nazm`,
+`bin/nazm-mcp`, `libexec/nazm/nazm-pipeline`, `libexec/nazm/nzcg`); the other five are built and compared by the
+self-build and are the harness's and front end's own programs.
+
+| Step | What it is | Where it runs |
+| --- | --- | --- |
+| `toolchain/selfbuild/host-selfbuild.sh aarch64\|x86_64 OUT` | seed, then stages 1 to 3, every Nazm-built step one `host-run` (2 GiB counted heap at most, one at a time); x86_64 under Rosetta. Writes `OUT/fixpoint.txt` last, only when every check passed | macOS host (`runbook.md`, *The macOS self-build*) |
+| the comparisons inside it | the fixpoint whole; Core IR of the last stage's front end against the seed's, nine documents; the corpus built by the last stage and by the seed and run both ways (programs with no counted heap are counted apart, not run on the host); the interpreter built by the chain against the seed's `run --interpret`; `nazm-check` byte for byte; the 256 MiB heap probe, which stops with N0406 | same |
+| `toolchain/selfbuild/selfbuild.sh` | the same chain on Linux aarch64; **internal**, contained only (`cargo xtask contained selfbuild`); no Linux target is released at the cut-over | the contained container |
+| `toolchain/selfbuild/windows-selfbuild.sh HOST OUT` | a passed macOS stage 3 builds the nine for `x86_64-pc-windows-gnu` twice (the two builds compared) and for the Mac (the reference); the Windows programs run on the Windows host only through `win-run.ps1`; writes its own `fixpoint.txt` naming its builder. There is **no Windows-native fixpoint**: Windows programs are built by the macOS stage 3 | macOS builds, a Windows host runs |
+| `scripts/release-archive.sh TRIPLE RECORD_DIR OUTDIR` | packages the four shipped programs of a passed self-build of this commit (macOS: stage 3; Windows: the first of its two builds) as `nazm-TRIPLE.tar.gz` by `scripts/reproducible-tar.py`, with `SELFBUILD.txt`, and rewrites `SHA256SUMS`. Refuses unless the record passed for this commit, this build-input digest and a clean tree; has no code path that copies a seed binary | host |
+| `scripts/verify-selfbuild.sh ARCHIVE [OUT]` | unpacks and reads, running nothing: each shipped file is its recorded digest, the last stage, and equal to the stage before; with a reader's own `OUT` of the same commit, the same bytes as its stage 3. `scripts/sign-release.sh` runs it on every archive first | host |
+
+`fixpoint.txt` (`nazm.selfbuild-record/1`) names the commit, whether the tree was clean, the build-input digest
+(`scripts/source-digest.sh`, taken at the start and the end of the run), the seed's SHA-256, the environment's,
+one `sha256 STAGE NAME DIGEST` line per built file, and ends with `result passed`. Any later commit
+invalidates it, so the archives of a release are made last, from self-builds of the release commit.
+
+**What is recorded, and what is not.** Recorded in `openspec/changes/r8-cut-over/tasks.md` (16.3, 16.4, 17.1, 18.1a):
+aarch64 and x86_64 self-builds passed on the host with stages 1 to 3 identical; the Windows set built twice
+identically and run on a Windows host with the shortfalls stated there; a dry-run archive for
+`aarch64-apple-darwin` reproduced byte for byte and verified. **Not yet done** (18.1b, the release gate): the
+archives of all three targets from the release commit, signing, publishing. The macOS fixpoint is a claim about
+the chain on that host's SDK and clang; reproducing across machines or toolchains is not claimed
+(`environment.txt` names them). Nothing here times anything.
+
+**The seed gate.** `cargo xtask check` includes *seed freeze* (`xtask/src/seed.rs`). The seed's paths are the
+crates `nazm-cli` builds with (the closure of its normal and build dependencies under `crates/`, read from the
+manifests) and `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `.cargo/config.toml`. `xtask/`, `fuzz/` and the
+crates outside that closure are tests and tools of the seed, not the seed. `docs/internal/seed-freeze.txt` holds
+the digest of those files; a change to any of them fails the gate until the copyright holder appends
+`exempt DATE | PATH | REASON | NEW-DIGEST` to it. The gate cannot tell who edited the record; that is a review
+rule. The seed changes only to keep building the toolchain (`rewrite-in-nazm` decision 4).
+
+---
+
 ## 1. The design, and why it came first — *historical, 2026-09*
 
 *This section is the design record as written **before** the language was extended, kept
