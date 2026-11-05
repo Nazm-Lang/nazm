@@ -40,11 +40,13 @@ fn pk_starts(s: Str, p: Str) -> Bool {
     str_slice(s, 0, str_len(p)) == p
 }
 
-// A Windows host's drive prefix (R8 slice 17, design S17.5): the length of `X:/` (or `X:\`) that
-// begins `p` on Windows, where `os_family()` is 2, so `C:/Users/x` is absolute there as `/x` is on
-// macOS; 0 everywhere else, so a macOS or Linux path is read exactly as before.
+// A Windows drive prefix (R8 slice 17, design S17.5): the length of `X:/` (or `X:\`) that begins `p`, else 0.
+// By the path's shape alone, not by asking the host: the Nazm checker's table has no `os_family` (the
+// compiler's sources keep to what it carries), and a build for Windows made on another host must read
+// `C:/Users/x` as absolute in the program it builds. On macOS and Linux no real path starts so; a relative
+// directory named `c:` would be the one difference.
 pub fn pk_drive(p: Str) -> Int {
-    if os_family() != 2 || str_len(p) < 3 { return 0; }
+    if str_len(p) < 3 { return 0; }
     let c = str_byte(p, 0);
     let letter = (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
     if letter && str_byte(p, 1) == 58 && (str_byte(p, 2) == 47 || str_byte(p, 2) == 92) { return 3; }
