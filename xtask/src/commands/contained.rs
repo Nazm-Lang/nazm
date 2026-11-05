@@ -160,7 +160,8 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
                 let ok = a.ends_with(".nz")
                     && !a.starts_with('/')
                     && !a.contains("..")
-                    && a.bytes().all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b));
+                    && a.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b));
                 if !ok {
                     eprintln!("contained: elfrun takes repository-relative `.nz` paths, not {a:?}");
                     return ExitCode::FAILURE;
