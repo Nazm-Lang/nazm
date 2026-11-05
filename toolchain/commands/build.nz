@@ -483,7 +483,7 @@ fn bd_stage(io: IoCap, o: Opts, variable: Str, name: Str) -> Str {
     if dir == "" {
         bd_fail(io, o, "nazm: `nazm build` runs " + name + ": set `" + variable + "`, or `NAZM_LIBEXEC` to the directory holding it", 4)
     }
-    let p = ut_join(dir, name)
+    let p = ut_join(dir, ut_exe_name(name))
     if ut_kind(io, p) != 0 { bd_fail(io, o, "nazm: `nazm build` runs " + name + ": it is not installed at `" + p + "`", 4) }
     p
 }
