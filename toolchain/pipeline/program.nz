@@ -242,7 +242,7 @@ fn plan_instances(c: Cir) -> Vec[Inst] {
         next += 1
         // The stated bounds (`N0358`): a program needing more instances than this, or an
         // instance whose arguments nest past any written type, is refused, never planned forever.
-        if vec_len(plan) > 10000 || str_len(str_join(inst.keys, ",")) > 4096 {
+        if vec_len(plan) > 10000 || str_len(str_join(inst.keys, ",")) > 4096 || keys_nest_past(inst.keys, 64) {
             let refused: Vec[Inst] = vec_new()
             vec_push(refused, Inst(fi: 0 - 1, args: strs_new(), keys: strs_new()))
             return refused
@@ -357,6 +357,23 @@ fn thunk_of(c: Cir, target: CirFn, module: Str) -> CirFn {
     let body = json_add_object(d, bk, bv)
     CirFn(def: module + "::fn " + name, module: module, name: name, type_params: 0, params: target.params + 1,
         ret: target.ret, published: target.published, locals: locals, consts: vec_new(), body: body, foreign: "", node: 0 - 1, captures: ints_new(), export: "")
+}
+
+/// Whether any type key nests deeper than `bound` (`MAX_INSTANCE_NESTING`): a type is one level, and each `[`, `(` or `<` inside one is another.
+fn keys_nest_past(keys: Strs, bound: Int) -> Bool ! {} {
+    for k in keys {
+        let mut depth = 1
+        for i in 0..str_len(k) {
+            let b = str_byte(k, i)
+            if b == 91 || b == 40 || b == 60 {
+                depth += 1
+                if depth > bound { return true }
+            } else if b == 93 || b == 41 || (b == 62 && !(i > 0 && str_byte(k, i - 1) == 45)) {
+                depth -= 1
+            }
+        }
+    }
+    false
 }
 
 /// Lower a program's Core IR to MIR, or say why not.

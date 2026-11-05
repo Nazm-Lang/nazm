@@ -242,7 +242,7 @@ fn dsymutil_row(io: IoCap, proc: ProcessCap, sp: SpawnCap, r: Row) -> Int ! { io
     add_row(r, "dsymutil", needed, true, if str_len(line) == 0 || v.status != 0 { "found" } else { line }, false)
 }
 
-fn advice(os: Str) -> Str {
+pub fn advice(os: Str) -> Str {
     if os == "macos" {
         return "On macOS: `xcode-select --install` (Apple's command line tools give clang, the linker, ar and dsymutil), or Homebrew's `llvm` on PATH."
     }
