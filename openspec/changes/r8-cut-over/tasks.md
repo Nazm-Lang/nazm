@@ -32,7 +32,7 @@
       (`toolchain/lib/stage.sh`, `stage-run.sh`; the scripts that run programs in parallel, built
       without a limit, or as a campaign refuse to start uncontained; host smoke: a built program
       through `stage-run.sh` and the port's `check` under a 2 GiB limit; the suites themselves
-      unexecuted here)
+      unexecuted here; the full release gate (10.3) re-runs build.sh in llvm, cached, report-cached, lib, summary and timings modes and with BUILD_ARGS=1, and a difference reopens this box)
 
 ## 3. Slice 3 — R6 gap 2
 - [x] 3.1 `callee_at` (`call`, `call_indirect`, `call_trait`) and a payload binding's `at` in
@@ -48,9 +48,12 @@
       see *Slice 4 — the evidence* in `design.md`)
 - [x] 4.3 `selfbuild.sh` builds through the stage's `nazm build` instead of its glue —
       `cargo xtask contained selfbuild` passed 2026-10-20 (`design.md`, *Slice 4 — the evidence*)
-- [ ] 4.4 Left by 4.2: the runtime's units through the object store (clang's `-###` probe, R3's
-      keys) and the user cache for shared units; `build --help` and clap's usage errors; Rust's
-      exact refusal texts for the targets it names
+- [x] 4.4 Closed by slice 6 (`6.1`, `design.md` *Slice 6*): the runtime's and the standard modules' units through the
+      object store and the user cache under R3's keys (the `clang -###` probe, `bd_*` in `build.nz`), `build --help`
+      and clap's usage errors (`buildcli.nz`, `tests/args/build.txt`, `BUILD_ARGS=1`: 158 agree, 0 differ), Rust's
+      refusal texts where it refuses; the 16 refused inputs are the Linux/WASM/iOS/board targets the cut-over removes
+      (R8 cut-over decisions), where the Rust build goes on to build. Evidence is 6.1's run; not re-run in this
+      checkout (a heavy host workload was not allowed while the 14.1 run owned the machine): unexecuted here; re-run by the full release gate (10.3), and a difference reopens this box
 
 ## 5. Slice 5 — the LLVM path
 - [x] 5.1 LIR → LLVM IR text (`toolchain/pipeline/{llvm,lldebug,llpost}.nz`, `--layout soa` in `ops.nz`), byte for
@@ -67,8 +70,11 @@
       identical (`nazm`, `pl`, `cg` of stage 0 equal stage 1's: Nazm's text is the Rust build's), 9 programs
       per stage identical, 66 corpus programs run as the seed's, the interpreter and `nazm-check` agree;
       the default (`backend=nazm`) self-build passes again
-- [ ] 5.4 Left: the LLVM objects through the object store and the ThinLTO cache (derived data),
-      `--build-report`, `--summary-json`, `--timings`, `--lib`; the released set's backend is slice 15's
+- [x] 5.4 Closed by slice 6 (`6.1`, `design.md` *Slice 6*): the LLVM objects through the object store (project store, user
+      cache for shared units), the ThinLTO cache (`STORE/lto`, `-Wl,-cache_path_lto`), `--build-report` (`reused` and
+      `stored` agree: mode `report-cached`), `--summary-json`, `--timings`, `--lib` (`lib`, `lib-shared`, `lib-objects`):
+      6.1's comparison 4585 agree, 0 differ. Only the relink cache (`link/`, derived data, no output differs) is not
+      carried. The released set's backend is slice 15's. Not re-run in this checkout: unexecuted here; re-run by the full release gate (10.3), and a difference reopens this box
 
 ## 6. Slice 6 — the rest of `build`
 - [x] 6.1 `build` group 3; `nazm runtime build` and `verify`
