@@ -98,17 +98,17 @@
       directories and compares the archives (`scripts/host-archive.sh`: deterministic), run by the `reproducible` job of
       `.github/workflows/ci.yml` on each push to main (2026-10-16); signing scripts written (`scripts/sign-release.sh`,
       `scripts/verify-release.sh`; Sigstore chosen 2026-10-15, D16)
-- [ ] 7.2b The first real signature of a release archive: the copyright holder's, at 1.0 (tagging and publishing stay his). Does not block 0.11.0
+- [ ] 7.2b (planned for 1.0 (holder-only signature), split recorded 2026-11-07) The first real signature of a release archive: the copyright holder's, at 1.0 (tagging and publishing stay his). Does not block 0.11.0
 ## 8. Faster verification (the copyright holder's choices, 2026-10-14)
-- [ ] 8.1 A faster linker (mold or lld) for the contained image's Rust builds, measured against the current image on the build,
+- [ ] 8.1 (planned for 0.11.0 (needs a holder-approved quiet-window measurement; only if it does not touch compiler/ or library/), split recorded 2026-11-07) A faster linker (mold or lld) for the contained image's Rust builds, measured against the current image on the build,
       suite and mutation cells of `docs/internal/performance-log.md`. Not started: `docker/contained.Dockerfile` names neither.
       Does not block 0.11.0 (build speed); when: after 0.11.0 before 1.0
 - [x] 8.2 An eight-CPU profile calibrated like P4T4: approved by the copyright holder, and adopted only
       where it stays inside a memory ceiling the calibration justifies (P6 crossed 4 GiB, 2026-09)
 - [x] 8.3a Mutants scheduled by the package that owns the mutated file, then by killer target (`bucket_order`, `xtask/src/mutate.rs`, a5177059)
-- [ ] 8.3b Leaf crates together, so consecutive mutants rebuild less: not evidenced (the grouping is by owning package, not by
+- [ ] 8.3b (planned for 0.12.0 (measure first), split recorded 2026-11-07) Leaf crates together, so consecutive mutants rebuild less: not evidenced (the grouping is by owning package, not by
       dependency depth). Does not block 0.11.0; when: after 0.11.0 before 1.0
-- [ ] 8.4 The baseline suite a contained mutate session runs before its suite tier is kept across `--resume`, so a mutant its
+- [ ] 8.4 (planned for 0.11.0 (harness change only; not under compiler/ or library/), split recorded 2026-11-07) The baseline suite a contained mutate session runs before its suite tier is kept across `--resume`, so a mutant its
       killers miss costs one suite run, not a whole session per resume. `baseline_suite` still runs in each session
       (`xtask/src/mutate.rs`, 848 and 972); whether a resume skips it was not verified. Does not block 0.11.0; when: after
       0.11.0 before 1.0
