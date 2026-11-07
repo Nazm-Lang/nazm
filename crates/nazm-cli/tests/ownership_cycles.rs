@@ -50,6 +50,9 @@ fn every_inline_cycle_is_refused_within_a_bound() {
         // A type outside the cycle that holds one inside it (found by fuzzing): the depth walk
         // must not follow the cycle forever.
         "struct V { r: V, }\nstruct M { r: V, }\nfn main() -> Int { 0 }\n",
+        // The same through the task-safety walk: a channel of an enum that holds a type that
+        // holds itself (found by fuzzing a mutated `@std/metrics`).
+        "struct B { b: B, }\nenum M { Of(h: B), }\nfn f() -> Int { let c = chan_new_of[M](4); 0 }\nfn main() -> Int { 0 }\n",
     ] {
         refused_as_a_cycle(src);
     }
