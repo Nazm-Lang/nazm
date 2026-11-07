@@ -15,7 +15,7 @@
 - [x] 2.5 clap's usage errors and `--help` for `fmt`: the shared parser (`toolchain/commands/cli.nz`,
       design D8); a directory named as a file is `cannot read` (D4); every command line of
       `tests/args/fmt.txt` agrees (2026-10-15)
-- [ ] 2.6 Drop a statement's `;` in both formatters once the repository's sources may use the new syntax (design,
+- [ ] 2.6 (planned for 0.12.0 (reformatting touches compiler/ and library/), split recorded 2026-11-07) Drop a statement's `;` in both formatters once the repository's sources may use the new syntax (design,
       *Future work*). Still open: `library/std` and `compiler/` still end statements with `;`. Does not block
       0.11.0; when: after 0.11.0 before 1.0 (the date of the "may use" decision is not recorded)
 ## 3. `doc`
@@ -140,7 +140,7 @@
       refuses the rest; every line of `tests/args/nazm.txt` agrees (2026-10-15). Left in `cli.nz`:
       a command's own subcommands (`runtime`, `attest`, `patch`), aliases, possible values, groups,
       `requires` — each with the first command that declares it
-- [ ] 11.2 `bindgen`, `contract`, `accel`, `bench`, `profile`, `explain-cost`, `explain-flow`, `obligations`, `trace`,
+- [ ] 11.2 (planned for 0.12.0, split recorded 2026-11-07) `bindgen`, `contract`, `accel`, `bench`, `profile`, `explain-cost`, `explain-flow`, `obligations`, `trace`,
       `reload-check`, `repl`, `comptime`, `capabilities`, `doctor`. Ported and agreeing: `bindgen`, `reload-check`,
       `doctor` (design D22, 2026-10-19) and `bench`, `accel` (run included), `contract` (`r8-cut-over` 10.1, 10.2,
       slice 11). Open (`r8-cut-over` design S11.3, 2026-10-24/25): `obligations`, `explain-flow`, `explain-cost`
