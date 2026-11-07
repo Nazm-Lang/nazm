@@ -24,7 +24,7 @@
       as whole `nazm.diagnostic/1` objects, labels, help and fixes included (`syntax`;
       `compiler/diag.nz`, `compiler/diagnose.nz`)
 - [x] 2.8a The new checker (`sema.nz`) and the Core IR lowering (`core.nz`) read `syntax.nz`'s tree (D13)
-- [ ] 2.8b `parse.nz`, `analyse.nz`, `check.nz`, `emit.nz`, `module.nz` and `lex.nz` (the bootstrap chain) retired
+- [ ] 2.8b (planned for 0.12.0 (after the cut-over is published and proven), split recorded 2026-11-07) `parse.nz`, `analyse.nz`, `check.nz`, `emit.nz`, `module.nz` and `lex.nz` (the bootstrap chain) retired
       together (D13). All still exist and are read by `crates/nazm-cli/tests/selfhost.rs` (the parity record,
       `NOT_CARRIED`), `compiler/bootstrap.sh` and toolchain/harness programs; none is in the self-build's
       nine programs (`toolchain/selfbuild/programs.txt`). Does not block 0.11.0 (cleanup of code duplicated
@@ -305,7 +305,7 @@ reference's bytes), and the self-build's Core IR is 9/9 identical (`r8-cut-over`
 - [x] 4.2 The text rendering compared — `run.sh render`, every carried input (3.1zi)
 - [x] 4.3a Built-ins of group F in the new checker: `builtins.nz` is generated from the reference's table (D14); a
       call of a built-in whose signature the checker cannot shape is the one stop left (`stops-audit.md`)
-- [ ] 4.3b `selfhost.rs`'s `NOT_CARRIED` (about 90 built-ins) emptied: it guards the bootstrap checker `analyse.nz`
+- [ ] 4.3b (planned for 0.12.0 (after the cut-over is published and proven), split recorded 2026-11-07) `selfhost.rs`'s `NOT_CARRIED` (about 90 built-ins) emptied: it guards the bootstrap checker `analyse.nz`
       (see 2.8b), not `sema.nz`, and empties when that chain retires. Does not block 0.11.0; when: after 0.11.0
       before 1.0
 
