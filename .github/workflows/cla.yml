@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: >-
-          github.event.comment.body == 'I have read the Nazm Contributor Licence Agreement, version 0.1, and I agree to it.'
+          github.event.comment.body == 'I have read the Nazm Contributor Licence Agreement, version 0.2, and I agree to it.'
           || github.event.comment.body == 'recheck'
           || github.event_name == 'pull_request_target'
         uses: contributor-assistant/github-action@v2.6.1
@@ -45,7 +45,7 @@ jobs:
           branch: cla-signatures
           # The copyright holder needs no licence from himself; bots sign nothing.
           allowlist: mdferdousalam,dependabot[bot],github-actions[bot]
-          custom-pr-sign-comment: I have read the Nazm Contributor Licence Agreement, version 0.1, and I agree to it.
+          custom-pr-sign-comment: I have read the Nazm Contributor Licence Agreement, version 0.2, and I agree to it.
           custom-notsigned-prcomment: >-
             Thank you for contributing to Nazm. Before it can be merged, please read the
             [Nazm Contributor Licence Agreement](https://github.com/Nazm-Lang/nazm/blob/main/docs/internal/CLA.md)

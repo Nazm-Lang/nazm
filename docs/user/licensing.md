@@ -84,11 +84,14 @@ stays in the separate evidence bundle.
 1. **The runtime and standard library in user programs** — `Apache-2.0 WITH LLVM-exception` for the
    whole project: the compiled runtime, `libnazmrt.a`, the prelude and the standard-library modules
    impose nothing on a compiled program.
-2. **The copyright holder** — Ferdous Alam; `NOTICE` carries the line.
+2. **The copyright holder** — Ferdous Alam; `NOTICE` carries the line. Nazm's code is written by AI
+   coding agents under the copyright holder's direction, selection and review, and the holder claims
+   the copyright that results; what the law protects in such work depends on the country, and a
+   lawyer reviews the statement (`docs/internal/CLA.md`, section 8).
 
-3. **Contributor terms** — a contributor licence agreement (`docs/internal/CLA.md`): the contributor keeps
-   copyright and licenses the contribution to the copyright holder with the right to relicense it,
-   commercially included. Signed through a bot, CLA Assistant Lite (`.github/workflows/cla.yml`),
+3. **Contributor terms** — a contributor licence agreement (`docs/internal/CLA.md`): the contributor assigns
+   the copyright in the contribution to the copyright holder and keeps a licence back to use it,
+   and the holder may relicense it, commercially included. Signed through a bot, CLA Assistant Lite (`.github/workflows/cla.yml`),
    which keeps the signatures in this repository; it stays off until the repository variable
    `CLA_ENABLED` is set. The text is a draft written without legal review; it is reviewed by a
    lawyer, and the bot switched on, before the first outside contribution is accepted.
