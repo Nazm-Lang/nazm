@@ -850,9 +850,16 @@ impl UserTypes {
             return Some(0);
         };
         let mut memo: std::collections::HashMap<TypeNode, usize> = std::collections::HashMap::new();
+        // Definitions entered and not yet finished. A definition reached again while it is one
+        // is a back edge of a cycle, which the layout check reports; it adds no depth here, and
+        // without this a definition that holds a cycle (without being in it) walked it forever.
+        let mut open: std::collections::HashSet<TypeNode> = std::collections::HashSet::new();
         let mut stack: Vec<(TypeNode, bool)> = vec![(root, false)];
         while let Some((node, expanded)) = stack.pop() {
             if memo.contains_key(&node) {
+                continue;
+            }
+            if !expanded && !open.insert(node) {
                 continue;
             }
             let inner: Vec<TypeNode> = self
@@ -870,13 +877,14 @@ impl UserTypes {
                 if d > MAX_TYPE_DEPTH {
                     return None;
                 }
+                open.remove(&node);
                 memo.insert(node, d);
             } else {
                 stack.push((node, true));
                 stack.extend(
                     inner
                         .into_iter()
-                        .filter(|n| !memo.contains_key(n))
+                        .filter(|n| !memo.contains_key(n) && !open.contains(n))
                         .map(|n| (n, false)),
                 );
             }
