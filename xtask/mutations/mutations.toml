@@ -1605,12 +1605,15 @@ shared mutable storage; wrapping one twice does not make it safe, and this says 
 file = "crates/nazm-sema/src/udt.rs"
 find = """                Type::Record(_) | Type::Enum(_) => {
                     let n = names.len();
-                    path.extend(names);
                     if let Some(inner) = TypeNode::of(ty) {
                         if self.opaque(inner) {
+                            path.extend(names);
                             return Err(TaskUnsafe { path, ty });
                         }
-                        stack.push((inner, 0, n));
+                        if seen.insert(inner) {
+                            path.extend(names);
+                            stack.push((inner, 0, n));
+                        }
                     }
                 }"""
 replace = """                Type::Record(_) | Type::Enum(_) => {}"""
