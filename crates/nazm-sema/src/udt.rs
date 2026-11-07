@@ -533,6 +533,12 @@ impl UserTypes {
         // records how many components it pushed so unwinding is exact.
         let mut stack: Vec<(TypeNode, usize, usize)> = vec![(root, 0, 0)];
         let mut path: Vec<String> = Vec::new();
+        // A definition is walked once: a type that contains itself (refused elsewhere, in the
+        // same run) would otherwise grow the stack and the path until memory ran out. A node
+        // met again is either still being walked, whose other edges that frame will visit, or
+        // finished without an error, as the first error ends the walk.
+        let mut seen: std::collections::HashSet<TypeNode> = std::collections::HashSet::new();
+        seen.insert(root);
         while let Some((node, at, pushed)) = stack.pop() {
             let edges = self.contained(node);
             let Some((variant, field, ty)) = edges.get(at).copied() else {
@@ -546,12 +552,15 @@ impl UserTypes {
             match ty {
                 Type::Record(_) | Type::Enum(_) => {
                     let n = names.len();
-                    path.extend(names);
                     if let Some(inner) = TypeNode::of(ty) {
                         if self.opaque(inner) {
+                            path.extend(names);
                             return Err(TaskUnsafe { path, ty });
                         }
-                        stack.push((inner, 0, n));
+                        if seen.insert(inner) {
+                            path.extend(names);
+                            stack.push((inner, 0, n));
+                        }
                     }
                 }
                 other if !other.may_cross_into_a_task() => {
