@@ -4,3 +4,4 @@
 # appending: exempt YYYY-MM-DD | PATH | REASON | NEW-DIGEST
 frozen-at d7fab19b
 base d21b08d9df11c220cc2a9cc6f460ddeb6f66813fcd8019cdad3b153673cb0737
+exempt 2026-11-07 | crates/nazm-sema/src/udt.rs | UserTypes::depth no longer walks a cycle forever when a type outside it holds one (found by release-gate fuzzing; N0336 still reports the cycle); recorded on the copyright holder's instruction | 70157af0779f0753c7aadac604e573a6e86b941668b7a1803c03b99a96c70668

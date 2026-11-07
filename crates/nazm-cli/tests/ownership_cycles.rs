@@ -47,6 +47,9 @@ fn every_inline_cycle_is_refused_within_a_bound() {
         "struct A { b: B, }\nstruct B { a: A, }\nfn main() -> Int { 0 }\n",
         "struct A { b: B, }\nenum B { V(a: A), }\nfn main() -> Int { 0 }\n",
         "enum A { V(b: B), }\nenum B { V(a: A), }\nfn main() -> Int { 0 }\n",
+        // A type outside the cycle that holds one inside it (found by fuzzing): the depth walk
+        // must not follow the cycle forever.
+        "struct V { r: V, }\nstruct M { r: V, }\nfn main() -> Int { 0 }\n",
     ] {
         refused_as_a_cycle(src);
     }
