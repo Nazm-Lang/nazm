@@ -22,6 +22,7 @@
 use std::collections::BTreeSet;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 unsafe extern "C" {
@@ -91,13 +92,65 @@ const HANG: Duration = Duration::from_secs(2);
 /// After this many hangs a target stops: each leaves a blocked thread behind.
 const MAX_HANGS: usize = 50;
 
+/// The input a non-interpreter target is running now, and since when. The compiler stages must
+/// terminate within bounded memory on any input, so one that does not is a defect, not a hang to
+/// abandon: [`watch`] keeps it, reports it and stops the process before the container's memory
+/// limit kills the run and loses the report.
+static INFLIGHT: Mutex<Option<(Instant, String)>> = Mutex::new(None);
+const STUCK: Duration = Duration::from_secs(30);
+
+/// Memory in use against the cgroup ceiling, as a percentage, where the cgroup says (`None` on a
+/// host, where fuzzing is refused anyway).
+fn memory_percent() -> Option<u64> {
+    let read = |f: &str| std::fs::read_to_string(f).ok()?.trim().parse::<u64>().ok();
+    let max = read("/sys/fs/cgroup/memory.max")?;
+    // Anonymous memory only: the page cache counts in `memory.current` and is reclaimable.
+    let stat = std::fs::read_to_string("/sys/fs/cgroup/memory.stat").ok()?;
+    let cur = stat
+        .lines()
+        .find_map(|l| l.strip_prefix("anon ")?.trim().parse::<u64>().ok())?;
+    Some(cur.saturating_mul(100) / max.max(1))
+}
+
+/// Start the watchdog once: an input in flight longer than [`STUCK`], or memory past 90 % of the
+/// ceiling while one is in flight, is written under `OUT/hangs/`, printed whole, and the process
+/// exits 1.
+fn watch(out: &Path) {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    let out = out.to_path_buf();
+    STARTED.call_once(move || {
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(250));
+            let g = INFLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+            let Some((since, input)) = g.as_ref() else {
+                continue;
+            };
+            let slow = since.elapsed() > STUCK;
+            let big = memory_percent().is_some_and(|p| p >= 90);
+            if slow || big {
+                keep_hang(&out, input, &mut BTreeSet::new());
+                eprintln!(
+                    "stuck: an input ran {} ({} bytes); kept under hangs/; input follows\n{input}\n--- end of input",
+                    if big { "past 90 % of the memory ceiling" } else { "past 30 s" },
+                    input.len()
+                );
+                std::process::exit(1);
+            }
+        });
+    });
+}
+
 /// One execution, bounded in time for the interpreter, whose programs may block forever.
 fn exec_bounded(target: Target, input: &str) -> Ended {
     if target != Target::Run {
-        return match exec(target, input) {
+        *INFLIGHT.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some((Instant::now(), input.to_owned()));
+        let ended = match exec(target, input) {
             Ok(()) => Ended::Done,
             Err(m) => Ended::Panicked(m),
         };
+        *INFLIGHT.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        return ended;
     }
     let (tx, rx) = std::sync::mpsc::channel();
     let owned = input.to_owned();
@@ -471,6 +524,7 @@ fn main() {
     std::panic::set_hook(Box::new(|_| {}));
 
     let mut queue: Vec<String> = Vec::new();
+    watch(&out);
     let mut crashes: BTreeSet<String> = BTreeSet::new();
     let _ = std::fs::create_dir_all(out.join("crashes"));
     let record = |input: &str, message: &str, crashes: &mut BTreeSet<String>| {
