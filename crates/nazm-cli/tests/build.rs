@@ -544,6 +544,42 @@ fn a_failing_clang_is_reported_with_its_own_output() {
     );
 }
 
+/// A link-step failure of clang's environment — its own words for a missing system library — is
+/// reported as the toolchain's, not as a bug in the generated IR. A stub `clang` says it on any
+/// Unix host; the macOS test with a missing SDK checks the same through the real one.
+#[test]
+#[cfg(unix)] // the stub is an `sh` script
+fn a_link_failure_in_clangs_own_words_is_not_blamed_on_the_ir() {
+    let (dir, src) = write_program("fn main() -> Int {\n    1 + 1\n}\n");
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).expect("bin");
+    let stub = bin.join("clang");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\necho \"ld: library 'System' not found\" >&2\n\
+         echo 'clang: error: linker command failed with exit code 1' >&2\nexit 1\n",
+    )
+    .expect("stub");
+    set_executable(&stub);
+
+    let out = Command::new(NAZM)
+        .args(["build", "--no-cache", src.to_str().unwrap()])
+        .arg("-o")
+        .arg(dir.path().join(crate::common::exe_name("prog")))
+        .env("PATH", &bin)
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert_eq!(out.status.code(), Some(4), "{stderr}");
+    assert!(
+        stderr.contains("ld: library 'System' not found"),
+        "clang's own output was lost: {stderr}"
+    );
+    assert!(stderr.contains("not about the generated IR"), "{stderr}");
+    assert!(!stderr.contains("bug in `nazm build`"), "{stderr}");
+}
+
 #[test]
 fn an_existing_executable_survives_a_failed_build() {
     // The failure that costs someone a working artefact: deleting the output, then

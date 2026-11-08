@@ -13640,7 +13640,7 @@ why = "the CPU an x86_64 macOS object is compiled for is recorded as another"
 file = "crates/nazm-lir/src/backend.rs"
 find = "        llvm_cpu: \"penryn\","
 replace = "        llvm_cpu: \"x86-64\","
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_matrix::the_capability_matrix_states_exactly_what_the_compiler_does" }, { package = "nazm-cli", test = "cli_m_r", name = "platform_matrix::each_llvm_cpu_is_the_one_the_driver_resolves" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_matrix::the_capability_matrix_states_exactly_what_the_compiler_does" }]
 
 [[mutation]]
 name = "n95-the-matrix-is-not-printed"
@@ -15265,7 +15265,7 @@ why = "a link-step failure of clang's environment is reported as a bug in the ge
 file = "crates/nazm-cli/src/build/link.rs"
 find = "            if toolchain_failure(&said) {"
 replace = "            if false {"
-killers = [{ package = "nazm-cli", test = "cli_a_b", name = "build::a_toolchain_environment_failure_is_not_blamed_on_the_ir" }]
+killers = [{ package = "nazm-cli", test = "cli_a_b", name = "build::a_link_failure_in_clangs_own_words_is_not_blamed_on_the_ir" }]
 
 # --- Gate 3: the Windows port and the platform layer ----------------------------------------------
 
@@ -19724,23 +19724,23 @@ why = "`nazm build --release` writes no `sspstrong`, so no function checks a sta
 file = "crates/nazm-cli/src/build/release.rs"
 find = "                    return Some(format!(\"{before} sspstrong{after}\"));"
 replace = "                    return Some(format!(\"{before}{after}\"));"
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "release_build::a_release_executable_checks_a_stack_canary_and_the_default_one_does_not" }]
+killers = [{ package = "nazm-cli", bin = "nazm", name = "build::release::tests::every_defined_function_and_only_those_is_protected" }]
 
 [[mutation]]
 name = "r1-5-d15-a-release-build-is-not-stripped"
 why = "`nazm build --release` signs the executable without stripping it, so every function's name is left in it (D15)"
 file = "crates/nazm-cli/src/build/release.rs"
-find = "    tool(\"strip\", &[exe.as_os_str()])?;"
+find = "        (\"strip\", vec![exe.into()]),"
 replace = ""
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "release_build::a_release_executable_has_no_symbols_or_debug_information_left" }]
+killers = [{ package = "nazm-cli", bin = "nazm", name = "build::release::tests::a_release_executable_is_stripped_then_signed_ad_hoc_with_the_hardened_runtime" }]
 
 [[mutation]]
 name = "r1-5-d15-a-release-build-is-signed-without-the-hardened-runtime"
 why = "`nazm build --release` signs ad hoc without `--options runtime` (D15)"
 file = "crates/nazm-cli/src/build/release.rs"
-find = "            \"runtime\".as_ref(),"
-replace = "            \"kill\".as_ref(),"
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "release_build::a_release_executable_is_signed_ad_hoc_with_the_hardened_runtime_and_the_default_one_is_not" }]
+find = "                \"runtime\".into(),"
+replace = "                \"kill\".into(),"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "build::release::tests::a_release_executable_is_stripped_then_signed_ad_hoc_with_the_hardened_runtime" }]
 
 [[mutation]]
 name = "r1-5-d15-a-cranelift-release-build-is-built-unprotected"
