@@ -49,7 +49,17 @@ RUN cargo fetch --locked \
 
 # `ssh-keygen` signs and checks the in-toto attestations (`nazm attest`), so the attestation tests and
 # their mutation killers run here instead of being ignored (N94, killer repoint 2026-11-08). Debian's
-# package, nothing bundled; its own layer, so the warm build above stays cached.
+# package, nothing bundled; its own layer, so the warm build above stays cached. `python3` writes the
+# reproducible release archive (`scripts/reproducible-tar.py`), so the packaging tests run here too.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends openssh-client \
+ && apt-get install -y --no-install-recommends openssh-client python3 \
+ && rm -rf /var/lib/apt/lists/*
+
+# `x86_64-w64-mingw32-objdump` disassembles and dumps (and `x86_64-w64-mingw32-gcc` links them, as the
+# target's own toolchain would) the Windows objects the generator writes
+# (`nazm build --backend nazm --target x86_64-pc-windows-gnu --objects`), so the test of their
+# Win64 convention and unwind data, and its mutation killers, run here instead of being ignored
+# (killer repoint 2026-11-08). Debian's package, nothing bundled; its own layer.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends binutils-mingw-w64-x86-64 gcc-mingw-w64-x86-64 \
  && rm -rf /var/lib/apt/lists/*

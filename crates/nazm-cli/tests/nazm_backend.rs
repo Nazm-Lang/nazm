@@ -26,6 +26,8 @@ use crate::common::{self, run_bounded, run_within, Ran};
 use crate::differential;
 
 const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
+/// MinGW-w64's disassembler, which reads raw x86-64 bytes on any host the image runs on.
+const OBJDUMP: &str = "x86_64-w64-mingw32-objdump";
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -419,7 +421,7 @@ fn the_generators_own_programs_agree_with_llvm_on_x86_64_under_rosetta() {
 /// object is PE/COFF for AMD64 with a `.pdata` entry per function, and MinGW-w64 links each
 /// program as its `link.txt` says, C beside it included. Compile- and link-verified only: running
 /// them is `scripts/windows-host.sh` with `BACKEND=nazm`, on a Windows host no test reaches.
-#[cfg_attr(not(target_os = "macos"), ignore = "macOS only before 1.0")]
+// Runs in the Linux container too (the image carries MinGW-w64's gcc and objdump).
 #[test]
 fn the_generators_own_programs_build_for_windows_and_link_with_mingw() {
     const GCC: &str = "x86_64-w64-mingw32-gcc";
@@ -597,7 +599,8 @@ fn unwind_infos(dump: &str) -> Vec<(u64, u64, Vec<String>)> {
 /// from above the caller's 32 bytes of shadow space; no xmm6–xmm15 is touched (callee-saved
 /// there); a function using rsi or rdi pushes it; a frame of a page or more is probed by
 /// `___chkstk_ms`; and every function's UNWIND_INFO says exactly what its prologue does.
-#[cfg_attr(not(target_os = "macos"), ignore = "macOS only before 1.0")]
+// Runs in the Linux container too (the image carries MinGW's objdump): the generator is built and
+// run there, and the objects it writes are Windows ones whatever the host.
 #[test]
 fn the_windows_objects_keep_the_win64_convention_and_describe_every_frame() {
     let objdump = Command::new("x86_64-w64-mingw32-objdump")
@@ -774,7 +777,6 @@ fn lsdas(o: &[u8]) -> (u64, Vec<u64>, Vec<u64>) {
 /// macOS 26 runner tied every function to that atom's start, the first function's LSDA: no
 /// landing pad was found below it and every failure aborted. The linker here resolves the
 /// address inside the atom, so only the object can show it.
-#[cfg_attr(not(target_os = "macos"), ignore = "macOS only before 1.0")]
 #[test]
 fn every_lsda_of_a_mach_o_object_is_an_atom_of_its_own() {
     let nzcg = differential::nzcg();
@@ -814,6 +816,137 @@ fn every_lsda_of_a_mach_o_object_is_an_atom_of_its_own() {
     }
 }
 
+/// The generator's own programs, built by the generator for this Linux machine's own architecture
+/// (the container's: ELF objects linked with its `cc`), run, and compared byte for byte with the
+/// LLVM build of each: `toolchain/codegen/tests/run.sh` as `cargo xtask contained elfrun` runs it.
+/// `guards.nz` is the signed remainder selected without its guard at every width and every kind of
+/// comparison that ends a block, the cases the aarch64 selection gets wrong if a fused branch falls
+/// through the wrong way or a remainder divides by the wrong register; `fib.nz` is the plain one.
+/// Contained only (`NAZM_CONTAINED=1`): the script refuses to run a Nazm-built program elsewhere.
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "the generator's ELF programs run in the Linux container"
+)]
+#[test]
+fn the_generators_own_programs_agree_with_llvm_on_this_linux() {
+    if common::skip_without(
+        std::env::var("NAZM_CONTAINED").as_deref() == Ok("1"),
+        "not contained: run.sh runs Nazm-built programs only through `cargo xtask contained`",
+    ) {
+        return;
+    }
+    let work = tempfile::tempdir().unwrap();
+    let inputs = [
+        "toolchain/codegen/tests/programs/guards.nz",
+        "bench/compare/nazm/fib.nz",
+    ];
+    let o = Command::new("bash")
+        .current_dir(repo())
+        .arg("toolchain/codegen/tests/run.sh")
+        .args(inputs)
+        .env("NAZM", NAZM)
+        .env("NAZM_REF", NAZM)
+        .env("NZCG_OUT", work.path())
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&o.stdout);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        text.contains("2 agree, 0 differ, 0 refused, 0 skipped"),
+        "{text}\n{err}"
+    );
+    assert_eq!(o.status.code(), Some(0), "{text}\n{err}");
+}
+
+/// A signed 64-bit remainder the generator selects without its guard stops before `idiv` for a
+/// divisor of -1 (the minimum's remainder by -1 would trap): on x86-64, `cmp $-1, R; je past;
+/// cqto; idiv R`, with the same register in the compare and the divide. No x86-64 code runs in
+/// the aarch64 container, so this reads the generated code: the object for
+/// `x86_64-unknown-linux-gnu`, its code disassembled with MinGW-w64's `objdump` (in the image).
+#[test]
+fn an_x86_64_remainder_by_minus_one_never_reaches_idiv() {
+    use object::read::{Object as _, ObjectSection as _};
+    if common::skip_without(
+        Command::new(OBJDUMP).arg("--version").output().is_ok(),
+        "no x86_64-w64-mingw32-objdump",
+    ) {
+        return;
+    }
+    let nzcg = differential::nzcg();
+    let d = tempfile::tempdir().unwrap();
+    let triple = "x86_64-unknown-linux-gnu";
+    let lir = Command::new(NAZM)
+        .current_dir(d.path())
+        .args(["lir", "--target", triple, "--ops"])
+        .arg(repo().join("toolchain/codegen/tests/programs/guards.nz"))
+        .output()
+        .unwrap();
+    assert!(
+        lir.status.success(),
+        "{}",
+        String::from_utf8_lossy(&lir.stderr)
+    );
+    std::fs::write(d.path().join("lir.txt"), &lir.stdout).unwrap();
+    std::fs::create_dir(d.path().join("gen")).unwrap();
+    let g = Command::new(nzcg)
+        .current_dir(d.path())
+        .args(["--target", triple, "lir.txt", "gen"])
+        .output()
+        .unwrap();
+    assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
+    let mut guarded = 0;
+    let mut divides = 0;
+    for entry in std::fs::read_dir(d.path().join("gen")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("o") {
+            continue;
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        let file = object::read::File::parse(&*bytes).unwrap();
+        for section in file.sections() {
+            if section.kind() != object::SectionKind::Text {
+                continue;
+            }
+            let code = section.data().unwrap();
+            let raw = d.path().join("code.bin");
+            std::fs::write(&raw, code).unwrap();
+            let dis = Command::new(OBJDUMP)
+                .args(["-D", "-b", "binary", "-m", "i386:x86-64", "-M", "att"])
+                .arg(&raw)
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&dis.stdout);
+            let ops: Vec<String> = text
+                .lines()
+                .filter_map(|l| l.split_once(":\t"))
+                .filter_map(|(_, rest)| rest.split_once('\t').map(|(_, t)| t.trim().to_owned()))
+                .collect();
+            for (i, op) in ops.iter().enumerate() {
+                let Some(reg) = op.strip_prefix("idiv") else {
+                    continue;
+                };
+                divides += 1;
+                let reg = reg.trim();
+                let before = &ops[i.saturating_sub(3)..i];
+                if before.len() == 3
+                    && before[0].starts_with("cmp")
+                    && before[0].contains("$0xffffffffffffffff")
+                    && before[0].ends_with(reg)
+                    && before[1].starts_with("je")
+                    && before[2].starts_with("cqto")
+                {
+                    guarded += 1;
+                }
+            }
+        }
+    }
+    assert!(divides >= 4, "guards.nz selects too few idivs: {divides}");
+    assert!(
+        guarded >= 1,
+        "no `cmp $-1, R; je; cqto; idiv R` guard before any of {divides} idivs"
+    );
+}
+
 /// A stand-in generator: a shell script that records its arguments and its input, then runs the
 /// real one, or does what `body` says.
 fn fake(dir: &Path, body: &str) -> PathBuf {
@@ -842,6 +975,316 @@ fn recording(dir: &Path) -> PathBuf {
             real.display()
         ),
     )
+}
+
+// ---- On every host --------------------------------------------------------------------------------
+//
+// The generator emits objects for the macOS targets and Windows x86-64 whatever machine it runs on:
+// `--target aarch64-apple-darwin --objects DIR` writes them without linking. So the driver's side of
+// the generator — what it is told, what it is handed, how its refusals are reported, what the
+// record and the archive say of it — is checked here by a stand-in generator (a shell script), and
+// the generator's own objects by the real one, on Linux as on macOS. The macOS tests below also
+// link and run the program.
+
+const ONE_THREAD: &str = "fn main(out: OutCap) -> Int ! {io} {\n    println(7)\n    0\n}\n";
+const SEVERAL_THREADS: &str = "fn work(n: Int) -> Int { n * 2 }\n\
+                               fn main(tasks: SpawnCap, out: OutCap) -> Int {\n    \
+                               scope { spawn work(3); }\n    println(7)\n    0\n}\n";
+
+/// `nazm build --backend nazm` for the macOS target the generator carries, to objects in `o`.
+fn cross(dir: &Path, generator: &Path, extra: &[&str], src: &str) -> Ran {
+    let mut args = vec![
+        "build",
+        "--no-cache",
+        "--backend",
+        "nazm",
+        "--target",
+        "aarch64-apple-darwin",
+        "--objects",
+        "o",
+    ];
+    args.extend_from_slice(extra);
+    args.push(src);
+    nazm_with(dir, generator, &args)
+}
+
+/// A stand-in generator that records its arguments (`args.txt`) and the LIR it was handed
+/// (`unit.lir`), and writes an object file of known bytes.
+fn stub_generator(dir: &Path) -> PathBuf {
+    fake(
+        dir,
+        &format!(
+            "echo \"$@\" >> '{}'\nfor a; do last2=$last1; last1=$a; done\ncp \"$last2\" '{}'\n\
+             printf STUBOBJECT > \"$last1/unit-0.o\"",
+            dir.join("args.txt").display(),
+            dir.join("unit.lir").display()
+        ),
+    )
+}
+
+#[test]
+fn a_cross_build_tells_the_generator_the_target_and_whether_the_program_has_one_thread() {
+    let d = tempfile::tempdir().unwrap();
+    for (name, src, threads) in [
+        ("one.nz", ONE_THREAD, false),
+        ("many.nz", SEVERAL_THREADS, true),
+    ] {
+        std::fs::write(d.path().join(name), src).unwrap();
+        let _ = std::fs::remove_file(d.path().join("args.txt"));
+        let _ = std::fs::remove_dir_all(d.path().join("o"));
+        let nz = stub_generator(d.path());
+        let r = cross(d.path(), &nz, &[], name);
+        assert_eq!(r.code, Some(0), "{name}: {}", r.stderr);
+        // The generator ran — not another backend in its place — and its object is the unit's.
+        let args = std::fs::read_to_string(d.path().join("args.txt")).unwrap();
+        assert!(!args.is_empty(), "{name}: the generator was not run");
+        assert!(
+            args.lines()
+                .all(|l| l.starts_with("--target aarch64-apple-darwin ")),
+            "{name}: {args}"
+        );
+        assert_eq!(
+            args.contains("--one-thread"),
+            !threads,
+            "{name}: one thread is {}: {args}",
+            !threads
+        );
+        assert_eq!(
+            std::fs::read(d.path().join("o/00-m0.o")).unwrap(),
+            b"STUBOBJECT",
+            "{name}: the unit's object is not the generator's"
+        );
+    }
+}
+
+#[test]
+fn a_cross_debug_build_hands_the_generator_its_positions_and_their_files() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("prog.nz"),
+        "fn add(a: Int, b: Int) -> Int { a + b }\n\nfn main() -> Int { add(1, 2) }\n",
+    )
+    .unwrap();
+    let nz = stub_generator(d.path());
+    for debug in [false, true] {
+        let extra: &[&str] = if debug { &["--debug"] } else { &[] };
+        let r = cross(d.path(), &nz, extra, "prog.nz");
+        assert_eq!(r.code, Some(0), "{}", r.stderr);
+        let lir = std::fs::read_to_string(d.path().join("unit.lir")).unwrap();
+        assert_eq!(lir.contains("\n; file "), debug, "{lir}");
+        assert_eq!(lir.contains("  loc "), debug, "{lir}");
+    }
+}
+
+#[test]
+fn a_cross_refused_construct_is_n0101_by_name_and_nothing_is_written_or_fallen_back_to() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("prog.nz"), "fn main() -> Int { 0 }\n").unwrap();
+    let nz = fake(
+        d.path(),
+        "echo 'nzcg: refused: the instruction `frob i64`, in `main` of prog.nz' >&2\n\
+         echo 'nzcg: refused: the terminator `jump.far`, in `main` of prog.nz' >&2\nexit 3",
+    );
+    let r = cross(d.path(), &nz, &[], "prog.nz");
+    assert_eq!(r.code, Some(1), "{r:?}");
+    assert_eq!(r.stderr.matches("[N0101]").count(), 2, "{}", r.stderr);
+    assert!(
+        r.stderr.contains("the instruction `frob i64`"),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        r.stderr.contains("the terminator `jump.far`"),
+        "{}",
+        r.stderr
+    );
+    assert!(!r.stderr.contains("N0900"), "{}", r.stderr);
+    assert!(
+        !d.path().join("o/00-m0.o").exists(),
+        "no fallback: no object is built"
+    );
+}
+
+/// A program whose runtime frees through the small-block heap must not hand the generator LIR that
+/// still allocates from C: the argument block a `spawn` allocates would be freed by `nz.small_free`
+/// and the program would abort in C's `free`.
+#[test]
+fn a_cross_build_hands_the_generator_lir_that_allocates_from_the_small_block_heap() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("many.nz"), SEVERAL_THREADS).unwrap();
+    let nz = stub_generator(d.path());
+    let r = cross(d.path(), &nz, &[], "many.nz");
+    assert_eq!(r.code, Some(0), "{}", r.stderr);
+    let lir = std::fs::read_to_string(d.path().join("unit.lir")).unwrap();
+    assert!(lir.contains("import func @nz.small_malloc "), "{lir}");
+    assert!(lir.contains("import func @nz.small_free "), "{lir}");
+    for c in ["@malloc ", "@realloc ", "@free "] {
+        assert!(!lir.contains(&format!("import func {c}")), "{c}: {lir}");
+    }
+}
+
+/// R9, D15: a program `--backend nazm` built names the generator that compiled it by its digest —
+/// the file `NAZM_NZCG` named, as anyone can recompute — and one LLVM built names none.
+#[test]
+fn a_cross_build_by_nazms_generator_names_it_by_its_digest() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("one.nz"), ONE_THREAD).unwrap();
+    let nz = stub_generator(d.path());
+    let r = cross(d.path(), &nz, &["--provenance", "p.json"], "one.nz");
+    assert_eq!(r.code, Some(0), "{}", r.stderr);
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(d.path().join("p.json")).unwrap()).unwrap();
+    assert_eq!(v["backend"]["name"], "nazm", "{v}");
+    assert_eq!(
+        v["backend"]["nzcg"],
+        format!(
+            "blake3:{}",
+            blake3::hash(&std::fs::read(&nz).unwrap()).to_hex()
+        ),
+        "{v}"
+    );
+    let r = nazm_with(
+        d.path(),
+        &nz,
+        &[
+            "build",
+            "--no-cache",
+            "--target",
+            "aarch64-apple-darwin",
+            "--objects",
+            "llvm",
+            "--provenance",
+            "q.json",
+            "one.nz",
+        ],
+    );
+    assert_eq!(r.code, Some(0), "{}", r.stderr);
+    let w: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(d.path().join("q.json")).unwrap()).unwrap();
+    assert!(w["backend"].get("nzcg").is_none(), "{w}");
+}
+
+/// The generator's own object for macOS: its code sits in `__TEXT,__nz_text`, the section the
+/// preemption handler takes for generated code, and none of it in the plain `__text` — read from the
+/// object the real generator writes, on any host.
+#[test]
+fn nazms_own_generator_writes_its_code_in_the_generated_code_section() {
+    use object::read::{Object as _, ObjectSection as _, ObjectSymbol as _};
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("prog.nz"),
+        "fn add(a: Int, b: Int) -> Int { a + b }\n\nfn main() -> Int { add(1, 2) }\n",
+    )
+    .unwrap();
+    let r = cross(d.path(), differential::nzcg(), &[], "prog.nz");
+    assert_eq!(r.code, Some(0), "{}", r.stderr);
+    let bytes = std::fs::read(d.path().join("o/00-m0.o")).unwrap();
+    let file = object::read::File::parse(&*bytes).unwrap();
+    assert_eq!(file.format(), object::BinaryFormat::MachO);
+    let (mut generated, mut plain) = (None, 0);
+    for s in file.sections() {
+        if s.segment_name().ok().flatten() != Some("__TEXT") {
+            continue;
+        }
+        match s.name() {
+            Ok("__nz_text") => generated = Some((s.index(), s.size())),
+            Ok("__text") => plain += s.size(),
+            _ => {}
+        }
+    }
+    let (index, size) = generated.expect("the object has no __TEXT,__nz_text section");
+    assert!(size > 0, "the generated code section is empty");
+    assert_eq!(plain, 0, "code is left in the plain __text section");
+    let mut functions = 0;
+    for sym in file.symbols() {
+        if sym.is_definition() && sym.kind() == object::SymbolKind::Text {
+            functions += 1;
+            assert_eq!(
+                sym.section_index(),
+                Some(index),
+                "{} is not in the generated code section",
+                sym.name().unwrap_or("?")
+            );
+        }
+    }
+    assert!(functions > 0, "the object defines no function");
+}
+
+/// The packaged layout (R1.5 task 7.8): `scripts/host-archive.sh` builds `nzcg` with the `nazm` it
+/// packages and installs it as `libexec/nazm/nzcg`, where the unpacked `bin/nazm` finds it with
+/// `NAZM_NZCG` unset — and nowhere else: moved away, the build is refused naming that path. Any host
+/// can package under the macOS triple and build for it to objects.
+#[test]
+fn the_packaged_macos_archive_carries_its_generator_beside_nazm() {
+    if common::skip_without(
+        Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success()),
+        "python3 is not on PATH, so host-archive.sh cannot write the archive",
+    ) {
+        return;
+    }
+    let triple = "aarch64-apple-darwin";
+    let d = tempfile::tempdir().unwrap();
+    let out = d.path().join("archives");
+    let r = run_bounded(
+        Command::new("sh")
+            .arg(repo().join("scripts/host-archive.sh"))
+            .args([triple, NAZM])
+            .arg(&out),
+        "host-archive.sh",
+    );
+    assert_eq!(r.code, Some(0), "{r:?}");
+    let archive = out.join(format!("nazm-{triple}.tar.gz"));
+    let unpacked = d.path().join("unpacked");
+    std::fs::create_dir_all(&unpacked).unwrap();
+    let r = run_bounded(
+        Command::new("tar")
+            .arg("-xzf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(&unpacked),
+        "tar",
+    );
+    assert_eq!(r.code, Some(0), "{r:?}");
+    let top = unpacked.join(format!("nazm-{triple}"));
+    let nzcg = top.join("libexec/nazm/nzcg");
+    assert!(nzcg.is_file(), "the archive carries no {}", nzcg.display());
+    let install = std::fs::read_to_string(top.join("INSTALL.txt")).unwrap();
+    assert!(install.contains("libexec/nazm/nzcg"), "{install}");
+
+    let work = d.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(work.join("prog.nz"), ONE_THREAD).unwrap();
+    let build = |objects: &str| {
+        run_bounded(
+            Command::new(top.join("bin/nazm"))
+                .current_dir(&work)
+                .env_remove(nazm_codegen_nazm::VARIABLE)
+                .args([
+                    "build",
+                    "--no-cache",
+                    "--backend",
+                    "nazm",
+                    "--target",
+                    triple,
+                    "--objects",
+                    objects,
+                    "prog.nz",
+                ]),
+            "nazm build --backend nazm",
+        )
+    };
+    let r = build("found");
+    assert_eq!(r.code, Some(0), "{r:?}");
+    assert!(work.join("found/00-m0.o").is_file());
+    // Moved away, it is not found anywhere else: the refusal names the installed path.
+    std::fs::rename(&nzcg, top.join("nzcg-moved")).unwrap();
+    let r = build("lost");
+    assert_eq!(r.code, Some(4), "{r:?}");
+    assert!(r.stderr.contains("libexec/nazm/nzcg"), "{}", r.stderr);
+    assert!(!work.join("lost").exists());
 }
 
 #[cfg_attr(not(target_os = "macos"), ignore = "macOS only before 1.0")]
