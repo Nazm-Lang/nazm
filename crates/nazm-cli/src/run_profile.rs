@@ -221,18 +221,31 @@ pub(crate) fn run(file: &Path, backend: &str, sample: Option<u64>) -> ExitCode {
     code
 }
 
+/// The build a profiled run starts with. A sample is attributed to a `.nz` line through the build's
+/// debug information, so a sampled run builds with `--debug` (and without the cache, which holds
+/// builds made without it).
+fn build_command(
+    me: &Path,
+    backend: &str,
+    file: &Path,
+    exe: &Path,
+    sample: Option<u64>,
+) -> Command {
+    let mut build = Command::new(me);
+    build.args(["build", "--backend", backend]);
+    if sample.is_some() {
+        build.args(["--debug", "--no-cache"]);
+    }
+    build.arg(file).arg("-o").arg(exe);
+    build
+}
+
 fn profile(file: &Path, backend: &str, work: &Path, sample: Option<u64>) -> ExitCode {
     let exe = work.join("profiled");
     let Ok(me) = std::env::current_exe() else {
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
     };
-    let mut build = Command::new(&me);
-    build.args(["build", "--backend", backend]);
-    // A sample is attributed to a `.nz` line through the build's debug information.
-    if sample.is_some() {
-        build.args(["--debug", "--no-cache"]);
-    }
-    let built = build.arg(file).arg("-o").arg(&exe).output();
+    let built = build_command(&me, backend, file, &exe, sample).output();
     match built {
         Ok(o) if o.status.success() => {}
         Ok(o) => {
@@ -350,6 +363,40 @@ mod tests {
         9 nz.m.p_2Enz.burn  (in profiled) + 236,64,...  [0x6,0x7,...]  p.nz:4\n      \
         2 c_hash  (in profiled) + 12  [0x8]\n      \
         1 nz.alloc  (in profiled) + 4  [0x9]\n\nTotal number in stack\n";
+
+    fn args_of(sample: Option<u64>) -> Vec<String> {
+        let c = build_command(
+            Path::new("/bin/nazm"),
+            "llvm",
+            Path::new("p.nz"),
+            Path::new("out"),
+            sample,
+        );
+        c.get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn a_sampled_build_carries_debug_information_and_a_plain_one_does_not() {
+        assert_eq!(
+            args_of(Some(1)),
+            [
+                "build",
+                "--backend",
+                "llvm",
+                "--debug",
+                "--no-cache",
+                "p.nz",
+                "-o",
+                "out"
+            ]
+        );
+        assert_eq!(
+            args_of(None),
+            ["build", "--backend", "llvm", "p.nz", "-o", "out"]
+        );
+    }
 
     #[test]
     fn each_sample_is_attributed_once_by_its_innermost_frame() {
