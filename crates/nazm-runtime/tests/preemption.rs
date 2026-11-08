@@ -7,6 +7,9 @@
 //! lays out workers the way the runtime does and counts what the piece does: the monitor
 //! (`nz.pool_watch`), the interrupt's yield (`nz.pool_preempt`) and the signal handler
 //! (`nz.os_preempt_handler`). Each case states a situation and the exact outcome.
+// The harness is compiled with the host's `clang` and links asm labels the way macOS and Linux do; it has no
+// Windows form. The contained Linux run (the mutation killers) and macOS CI run it.
+#![cfg(unix)]
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
