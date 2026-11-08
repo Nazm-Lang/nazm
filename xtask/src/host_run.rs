@@ -336,8 +336,32 @@ fn read_image(exe: &Path) -> Result<Vec<u8>, Refusal> {
 }
 
 /// `cargo xtask host-run [--deadline-secs N] -- EXECUTABLE [ARGS...]`.
+/// What the runner asks of the machine it is on, as one value so a test can stand a Linux machine in
+/// for a macOS one without a variable in the product: whether it is macOS, which program measures a
+/// stage (`/usr/bin/time -l`), where the lock and marker live, and the environment it reads.
+pub(crate) struct Host {
+    macos: bool,
+    time: PathBuf,
+    state: Option<PathBuf>,
+    env: Box<dyn Fn(&str) -> Option<String>>,
+    /// Whether a contained workload is running (`docker ps`).
+    contained: fn() -> bool,
+}
+
+impl Host {
+    fn real() -> Self {
+        Self {
+            macos: cfg!(target_os = "macos"),
+            time: PathBuf::from("/usr/bin/time"),
+            state: None,
+            env: Box::new(|v| std::env::var(v).ok()),
+            contained: contained_running,
+        }
+    }
+}
+
 pub(crate) fn host_run(args: &[String]) -> ExitCode {
-    match run(args) {
+    match run(args, &Host::real()) {
         Ok(code) => code,
         Err(r) => {
             eprintln!("host-run: refused [{}]: {}", r.name(), r.why());
@@ -346,17 +370,17 @@ pub(crate) fn host_run(args: &[String]) -> ExitCode {
     }
 }
 
-fn run(args: &[String]) -> Result<ExitCode, Refusal> {
-    if !cfg!(target_os = "macos") {
+fn run(args: &[String], host: &Host) -> Result<ExitCode, Refusal> {
+    if !host.macos {
         return Err(Refusal::NotMacos);
     }
-    if let Some(m) = contained::host_env_refusal(|v| std::env::var(v).ok()) {
+    if let Some(m) = contained::host_env_refusal(&host.env) {
         return Err(Refusal::HostEnvironment(m));
     }
     let opts = parse_args(args)?;
     let limit = heap_limit_of(&read_image(&opts.exe)?)?;
 
-    let dir = state_dir();
+    let dir = host.state.clone().unwrap_or_else(state_dir);
     let state = |e: std::io::Error| Refusal::Usage(format!("{}: {e}", dir.display()));
     fs::create_dir_all(&dir).map_err(state)?;
     let marker = dir.join("withdrawn");
@@ -385,12 +409,12 @@ fn run(args: &[String]) -> Result<ExitCode, Refusal> {
     let Some(_lock) = held else {
         return Err(Refusal::AnotherStage);
     };
-    if contained_running() {
+    if (host.contained)() {
         return Err(Refusal::ContainedWorkload);
     }
 
     let report = dir.join(format!("time-{}.txt", std::process::id()));
-    let result = execute(&opts, &report);
+    let result = execute(&opts, &report, host);
     let _ = fs::remove_file(&report);
     let ran = result.map_err(Refusal::Usage)?;
 
@@ -491,8 +515,8 @@ struct Ran {
     timed_out: bool,
 }
 
-fn execute(opts: &Options, report: &Path) -> Result<Ran, String> {
-    let mut cmd = Command::new("/usr/bin/time");
+fn execute(opts: &Options, report: &Path, host: &Host) -> Result<Ran, String> {
+    let mut cmd = Command::new(&host.time);
     cmd.arg("-l")
         .arg("-o")
         .arg(report)
@@ -505,7 +529,7 @@ fn execute(opts: &Options, report: &Path) -> Result<Ran, String> {
     cmd.process_group(0);
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("cannot start /usr/bin/time: {e}"))?;
+        .map_err(|e| format!("cannot start {}: {e}", host.time.display()))?;
     let out = child
         .stdout
         .take()
@@ -682,5 +706,179 @@ mod tests {
         assert!(a(&["--deadline-secs", "0", "--", "x"]).is_err());
         assert!(a(&["--deadline-secs", "3601", "--", "x"]).is_err());
         assert!(a(&["--"]).is_err());
+    }
+
+    /// A machine that is macOS as far as the runner can tell, with `time` replaced by a script that
+    /// runs the stage and writes a BSD-style report of `peak` bytes, and its state in `dir`.
+    fn macos_like(dir: &Path, peak: u64) -> Host {
+        use std::os::unix::fs::PermissionsExt as _;
+        let time = dir.join("fake-time");
+        fs::write(
+            &time,
+            format!(
+                "#!/bin/sh\nreport=$3\nshift 3\n\"$@\"\ncode=$?\nprintf '  {peak}  maximum resident set size\\n' > \"$report\"\nexit $code\n"
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&time, fs::Permissions::from_mode(0o755)).unwrap();
+        Host {
+            macos: true,
+            time,
+            state: Some(dir.join("state")),
+            env: Box::new(|_| None),
+            contained: || false,
+        }
+    }
+
+    /// A stage: a script carrying the symbol and the limit message the runner reads, then `body`.
+    fn stage(dir: &Path, name: &str, limit: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        let p = dir.join(name);
+        fs::write(
+            &p,
+            format!(
+                "#!/bin/sh\n# _nz.heap_malloc\n# nazm: error[N0406]: out of memory: the heap limit of {limit} bytes is reached\n{body}"
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    fn exit_of(r: &Result<ExitCode, Refusal>) -> String {
+        format!("{r:?}")
+    }
+
+    fn refusal_of(r: Result<ExitCode, Refusal>) -> &'static str {
+        match r {
+            Err(e) => e.name(),
+            Ok(c) => panic!("the run was not refused: {c:?}"),
+        }
+    }
+
+    #[test]
+    fn a_missing_or_non_executable_file_is_refused_by_name() {
+        let d = tempfile::tempdir().unwrap();
+        let host = macos_like(d.path(), 1);
+        let absent = d.path().join("absent");
+        let a = args(&["--", absent.to_str().unwrap()]);
+        assert_eq!(refusal_of(run(&a, &host)), "no-executable");
+        let data = d.path().join("data");
+        fs::write(
+            &data,
+            "# nz.heap_malloc the heap limit of 1 bytes is reached",
+        )
+        .unwrap();
+        let a = args(&["--", data.to_str().unwrap()]);
+        assert_eq!(refusal_of(run(&a, &host)), "no-executable");
+    }
+
+    #[test]
+    fn a_host_that_declares_containment_is_refused_by_name() {
+        let d = tempfile::tempdir().unwrap();
+        let exe = stage(d.path(), "ok", "4194304", "echo ran\n");
+        for var in ["NAZM_CONTAINED", "NAZM_ALLOW_UNCONTAINED"] {
+            let mut host = macos_like(d.path(), 1);
+            host.env = Box::new(move |v| (v == var).then(|| "1".to_owned()));
+            let a = args(&["--", exe.to_str().unwrap()]);
+            assert_eq!(refusal_of(run(&a, &host)), "host-environment", "{var}");
+        }
+    }
+
+    #[test]
+    fn a_third_stage_is_refused_while_two_run() {
+        let d = tempfile::tempdir().unwrap();
+        let host = macos_like(d.path(), 1);
+        fs::create_dir_all(d.path().join("state")).unwrap();
+        let exe = stage(d.path(), "ok", "4194304", "echo ran\n");
+        let a = args(&["--", exe.to_str().unwrap()]);
+        let hold = |name: &str| {
+            let f = fs::File::options()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(d.path().join("state").join(name))
+                .unwrap();
+            f.try_lock().unwrap();
+            f
+        };
+        // One stage running: a second is admitted.
+        let first = hold(SLOTS[0]);
+        assert!(
+            run(&a, &host).is_ok(),
+            "a second stage runs beside the first"
+        );
+        // Two running: a third is refused.
+        let second = hold(SLOTS[1]);
+        assert_eq!(refusal_of(run(&a, &host)), "another-stage-running");
+        // A slot is free once a stage ends.
+        drop(first);
+        assert!(run(&a, &host).is_ok(), "a slot is free once a stage ends");
+        drop(second);
+    }
+
+    #[test]
+    fn a_peak_past_the_limit_is_the_withdrawal_condition_and_later_runs_are_refused() {
+        let d = tempfile::tempdir().unwrap();
+        // A one-byte limit and no margin: the reported peak is past it.
+        let over = stage(d.path(), "over", "1", "echo ran\n");
+        let host = macos_like(d.path(), 4096);
+        let a = args(&["--margin-bytes", "0", "--", over.to_str().unwrap()]);
+        let r = run(&a, &host);
+        assert!(
+            exit_of(&r).contains(&format!("{EXIT_WITHDRAWN}")),
+            "withdrawn: {r:?}"
+        );
+        let marker = d.path().join("state").join("withdrawn");
+        assert!(marker.exists());
+
+        let fine = stage(d.path(), "fine", "4194304", "echo ran\n");
+        let b = args(&["--", fine.to_str().unwrap()]);
+        assert_eq!(refusal_of(run(&b, &host)), "withdrawn");
+        fs::remove_file(&marker).unwrap();
+        assert!(run(&b, &host).is_ok());
+        assert!(!marker.exists(), "a run within its limit leaves no marker");
+    }
+
+    #[test]
+    fn a_stage_past_its_deadline_is_killed_with_its_children() {
+        let d = tempfile::tempdir().unwrap();
+        let pidfile = d.path().join("child.pid");
+        let exe = stage(
+            d.path(),
+            "hangs",
+            "4194304",
+            &format!("sleep 30 &\necho $! > {}\nwait\n", pidfile.display()),
+        );
+        let report = d.path().join("report.txt");
+        let a = args(&[
+            "--deadline-secs",
+            "1",
+            "--report",
+            report.to_str().unwrap(),
+            "--",
+            exe.to_str().unwrap(),
+        ]);
+        let r = run(&a, &macos_like(d.path(), 4096));
+        assert!(
+            exit_of(&r).contains(&format!("{EXIT_DEADLINE}")),
+            "deadline status: {r:?}"
+        );
+        let said = fs::read_to_string(&report).unwrap();
+        assert!(said.contains("DEADLINE reached"), "{said}");
+        // The sleeper the stage started is gone: signal 0 finds no such process.
+        let pid = fs::read_to_string(&pidfile).unwrap().trim().to_owned();
+        let alive = Command::new("kill")
+            .args(["-0", &pid])
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(!alive, "the stage's child {pid} outlived its deadline");
     }
 }
