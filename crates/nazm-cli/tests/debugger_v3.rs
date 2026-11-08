@@ -160,6 +160,72 @@ fn a_cranelift_build_carries_debug_information_only_when_asked() {
     }
 }
 
+/// A Mach-O object's DWARF names the code and its other debug sections by section-relative
+/// relocations whose stored word is an offset into the target section; the linker and `dsymutil`
+/// read it as an object address, so the backend settles each word to the target section's address
+/// plus that offset (`dwarf::settle_macho`). This needs no macOS: Cranelift writes the object for
+/// `aarch64-apple-darwin` on any host, and the test reads it back. A word left as a bare offset
+/// would put every function at the wrong address in a debugger.
+#[test]
+fn a_cranelift_mach_o_object_has_its_dwarf_addresses_settled() {
+    use object::read::{Object as _, ObjectSection as _};
+    let d = with("s.nz", SCOPES);
+    let b = nazm(
+        d.path(),
+        &[
+            "build",
+            "--debug",
+            "--no-cache",
+            "--backend",
+            "cranelift",
+            "--target",
+            "aarch64-apple-darwin",
+            "--objects",
+            "o",
+            "s.nz",
+        ],
+    );
+    assert!(b.status.success(), "{}", err(&b));
+    let bytes = std::fs::read(d.path().join("o").join("00-m0.o")).unwrap();
+    let file = object::read::File::parse(&*bytes).unwrap();
+    assert_eq!(file.format(), object::BinaryFormat::MachO);
+    let (mut checked, mut shifted) = (0, 0);
+    for section in file.sections() {
+        if section.segment_name().ok().flatten() != Some("__DWARF") {
+            continue;
+        }
+        let (start, _) = section.file_range().expect("a DWARF section has bytes");
+        for (offset, r) in section.relocations() {
+            let object::read::RelocationTarget::Section(idx) = r.target() else {
+                continue;
+            };
+            let target = file.section_by_index(idx).unwrap();
+            let at = usize::try_from(start + offset).unwrap();
+            let width = usize::from(r.size() >> 3);
+            let mut word = [0u8; 8];
+            word[..width].copy_from_slice(&bytes[at..at + width]);
+            let word = u64::from_le_bytes(word);
+            // The settled word lands inside the target section: its address plus an offset.
+            assert!(
+                word >= target.address() && word - target.address() <= target.size(),
+                "{}: a relocation to {} holds {word:#x}, outside {:#x}..+{:#x}",
+                section.name().unwrap_or("?"),
+                target.name().unwrap_or("?"),
+                target.address(),
+                target.size()
+            );
+            checked += 1;
+            // Only a word aimed at a section laid out past address 0 tells settled from not.
+            shifted += usize::from(target.address() > 0);
+        }
+    }
+    assert!(checked > 0, "no DWARF relocation was found to check");
+    assert!(
+        shifted > 0,
+        "no DWARF relocation targets a section past address 0, so the test could not tell"
+    );
+}
+
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "drives lldb on macOS")]
 fn a_debugger_finds_a_cranelift_build_s_functions_and_lines() {
