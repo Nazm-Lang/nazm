@@ -714,6 +714,7 @@ mod tests {
 
     /// A machine that is macOS as far as the runner can tell, with `time` replaced by a script that
     /// runs the stage and writes a BSD-style report of `peak` bytes, and its state in `dir`.
+    #[cfg(unix)]
     fn macos_like(dir: &Path, peak: u64) -> Host {
         use std::os::unix::fs::PermissionsExt as _;
         let time = dir.join("fake-time");
@@ -735,6 +736,7 @@ mod tests {
     }
 
     /// A stage: a script carrying the symbol and the limit message the runner reads, then `body`.
+    #[cfg(unix)]
     fn stage(dir: &Path, name: &str, limit: &str, body: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt as _;
         let p = dir.join(name);
@@ -749,14 +751,17 @@ mod tests {
         p
     }
 
+    #[cfg(unix)]
     fn args(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| (*s).to_owned()).collect()
     }
 
+    #[cfg(unix)]
     fn exit_of(r: &Result<ExitCode, Refusal>) -> String {
         format!("{r:?}")
     }
 
+    #[cfg(unix)]
     fn refusal_of(r: Result<ExitCode, Refusal>) -> &'static str {
         match r {
             Err(e) => e.name(),
@@ -764,6 +769,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_missing_or_non_executable_file_is_refused_by_name() {
         let d = tempfile::tempdir().unwrap();
@@ -781,6 +787,7 @@ mod tests {
         assert_eq!(refusal_of(run(&a, &host)), "no-executable");
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_host_that_declares_containment_is_refused_by_name() {
         let d = tempfile::tempdir().unwrap();
@@ -793,6 +800,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_third_stage_is_refused_while_two_run() {
         let d = tempfile::tempdir().unwrap();
@@ -826,6 +834,7 @@ mod tests {
         drop(second);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_peak_past_the_limit_is_the_withdrawal_condition_and_later_runs_are_refused() {
         let d = tempfile::tempdir().unwrap();
@@ -849,6 +858,7 @@ mod tests {
         assert!(!marker.exists(), "a run within its limit leaves no marker");
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_stage_past_its_deadline_is_killed_with_its_children() {
         let d = tempfile::tempdir().unwrap();
