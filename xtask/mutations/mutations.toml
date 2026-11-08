@@ -13524,7 +13524,7 @@ Repointed by N105: the rule is LIR's, made once for both backends."""
 file = "crates/nazm-codegen-clif/src/translate.rs"
 find = '        crate::dwarf::settle_macho(bytes).map_err(|e| vec![defect(e)])'
 replace = '        Ok(bytes)'
-killers = [{ package = "nazm-cli", test = "cli_c_d", name = "debugger_v3::a_debugger_finds_a_cranelift_build_s_functions_and_lines" }]
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "debugger_v3::a_cranelift_mach_o_object_has_its_dwarf_addresses_settled" }]
 
 # `n91-a-debug-object-is-reused` is retired by N105 as an equivalent mutant: the object key is the LIR's digest,
 # and a debug build's LIR carries every source position as a `Loc`, so a line added above the code changes the key
@@ -13552,7 +13552,7 @@ why = "a sampled program is built without debug information, so no sample is att
 file = "crates/nazm-cli/src/run_profile.rs"
 find = "        build.args([\"--debug\", \"--no-cache\"]);"
 replace = "        build.args([\"--no-cache\"]);"
-killers = [{ package = "nazm-cli", test = "cli_c_d", name = "debugger_v3::a_sampled_run_is_attributed_to_nazm_functions_and_lines" }]
+killers = [{ package = "nazm-cli", bin = "nazm", name = "run_profile::tests::a_sampled_build_carries_debug_information_and_a_plain_one_does_not" }]
 
 [[mutation]]
 name = "n92-a-measured-heading-goes-unfiled"

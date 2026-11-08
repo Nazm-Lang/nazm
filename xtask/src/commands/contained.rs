@@ -458,7 +458,8 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
                 manifest: "/work/fuzzout/EXPORTS".to_owned(),
                 dest,
                 allowed: vec!["fuzz-min.tar".to_owned(), "report.txt".to_owned()],
-                max_bytes: 8 * 1024 * 1024,
+                // Five targets' minimised corpora: about 17 MB at 600 s (the first 8 MiB cap refused them).
+                max_bytes: 64 * 1024 * 1024,
             });
             (
                 "fuzz",
@@ -613,7 +614,13 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
             ExitCode::from(3)
         }
         other => {
-            eprintln!("contained: {name} did not pass ({})", other.word());
+            let why = match &other {
+                Outcome::ExportRefused(w) | Outcome::ToolFailure(w) | Outcome::Unavailable(w) => {
+                    format!(": {w}")
+                }
+                _ => String::new(),
+            };
+            eprintln!("contained: {name} did not pass ({}){why}", other.word());
             ExitCode::FAILURE
         }
     }
