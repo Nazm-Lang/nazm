@@ -67,6 +67,8 @@ nazm-diag = { workspace = true }
 # Each build case needs a throwaway directory for its source, its executable and, in two
 # cases, a stub toolchain on PATH.
 tempfile = { workspace = true }
+# `tests/debugger_v3.rs` reads a Mach-O object's DWARF relocations; the version the Cranelift backend writes it with.
+object = { version = "=0.40.0", default-features = false, features = ["read_core", "macho", "std"] }
 
 [lints]
 workspace = true

@@ -1211,6 +1211,7 @@ dependencies = [
  "nazm-repo",
  "nazm-service",
  "nazm-span",
+ "object",
  "serde",
  "serde_json",
  "tempfile",

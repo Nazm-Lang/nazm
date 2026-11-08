@@ -46,3 +46,10 @@ COPY . /src
 RUN cargo fetch --locked \
  && cargo build --locked --tests --jobs 1 \
  && cargo build --locked -p xtask --jobs 1
+
+# `ssh-keygen` signs and checks the in-toto attestations (`nazm attest`), so the attestation tests and
+# their mutation killers run here instead of being ignored (N94, killer repoint 2026-11-08). Debian's
+# package, nothing bundled; its own layer, so the warm build above stays cached.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssh-client \
+ && rm -rf /var/lib/apt/lists/*
