@@ -335,6 +335,9 @@ fn read_image(exe: &Path) -> Result<Vec<u8>, Refusal> {
     Ok(bytes)
 }
 
+/// Reads one environment variable.
+type EnvLookup = Box<dyn Fn(&str) -> Option<String>>;
+
 /// `cargo xtask host-run [--deadline-secs N] -- EXECUTABLE [ARGS...]`.
 /// What the runner asks of the machine it is on, as one value so a test can stand a Linux machine in
 /// for a macOS one without a variable in the product: whether it is macOS, which program measures a
@@ -343,7 +346,7 @@ pub(crate) struct Host {
     macos: bool,
     time: PathBuf,
     state: Option<PathBuf>,
-    env: Box<dyn Fn(&str) -> Option<String>>,
+    env: EnvLookup,
     /// Whether a contained workload is running (`docker ps`).
     contained: fn() -> bool,
 }
@@ -584,6 +587,7 @@ fn execute(opts: &Options, report: &Path, host: &Host) -> Result<Ran, String> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
 
     fn image(limit: &str, symbol: bool) -> Vec<u8> {
