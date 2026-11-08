@@ -597,24 +597,25 @@ fn main() {
             .collect();
         let mut covered: BTreeSet<u32> = BTreeSet::new();
         let mut chosen: Vec<usize> = Vec::new();
-        loop {
-            let best = (0..queue.len())
-                .filter(|i| !chosen.contains(i))
-                .map(|i| {
-                    (
-                        edges[i].difference(&covered).count(),
-                        std::cmp::Reverse(queue[i].len()),
-                        i,
-                    )
-                })
-                .max();
-            match best {
-                Some((gain, _, i)) if gain > 0 => {
-                    covered.extend(edges[i].iter().copied());
-                    chosen.push(i);
-                }
-                _ => break,
+        // Lazy greedy: an input's gain only ever falls as `covered` grows, so a stale gain is an
+        // upper bound. Pop the best stale entry, recompute it, and take it only if it still beats
+        // the next one. The order is (gain, smaller input, lower index) as before, so the same
+        // inputs are chosen without rescanning every input each round.
+        let mut heap: std::collections::BinaryHeap<(usize, std::cmp::Reverse<usize>, usize)> = (0
+            ..queue.len())
+            .map(|i| (edges[i].len(), std::cmp::Reverse(queue[i].len()), i))
+            .collect();
+        while let Some((stale, len, i)) = heap.pop() {
+            let gain = edges[i].difference(&covered).count();
+            if gain == 0 {
+                continue;
             }
+            if gain < stale {
+                heap.push((gain, len, i));
+                continue;
+            }
+            covered.extend(edges[i].iter().copied());
+            chosen.push(i);
         }
         let dir = out.join("min");
         let _ = std::fs::create_dir_all(&dir);
