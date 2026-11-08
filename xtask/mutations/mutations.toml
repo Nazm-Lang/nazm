@@ -19866,7 +19866,7 @@ why = "asking for the Nazm backend builds with the LLVM backend instead: a silen
 file = "crates/nazm-cli/src/build/mod.rs"
 find = '''        nazm_lir::backend::BackendId::Nazm => &nzcg,'''
 replace = '''        nazm_lir::backend::BackendId::Nazm => &llvm,'''
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_generator_is_told_the_target_and_whether_the_program_has_one_thread" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_cross_build_tells_the_generator_the_target_and_whether_the_program_has_one_thread" }]
 
 [[mutation]]
 name = "r9-a-refusal-is-reported-as-a-defect"
@@ -19874,7 +19874,7 @@ why = "the generator's refusal (exit status 3) becomes one N0900 compiler defect
 file = "crates/nazm-codegen-nazm/src/lib.rs"
 find = '''        Some(REFUSED) => Err(refusals(&stderr)),'''
 replace = '''        Some(REFUSED) => Err(vec![defect(stderr.to_string())]),'''
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_refused_construct_is_n0101_by_name_and_nothing_is_written_or_fallen_back_to" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_cross_refused_construct_is_n0101_by_name_and_nothing_is_written_or_fallen_back_to" }]
 
 [[mutation]]
 name = "r9-one-thread-is-said-backwards"
@@ -19882,7 +19882,7 @@ why = "the generator is told a program has one thread exactly when it has severa
 file = "crates/nazm-codegen-nazm/src/lib.rs"
 find = '''    if one_thread {'''
 replace = '''    if !one_thread {'''
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_generator_is_told_the_target_and_whether_the_program_has_one_thread" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_cross_build_tells_the_generator_the_target_and_whether_the_program_has_one_thread" }]
 
 [[mutation]]
 name = "r9-the-generator-is-not-in-the-key"
@@ -19898,7 +19898,7 @@ why = "a debug build hands the generator its positions without the names of the 
 file = "crates/nazm-codegen-nazm/src/lib.rs"
 find = '''self.run(&text(&m, names, self.debug), native.single_thread)'''
 replace = '''self.run(&text(&m, names, false), native.single_thread)'''
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_debug_build_hands_the_generator_its_positions_and_their_files" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_cross_debug_build_hands_the_generator_its_positions_and_their_files" }]
 
 [[mutation]]
 name = "r9-a-target-it-does-not-carry-is-not-refused-first"
@@ -19954,7 +19954,7 @@ why = "the macOS archive is packaged without libexec/nazm/nzcg, so the installed
 file = "scripts/host-archive.sh"
 find = '''    aarch64-apple-darwin|x86_64-apple-darwin)'''
 replace = '''    none)'''
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_packaged_toolchain_finds_its_generator_beside_nazm_without_the_variable" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_packaged_macos_archive_carries_its_generator_beside_nazm" }]
 
 [[mutation]]
 name = "r9-7-9-the-record-does-not-name-the-generator"
@@ -19962,7 +19962,7 @@ why = "a program Nazm's own code generator built has a provenance record that do
 file = "crates/nazm-cli/src/provenance.rs"
 find = '''    if r.backend == "nazm" {'''
 replace = '''    if false {'''
-killers = [{ package = "nazm-cli", test = "cli_a_b", name = "build_provenance::a_program_nazms_own_generator_built_names_it_by_its_digest" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_cross_build_by_nazms_generator_names_it_by_its_digest" }]
 
 [[mutation]]
 name = "r9-7-9-profile-refuses-the-nazm-backend"
@@ -19980,7 +19980,7 @@ why = "on aarch64 a comparison fused with its block's branch skips to the else b
 file = "toolchain/codegen/sel.nz"
 find = '''            branch_to(g, 1, b_cond(cond ^ 1, 0), t.c)'''
 replace = '''            branch_to(g, 1, b_cond(cond, 0), t.c)'''
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::every_input_of_the_generators_suite_agrees_with_the_llvm_build" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_generators_own_programs_agree_with_llvm_on_this_linux" }]
 
 [[mutation]]
 name = "r9-7-6-the-unguarded-remainder-divides-by-minus-one"
@@ -19988,7 +19988,7 @@ why = "on x86-64 the remainder selected without its guard no longer stops before
 file = "toolchain/codegen/sel_x64.nz"
 find = '''        cmp_imm8(b, B, -1)'''
 replace = '''        cmp_imm8(b, B, 0)'''
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_generators_own_programs_agree_with_llvm_on_x86_64_under_rosetta" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::an_x86_64_remainder_by_minus_one_never_reaches_idiv" }]
 
 [[mutation]]
 name = "r9-7-6-the-unguarded-remainder-reads-the-select"
@@ -19996,7 +19996,7 @@ why = "on aarch64 the remainder selected without its guard divides by the guard'
 file = "toolchain/codegen/sel.nz"
 find = '''                y.b = f.insts[i + 6].b'''
 replace = '''                y.b = r.b'''
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::every_input_of_the_generators_suite_agrees_with_the_llvm_build" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_generators_own_programs_agree_with_llvm_on_this_linux" }]
 
 [[mutation]]
 name = "r9-8-1-a-pc-relative-field-is-absolute"
@@ -20714,7 +20714,7 @@ why = "the monitor marks a stuck worker asked but never interrupts its thread, s
 file = "crates/nazm-runtime/src/core.rs"
 find = '''  call void @nz.os_preempt(ptr %thp)'''
 replace = '''  ; no interrupt'''
-killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+killers = [{ package = "nazm-runtime", test = "preemption", name = "the_monitor_asks_and_interrupts_exactly_a_stuck_worker_with_a_task_waiting" }]
 
 [[mutation]]
 name = "pp-the-monitor-sees-no-one-waiting"
@@ -20724,7 +20724,7 @@ find = '''  %queued = or i1 %rq, %fq
   br i1 %queued, label %ask, label %keep'''
 replace = '''  %queued = and i1 %rq, false
   br i1 %queued, label %ask, label %keep'''
-killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+killers = [{ package = "nazm-runtime", test = "preemption", name = "the_monitor_asks_and_interrupts_exactly_a_stuck_worker_with_a_task_waiting" }]
 
 [[mutation]]
 name = "pp-the-handler-finds-no-generated-code"
@@ -20734,7 +20734,7 @@ find = '''  %in = and i1 %above, %below
   br i1 %in, label %yield, label %out'''
 replace = '''  %in = and i1 %above, false
   br i1 %in, label %yield, label %out'''
-killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+killers = [{ package = "nazm-runtime", test = "preemption", name = "the_signal_handler_yields_only_for_a_program_counter_inside_the_generated_code_section" }]
 
 [[mutation]]
 name = "pp-generated-code-has-no-section"
@@ -20742,7 +20742,7 @@ why = "the LLVM backend leaves generated functions in the default text section o
 file = "crates/nazm-lir/src/op/llvm.rs"
 find = '''            Self::MachO => " section \"__TEXT,__nz_text,regular,pure_instructions\"",'''
 replace = '''            Self::MachO => "",'''
-killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "preemption::the_llvm_backend_puts_every_function_it_generates_in_the_preemption_section" }]
 
 [[mutation]]
 name = "pp-an-asked-task-does-not-yield"
@@ -20750,7 +20750,7 @@ why = "the interrupt clears its worker's request but the task goes on running"
 file = "crates/nazm-runtime/src/core.rs"
 find = '''  br i1 %asked, label %yield, label %out'''
 replace = '''  br i1 %asked, label %out, label %out'''
-killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+killers = [{ package = "nazm-runtime", test = "preemption", name = "an_interrupted_task_yields_only_when_its_worker_asked_and_no_failure_is_unwinding" }]
 
 # --- Static archives written by nazm (2026-10-17): Apple's CLT 27.0 `ar` index varied run to run
 
@@ -20927,7 +20927,7 @@ find = '''        } else if nazm_lir::backend::small_heap(self.small_heap, nativ
         }'''
 replace = '''        } else if nazm_lir::backend::small_heap(self.small_heap, native) {
         }'''
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_task_program_from_each_backend_runs_on_any_number_of_workers" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_cross_build_hands_the_generator_lir_that_allocates_from_the_small_block_heap" }]
 
 # --- Performance leadership 6.3: preemption on every backend (2026-10-17) ---------------------------
 
@@ -20938,7 +20938,7 @@ file = "crates/nazm-codegen-clif/src/translate.rs"
 find = '''    let bytes = in_code_section(bytes, section);'''
 replace = '''    let bytes = in_code_section(bytes, CodeSection::Plain);
     let _ = section;'''
-killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "preemption::the_cranelift_backend_puts_every_function_it_generates_in_the_preemption_section" }]
 
 [[mutation]]
 name = "pp-nzcg-code-stays-in-the-text-section"
@@ -20946,7 +20946,7 @@ why = "Nazm's own code generator writes its code in __text, outside the generate
 file = "toolchain/codegen/macho.nz"
 find = '''    let sec_names: Strs = ["__nz_text", "__const", "__const", "__data"]'''
 replace = '''    let sec_names: Strs = ["__text", "__const", "__const", "__data"]'''
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_long_loop_from_nazms_own_code_generator_yields_its_worker" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::nazms_own_generator_writes_its_code_in_the_generated_code_section" }]
 
 # --- Performance leadership 6.4: the direct hand-off on a generic channel (2026-10-17)
 
