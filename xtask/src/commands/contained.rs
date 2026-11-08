@@ -320,7 +320,16 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
             // for, so every one of them is compiled from the copy; only dependencies whose
             // package, version and features are unchanged are reused, which is what
             // Cargo's fingerprints key them on. N32-H: this halved the cold build.
-            bounds.deadline = Duration::from_secs(3000);
+            // A session pays its setup (pristine build, killer listing, one baseline run of
+            // every killer) before the first mutant: about 45 minutes for the full targeted
+            // catalogue. `NAZM_MUTATE_SESSION_SECS` (600..=86400) lengthens the session so a
+            // long campaign pays it once per session; every other bound is unchanged.
+            let session_secs = std::env::var("NAZM_MUTATE_SESSION_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .filter(|s| (600..=86_400).contains(s))
+                .unwrap_or(3000);
+            bounds.deadline = Duration::from_secs(session_secs);
             let passed = match mutate_passthrough(args.get(1..).unwrap_or_default()) {
                 Ok(a) => a,
                 Err(e) => {
@@ -351,7 +360,7 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
             {
                 String::new()
             } else {
-                " --budget-secs 2400".to_owned()
+                format!(" --budget-secs {}", session_secs.saturating_mul(4).div_euclid(5))
             };
             // `timeout` inside the container, so a supervisor that dies without killing
             // it still leaves a container that stops itself. TERM, not KILL: `timeout`
