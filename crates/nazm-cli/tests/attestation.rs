@@ -183,9 +183,9 @@ fn the_sbom_lists_every_package_source_and_the_runtime_with_their_digests() {
     );
 }
 
-// The contained Linux image has no ssh-keygen: there it is ignored, not a pass (Q1-D-02).
+// The contained Linux image carries `openssh-client` (docker/contained.Dockerfile), so this runs
+// there too: it is the killer of the three n94 attestation mutants.
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "signs with the host's ssh-keygen")]
 fn a_signed_statement_verifies_for_its_signer_and_its_artefacts_only() {
     if common::skip_without(
         Command::new("ssh-keygen").arg("-?").output().is_ok(),
