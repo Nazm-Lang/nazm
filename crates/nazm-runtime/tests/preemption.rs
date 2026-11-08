@@ -210,10 +210,7 @@ fn the_signal_handler_yields_only_for_a_program_counter_inside_the_generated_cod
         // The section's bounds are the linker's symbols on macOS; here they are the two ends of one
         // array, compared the same way.
         let handler = handler
-            .replace(
-                "@\"\\01section$start$__TEXT$__nz_text\"",
-                "@nzsect",
-            )
+            .replace("@\"\\01section$start$__TEXT$__nz_text\"", "@nzsect")
             .replace(
                 "@\"\\01section$end$__TEXT$__nz_text\"",
                 "getelementptr inbounds ({ [64 x i8], i8 }, ptr @nzsect, i32 0, i32 1)",
