@@ -38,8 +38,8 @@ Status as of 2026-11-08 (update it with every change).
 | ID | Step | Status | Waits on |
 |---|---|---|---|
 | E1 | Retitle the headings of the `openspec` task lists with the plain step names and IDs | Not started | 0.11.0 published |
-| E2 | Delete the old branches on GitHub that still carry the pre-rewrite history | Not started | The holder's go-ahead |
-| E3 | Require the Windows job in the repository's branch protection (a repository setting) | Not started | The holder |
+| E2 | Delete the old branches on GitHub that still carry the pre-rewrite history | Done 2026-11-08: 41 merged or redundant branches deleted (all backed up in a local bundle); kept `main`, `cla-signatures`, the two open-PR branches and four branches with no PR (`r8-s14a-patch`, `r8-s14b-misc`, `r8-s14m`, `r8-slice14b`) | |
+| E3 | Require the Windows job in branch protection. The job runs only on pushes to `main`, never on pull requests, so requiring it as it is would block every merge. First make the job run on code pull requests (a CI change, three operating systems times four shards of GitHub time), then require it | Not started; approved by the holder 2026-11-08, needs the CI change first | The CI change |
 
 ## F. Gate and ship
 
