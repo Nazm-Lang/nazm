@@ -39,6 +39,7 @@ mod patterns;
 #[cfg(unix)]
 mod platform_files;
 mod platform_matrix;
+mod preemption;
 mod prelude;
 mod printing;
 mod process;
