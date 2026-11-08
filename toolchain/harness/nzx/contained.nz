@@ -249,7 +249,7 @@ fn build_plan(c: Ctx, args: Strs, profile: Profile, b0: Bounds, print_argv: Bool
         let allowed = strs_new();
         strs_push(allowed, "fuzz-min.tar");
         strs_push(allowed, "report.txt");
-        let b = bounds_with_export(bounds_with_deadline(b0, 1800 + seconds * 2 * count), Export(manifest: "/work/fuzzout/EXPORTS", dest: dest, allowed: allowed, max_bytes: 8388608));
+        let b = bounds_with_export(bounds_with_deadline(b0, 1800 + seconds * 2 * count), Export(manifest: "/work/fuzzout/EXPORTS", dest: dest, allowed: allowed, max_bytes: 67108864));
         if w == "fuzz-seed" {
             return Result[Plan, Str].Ok(value: Plan(name: "fuzz-seed", argv: shell(script_fuzz_seed(j, seconds, str_join(targets, " "))), bounds: b));
         }
