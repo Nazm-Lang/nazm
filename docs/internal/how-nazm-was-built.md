@@ -246,7 +246,7 @@ Versioning, release archives, checksums, provenance, the website and the package
 - `e09ece0b` build: write static archives deterministically for byte-identical builds
 - `e36c4da5` build: harden release builds for either macOS architecture on macOS
 
-The plan for shipping 0.11.0, by phase, is in [`release-0-11-0-plan.md`](release-0-11-0-plan.md).
+The plan for shipping 0.11.0, by phase, is in [`release-0-11-0-plan.md`](release-0-11-0-plan.md), and the next release's in [`release-0-12-0-plan.md`](release-0-12-0-plan.md).
 
 ## Old labels
 
