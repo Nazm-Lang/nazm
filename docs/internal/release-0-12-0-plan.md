@@ -32,6 +32,7 @@ Status as of 2026-11-08 (update it with every change).
 | ID | Step | Old task | Status | Waits on |
 |---|---|---|---|---|
 | D1 | Mutation runs group leaf crates so consecutive mutants rebuild less (measure first; only if the gain is real) | R1.5 8.3b | Not started | 0.11.0 published |
+| D2 | Make the whole-repository `context` test fast: one test, `every_definition_of_the_repository_has_a_packet_every_layer_agrees_with`, takes about 1000 s (744 s even spread over every core, because one large document dominates). Find why a packet for each definition costs so much in that document and fix the cost in the service, not the test; it is the longest job in CI | Measured 2026-11-09, not started | 0.11.0 published |
 
 ## E. Housekeeping
 
