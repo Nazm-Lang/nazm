@@ -17,5 +17,5 @@ pristine tree passes it, the mutant fails it, the restored tree passes it.
 | preemption | pp-an-asked-task-does-not-yield, pp-the-monitor-sees-no-one-waiting, pp-the-monitor-interrupts-no-one, pp-the-handler-finds-no-generated-code, pp-generated-code-has-no-section, pp-cranelift-code-stays-in-the-text-section, pp-nzcg-code-stays-in-the-text-section | `scheduler_pool` test is `cfg(target_os = "macos")` | open |
 | release build | r1-5-d15-a-release-build-has-no-canary, -is-not-stripped, -is-signed-without-the-hardened-runtime | `otool`, `nm`, `codesign`; `cfg(target_os = "macos")` | open |
 | attestation | n94-the-signature-is-not-checked, n94-an-artefact-is-not-checked, n94-a-stray-artefact-is-attested | the test is `ignore` | open |
-| debugger | n91-sampling-without-lines, n91-macho-addresses-are-not-settled | the test is `ignore` (lldb, Mach-O) | open |
+| debugger | n91-sampling-without-lines, n91-macho-addresses-are-not-settled | the test is `ignore` (lldb, Mach-O) | half: `n91-sampling-without-lines` **done** (`build_command` seam in `run_profile.rs`, seed exemption logged, unit test); `n91-macho-addresses-are-not-settled` open |
 | others | n95-a-cpu-is-misrecorded, g3-a-toolchain-failure-is-blamed-on-the-ir | `ignore` / `cfg(target_os = "macos")` | open |
