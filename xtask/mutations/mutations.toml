@@ -20714,7 +20714,7 @@ why = "the monitor marks a stuck worker asked but never interrupts its thread, s
 file = "crates/nazm-runtime/src/core.rs"
 find = '''  call void @nz.os_preempt(ptr %thp)'''
 replace = '''  ; no interrupt'''
-killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+killers = [{ package = "nazm-runtime", test = "preemption", name = "the_monitor_asks_and_interrupts_exactly_a_stuck_worker_with_a_task_waiting" }]
 
 [[mutation]]
 name = "pp-the-monitor-sees-no-one-waiting"
@@ -20724,7 +20724,7 @@ find = '''  %queued = or i1 %rq, %fq
   br i1 %queued, label %ask, label %keep'''
 replace = '''  %queued = and i1 %rq, false
   br i1 %queued, label %ask, label %keep'''
-killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+killers = [{ package = "nazm-runtime", test = "preemption", name = "the_monitor_asks_and_interrupts_exactly_a_stuck_worker_with_a_task_waiting" }]
 
 [[mutation]]
 name = "pp-the-handler-finds-no-generated-code"
@@ -20734,7 +20734,7 @@ find = '''  %in = and i1 %above, %below
   br i1 %in, label %yield, label %out'''
 replace = '''  %in = and i1 %above, false
   br i1 %in, label %yield, label %out'''
-killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+killers = [{ package = "nazm-runtime", test = "preemption", name = "the_signal_handler_yields_only_for_a_program_counter_inside_the_generated_code_section" }]
 
 [[mutation]]
 name = "pp-generated-code-has-no-section"
@@ -20742,7 +20742,7 @@ why = "the LLVM backend leaves generated functions in the default text section o
 file = "crates/nazm-lir/src/op/llvm.rs"
 find = '''            Self::MachO => " section \"__TEXT,__nz_text,regular,pure_instructions\"",'''
 replace = '''            Self::MachO => "",'''
-killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "preemption::the_llvm_backend_puts_every_function_it_generates_in_the_preemption_section" }]
 
 [[mutation]]
 name = "pp-an-asked-task-does-not-yield"
@@ -20750,7 +20750,7 @@ why = "the interrupt clears its worker's request but the task goes on running"
 file = "crates/nazm-runtime/src/core.rs"
 find = '''  br i1 %asked, label %yield, label %out'''
 replace = '''  br i1 %asked, label %out, label %out'''
-killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+killers = [{ package = "nazm-runtime", test = "preemption", name = "an_interrupted_task_yields_only_when_its_worker_asked_and_no_failure_is_unwinding" }]
 
 # --- Static archives written by nazm (2026-10-17): Apple's CLT 27.0 `ar` index varied run to run
 
@@ -20938,7 +20938,7 @@ file = "crates/nazm-codegen-clif/src/translate.rs"
 find = '''    let bytes = in_code_section(bytes, section);'''
 replace = '''    let bytes = in_code_section(bytes, CodeSection::Plain);
     let _ = section;'''
-killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "preemption::the_cranelift_backend_puts_every_function_it_generates_in_the_preemption_section" }]
 
 [[mutation]]
 name = "pp-nzcg-code-stays-in-the-text-section"
