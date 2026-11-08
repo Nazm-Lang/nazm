@@ -189,7 +189,7 @@
       which `runtime_table.py`'s pattern skipped, so `runtime.nz` lost it and a program that
       makes a sequence (`examples/worker-pool.nz`) stopped at `ops`; the pattern takes any
       spacing and the script now asserts it read every import (179)
-- [ ] 8.3 **In scope for 0.11.0: Linux, `wasm32-unknown-unknown` and WASI (`wasm32-wasip1`). Deferred until after 1.0: Android, iOS and all the boards** (the copyright holder's decisions, 2026-11-05, replacing the 2026-10-15 deferral; not ported
+- [ ] 8.3 **Moved to 0.12.0 (holder, 2026-11-05, `decisions-log.md`): Linux, `wasm32-unknown-unknown` and WASI (`wasm32-wasip1`). Deferred until after 1.0: Android, iOS and all the boards** (the copyright holder's decisions, 2026-11-05, replacing the 2026-10-15 deferral; not ported
       now): Linux (`aarch64-`/`x86_64-unknown-linux-gnu`),
       WebAssembly (`wasm32-unknown-unknown`), WASI (`wasm32-wasip1`), Android and iOS, and the
       boards (`aarch64-unknown-none`, `riscv64gc-unknown-none-elf`, `thumbv7m-none-eabi`, and
