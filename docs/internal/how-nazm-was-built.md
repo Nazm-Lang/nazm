@@ -246,6 +246,8 @@ Versioning, release archives, checksums, provenance, the website and the package
 - `e09ece0b` build: write static archives deterministically for byte-identical builds
 - `e36c4da5` build: harden release builds for either macOS architecture on macOS
 
+The plan for shipping 0.11.0, by phase, is in [`release-0-11-0-plan.md`](release-0-11-0-plan.md).
+
 ## Old labels
 
 Older notes, tasks and `Was:` lines use working labels. They map to steps like this:
