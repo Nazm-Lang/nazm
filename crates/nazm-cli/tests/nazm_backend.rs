@@ -26,6 +26,8 @@ use crate::common::{self, run_bounded, run_within, Ran};
 use crate::differential;
 
 const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
+/// MinGW-w64's disassembler, which reads raw x86-64 bytes on any host the image runs on.
+const OBJDUMP: &str = "x86_64-w64-mingw32-objdump";
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -774,7 +776,6 @@ fn lsdas(o: &[u8]) -> (u64, Vec<u64>, Vec<u64>) {
 /// macOS 26 runner tied every function to that atom's start, the first function's LSDA: no
 /// landing pad was found below it and every failure aborted. The linker here resolves the
 /// address inside the atom, so only the object can show it.
-#[cfg_attr(not(target_os = "macos"), ignore = "macOS only before 1.0")]
 #[test]
 fn every_lsda_of_a_mach_o_object_is_an_atom_of_its_own() {
     let nzcg = differential::nzcg();
@@ -812,6 +813,137 @@ fn every_lsda_of_a_mach_o_object_is_an_atom_of_its_own() {
             );
         }
     }
+}
+
+/// The generator's own programs, built by the generator for this Linux machine's own architecture
+/// (the container's: ELF objects linked with its `cc`), run, and compared byte for byte with the
+/// LLVM build of each: `toolchain/codegen/tests/run.sh` as `cargo xtask contained elfrun` runs it.
+/// `guards.nz` is the signed remainder selected without its guard at every width and every kind of
+/// comparison that ends a block, the cases the aarch64 selection gets wrong if a fused branch falls
+/// through the wrong way or a remainder divides by the wrong register; `fib.nz` is the plain one.
+/// Contained only (`NAZM_CONTAINED=1`): the script refuses to run a Nazm-built program elsewhere.
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "the generator's ELF programs run in the Linux container"
+)]
+#[test]
+fn the_generators_own_programs_agree_with_llvm_on_this_linux() {
+    if common::skip_without(
+        std::env::var("NAZM_CONTAINED").as_deref() == Ok("1"),
+        "not contained: run.sh runs Nazm-built programs only through `cargo xtask contained`",
+    ) {
+        return;
+    }
+    let work = tempfile::tempdir().unwrap();
+    let inputs = [
+        "toolchain/codegen/tests/programs/guards.nz",
+        "bench/compare/nazm/fib.nz",
+    ];
+    let o = Command::new("bash")
+        .current_dir(repo())
+        .arg("toolchain/codegen/tests/run.sh")
+        .args(inputs)
+        .env("NAZM", NAZM)
+        .env("NAZM_REF", NAZM)
+        .env("NZCG_OUT", work.path())
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&o.stdout);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        text.contains("2 agree, 0 differ, 0 refused, 0 skipped"),
+        "{text}\n{err}"
+    );
+    assert_eq!(o.status.code(), Some(0), "{text}\n{err}");
+}
+
+/// A signed 64-bit remainder the generator selects without its guard stops before `idiv` for a
+/// divisor of -1 (the minimum's remainder by -1 would trap): on x86-64, `cmp $-1, R; je past;
+/// cqto; idiv R`, with the same register in the compare and the divide. No x86-64 code runs in
+/// the aarch64 container, so this reads the generated code: the object for
+/// `x86_64-unknown-linux-gnu`, its code disassembled with MinGW-w64's `objdump` (in the image).
+#[test]
+fn an_x86_64_remainder_by_minus_one_never_reaches_idiv() {
+    use object::read::{Object as _, ObjectSection as _};
+    if common::skip_without(
+        Command::new(OBJDUMP).arg("--version").output().is_ok(),
+        "no x86_64-w64-mingw32-objdump",
+    ) {
+        return;
+    }
+    let nzcg = differential::nzcg();
+    let d = tempfile::tempdir().unwrap();
+    let triple = "x86_64-unknown-linux-gnu";
+    let lir = Command::new(NAZM)
+        .current_dir(d.path())
+        .args(["lir", "--target", triple, "--ops"])
+        .arg(repo().join("toolchain/codegen/tests/programs/guards.nz"))
+        .output()
+        .unwrap();
+    assert!(
+        lir.status.success(),
+        "{}",
+        String::from_utf8_lossy(&lir.stderr)
+    );
+    std::fs::write(d.path().join("lir.txt"), &lir.stdout).unwrap();
+    std::fs::create_dir(d.path().join("gen")).unwrap();
+    let g = Command::new(nzcg)
+        .current_dir(d.path())
+        .args(["--target", triple, "lir.txt", "gen"])
+        .output()
+        .unwrap();
+    assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
+    let mut guarded = 0;
+    let mut divides = 0;
+    for entry in std::fs::read_dir(d.path().join("gen")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("o") {
+            continue;
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        let file = object::read::File::parse(&*bytes).unwrap();
+        for section in file.sections() {
+            if section.kind() != object::SectionKind::Text {
+                continue;
+            }
+            let code = section.data().unwrap();
+            let raw = d.path().join("code.bin");
+            std::fs::write(&raw, code).unwrap();
+            let dis = Command::new(OBJDUMP)
+                .args(["-D", "-b", "binary", "-m", "i386:x86-64", "-M", "att"])
+                .arg(&raw)
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&dis.stdout);
+            let ops: Vec<String> = text
+                .lines()
+                .filter_map(|l| l.split_once(":\t"))
+                .filter_map(|(_, rest)| rest.split_once('\t').map(|(_, t)| t.trim().to_owned()))
+                .collect();
+            for (i, op) in ops.iter().enumerate() {
+                let Some(reg) = op.strip_prefix("idiv") else {
+                    continue;
+                };
+                divides += 1;
+                let reg = reg.trim();
+                let before = &ops[i.saturating_sub(3)..i];
+                if before.len() == 3
+                    && before[0].starts_with("cmp")
+                    && before[0].contains("$0xffffffffffffffff")
+                    && before[0].ends_with(reg)
+                    && before[1].starts_with("je")
+                    && before[2].starts_with("cqto")
+                {
+                    guarded += 1;
+                }
+            }
+        }
+    }
+    assert!(divides >= 4, "guards.nz selects too few idivs: {divides}");
+    assert!(
+        guarded >= 1,
+        "no `cmp $-1, R; je; cqto; idiv R` guard before any of {divides} idivs"
+    );
 }
 
 /// A stand-in generator: a shell script that records its arguments and its input, then runs the
