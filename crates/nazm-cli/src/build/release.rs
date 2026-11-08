@@ -79,18 +79,31 @@ pub(crate) fn link_args() -> Vec<String> {
 ///
 /// The tool that failed and what it said.
 pub(crate) fn finish(exe: &Path) -> Result<(), String> {
-    tool("strip", &[exe.as_os_str()])?;
-    tool(
-        "codesign",
-        &[
-            "--force".as_ref(),
-            "--sign".as_ref(),
-            "-".as_ref(),
-            "--options".as_ref(),
-            "runtime".as_ref(),
-            exe.as_os_str(),
-        ],
-    )
+    for (name, args) in finish_plan(exe) {
+        let args: Vec<&std::ffi::OsStr> = args.iter().map(|a| a.as_os_str()).collect();
+        tool(name, &args)?;
+    }
+    Ok(())
+}
+
+/// The tools `finish` runs, in order, with their arguments: strip, then the ad hoc signature with
+/// the hardened runtime. A value, so a test on any host can say what a release build does to its
+/// executable without the macOS tools.
+fn finish_plan(exe: &Path) -> Vec<(&'static str, Vec<std::ffi::OsString>)> {
+    vec![
+        ("strip", vec![exe.into()]),
+        (
+            "codesign",
+            vec![
+                "--force".into(),
+                "--sign".into(),
+                "-".into(),
+                "--options".into(),
+                "runtime".into(),
+                exe.into(),
+            ],
+        ),
+    ]
 }
 
 /// Run one of the toolchain's tools with the environment the driver is given, nothing else.
@@ -114,6 +127,7 @@ fn tool(name: &str, args: &[&std::ffi::OsStr]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
     use super::*;
 
     #[test]
@@ -131,5 +145,22 @@ mod tests {
         assert!(out.contains("define void @h() sspreq {"), "{out}");
         assert!(out.contains("declare void @use(ptr)\n"));
         assert_eq!(out.matches("sspstrong").count(), 3);
+    }
+
+    #[test]
+    fn a_release_executable_is_stripped_then_signed_ad_hoc_with_the_hardened_runtime() {
+        let plan = finish_plan(Path::new("/out/p"));
+        let words = |args: &[std::ffi::OsString]| -> Vec<String> {
+            args.iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect()
+        };
+        let names: Vec<&str> = plan.iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, ["strip", "codesign"], "strip first, then sign");
+        assert_eq!(words(&plan[0].1), ["/out/p"]);
+        assert_eq!(
+            words(&plan[1].1),
+            ["--force", "--sign", "-", "--options", "runtime", "/out/p"]
+        );
     }
 }
