@@ -19866,7 +19866,7 @@ why = "asking for the Nazm backend builds with the LLVM backend instead: a silen
 file = "crates/nazm-cli/src/build/mod.rs"
 find = '''        nazm_lir::backend::BackendId::Nazm => &nzcg,'''
 replace = '''        nazm_lir::backend::BackendId::Nazm => &llvm,'''
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_generator_is_told_the_target_and_whether_the_program_has_one_thread" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_cross_build_tells_the_generator_the_target_and_whether_the_program_has_one_thread" }]
 
 [[mutation]]
 name = "r9-a-refusal-is-reported-as-a-defect"
@@ -19874,7 +19874,7 @@ why = "the generator's refusal (exit status 3) becomes one N0900 compiler defect
 file = "crates/nazm-codegen-nazm/src/lib.rs"
 find = '''        Some(REFUSED) => Err(refusals(&stderr)),'''
 replace = '''        Some(REFUSED) => Err(vec![defect(stderr.to_string())]),'''
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_refused_construct_is_n0101_by_name_and_nothing_is_written_or_fallen_back_to" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_cross_refused_construct_is_n0101_by_name_and_nothing_is_written_or_fallen_back_to" }]
 
 [[mutation]]
 name = "r9-one-thread-is-said-backwards"
@@ -19882,7 +19882,7 @@ why = "the generator is told a program has one thread exactly when it has severa
 file = "crates/nazm-codegen-nazm/src/lib.rs"
 find = '''    if one_thread {'''
 replace = '''    if !one_thread {'''
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_generator_is_told_the_target_and_whether_the_program_has_one_thread" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_cross_build_tells_the_generator_the_target_and_whether_the_program_has_one_thread" }]
 
 [[mutation]]
 name = "r9-the-generator-is-not-in-the-key"
@@ -19898,7 +19898,7 @@ why = "a debug build hands the generator its positions without the names of the 
 file = "crates/nazm-codegen-nazm/src/lib.rs"
 find = '''self.run(&text(&m, names, self.debug), native.single_thread)'''
 replace = '''self.run(&text(&m, names, false), native.single_thread)'''
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_debug_build_hands_the_generator_its_positions_and_their_files" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_cross_debug_build_hands_the_generator_its_positions_and_their_files" }]
 
 [[mutation]]
 name = "r9-a-target-it-does-not-carry-is-not-refused-first"
@@ -19954,7 +19954,7 @@ why = "the macOS archive is packaged without libexec/nazm/nzcg, so the installed
 file = "scripts/host-archive.sh"
 find = '''    aarch64-apple-darwin|x86_64-apple-darwin)'''
 replace = '''    none)'''
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_packaged_toolchain_finds_its_generator_beside_nazm_without_the_variable" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_packaged_macos_archive_carries_its_generator_beside_nazm" }]
 
 [[mutation]]
 name = "r9-7-9-the-record-does-not-name-the-generator"
@@ -19962,7 +19962,7 @@ why = "a program Nazm's own code generator built has a provenance record that do
 file = "crates/nazm-cli/src/provenance.rs"
 find = '''    if r.backend == "nazm" {'''
 replace = '''    if false {'''
-killers = [{ package = "nazm-cli", test = "cli_a_b", name = "build_provenance::a_program_nazms_own_generator_built_names_it_by_its_digest" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_cross_build_by_nazms_generator_names_it_by_its_digest" }]
 
 [[mutation]]
 name = "r9-7-9-profile-refuses-the-nazm-backend"
@@ -20927,7 +20927,7 @@ find = '''        } else if nazm_lir::backend::small_heap(self.small_heap, nativ
         }'''
 replace = '''        } else if nazm_lir::backend::small_heap(self.small_heap, native) {
         }'''
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_task_program_from_each_backend_runs_on_any_number_of_workers" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_cross_build_hands_the_generator_lir_that_allocates_from_the_small_block_heap" }]
 
 # --- Performance leadership 6.3: preemption on every backend (2026-10-17) ---------------------------
 
@@ -20946,7 +20946,7 @@ why = "Nazm's own code generator writes its code in __text, outside the generate
 file = "toolchain/codegen/macho.nz"
 find = '''    let sec_names: Strs = ["__nz_text", "__const", "__const", "__data"]'''
 replace = '''    let sec_names: Strs = ["__text", "__const", "__const", "__data"]'''
-killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_long_loop_from_nazms_own_code_generator_yields_its_worker" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::nazms_own_generator_writes_its_code_in_the_generated_code_section" }]
 
 # --- Performance leadership 6.4: the direct hand-off on a generic channel (2026-10-17)
 
