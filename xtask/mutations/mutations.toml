@@ -21303,7 +21303,7 @@ find = """    let Some(_lock) = held else {
 replace = """    let Some(_lock) = held.or_else(|| fs::File::open(dir.join(SLOTS[0])).ok()) else {
         return Err(Refusal::AnotherStage);
     };"""
-killers = [{ package = "xtask", test = "host_run", name = "a_third_stage_is_refused_while_two_run" }]
+killers = [{ package = "xtask", bin = "xtask", name = "host_run::tests::a_third_stage_is_refused_while_two_run" }]
 
 [[mutation]]
 name = "r6-host-run-withdrawal-marker"
@@ -21311,7 +21311,7 @@ why = "a withdrawn rule is not remembered: the next host run starts"
 file = "xtask/src/host_run.rs"
 find = """    if let Ok(why) = fs::read_to_string(&marker) {"""
 replace = """    if let Ok(why) = fs::read_to_string(dir.join("no-such-marker")) {"""
-killers = [{ package = "xtask", test = "host_run", name = "a_peak_past_the_limit_is_the_withdrawal_condition_and_later_runs_are_refused" }]
+killers = [{ package = "xtask", bin = "xtask", name = "host_run::tests::a_peak_past_the_limit_is_the_withdrawal_condition_and_later_runs_are_refused" }]
 
 [[mutation]]
 name = "r6-host-run-host-environment"
@@ -21319,7 +21319,7 @@ why = "a host that declares containment is run on"
 file = "xtask/src/host_run.rs"
 find = """        return Err(Refusal::HostEnvironment(m));"""
 replace = """        let _ = m;"""
-killers = [{ package = "xtask", test = "host_run", name = "a_host_that_declares_containment_is_refused_by_name" }]
+killers = [{ package = "xtask", bin = "xtask", name = "host_run::tests::a_host_that_declares_containment_is_refused_by_name" }]
 
 [[mutation]]
 name = "r6-host-run-deadline"
@@ -21327,7 +21327,7 @@ why = "a stage past its deadline is left running"
 file = "xtask/src/host_run.rs"
 find = """        if start.elapsed() >= Duration::from_secs(opts.deadline) {"""
 replace = """        if false && start.elapsed() >= Duration::from_secs(opts.deadline) {"""
-killers = [{ package = "xtask", test = "host_run", name = "a_stage_past_its_deadline_is_killed_with_its_children" }]
+killers = [{ package = "xtask", bin = "xtask", name = "host_run::tests::a_stage_past_its_deadline_is_killed_with_its_children" }]
 
 [[mutation]]
 name = "r6-host-run-not-executable"
@@ -21335,4 +21335,4 @@ why = "a file that is not executable is read as a stage"
 file = "xtask/src/host_run.rs"
 find = """& 0o111 == 0 {"""
 replace = """& 0o111 == 0o1000 {"""
-killers = [{ package = "xtask", test = "host_run", name = "a_missing_or_non_executable_file_is_refused_by_name" }]
+killers = [{ package = "xtask", bin = "xtask", name = "host_run::tests::a_missing_or_non_executable_file_is_refused_by_name" }]
