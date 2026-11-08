@@ -986,7 +986,9 @@ fn recording(dir: &Path) -> PathBuf {
 // the generator's own objects by the real one, on Linux as on macOS. The macOS tests below also
 // link and run the program.
 
+#[cfg(unix)]
 const ONE_THREAD: &str = "fn main(out: OutCap) -> Int ! {io} {\n    println(7)\n    0\n}\n";
+#[cfg(unix)]
 const SEVERAL_THREADS: &str = "fn work(n: Int) -> Int { n * 2 }\n\
                                fn main(tasks: SpawnCap, out: OutCap) -> Int {\n    \
                                scope { spawn work(3); }\n    println(7)\n    0\n}\n";
@@ -1010,6 +1012,7 @@ fn cross(dir: &Path, generator: &Path, extra: &[&str], src: &str) -> Ran {
 
 /// A stand-in generator that records its arguments (`args.txt`) and the LIR it was handed
 /// (`unit.lir`), and writes an object file of known bytes.
+#[cfg(unix)]
 fn stub_generator(dir: &Path) -> PathBuf {
     fake(
         dir,
@@ -1023,6 +1026,7 @@ fn stub_generator(dir: &Path) -> PathBuf {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_cross_build_tells_the_generator_the_target_and_whether_the_program_has_one_thread() {
     let d = tempfile::tempdir().unwrap();
     for (name, src, threads) in [
@@ -1058,6 +1062,7 @@ fn a_cross_build_tells_the_generator_the_target_and_whether_the_program_has_one_
 }
 
 #[test]
+#[cfg(unix)]
 fn a_cross_debug_build_hands_the_generator_its_positions_and_their_files() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -1077,6 +1082,7 @@ fn a_cross_debug_build_hands_the_generator_its_positions_and_their_files() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_cross_refused_construct_is_n0101_by_name_and_nothing_is_written_or_fallen_back_to() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("prog.nz"), "fn main() -> Int { 0 }\n").unwrap();
@@ -1109,6 +1115,7 @@ fn a_cross_refused_construct_is_n0101_by_name_and_nothing_is_written_or_fallen_b
 /// still allocates from C: the argument block a `spawn` allocates would be freed by `nz.small_free`
 /// and the program would abort in C's `free`.
 #[test]
+#[cfg(unix)]
 fn a_cross_build_hands_the_generator_lir_that_allocates_from_the_small_block_heap() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("many.nz"), SEVERAL_THREADS).unwrap();
@@ -1126,6 +1133,7 @@ fn a_cross_build_hands_the_generator_lir_that_allocates_from_the_small_block_hea
 /// R9, D15: a program `--backend nazm` built names the generator that compiled it by its digest —
 /// the file `NAZM_NZCG` named, as anyone can recompute — and one LLVM built names none.
 #[test]
+#[cfg(unix)]
 fn a_cross_build_by_nazms_generator_names_it_by_its_digest() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("one.nz"), ONE_THREAD).unwrap();
@@ -1215,6 +1223,7 @@ fn nazms_own_generator_writes_its_code_in_the_generated_code_section() {
 /// `NAZM_NZCG` unset — and nowhere else: moved away, the build is refused naming that path. Any host
 /// can package under the macOS triple and build for it to objects.
 #[test]
+#[cfg(unix)]
 fn the_packaged_macos_archive_carries_its_generator_beside_nazm() {
     if common::skip_without(
         Command::new("python3")
