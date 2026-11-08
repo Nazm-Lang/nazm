@@ -13552,7 +13552,7 @@ why = "a sampled program is built without debug information, so no sample is att
 file = "crates/nazm-cli/src/run_profile.rs"
 find = "        build.args([\"--debug\", \"--no-cache\"]);"
 replace = "        build.args([\"--no-cache\"]);"
-killers = [{ package = "nazm-cli", test = "cli_c_d", name = "debugger_v3::a_sampled_run_is_attributed_to_nazm_functions_and_lines" }]
+killers = [{ package = "nazm-cli", bin = "nazm", name = "run_profile::tests::a_sampled_build_carries_debug_information_and_a_plain_one_does_not" }]
 
 [[mutation]]
 name = "n92-a-measured-heading-goes-unfiled"
