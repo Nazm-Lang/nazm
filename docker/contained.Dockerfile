@@ -53,3 +53,12 @@ RUN cargo fetch --locked \
 RUN apt-get update \
  && apt-get install -y --no-install-recommends openssh-client \
  && rm -rf /var/lib/apt/lists/*
+
+# `x86_64-w64-mingw32-objdump` disassembles and dumps (and `x86_64-w64-mingw32-gcc` links them, as the
+# target's own toolchain would) the Windows objects the generator writes
+# (`nazm build --backend nazm --target x86_64-pc-windows-gnu --objects`), so the test of their
+# Win64 convention and unwind data, and its mutation killers, run here instead of being ignored
+# (killer repoint 2026-11-08). Debian's package, nothing bundled; its own layer.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends binutils-mingw-w64-x86-64 gcc-mingw-w64-x86-64 \
+ && rm -rf /var/lib/apt/lists/*

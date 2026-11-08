@@ -419,7 +419,7 @@ fn the_generators_own_programs_agree_with_llvm_on_x86_64_under_rosetta() {
 /// object is PE/COFF for AMD64 with a `.pdata` entry per function, and MinGW-w64 links each
 /// program as its `link.txt` says, C beside it included. Compile- and link-verified only: running
 /// them is `scripts/windows-host.sh` with `BACKEND=nazm`, on a Windows host no test reaches.
-#[cfg_attr(not(target_os = "macos"), ignore = "macOS only before 1.0")]
+// Runs in the Linux container too (the image carries MinGW-w64's gcc and objdump).
 #[test]
 fn the_generators_own_programs_build_for_windows_and_link_with_mingw() {
     const GCC: &str = "x86_64-w64-mingw32-gcc";
@@ -597,7 +597,8 @@ fn unwind_infos(dump: &str) -> Vec<(u64, u64, Vec<String>)> {
 /// from above the caller's 32 bytes of shadow space; no xmm6–xmm15 is touched (callee-saved
 /// there); a function using rsi or rdi pushes it; a frame of a page or more is probed by
 /// `___chkstk_ms`; and every function's UNWIND_INFO says exactly what its prologue does.
-#[cfg_attr(not(target_os = "macos"), ignore = "macOS only before 1.0")]
+// Runs in the Linux container too (the image carries MinGW's objdump): the generator is built and
+// run there, and the objects it writes are Windows ones whatever the host.
 #[test]
 fn the_windows_objects_keep_the_win64_convention_and_describe_every_frame() {
     let objdump = Command::new("x86_64-w64-mingw32-objdump")
