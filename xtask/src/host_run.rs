@@ -816,7 +816,14 @@ mod tests {
                 .truncate(false)
                 .open(d.path().join("state").join(name))
                 .unwrap();
-            f.try_lock().unwrap();
+            // A test thread that forks in parallel inherits this descriptor until its exec, so
+            // the lock can read as taken for a moment; wait that out rather than flake.
+            let mut waited = 0;
+            while f.try_lock().is_err() {
+                assert!(waited < 500, "slot {name} never became free");
+                waited += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
             f
         };
         // One stage running: a second is admitted.
