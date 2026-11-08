@@ -360,7 +360,10 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
             {
                 String::new()
             } else {
-                format!(" --budget-secs {}", session_secs.saturating_mul(4).div_euclid(5))
+                format!(
+                    " --budget-secs {}",
+                    session_secs.saturating_mul(4).div_euclid(5)
+                )
             };
             // `timeout` inside the container, so a supervisor that dies without killing
             // it still leaves a container that stops itself. TERM, not KILL: `timeout`
