@@ -307,6 +307,20 @@ fn a_published_version_never_changes() {
     write(&src.join("src/extra.nz"), "fn more() -> Int { 1 }\n");
     let e = publish(&src, &w.path("reg")).unwrap_err();
     assert_eq!(e.code, codes::REGISTRY_INVALID);
+    // Refused for the right reason: a later check (a version directory the index lists but
+    // that is already there) would refuse the same publish with the same code, so the code alone
+    // does not show that the index was consulted.
+    assert!(
+        e.message
+            .contains("is already published; a published version never changes"),
+        "{}",
+        e.message
+    );
+    // And the stored copy is the first one's, unchanged.
+    assert!(
+        !w.path("reg/packages/shapes/1.0.0/src/extra.nz").exists(),
+        "the second publish reached the stored version"
+    );
     // A package that depends on a path cannot be published: the path means nothing elsewhere.
     let local = w.path("work/local");
     package(

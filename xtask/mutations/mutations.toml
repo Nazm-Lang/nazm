@@ -3728,7 +3728,7 @@ Repointed by Gate 2, whose `Text` joined the types with equality on that line.""
 file = "crates/nazm-sema/src/udt.rs"
 find = "            Type::Int | Type::Bool | Type::Str | Type::Text | Type::Num(_) => true,"
 replace = "            Type::Int | Type::Bool | Type::Str | Type::Text | Type::Num(_) | Type::Ints | Type::Strs => true,"
-killers = [{ package = "nazm-core", test = "equality", name = "handles_still_have_no_equality" }]
+killers = [{ package = "nazm-core", test = "equality", name = "handles_still_have_no_equality" }, { package = "nazm-sema", test = "handle_equality", name = "a_sequence_handle_has_no_equality_though_every_scalar_has" }]
 
 [[mutation]]
 name = "n13-a-chan-has-equality"
@@ -9334,7 +9334,7 @@ why = "a standard module is looked up by the length of its name, so `@std/text` 
 file = "crates/nazm-sema/src/stdlib.rs"
 find = "    MODULES.iter().find(|(n, _)| *n == name).copied()"
 replace = "    MODULES.iter().find(|(n, _)| n.len() == name.len()).copied()"
-killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stdlib::text_behaves_as_documented_at_its_edges" }]
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stdlib::text_behaves_as_documented_at_its_edges" }, { package = "nazm-sema", test = "stdlib_lookup", name = "every_standard_module_is_found_by_its_whole_name_and_by_nothing_shorter_or_alike" }]
 
 [[mutation]]
 name = "n45-a-project-path-can-take-a-standard-key"
