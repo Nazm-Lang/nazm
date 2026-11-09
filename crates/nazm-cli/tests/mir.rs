@@ -306,6 +306,67 @@ fn main() -> Int {
     );
 }
 
+/// A comparison borrows its operands: the temporaries a call left are released only after the
+/// answer exists. Released first, a string would be compared after its storage was freed — a
+/// use-after-free that nothing at run time shows, because the freed bytes are still there and
+/// every answer and memory counter is right (the mutant `n13-native-operands-are-released-before-
+/// they-are-compared` survived the whole workspace suite for that reason). The order is a fact
+/// of the MIR, so it is held there.
+#[test]
+fn a_comparison_reads_its_operand_temporaries_before_they_are_released() {
+    let p =
+        valid("fn main() -> Int {\n    if int_to_str(1) == int_to_str(2) { 1 } else { 0 }\n}\n");
+    let main = function(&p, "main");
+    let mut compares = 0;
+    for block in &main.blocks {
+        for (at, st) in block.stmts.iter().enumerate() {
+            let StatementKind::Assign {
+                value: Rvalue::Compare { lhs, rhs, .. },
+                ..
+            } = &st.kind
+            else {
+                continue;
+            };
+            compares += 1;
+            let operands: Vec<LocalId> = [lhs, rhs]
+                .into_iter()
+                .filter_map(|o| match o {
+                    Operand::Local(l) => Some(*l),
+                    Operand::Const(_) => None,
+                })
+                .collect();
+            assert_eq!(
+                operands.len(),
+                2,
+                "both operands are temporaries\n{}",
+                print(&p)
+            );
+            for before in &block.stmts[..at] {
+                if let StatementKind::Drop(l) = &before.kind {
+                    assert!(
+                        !operands.contains(l),
+                        "an operand is released before the comparison reads it\n{}",
+                        print(&p)
+                    );
+                }
+            }
+            for l in &operands {
+                let after = block.stmts[at + 1..]
+                    .iter()
+                    .filter(|s| matches!(&s.kind, StatementKind::Drop(d) if d == l))
+                    .count();
+                assert_eq!(
+                    after,
+                    1,
+                    "each operand is released once, after\n{}",
+                    print(&p)
+                );
+            }
+        }
+    }
+    assert_eq!(compares, 1, "one comparison in the program\n{}", print(&p));
+}
+
 #[test]
 fn a_field_write_moves_its_value_and_releases_the_old_one() {
     // `SetField` moves a temporary into the field: the temporary is emptied, the old field's

@@ -3916,6 +3916,7 @@ name = "n13-native-operands-are-released-before-they-are-compared"
 why = """
 the temporaries are released before the helper reads them, so a string payload is compared after its storage was freed — a real use-after-free, not an equivalent mutant
 Repointed by N40: a comparison borrows its operand temporaries and gives them back after; the validator refuses the read of an emptied one.
+Held since 2026-11-10 by a MIR-order test: a use-after-free that frees nothing observable at run time cannot be caught by running the program, but the order of the release and the comparison is a fact of the MIR, so the test reads it there (it was a known survivor before).
 """
 file = "crates/nazm-mir/src/lower.rs"
 find = """                let (a, b) = two(ops);
@@ -3928,7 +3929,7 @@ replace = """                let (a, b) = two(ops);
                     dst,
                     Rvalue::Compare {"""
 profile = "native"
-no_killer = "a known surviving mutant (campaign 418a5e5921b866cc: SURVIVED at the workspace suite). Nothing allocates between the early release and the helper's read, so the freed bytes are still there and every answer and memory counter is right; glibc 2.41 in the contained image ignores MALLOC_PERTURB_ and glibc.malloc.perturb (measured with a C probe), so no deterministic direct killer exists under the supported allocator and harness. A test-detection gap: it needs freed storage poisoned, which no supported configuration does"
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "mir::a_comparison_reads_its_operand_temporaries_before_they_are_released" }]
 
 [[mutation]]
 name = "n13-native-helper-names-omit-type-arguments"
