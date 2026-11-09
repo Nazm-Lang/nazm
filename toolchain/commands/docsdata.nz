@@ -35268,7 +35268,7 @@ fn dd_doc13() -> Str {
     let l = strs_new()
     strs_push(l, "# Nazm language specification")
     strs_push(l, "")
-    strs_push(l, "**Status: the 1.0 draft of the Nazm language, the executable language of the toolchain 0.10.0")
+    strs_push(l, "**Status: the 1.0 draft of the Nazm language, the executable language of the toolchain 0.11.0")
     strs_push(l, "public preview, and the draft of the 1.x line's stable contract** — in force from 1.0, and until")
     strs_push(l, "then a target a 0.x release may still change, saying so in its release notes. It is normative for")
     strs_push(l, "what it settles:")

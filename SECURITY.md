@@ -25,7 +25,7 @@ maintainer have agreed a disclosure date.
 - **Otherwise:** email the maintainer at the address in the workspace manifest's `authors`
   (`Cargo.toml`), with "Nazm security" in the subject.
 
-*Status, 0.10.0 (2026-10-15):* the repository is public at `Nazm-Lang/nazm` and private
+*Status, 0.11.0 (TODO(gate): release date):* the repository is public at `Nazm-Lang/nazm` and private
 vulnerability reporting is enabled on it, so the preferred channel is open. That the fallback
 address receives mail has not been confirmed (`docs/user/vulnerability-process.md`, *Intake*).
 

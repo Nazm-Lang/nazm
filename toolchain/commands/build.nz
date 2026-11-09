@@ -1895,7 +1895,7 @@ fn bd_provenance(io: IoCap, proc: ProcessCap, sp: SpawnCap, v: VouchCap, o: Opts
 }
 
 // The toolchain's version, as the record writes it.
-fn version_text() -> Str { "0.10.0" }
+fn version_text() -> Str { "0.11.0" }
 
 // A library's C header (`c_header`): every export, by symbol, in `<stdint.h>` and `<stdbool.h>` types. `exports` are the
 // plan's `SYMBOL RET PARAMS...` lines, by symbol.

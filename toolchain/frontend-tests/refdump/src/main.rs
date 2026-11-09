@@ -176,7 +176,7 @@ fn builtins() -> String {
     // as their decimal text (R2, design D28). Generated, as the table above is.
     let mut fields: Vec<String> = vec![
         nazm_cache::SEMANTIC_EPOCH.to_string(),
-        "0.10.0".to_owned(),
+        "0.11.0".to_owned(),
         nazm_iface::SCHEMA.to_owned(),
         nazm_cache::SCHEMA.to_owned(),
         Intrinsic::ALL.len().to_string(),
