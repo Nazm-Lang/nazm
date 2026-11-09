@@ -207,6 +207,19 @@ pub(crate) fn mutate_cli(rest: &[String]) -> ExitCode {
                 }
                 Err(e) => return e,
             },
+            "--broad-deadline-secs" => {
+                match value(i, "--broad-deadline-secs").map(|v| v.parse::<u64>()) {
+                    Ok(Ok(n)) if n > 0 => {
+                        o.deadlines.broad_secs = n;
+                        2
+                    }
+                    Ok(_) => {
+                        eprintln!("mutate: --broad-deadline-secs needs a positive whole number");
+                        return ExitCode::FAILURE;
+                    }
+                    Err(e) => return e,
+                }
+            }
             "--campaign-dir" => match value(i, "--campaign-dir") {
                 Ok(v) => {
                     o.campaign_dir = Some(v.into());
@@ -389,5 +402,30 @@ pub(crate) fn mutate_recover(args: &mut impl Iterator<Item = String>) -> ExitCod
             println!("error: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(args: &[&str]) -> ExitCode {
+        mutate_cli(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn the_broad_deadline_is_accepted_as_a_positive_whole_number_only() {
+        assert_eq!(
+            run(&["--plan", "--broad-deadline-secs", "7200"]),
+            ExitCode::SUCCESS
+        );
+        for bad in ["0", "-5", "soon", ""] {
+            assert_eq!(
+                run(&["--plan", "--broad-deadline-secs", bad]),
+                ExitCode::FAILURE,
+                "{bad:?}"
+            );
+        }
+        assert_eq!(run(&["--plan", "--broad-deadline-secs"]), ExitCode::FAILURE);
     }
 }
