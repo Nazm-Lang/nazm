@@ -551,7 +551,7 @@ fixture() {
         printf '{"schema":"nazm.snapshot/3","status":"unavailable","reason":"incomplete_compilation"}\n' > unavail.json
         printf 'not json' > notjson.json
         printf '{}' > empty.json
-        sed 's/nazm 0.10.0/nazm 0.9.0/' base.json > wrongcompiler.json
+        sed 's/nazm 0.11.0/nazm 0.9.0/' base.json > wrongcompiler.json
         sed 's/"untracked"/"extra":1,"untracked"/' base.json > extra.json
         sed 's/"kind":"function"/"kind":"functio"/' base.json > kind.json
         sed 's/"identity":"a.nz::fn main"/"identity":"a.nz::fn  main"/' base.json > badid.json

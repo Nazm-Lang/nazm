@@ -790,7 +790,7 @@ fn initialize_ok(j: J, params: Int) -> Bool {
 fn initialize_result(j: J, params: Int) -> Str {
     let v = j_str(j, j_get(j, params, "protocolVersion"))
     let version = if known_version(v) { v } else { "2025-11-25" }
-    "{\"protocolVersion\":" + json_str(version) + ",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"nazm-mcp\",\"version\":\"0.10.0\"},\"instructions\":"
+    "{\"protocolVersion\":" + json_str(version) + ",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"nazm-mcp\",\"version\":\"0.11.0\"},\"instructions\":"
             + json_str(mt_instructions()) + "}"
 }
 
