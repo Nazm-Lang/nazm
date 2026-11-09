@@ -53,12 +53,12 @@ use "contract.nz"
 
 fn nl() -> Str { str_from_byte(10) }
 
-fn version() -> Str { "0.10.0" }
+fn version() -> Str { "0.11.0" }
 
 fn about() -> Str { "The Nazm programming language." }
 
 fn long_about() -> Str {
-    "Nazm language 1.0 draft, toolchain 0.10.0 — a public preview for macOS on Apple Silicon, with no compatibility "
+    "Nazm language 1.0 draft, toolchain 0.11.0 — a public preview for macOS and Windows, with no compatibility "
             + "promise until 1.0. Records, enums and `match`, first-order generics, traits and methods, `Result`, `Option` and "
             + "`?`, closures, modules and packages, declared effects, capabilities and provenance, structured concurrency (scope, "
             + "spawn, channels), integers of every width, floats, fixed arrays, constants, `Bytes` and UTF-8 `Text`. `nazm run` "

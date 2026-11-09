@@ -129,7 +129,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "nazm-cache"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "blake3",
  "nazm-iface",
@@ -140,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-cir"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "blake3",
  "nazm-sema",
@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-core"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "nazm-cir",
  "nazm-diag",
@@ -160,7 +160,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-diag"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "nazm-span",
  "serde",
@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-iface"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "blake3",
  "nazm-sema",
@@ -180,7 +180,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-package"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "blake3",
  "nazm-diag",
@@ -205,14 +205,14 @@ dependencies = [
 
 [[package]]
 name = "nazm-sema"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "nazm-span",
 ]
 
 [[package]]
 name = "nazm-service"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "blake3",
  "nazm-core",
@@ -225,11 +225,11 @@ dependencies = [
 
 [[package]]
 name = "nazm-span"
-version = "0.10.0"
+version = "0.11.0"
 
 [[package]]
 name = "nazm-syntax"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "cstree",
  "nazm-diag",
