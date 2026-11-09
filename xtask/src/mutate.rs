@@ -964,7 +964,10 @@ pub(crate) fn run_all(o: &Options) -> End {
         .into_iter()
         .filter(|(p, _)| !not_reached.contains(&p.name))
         .collect();
-    if !waiting.is_empty() && !stopped && baseline_results.is_none() {
+    // A spent budget skips the baseline suite too: it is the longest single step, and the
+    // mutants waiting for it are recorded as not reached and resume in the next session.
+    let budget_spent = o.budget.is_some_and(|b| started.elapsed() >= b);
+    if !waiting.is_empty() && !stopped && !budget_spent && baseline_results.is_none() {
         println!(
             "  baseline suite       {} mutant(s) need a tier beyond the killers",
             waiting.len()

@@ -721,6 +721,7 @@ fn mutate_passthrough(args: &[String]) -> Result<String, String> {
         "--only",
         "--strategy",
         "--budget-secs",
+        "--broad-deadline-secs",
         "--verify-killer",
         "--killer",
     ];
@@ -983,6 +984,17 @@ mod tests {
         ] {
             assert_eq!(default_profile(w), ExecutionProfile::P1, "{w}");
         }
+    }
+
+    #[test]
+    fn the_broad_deadline_reaches_the_campaign_and_only_as_a_safe_number() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            mutate_passthrough(&a(&["--broad-deadline-secs", "7200"])),
+            Ok(" --broad-deadline-secs '7200'".to_string())
+        );
+        assert!(mutate_passthrough(&a(&["--broad-deadline-secs"])).is_err());
+        assert!(mutate_passthrough(&a(&["--broad-deadline-secs", "1;rm -rf /"])).is_err());
     }
 
     #[test]
