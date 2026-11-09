@@ -4,7 +4,7 @@ What the Nazm toolchain (0.11.0 preview) has shown on each target and for each o
 thing each. The target table is the compiler's own — `nazm_lir::backend::SUPPORT`, printed by
 `nazm inspect` as `toolchain.support` — and `crates/nazm-cli/tests/docs.rs` fails if this page and
 that table disagree. The evidence behind every cell is in `capability-matrix.md`, area 33. **The
-0.11.0 preview is released for `aarch64-apple-darwin`, `x86_64-apple-darwin` and `x86_64-pc-windows-msvc`**; the other rows say what this tree has
+0.11.0 preview is released for `aarch64-apple-darwin`, `x86_64-apple-darwin` and `x86_64-pc-windows-gnu`**; the other rows say what this tree has
 shown, not what is released.
 
 ## The words

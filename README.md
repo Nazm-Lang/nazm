@@ -30,7 +30,7 @@ agreement awaits legal review ([`docs/user/licensing.md`](docs/user/licensing.md
 | --- | --- |
 | Language | **1.0 draft** — [`docs/user/spec.md`](docs/user/spec.md) |
 | Toolchain | **0.11.0** — `nazm --version` |
-| Targets | macOS on Apple Silicon (`aarch64-apple-darwin`) and Intel (`x86_64-apple-darwin`), and Windows (`x86_64-pc-windows-msvc`); others are unverified rather than unsupported, and not released |
+| Targets | macOS on Apple Silicon (`aarch64-apple-darwin`) and Intel (`x86_64-apple-darwin`), and Windows (`x86_64-pc-windows-gnu`); others are unverified rather than unsupported, and not released |
 | Standard library | **1.0 draft** |
 | Licence | Apache-2.0 WITH LLVM-exception — what Nazm compiles into a program carries no obligation; the toolchain binary's third-party notices are in `THIRD-PARTY-NOTICES.md` ([`docs/user/licensing.md`](docs/user/licensing.md)) |
 
