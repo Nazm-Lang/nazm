@@ -4302,9 +4302,9 @@ mutation catalogue: 76 entries on code N105 deleted repointed, 18 retired with t
 check cache, whose key does not change under a mutant (runbook: a probe runs in a fresh directory).
 N100's four without a verdict have focused killers. The 175 other entries without a declared killer
 were applied one at a time and each was caught: 132 in a dedicated host worktree, 43 selfhost and
-bootstrap entries under the contained runner. Of **1,255** entries, **1,254** declare a killer;
-`n13-native-operands-are-released-before-they-are-compared` is a known survivor, its reason in
-`no_killer`. `xtask/src/plan.rs` refuses an entry with neither (`an_entry_without_a_killer_must_say_why`).
+bootstrap entries under the contained runner. Of **1,255** entries, **1,255** declare a killer
+(`n13-native-operands-are-released-before-they-are-compared`, a known survivor until 2026-11-10, is held by
+a MIR-order test). `xtask/src/plan.rs` refuses an entry with neither (`an_entry_without_a_killer_must_say_why`).
 Not claimed: that a declared killer is a minimal one, or that zero survivors would mean no defect.
 
 *N93, 2026-10-04: coverage-guided fuzzing — VERIFIED for four targets at the stated budget; fuzzing
@@ -4556,7 +4556,10 @@ right; glibc 2.41 in the image ignores `MALLOC_PERTURB_` and `glibc.malloc.pertu
 (measured), so **no deterministic direct killer exists under the supported allocator and
 harness**. It stays **live** in the catalogue, with the `native` profile and a `no_killer`
 reason, as a known surviving mutation: a mutation-sensitivity limitation of this suite, not
-a verdict about the defect. Three
+a verdict about the defect. *Update, 2026-11-10: the release's full campaign would have reported it as a survivor, so
+it is now held by `mir::a_comparison_reads_its_operand_temporaries_before_they_are_released`, which
+reads the order of the release and the comparison in the MIR, where it is a fact, instead of at run
+time, where it is invisible; the entry names that killer and no longer a `no_killer`.* Three
 candidate killers were refuted by verification and not used. The whole catalogue was not
 re-run: N13 did not change the harness, and the two open MUTANT CRASH entries were not
 reached by it.
