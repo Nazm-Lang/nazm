@@ -458,6 +458,17 @@ fn a_cache_key_moves_with_every_setting_that_changes_the_code_and_only_those() {
         "{}",
         o0.version()
     );
+    // The version string is what a cached object is checked against: it names the optimisation
+    // setting itself, so an object built at one level is never reused at another.
+    let o1 = nazm_codegen_clif::Cranelift::new(host.clone(), 1);
+    assert!(o0.version().contains(" opt=none "), "{}", o0.version());
+    assert!(o2.version().contains(" opt=speed "), "{}", o2.version());
+    assert!(o1.version().contains(" opt=speed "), "{}", o1.version());
+    assert_ne!(
+        o0.version(),
+        o2.version(),
+        "the version moves with the level"
+    );
     assert!(o0.version().contains("verify=true"));
     assert!(o0.version().contains("runtime-abi="));
     // LLVM text keys itself by its bytes.
