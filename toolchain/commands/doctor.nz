@@ -255,7 +255,7 @@ pub fn advice(os: Str) -> Str {
 pub fn doctor_command(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int ! { io, spawn } {
     cli_parse(io, c)
     let os = fe_host_os()
-    print("nazm 0.10.0 on " + os + " " + fe_host_arch() + nl())
+    print("nazm 0.11.0 on " + os + " " + fe_host_arch() + nl())
     let r = Row(tool: strs_new(), needed: strs_new(), ok: ints_new(), said: strs_new(), required: ints_new())
     clang_row(io, proc, sp, os, r)
     if ints_get(r.ok, 0) == 1 { link_row(io, proc, sp, r) }

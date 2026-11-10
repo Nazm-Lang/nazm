@@ -301,7 +301,7 @@ fn capabilities() -> Str {
             + "[\"declaration\",\"defaultLibrary\"],\"tokenTypes\":[\"type\",\"struct\",\"enum\",\"typeParameter\",\"parameter\","
             + "\"variable\",\"property\",\"enumMember\",\"function\",\"interface\",\"method\"]},\"range\":false},"
             + "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"textDocumentSync\":{\"change\":2,\"openClose\":true},"
-            + "\"workspaceSymbolProvider\":{\"resolveProvider\":false}},\"serverInfo\":{\"name\":\"nazm\",\"version\":\"0.10.0\"}}"
+            + "\"workspaceSymbolProvider\":{\"resolveProvider\":false}},\"serverInfo\":{\"name\":\"nazm\",\"version\":\"0.11.0\"}}"
 }
 
 // --- reading the protocol -----------------------------------------------------------------------------
