@@ -13,13 +13,6 @@ Status as of 2026-11-08 (update it with every change).
 | A1 | The Nazm-written pipeline builds for Linux (`aarch64-` and `x86_64-unknown-linux-gnu`), `wasm32-unknown-unknown` and WASI (`wasm32-wasip1`); today it refuses them by name | R3 8.3 | Not started | 0.11.0 published |
 | A2 | The code generator's output runs on `x86_64-unknown-linux-gnu`, which needs an amd64 contained image | R9 6.3b | Not started | A1 |
 
-## A2. Windows x86_64 (moved from 0.11.0 on 2026-11-14)
-
-| ID | Step | Status | Waits on |
-|---|---|---|---|
-| W1 | Rerun the Windows host and toolchain programs on the Dell (the earlier run was 70 and 94 agree) against the 0.12.0 build; fill the counts in the notes | Not started; the Dell was unreachable from 2026-11-09 | 0.11.0 published, the Dell |
-| W2 | The `x86_64-pc-windows-gnu` archive (`nazm-x86_64-pc-windows-gnu.tar.gz`, MinGW, `bin/nazm.exe`) built from the self-build of the release commit, listed in the notes and in `support.md` | Not started | W1 |
-
 ## B. Retire the Rust bootstrap chain
 
 | ID | Step | Old task | Status | Waits on |
