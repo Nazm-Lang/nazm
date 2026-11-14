@@ -21,7 +21,7 @@
 
 use crate::common;
 use crate::differential;
-use crate::platform_files::{alike, runs_in};
+use crate::platform_files::{alike, alike_chunked, runs_in};
 
 use std::path::Path;
 
@@ -142,7 +142,7 @@ fn main(p: ProcessCap, io: IoCap) -> Int ! { io } {
 #[test]
 fn a_child_runs_in_its_directory_with_exactly_its_environment_alike_everywhere() {
     let runs = runs_in(SPAWNING, &scripted);
-    alike(&runs, 0, &|_| {
+    alike_chunked(&runs, 0, &|_| {
         "A=first\nAB=second\nMID=x=y\nPATH=/usr/bin:/bin\nZED=last\nexit 0\n\
          ran in sub\nnamed absolutely\nexit 0\n\
          sub\nexit 0\n\

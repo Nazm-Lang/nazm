@@ -4,7 +4,7 @@ What the Nazm toolchain (0.11.0 preview) has shown on each target and for each o
 thing each. The target table is the compiler's own — `nazm_lir::backend::SUPPORT`, printed by
 `nazm inspect` as `toolchain.support` — and `crates/nazm-cli/tests/docs.rs` fails if this page and
 that table disagree. The evidence behind every cell is in `capability-matrix.md`, area 33. **The
-0.11.0 preview is released for `aarch64-apple-darwin`, `x86_64-apple-darwin` and `x86_64-pc-windows-gnu`**; the other rows say what this tree has
+0.11.0 preview is released for `aarch64-apple-darwin` and `x86_64-apple-darwin`; Windows (`x86_64-pc-windows-gnu`) moved to 0.12.0**; the other rows say what this tree has
 shown, not what is released.
 
 ## The words
@@ -41,8 +41,8 @@ No cell says just "supported".
 | `aarch64-linux-android` | run-verified on a Linux kernel | unsupported | static Bionic executables, linked by the NDK r27c's `clang` for API level 30, run on an aarch64 Linux kernel in a Debian container; no Android device or emulator (Gate 3) | not exercised |
 | `aarch64-apple-ios` | compile-only | unsupported | linked against Xcode 27's iOS SDK, an archive and a program; never run — no simulator runtime is installed (Gate 3) | not exercised |
 
-**The Nazm-built toolchain (R8, 2026-11-05).** For `aarch64-apple-darwin`, `x86_64-apple-darwin` and
-`x86_64-pc-windows-gnu` the toolchain 0.11.0 ships is built by Nazm; the Rust implementation is the seed that
+**The Nazm-built toolchain (R8, 2026-11-05).** For `aarch64-apple-darwin` and `x86_64-apple-darwin`
+the toolchain 0.11.0 ships is built by Nazm (`x86_64-pc-windows-gnu` follows in 0.12.0); the Rust implementation is the seed that
 builds its first stage and is not shipped. The self-builds that record this ran on a macOS host (both
 architectures, the second under Rosetta 2) and, for the Windows executables, on a Windows 10 host (build 10.0.18362)
 through a bounded runner; the evidence and its limits (no Windows-native self-build, no `--backend nazm` or

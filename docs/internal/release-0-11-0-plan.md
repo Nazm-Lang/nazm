@@ -13,7 +13,7 @@ Status as of 2026-11-09 23:00 (update it with every change).
 | A1 | Contained selfhost, bootstrap, selfbuild and tests | Done | |
 | A2 | Fuzz, 5 targets, 600 s each | Done | |
 | A3 | Host nextest | Done (the 41 selfhost refusals are expected on the host) | |
-| A4 | Dell Windows rerun | Done: host 70 agree, 0 differ; toolchain 94 agree, 2 differ (httpd baseline) | |
+| A4 | Dell Windows rerun | Done earlier (host 70 agree, 0 differ; toolchain 94 agree, 2 differ); not rerun for 0.11.0: Windows moved to 0.12.0 on 2026-11-14 | |
 | A5a | Targeted mutation campaign, the 2,081 mutants the fast pass decides | Done, 0 survivors | |
 | A5b | The 32 mutants (11 catalogue entries) that need the baseline suite, run as a second campaign from main with a 7,200 s deadline | Running: 3 entries decided, one survived and was fixed (B5); the other 8 and that one are rerunning, in 6-hour sessions | |
 | A6 | `build.sh` modes (llvm, cached, report-cached, lib, summary, timings) with BUILD_ARGS=1, and the `host_run` integration tests | Done: 899 agree, 0 differ; 161 agree, 0 differ; 17 of 17 | |
@@ -42,11 +42,11 @@ Status as of 2026-11-09 23:00 (update it with every change).
 |---|---|---|---|
 | D1 | Version bump 0.10.0 to 0.11.0 through a PR with green CI, a seed-freeze exemption and the release notes (`docs/user/releases/0.11.0.md`, drafted with `TODO(gate)` marks). A dry run is draft PR #46, not to be merged; its trap list is in the resume memory | Dry run done; the real bump starts after A | A, B |
 | D2 | Contained selfhost, bootstrap and selfbuild on the bumped commit | Not started | D1 |
-| D3 | Archives: `aarch64-apple-darwin`, `x86_64-apple-darwin` (macOS host selfbuilds) and `x86_64-pc-windows-gnu` (the Dell). The Dell must be reachable | Not started; the Dell was unreachable at 22:38 on 2026-11-09 | D2 |
+| D3 | Archives: `aarch64-apple-darwin`, `x86_64-apple-darwin` (macOS host selfbuilds) (the Windows archive moved to 0.12.0 on 2026-11-14, so the Dell is not needed) | Not started | D2 |
 | D4 | Sign `SHA256SUMS` with Sigstore (`scripts/sign-release.sh`). This is the holder's own step: it opens a browser login and is never run by an agent | Needs the holder; see `decisions-log.md` | D3 |
 | D5 | Provenance, tag v0.11.0, GitHub release | Not started | D4 |
 | D6 | nazm.dev deploy (`suhail/deploy.sh`; builds locally, reaches the server) | Not started; a local build and the server login were rehearsed on 2026-11-09 | D5 |
-| D7 | homebrew-tap formula for 0.11.0: it is arm64-only today and must carry both Mac archives | Not started | D5 |
+| D7 | homebrew-tap formula for 0.11.0: it is arm64-only today and must carry both Mac archives (draft `on_arm`/`on_intel` formula written, SHA-256 pending) | Not started | D5 |
 
 ## E. After the release
 
