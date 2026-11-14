@@ -84,13 +84,53 @@ pub(crate) fn runs_in(src: &str, setup: &dyn Fn(&Path)) -> Vec<(String, Ran)> {
 /// Every run ended with `code`, printed what `expected` says for its label, and wrote the
 /// interpreter's memory report with nothing live.
 pub(crate) fn alike(runs: &[(String, Ran)], code: i32, expected: &dyn Fn(&str) -> String) {
-    let first = memory_line(&runs[0].1);
+    alike_with(runs, code, expected, false);
+}
+
+/// `alike` for a program that reads a child's output in a loop, one string per read: how a pipe
+/// splits that output is the system's, so the number of strings allocated varies from run to run
+/// (40 or 46 for the same program). Only that count is left out of the comparison; every string
+/// must still be reclaimed (`live=0`, checked below) and the sequences and the rest must agree.
+pub(crate) fn alike_chunked(runs: &[(String, Ran)], code: i32, expected: &dyn Fn(&str) -> String) {
+    alike_with(runs, code, expected, true);
+}
+
+fn without_string_counts(line: &str) -> String {
+    let (head, tail) = line.split_once("strings allocated=").unwrap_or((line, ""));
+    let rest = tail.split_once(" live=").map_or("", |(_, r)| r);
+    format!("{head}strings {rest}")
+}
+
+fn alike_with(runs: &[(String, Ran)], code: i32, expected: &dyn Fn(&str) -> String, chunked: bool) {
+    let shape = |r: &Ran| {
+        let line = memory_line(r);
+        if chunked {
+            without_string_counts(&line)
+        } else {
+            line
+        }
+    };
+    let first = shape(&runs[0].1);
     for (label, r) in runs {
         assert_eq!(r.code, Some(code), "{label}: {}", r.stderr);
         assert_eq!(r.stdout.trim_end(), expected(label), "{label}");
         let line = memory_line(r);
+        if chunked {
+            let counts = line.split("strings allocated=").nth(1).unwrap_or("");
+            let mut it = counts.split_whitespace();
+            let allocated = it.next().unwrap_or("");
+            let reclaimed = it
+                .next()
+                .and_then(|x| x.strip_prefix("reclaimed="))
+                .unwrap_or("?");
+            assert_eq!(
+                allocated, reclaimed,
+                "{label}: strings not all reclaimed: {line}"
+            );
+        }
         assert_eq!(
-            line, first,
+            shape(r),
+            first,
             "{label} and the interpreter disagree about storage"
         );
         for kind in ["sequences", "strings", "channels", "closures"] {
