@@ -54,14 +54,14 @@ Nothing contained may be running. Use one worktree, clean, on the merged commit.
 
    Each writes `fixpoint.txt` ending `result passed`. A refusal, or status 70 (the rule withdrawn),
    stops it and leaves a marker for a person: do not rerun around it.
-2. **The Windows self-build**, on the Dell: its builder is the stage 3 `nazm` of the passed
+2. **The Windows self-build**, on a Windows x86_64 host (`suad` for 0.11.0, or the Dell, `win-dell`): its builder is the stage 3 `nazm` of the passed
    aarch64 self-build above (`STAGE` is an environment variable; the script's default points at an older run).
 
    ```sh
-   STAGE=OUT_A/stage3 toolchain/selfbuild/windows-selfbuild.sh win-dell OUT_W
+   STAGE=OUT_A/stage3 toolchain/selfbuild/windows-selfbuild.sh suad OUT_W
    ```
 
-   The Dell must answer `ssh win-dell` first, and the remote directory
+   The host must answer `ssh suad` (or `ssh win-dell`) first, and the remote directory
    (`C:\Users\nazmci\nazm-w17`) must not exist. The target is `x86_64-pc-windows-gnu`, built by
    MinGW-w64's clang and linker from `C:\Users\nazmci\nazm-tools`.
 3. **Package** (macOS host only; it verifies the ad hoc signature with `codesign`):

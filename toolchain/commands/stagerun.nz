@@ -1,7 +1,9 @@
 // A stage run as `host-run` admits a program, for the inspection commands (R8 slice 8): a copy of what
-// `build.nz` holds privately (`bd_size`, `bd_admitted`, `bd_limits`, `bd_check_stage`, `bd_run`,
-// `bd_stage_run`, `bd_remove`, `bd_workdir`), made `pub` under `sr_` so this slice leaves `build.nz`
-// to its own slice. Hand-back to slice 4/5: make `build.nz`'s own `pub` and drop this copy.
+// `build.nz` holds privately (`bd_size`, `bd_check_stage`, `bd_run`, `bd_stage_run`, `bd_remove`,
+// `bd_workdir`), made `pub` under `sr_` so this slice leaves `build.nz` to its own slice. Hand-back
+// to slice 4/5: make `build.nz`'s own `pub` and drop this copy. The admission itself (`sr_admitted`,
+// `sr_limits`, `sr_limit_of`) is no longer copied: `build.nz` uses these, so `nazm build` and `nazm
+// run` admit a stage exactly as `host-run` does (a stripped release `nzcg` was refused by a stale copy).
 
 use "util.nz"
 use "@std/file"
