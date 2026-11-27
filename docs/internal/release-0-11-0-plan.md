@@ -4,7 +4,7 @@ The build stages (B1 to B14) are the steps of making the language; they are in
 [`how-nazm-was-built.md`](how-nazm-was-built.md) and are all done. This page is the plan for
 shipping 0.11.0, in five phases with fixed IDs. A step starts only when the steps it waits on are done.
 
-Status as of 2026-11-09 23:00 (update it with every change).
+Status as of 2026-11-28 (update it with every change).
 
 ## A. Gate: prove the code
 
@@ -17,7 +17,8 @@ Status as of 2026-11-09 23:00 (update it with every change).
 | A5a | Targeted mutation campaign, the 2,081 mutants the fast pass decides | Done, 0 survivors | |
 | A5b | The 32 mutants (11 catalogue entries) that need the baseline suite, run as a second campaign from main with a 7,200 s deadline | Running: 3 entries decided, one survived and was fixed (B5); the other 8 and that one are rerunning, in 6-hour sessions | |
 | A6 | `build.sh` modes (llvm, cached, report-cached, lib, summary, timings) with BUILD_ARGS=1, and the `host_run` integration tests | Done: 899 agree, 0 differ; 161 agree, 0 differ; 17 of 17 | |
-| A7 | Bench: no regression against `bench/baseline`, run last and alone | Not started | A5b |
+| A6b | `stage-admission.sh`: `nazm build` admits a stripped release stage as `host-run` does (the shipped-`nzcg` defect, `decisions-log.md` 2026-11-28) | Passed 3 of 3 on the fix; fails on the unfixed main | |
+| A7 | Bench: no regression against `bench/baseline`, run last and alone | Not started | A5b, D3 |
 
 ## B. Repair: what the gate found
 
@@ -42,8 +43,8 @@ Status as of 2026-11-09 23:00 (update it with every change).
 |---|---|---|---|
 | D1 | Version bump 0.10.0 to 0.11.0 through a PR with green CI, a seed-freeze exemption and the release notes (`docs/user/releases/0.11.0.md`, drafted with `TODO(gate)` marks). A dry run is draft PR #46, not to be merged; its trap list is in the resume memory | Dry run done; the real bump starts after A | A, B |
 | D2 | Contained selfhost, bootstrap and selfbuild on the bumped commit | Not started | D1 |
-| D3 | Archives: `aarch64-apple-darwin`, `x86_64-apple-darwin` (macOS host selfbuilds) and `x86_64-pc-windows-gnu` (the Dell; reachable again 2026-11-14) | Not started | D2 |
-| D4 | Sign `SHA256SUMS` with Sigstore (`scripts/sign-release.sh`). This is the holder's own step: it opens a browser login and is never run by an agent | Needs the holder; see `decisions-log.md` | D3 |
+| D3 | Archives: `aarch64-apple-darwin`, `x86_64-apple-darwin` (macOS host selfbuilds) and `x86_64-pc-windows-gnu` (on `suad`; the Dell is offline) | Built 2026-11-14 on e3e01297, then withdrawn: the macOS `nzcg` was refused by `nazm run` (A6b). Rebuilding all three on the fixed commit | D2, A6b |
+| D4 | Sign `SHA256SUMS` with Sigstore (`scripts/sign-release.sh`). This is the holder's own step: it opens a browser login and is never run by an agent | Not for 0.11.0: the holder chose to publish unsigned if the whole gate is green (2026-11-14); the notes say so | D3 |
 | D5 | Provenance, tag v0.11.0, GitHub release | Not started | D4 |
 | D6 | nazm.dev deploy (`suhail/deploy.sh`; builds locally, reaches the server) | Not started; a local build and the server login were rehearsed on 2026-11-09 | D5 |
 | D7 | homebrew-tap formula for 0.11.0: it is arm64-only today and must carry both Mac archives (draft `on_arm`/`on_intel` formula written, SHA-256 pending) | Not started | D5 |

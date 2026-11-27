@@ -41,6 +41,7 @@ use "util.nz"
 use "buildcli.nz"
 use "cli.nz"
 use "summary.nz"
+use "stagerun.nz"
 use "lockcheck.nz"
 use "group.nz"
 use "archive.nz"
@@ -494,49 +495,6 @@ fn bd_stage(io: IoCap, o: Opts, variable: Str, name: Str) -> Str {
     p
 }
 
-// `host-run`'s reading of an image (`heap_limit_of`): the counted heap linked, one heap limit, at
-// most 2 GiB. "" when it is admitted, else the refusal's name and why.
-fn bd_admitted(image: Str) -> Str {
-    if ut_find(image, "nz.heap_malloc", 0) < 0 {
-        return "no-counted-heap: the executable does not link the counted heap (`nz.heap_malloc` is not in it): build it with `--heap-limit`"
-    }
-    let found = bd_limits(image)
-    if strs_len(found) == 0 { return "no-heap-limit: the executable carries no heap limit (its `N0406` message is not in it)" }
-    if strs_len(found) > 1 { return "ambiguous-heap-limit: the executable names several heap limits" }
-    let limit = strs_get(found, 0)
-    if str_len(limit) > 10 || bo_size(limit) > 2147483648 {
-        return "heap-limit-too-large: its heap limit is " + limit + " bytes, over the 2 GiB (2147483648) a stage may have"
-    }
-    ""
-}
-
-// Every heap limit an image's `N0406` message names (`the heap limit of N bytes is reached`, N in
-// digits), each once.
-fn bd_limits(image: Str) -> Strs {
-    let before = "the heap limit of "
-    let after = " bytes is reached"
-    let found = strs_new()
-    let mut from = 0
-    let mut at = ut_find(image, before, from)
-    while at >= 0 {
-        let start = at + str_len(before)
-        let mut end = start
-        while end < str_len(image) && str_byte(image, end) >= 48 && str_byte(image, end) <= 57 { end += 1 }
-        if end > start && end + str_len(after) <= str_len(image) && str_slice(image, end, end + str_len(after)) == after {
-            let n = str_slice(image, start, end)
-            let mut seen = false
-            for i in 0..strs_len(found) { if strs_get(found, i) == n { seen = true } }
-            if !seen { strs_push(found, n) }
-        }
-        from = start
-        at = ut_find(image, before, from)
-    }
-    found
-}
-
-// The one heap limit an admitted image names.
-fn bd_limit_of(image: Str) -> Int { bo_size(strs_get(bd_limits(image), 0)) }
-
 // `host-run`'s state directory: where its withdrawal marker is.
 fn bd_state_dir(io: IoCap) -> Str {
     let d = os_env_get("NAZM_HOST_RUN_DIR")
@@ -546,9 +504,11 @@ fn bd_state_dir(io: IoCap) -> Str {
 
 fn bd_check_stage(io: IoCap, o: Opts, path: Str, name: Str) -> Int {
     let image = read_file(path)
-    let why = bd_admitted(image)
+    // `host-run`'s own reading (`stagerun.nz`, `sr_admitted`), so a stripped release stage is
+    // admitted by the heap unit's whole message exactly as `host-run` admits it.
+    let why = sr_admitted(image)
     if why != "" { bd_fail(io, o, "nazm: " + name + " (`" + path + "`) is not admitted as a stage: " + why, 4) }
-    bd_limit_of(image)
+    sr_limit_of(image)
 }
 
 // A stage run to its end: whether it started, its status, its output and errors, and its peak.
