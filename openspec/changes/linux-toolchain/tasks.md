@@ -26,6 +26,7 @@
 
 ## L5 — the claim
 
-- [ ] 5.1 `docs/user/support.md`: the Linux rows and the "internal" paragraph replaced by what ran
+- [x] 5.1 `docs/user/support.md`: the "internal" paragraph replaced by what ran (2026-11-28), the x86_64 row's *where* cell; `limitations.md`'s compile-only clause
+- [ ] 5.4 The compiler's own target table (`nazm_lir::backend::SUPPORT`, `toolchain.support` in `capdata.nz`) given the Linux evidence, so the status cells can change with it (`crates/nazm-cli/tests/docs.rs` ties them)
 - [ ] 5.2 `getting-started.md` (Linux), `limitations.md`, the 0.12.0 release notes' Linux rows
 - [ ] 5.3 `rewrite-in-nazm` 4.2b (Linux half) and `r9-code-generator` 6.3b updated from the evidence
