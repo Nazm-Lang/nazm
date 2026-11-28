@@ -8,8 +8,9 @@ very many connections on a small server, as Erlang does. The evidence in the rep
 not a claim. This change proposes 0.12.0 as the release that closes or measures them, beside the
 platforms already moved to it.
 
-**This is a draft for the holder's review.** Nothing here is started; the scope, the order and each
-target are the holder's to accept, cut or change.
+**Scope decided (the copyright holder, 2026-11-28): all five items below are in 0.12.0.** The
+remaining decisions are in the table at the end; nothing is started until each item's own change is
+written.
 
 ## What Changes
 
@@ -24,7 +25,7 @@ target are the holder's to accept, cut or change.
   accepted slower cold builds for faster programs); a built-in that gives a program its own path, so
   an installed `nazm` started by a full path finds its stages.
 
-### Proposed: five gaps from the evidence
+### In 0.12.0: five gaps from the evidence (holder, 2026-11-28)
 
 1. **A million connections on a small server, proved.** Today (`performance-log.md`, the
    concurrency round): spawning 1,000,000 tasks takes 1,501 ms against Go's 271 and Node's 183;
@@ -74,7 +75,7 @@ through its own change and the usual gates; the release gate is the 0.11.0 gate 
 
 | | Question |
 | --- | --- |
-| (a) | Which of the five go into 0.12.0, and which wait for 1.0 |
+| (a) | ~~Which of the five go into 0.12.0~~ — **decided 2026-11-28: all five** |
 | (b) | Supervision as language constructs or as a standard-library module over task scopes |
 | (c) | The machine for the million-connection run (a small VPS, its size) |
 | (d) | A budget for the token benchmark's model calls |

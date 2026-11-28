@@ -1,6 +1,6 @@
 ## 0. The holder's decisions (proposal.md, *Decisions for the holder*)
 
-- [ ] 0.1 Scope: which of items 1–5 are in 0.12.0
+- [x] 0.1 Scope: all five items are in 0.12.0 (the copyright holder, 2026-11-28)
 - [ ] 0.2 Supervision's form: language constructs or a library over task scopes
 - [ ] 0.3 The million-connection host; the token benchmark's budget; the study's recruiting and consent
 
@@ -17,7 +17,7 @@
 - [ ] 2.3 Cheaper cold builds: the shared runtime units precompiled per optimisation level
 - [ ] 2.4 A program's own path: an installed `nazm` started by a full path finds its stages
 
-## 3. The five gaps (if accepted in 0.1)
+## 3. The five gaps (in 0.12.0, 0.1)
 
 - [ ] 3.1 Fan-in and task start-up fixed and re-measured; then 1,000,000 connections on a small Linux host, published with the method
 - [ ] 3.2 Supervision: spec, diagnostics, runtime, tests; deadlock detection considered in the same design
