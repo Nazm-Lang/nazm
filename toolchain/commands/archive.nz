@@ -1,5 +1,5 @@
 // Static archives, written by Nazm itself (R8 slice 6: a port of `crates/nazm-cli/src/archive.rs` for the
-// objects of the targets that are kept: Mach-O, and COFF for Windows x86_64).
+// objects of the targets that are kept: Mach-O, COFF for Windows x86_64, and ELF for Linux, linux-toolchain L1).
 //
 // The system's `ar` wrote them once. Apple's tools write the symbol index in a varying order, so the same objects
 // archived twice gave different bytes; so the archive is written here, from the objects' own symbol tables, and is a
@@ -10,11 +10,11 @@
 // - Mach-O members: the BSD format Apple's `ld64` reads — every name `#1/N` with the name after the header, padded so
 //   each member's bytes start 8-byte aligned, and a first member `__.SYMDEF SORTED` whose index is sorted by symbol
 //   name, ties by member offset.
-// - COFF members: the GNU/System V format GNU `ld`, MinGW's `ld` and LLVM's linkers read — a first member `/`
+// - ELF and COFF members: the GNU/System V format GNU `ld`, MinGW's `ld` and LLVM's linkers read — a first member `/`
 //   indexing the symbols in member order, a `//` table of the names longer than 15 bytes.
 //
-// An index holds each member's defined global symbols, read from its object's symbol table (Mach-O `nlist`, COFF's
-// symbol table). An ELF or WebAssembly member belongs to a target that is not built after the cut-over: refused.
+// An index holds each member's defined global symbols, read from its object's symbol table (Mach-O `nlist`, ELF
+// `.symtab`, COFF's symbol table). A WebAssembly member belongs to a target that is not built after the cut-over: refused.
 
 use "util.nz"
 
@@ -64,7 +64,7 @@ fn ar_cstring(d: Str, at: Int) -> Str {
     str_slice(d, at, end)
 }
 
-// An object's format by its magic: "macho", "coff", "bigobj", or "".
+// An object's format by its magic: "macho", "elf", "coff", "bigobj", or "".
 fn ar_format(d: Str) -> Str {
     if str_len(d) < 4 { return "" }
     let a = str_byte(d, 0)
@@ -73,6 +73,7 @@ fn ar_format(d: Str) -> Str {
     let e = str_byte(d, 3)
     if (a == 207 || a == 206) && b == 250 && c == 237 && e == 254 { return "macho" }
     if a == 0 && b == 0 && c == 255 && e == 255 { return "bigobj" }
+    if a == 127 && b == 69 && c == 76 && e == 70 { return "elf" }
     if (a == 100 && b == 134) || (a == 100 && b == 170) || (a == 65 && b == 166) || (a == 76 && b == 1) || (a == 196 && b == 1) { return "coff" }
     ""
 }
@@ -149,12 +150,61 @@ fn ar_coff(d: Str, big: Bool) -> Result[Strs, Str] {
     Ok(out)
 }
 
+// What an object holds at `at` as eight bytes, little endian; -1 where it is cut short or past 2^62.
+fn ar_u64(d: Str, at: Int) -> Int {
+    let lo = ar_u32(d, at)
+    let hi = ar_u32(d, at + 4)
+    if lo < 0 || hi < 0 || hi >= 1073741824 { return 0 - 1 }
+    lo + hi * 4294967296
+}
+
+// ELF: each `.symtab` symbol bound global, weak or unique and defined (a common one included, as GNU `ar`
+// indexes). Little-endian only: the Linux targets carried are.
+fn ar_elf(d: Str) -> Result[Strs, Str] {
+    let wide = ar_u8(d, 4) == 2
+    if ar_u8(d, 5) != 1 { return Err("a big-endian ELF object, which no carried target writes") }
+    let shoff = if wide { ar_u64(d, 40) } else { ar_u32(d, 32) }
+    let shentsize = if wide { ar_u16(d, 58) } else { ar_u16(d, 46) }
+    let shnum = if wide { ar_u16(d, 60) } else { ar_u16(d, 48) }
+    if shoff < 0 || shentsize < 0 || shnum < 0 { return Err("truncated at byte 32") }
+    let out = strs_new()
+    for i in 0..shnum {
+        let s = shoff + i * shentsize
+        let kind = ar_u32(d, s + 4)
+        if kind < 0 { return Err("truncated at byte " + int_to_str(s + 4)) }
+        if kind != 2 { continue }
+        let offset = if wide { ar_u64(d, s + 24) } else { ar_u32(d, s + 16) }
+        let size = if wide { ar_u64(d, s + 32) } else { ar_u32(d, s + 20) }
+        let link = if wide { ar_u32(d, s + 40) } else { ar_u32(d, s + 24) }
+        let entsize = if wide { ar_u64(d, s + 56) } else { ar_u32(d, s + 36) }
+        if offset < 0 || size < 0 || link < 0 || entsize < 0 { return Err("truncated at byte " + int_to_str(s)) }
+        let ls = shoff + link * shentsize
+        let strings = if wide { ar_u64(d, ls + 24) } else { ar_u32(d, ls + 16) }
+        if strings < 0 { return Err("truncated at byte " + int_to_str(ls)) }
+        if entsize == 0 { return Err("a symbol table of entries of no size") }
+        // The first entry is the null symbol.
+        for k in 1..(size / entsize) {
+            let e = offset + k * entsize
+            let name = ar_u32(d, e)
+            let info = if wide { ar_u8(d, e + 4) } else { ar_u8(d, e + 12) }
+            let shndx = if wide { ar_u16(d, e + 6) } else { ar_u16(d, e + 14) }
+            if name < 0 || info < 0 || shndx < 0 { return Err("truncated at byte " + int_to_str(e)) }
+            let binding = info / 16
+            if (binding == 1 || binding == 2 || binding == 10) && shndx != 0 {
+                strs_push(out, ar_cstring(d, strings + name))
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn ar_globals(d: Str) -> Result[Strs, Str] {
     let f = ar_format(d)
     if f == "macho" { return ar_macho(d) }
+    if f == "elf" { return ar_elf(d) }
     if f == "coff" { return ar_coff(d, false) }
     if f == "bigobj" { return ar_coff(d, true) }
-    Err("not an object file nazm can index here (Mach-O or COFF)")
+    Err("not an object file nazm can index here (Mach-O, ELF or COFF)")
 }
 
 // `value` padded with spaces to `width`.
