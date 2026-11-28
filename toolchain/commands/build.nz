@@ -186,6 +186,12 @@ fn bd_os(t: Str) -> Str {
     "linux"
 }
 
+// Whether a release build of `t` is hardened on `host`: macOS on macOS (stripped, signed), Linux on Linux
+// (stripped by the link, a full-RELRO PIE).
+fn bd_hardens(t: Str, host: Str) -> Bool {
+    (bd_os(t) == "macos" && bd_os(host) == "macos") || (ut_contains(t, "-unknown-linux-gnu") && bd_os(host) == "linux")
+}
+
 fn bd_arch(t: Str) -> Str { if ut_starts(t, "x86_64") { "x86_64" } else { "aarch64" } }
 
 // A triple the Rust compiler generates code for (`Target::parse`).
@@ -220,12 +226,16 @@ fn bd_unknown_target(t: Str) -> Str {
             + "targets aarch64-linux-android and aarch64-apple-ios"
 }
 
-// The targets this driver builds for: the two macOS ones and Windows on x86_64, which Nazm's code
-// generator carries before 1.0; and Linux, inside the contained runner only, for the self-build
-// (design S4.4; `docs/user/support.md`: not a supported target).
+// The targets this driver builds for: the two macOS ones, Windows on x86_64 and the two Linux ones
+// (`linux-toolchain` L1: Linux was the contained self-build's alone until 0.12.0).
 fn bd_carried(io: IoCap, t: Str) -> Bool {
     if t == "aarch64-apple-darwin" || t == "x86_64-apple-darwin" || t == "x86_64-pc-windows-gnu" { return true }
-    (t == "aarch64-unknown-linux-gnu" || t == "x86_64-unknown-linux-gnu") && os_env_get("NAZM_CONTAINED") == "1"
+    t == "aarch64-unknown-linux-gnu" || t == "x86_64-unknown-linux-gnu"
+}
+
+// The targets `bd_carried` names, in its refusals' words.
+fn bd_carried_list() -> Str {
+    "aarch64-apple-darwin, x86_64-apple-darwin, x86_64-pc-windows-gnu, aarch64-unknown-linux-gnu and x86_64-unknown-linux-gnu"
 }
 
 // Whether the driver (`clang`) has a code generator for `arch` by its own list (`generates`).
@@ -259,10 +269,9 @@ fn bd_preflight(io: IoCap, proc: ProcessCap, sp: SpawnCap, o: Opts) -> Str {
     if o.backend == "cranelift" && bd_mobile(t) {
         bd_early(io, o, "nazm: `--backend cranelift` builds no mobile target; `" + t + "` is the LLVM backend's", 5)
     }
-    // Nazm's own code generator builds for the two macOS targets and Windows x86_64.
-    // (The two Linux triples too inside the contained runner, for the self-build: the one difference from the Rust build.)
+    // Nazm's own code generator builds for the two macOS targets, Windows x86_64 and the two Linux ones.
     if o.backend == "nazm" && !bd_carried(io, t) {
-        bd_early(io, o, "nazm: `--backend nazm` builds for aarch64-apple-darwin, x86_64-apple-darwin and x86_64-pc-windows-gnu before 1.0; `" + t + "` is the LLVM backend's", 5)
+        bd_early(io, o, "nazm: `--backend nazm` builds for " + bd_carried_list() + " before 1.0; `" + t + "` is the LLVM backend's", 5)
     }
     // RISC-V is code generation the host's `clang` may not have.
     if ut_starts(t, "riscv64") && !bd_generates(io, proc, sp, "riscv64") {
@@ -280,13 +289,13 @@ fn bd_preflight(io: IoCap, proc: ProcessCap, sp: SpawnCap, o: Opts) -> Str {
     if o.has_board && o.has_runtime {
         bd_early(io, o, "nazm: `--runtime` is a built-in board's runtime, and `--board` names another; build with one or the other", 5)
     }
-    // A release build is a hardened macOS executable from the LLVM backend.
+    // A release build is a hardened macOS or Linux executable from the LLVM backend, built on its own OS.
     if o.release {
         let mut why = ""
         if o.backend != "llvm" {
             why = "`--backend llvm`'s: Cranelift and Nazm's own code generator write no stack canary"
-        } else if bd_os(t) != "macos" || bd_os(host) != "macos" {
-            why = "a macOS executable, built on macOS: another target is not hardened yet"
+        } else if !bd_hardens(t, host) {
+            why = "a macOS executable built on macOS, or a Linux one built on Linux: another target is not hardened yet"
         }
         if why != "" { bd_early(io, o, "nazm: `--release` hardens " + why, 5) }
     }
@@ -311,7 +320,7 @@ fn bd_preflight(io: IoCap, proc: ProcessCap, sp: SpawnCap, o: Opts) -> Str {
         if why != "" { bd_early(io, o, "nazm: a heap limit bounds a hosted program's heap; " + why, 5) }
     }
     // A target the host cannot link is built as objects, or refused before anything is compiled.
-    let links_here = t == host || (bd_os(t) == "macos" && bd_os(host) == "macos")
+    let links_here = t == host || (bd_os(t) == "macos" && bd_os(host) == "macos") || (ut_contains(t, "-unknown-linux-gnu") && bd_os(host) == "linux")
     if !links_here && !o.has_objects && !o.lib {
         bd_early(io, o, "nazm: this host has no linker for `" + t + "`; build it with `--objects DIR`, which writes every object and `DIR/link.txt` for that target's own toolchain to link", 4)
     }
@@ -320,7 +329,7 @@ fn bd_preflight(io: IoCap, proc: ProcessCap, sp: SpawnCap, o: Opts) -> Str {
         bd_refuse(io, o, "`nazm build --backend cranelift` (Cranelift is not ported: `rewrite-in-nazm` decision 3; the backends are `llvm`, the default, and `nazm`)")
     }
     if !bd_carried(io, t) {
-        bd_refuse(io, o, "the target `" + t + "` (Nazm builds for aarch64-apple-darwin, x86_64-apple-darwin and x86_64-pc-windows-gnu; Linux, WebAssembly, WASI, Android, iOS and the boards are not built after the cut-over)")
+        bd_refuse(io, o, "the target `" + t + "` (Nazm builds for " + bd_carried_list() + "; WebAssembly, WASI, Android, iOS and the boards are not built after the cut-over)")
     }
     t
 }
@@ -1332,7 +1341,7 @@ fn runtime_build(io: IoCap, proc: ProcessCap, sp: SpawnCap, c: Cli) -> Int {
         profile = p
     }
     if profile != "hosted" || !bd_carried(io, target) {
-        bd_refuse(io, o, "`nazm runtime build` for `" + target + "` (Nazm builds the runtime for aarch64-apple-darwin, x86_64-apple-darwin and x86_64-pc-windows-gnu; Linux, WebAssembly, WASI, Android, iOS and the boards are not built after the cut-over)")
+        bd_refuse(io, o, "`nazm runtime build` for `" + target + "` (Nazm builds the runtime for " + bd_carried_list() + "; WebAssembly, WASI, Android, iOS and the boards are not built after the cut-over)")
     }
     let why = strs_new()
     if !ut_make_dirs(io, out, why) { rt_refuse(io, "cannot create " + out + ": " + str_join(why, ""), 4) }
@@ -1790,8 +1799,8 @@ pub fn bd_build(io: IoCap, proc: ProcessCap, sp: SpawnCap, tm: TimeCap, v: Vouch
         }
         bd_report_clang(io, o, result, work, work, true)
     }
-    // A release build is stripped and signed once it is linked.
-    if o.release {
+    // A macOS release build is stripped and signed once it is linked (Linux's was finished by the link).
+    if o.release && bd_os(target) == "macos" {
         let said = bd_finish_release(io, proc, sp, exe, env)
         if said != "" {
             bd_remove(io, work)
@@ -1972,6 +1981,13 @@ fn bd_link(io: IoCap, proc: ProcessCap, sp: SpawnCap, target: Str, cross: Str, e
     if bd_family(target) == "macho" { strs_push(a, "-Wl,-dead_strip") }
     if bd_family(target) == "elf" { strs_push(a, "-Wl,--gc-sections") }
     if release { strs_push(a, "-Wl,-pie") }
+    // On Linux the release finish is the link's: full RELRO, a stack that is not executable, no symbols.
+    if release && bd_os(target) == "linux" {
+        strs_push(a, "-Wl,-z,relro")
+        strs_push(a, "-Wl,-z,now")
+        strs_push(a, "-Wl,-z,noexecstack")
+        strs_push(a, "-s")
+    }
     let env = bd_passed(io)
     strs_push(env, "ZERO_AR_DATE=1")
     bd_run(io, proc, sp, "clang", a, false, env)
