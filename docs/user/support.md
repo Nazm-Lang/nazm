@@ -29,7 +29,7 @@ No cell says just "supported".
 | `aarch64-apple-darwin` | run-verified | run-verified | the host, Apple silicon | lldb, breakpoints resolved statically, both backends |
 | `x86_64-apple-darwin` | run-verified | run-verified | under Rosetta 2 on Apple silicon | not exercised |
 | `aarch64-unknown-linux-gnu` | run-verified | run-verified | the contained runner's Linux container | gdb, live, both backends (nazm-debug image) |
-| `x86_64-unknown-linux-gnu` | compile-only | compile-only | nowhere: no x86_64 Linux machine or emulator here | not exercised |
+| `x86_64-unknown-linux-gnu` | compile-only | compile-only | under the seed's backends, nowhere; the Nazm-built toolchain's programs ran under Docker Desktop's Rosetta amd64 emulation in a Debian 13 container (below); no x86_64 Linux machine | not exercised |
 | `x86_64-pc-windows-gnu` | run-verified on a Windows host | run-verified on a Windows host | a Windows 10 laptop (version 1903, 10.0.18362.113), linked by MinGW-w64's `gcc`: `scripts/windows-host.sh`, 68 agree, 0 differ, 7 skipped under each backend (2026-10-15); and Wine 8 in a Debian x86_64 container (`docker/wine.Dockerfile`) | not exercised |
 | `aarch64-unknown-none` | emulator-verified | unsupported | QEMU `virt`, Cortex-A53 | not exercised |
 | `riscv64gc-unknown-none-elf` | emulator-verified | unsupported | QEMU `virt`, RV64GC, machine mode | not exercised |
@@ -49,12 +49,22 @@ through a bounded runner; the evidence and its limits (no Windows-native self-bu
 `nazm test` there) are in `openspec/changes/r8-cut-over/tasks.md` 16 and 17. The 0.11.0 archives are made at its
 release gate; until then the released preview is the one above.
 
-**Linux triples inside the Nazm toolchain are internal.** The pipeline written in Nazm accepts the
-Linux triples so that the contained self-build (`cargo xtask contained selfbuild`, Linux aarch64 in
-the container) can run; that is an implementation detail of that build, decided 2026-10-20
-(`openspec/changes/r6-host-qualification`), and **no user-facing support claim**. The rows above
-are the whole claim: no Linux target is supported *by the Nazm-written toolchain*, and
-`x86_64-unknown-linux-gnu` stays compile-only. The Linux triples are not among the 0.11.0 release targets and come back for 1.0.
+**Linux in the Nazm-built toolchain (0.12.0, in progress: `openspec/changes/linux-toolchain`).** Until
+0.11.0 the Linux triples were the contained self-build's alone. From 0.12.0 the Nazm-built `nazm` builds for
+both Linux triples, and `--release` on Linux makes a stripped, full-RELRO position-independent executable with
+a non-executable stack. What has run, 2026-11-28:
+
+- `aarch64-unknown-linux-gnu`: the Nazm toolchain built itself natively in the contained runner's Debian 13
+  container (seed → stage 1 → 2 → 3, `--release`, LLVM): the stages byte-identical, every check of the macOS
+  self-build passed, and a release archive made from it installed and ran in a fresh Debian 13 container.
+- `x86_64-unknown-linux-gnu`: **cross-built** by that aarch64 stage 3, twice, identically, then run under
+  Docker Desktop's Rosetta amd64 emulation in a Debian 13 container: its 518 answers (the corpus, the
+  interpreter, Core IR and the tools) byte-identical to aarch64's, and its archive installed and ran there.
+  Nazm's own code generator's ELF objects ran there too (129 agree). No x86_64 Linux machine has run it,
+  and no timing is claimed from the emulation.
+
+The status cells above are the seed's backends' and are unchanged until the compiler's own table
+(`toolchain.support`) is updated with this evidence. Neither Linux archive is released until 0.12.0's gate.
 
 Cranelift's two `unsupported` reasons: its object writer has no format for a target without an
 operating system, and this Cranelift is built without a WebAssembly backend.

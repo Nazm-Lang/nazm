@@ -42,10 +42,16 @@ WORKDIR /src
 #
 # Without this the registry and the three rust-toolchain components are fetched on every
 # run, inside the deadline, over the network.
+#
+# `WARM_JOBS` is how many jobs that warm build takes: 1, unless the image is built for another
+# architecture (`--platform linux/amd64` on this aarch64 host runs every compiler emulated, by Docker
+# Desktop's Rosetta, about nine times slower), where more jobs only finish the same cache sooner. It changes nothing in what
+# the cache holds.
+ARG WARM_JOBS=1
 COPY . /src
 RUN cargo fetch --locked \
- && cargo build --locked --tests --jobs 1 \
- && cargo build --locked -p xtask --jobs 1
+ && cargo build --locked --tests --jobs "$WARM_JOBS" \
+ && cargo build --locked -p xtask --jobs "$WARM_JOBS"
 
 # `ssh-keygen` signs and checks the in-toto attestations (`nazm attest`), so the attestation tests and
 # their mutation killers run here instead of being ignored (N94, killer repoint 2026-11-08). Debian's
@@ -63,3 +69,14 @@ RUN apt-get update \
 RUN apt-get update \
  && apt-get install -y --no-install-recommends binutils-mingw-w64-x86-64 gcc-mingw-w64-x86-64 \
  && rm -rf /var/lib/apt/lists/*
+
+# Debian's x86_64 cross C library, its gcc runtime (`crtbegin.o`, `libgcc`) and its linker, so that `clang
+# --target x86_64-unknown-linux-gnu` links on this aarch64 image: what the Nazm-built `nazm` needs to build
+# the toolchain for x86_64 Linux here (linux-toolchain L3; the programs then run in the `linux/amd64` image).
+# The release of each is trixie's, the native C library's (glibc 2.41). Only the aarch64 image takes them:
+# on amd64 the native ones are the target's.
+RUN if [ "$(dpkg --print-architecture)" = arm64 ]; then \
+        apt-get update \
+     && apt-get install -y --no-install-recommends libc6-dev-amd64-cross libgcc-14-dev-amd64-cross binutils-x86-64-linux-gnu \
+     && rm -rf /var/lib/apt/lists/*; \
+    fi

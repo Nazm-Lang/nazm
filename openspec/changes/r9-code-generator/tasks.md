@@ -65,8 +65,11 @@
       The first run of this workload skipped all 129 (`build --objects` writes `NAME.nazm` into the current
       directory, which the contained runner mounts read-only; `run.sh` now builds from the work directory).
       Not run: `x86_64-unknown-linux-gnu` (6.3b)
-- [ ] 6.3b (planned for 0.12.0, split recorded 2026-11-07) (moved to 0.12.0, 2026-11-05) The same on `x86_64-unknown-linux-gnu`: needs an amd64 contained image (`--platform amd64`,
-      emulated on this Mac), none built; not claimed
+- [x] 6.3b (planned for 0.12.0, split recorded 2026-11-07) (moved to 0.12.0, 2026-11-05) The same on `x86_64-unknown-linux-gnu` — done 2026-11-28
+      (`linux-toolchain` 3.4): `cargo xtask contained --platform amd64 elfrun` at 12778f8e, in `nazm-contained-amd64:1.98.1`
+      (the same Dockerfile built for `linux/amd64`), gave **129 agree, 0 differ, 0 refused, 0 skipped**, passed in 877.2 s.
+      Emulated: Docker Desktop runs the x86_64 programs under its Rosetta on this aarch64 Mac (1 CPU, 4 GiB, no network);
+      no time is claimed from it, and no native x86_64 Linux host has run it
 
 ## 7. On main after R1.5, 3.3 and failures by unwinding (macOS only: aarch64-apple-darwin, x86_64-apple-darwin under Rosetta)
 
