@@ -44,8 +44,8 @@ WORKDIR /src
 # run, inside the deadline, over the network.
 #
 # `WARM_JOBS` is how many jobs that warm build takes: 1, unless the image is built for another
-# architecture (`--platform linux/amd64` on this aarch64 host runs every compiler under qemu, about
-# nine times slower), where more jobs only finish the same cache sooner. It changes nothing in what
+# architecture (`--platform linux/amd64` on this aarch64 host runs every compiler emulated, by Docker
+# Desktop's Rosetta, about nine times slower), where more jobs only finish the same cache sooner. It changes nothing in what
 # the cache holds.
 ARG WARM_JOBS=1
 COPY . /src
