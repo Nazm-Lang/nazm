@@ -23,6 +23,9 @@
 #   release-nazm  `build --release --backend nazm`: refused (5), no stack canary
 #   windows       `build --target x86_64-pc-windows-gnu`: no linker here (4), `--objects` named
 #   wasm          `build --target wasm32-wasip1 --objects o`: not carried (6), the list naming both Linux triples
+#   nazm-wasm     `build --backend nazm --target wasm32-wasip1`: refused (5), the list naming both Linux triples
+#                 (the seed's list does not, so build.sh no longer compares this line, or its aarch64-unknown-none twin)
+#   runtime       `runtime build --out rt`: the hosted runtime for HOST, an archive whose index the ELF objects fill
 #
 # Prints `linux-build: ok CASE` or `linux-build: FAILED CASE: why` for each, then
 # `linux-build: N passed, M failed`; exit 0 only when none failed.
@@ -134,6 +137,18 @@ if [ -z "$why" ]; then ok windows; else no windows "$why"; fi
 nz wasm build --target wasm32-wasip1 --objects o-wasm hello.nz
 why=$(refused wasm 6 'aarch64-unknown-linux-gnu and x86_64-unknown-linux-gnu; WebAssembly, WASI')
 if [ -z "$why" ]; then ok wasm; else no wasm "$why"; fi
+
+# nazm-wasm
+nz nazm-wasm build --backend nazm --target wasm32-wasip1 hello.nz
+# shellcheck disable=SC2016 # the backquotes are the message's own
+why=$(refused nazm-wasm 5 'aarch64-unknown-linux-gnu and x86_64-unknown-linux-gnu before 1.0; `wasm32-wasip1` is the LLVM backend')
+if [ -z "$why" ]; then ok nazm-wasm; else no nazm-wasm "$why"; fi
+
+# runtime
+nz runtime runtime build --out rt
+if [ "$st" -eq 0 ] && [ -s "$work/rt/libnazmrt.a" ] && [ -f "$work/rt/nazm-runtime.json" ] && grep -qF "$host" "$work/rt/nazm-runtime.json" \
+    && [ "$(head -c 8 "$work/rt/libnazmrt.a")" = '!<arch>' ]; then ok "runtime ($host)"
+else no runtime "status $st: $(err runtime)"; fi
 
 printf 'linux-build: %s passed, %s failed\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]
