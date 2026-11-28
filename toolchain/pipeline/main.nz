@@ -422,6 +422,8 @@ fn llvm_unit(t: Str, target: Str, single: Bool, renaming: Str, fl: Flags, defs: 
             x = lp_inline_counting(x, single, defs)
             if renaming == "heap" { x = count_heap(x) } else if renaming == "small" { x = small_heap(x) }
             if fl.release { x = lp_stack_protected(x) }
+            // A release build on Linux is a PIE (`nazm build` links it so), and its text says so to LLVM.
+            if fl.release && text_contains(target, "-linux-") { x = lp_position_independent(x) }
             Ok(x)
         },
         Err(e) => Err(e),
@@ -646,6 +648,7 @@ fn build(io: IoCap, v: VouchCap, c: Cir, tt: TypeTable, p: MirProgram, target: S
         }
         // A release build: every function the runtime defines carries a stack canary too.
         if fl.llvm && fl.release { text = lp_stack_protected(text) }
+        if fl.llvm && fl.release && text_contains(target, "-linux-") { text = lp_position_independent(text) }
         if write_file(str_vouch(dir + "/rt/" + name + ".ll"), text) < 0 {
             eprint("pipeline: cannot write " + dir + "/rt/" + name + ".ll" + nl())
             return 1

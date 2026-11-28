@@ -220,3 +220,48 @@ pub fn lp_stack_protected(text: Str) -> Str ! {} {
     }
     str_join(out, lp_nl())
 }
+
+// --- --release on Linux: a position-independent executable ------------------------------------------------
+
+// `text` marked as code for a position-independent executable (`PIC Level` 2, `PIE Level` 2), as clang marks
+// what it compiles from C on Linux (linux-toolchain L1). LLVM reads the marks, not the driver's `-fPIE`, when
+// it is handed a unit's text: without them it takes the unit for code that is not position-independent and
+// reaches data the C library defines (the stack canary's `__stack_chk_guard`, which `sspstrong` brings) directly,
+// which a PIE's link refuses on aarch64. The marks join the unit's `!llvm.module.flags` if it has one (debug
+// information's), under metadata numbers after the largest the text uses.
+pub fn lp_position_independent(text: Str) -> Str ! {} {
+    let mut top = 0 - 1
+    let n = str_len(text)
+    let mut i = 0
+    while i + 1 < n {
+        if str_byte(text, i) == 33 && str_byte(text, i + 1) >= 48 && str_byte(text, i + 1) <= 57 {
+            let mut v = 0
+            let mut j = i + 1
+            while j < n && str_byte(text, j) >= 48 && str_byte(text, j) <= 57 {
+                v = v * 10 + (str_byte(text, j) - 48)
+                j += 1
+            }
+            if v > top { top = v }
+            i = j
+        } else {
+            i += 1
+        }
+    }
+    let pic = "!" + int_to_str(top + 1)
+    let pie = "!" + int_to_str(top + 2)
+    let head = "!llvm.module.flags = !{"
+    let out = strs_new()
+    let mut joined = false
+    for line in lp_lines(text) {
+        if !joined && text_starts_with(line, head) && text_ends_with(line, "}") {
+            strs_push(out, str_slice(line, 0, str_len(line) - 1) + ", " + pic + ", " + pie + "}")
+            joined = true
+        } else {
+            strs_push(out, line)
+        }
+    }
+    if !joined { strs_push(out, head + pic + ", " + pie + "}") }
+    strs_push(out, pic + " = !{i32 8, !\"PIC Level\", i32 2}")
+    strs_push(out, pie + " = !{i32 7, !\"PIE Level\", i32 2}")
+    str_join(out, lp_nl()) + lp_nl()
+}
