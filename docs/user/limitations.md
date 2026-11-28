@@ -2,7 +2,7 @@
 
 One list, kept current, of what Nazm does **not** do or does only partly — the v1 foundation and
 everything N49–N74 added to it, as audited in N75, and kept current through the 1.0 draft (Gate 1,
-2026-10-07; the 0.9.0 preview, 2026-10-12; 0.10.0, 2026-10-15; 0.11.0, TODO(gate): release date). What 1.0 will promise about what is here is
+2026-10-07; the 0.9.0 preview, 2026-10-12; 0.10.0, 2026-10-15; 0.11.0, 2026-11-28). What 1.0 will promise about what is here is
 `stability.md`. Each line names the
 capability-matrix area that owns it (`capability-matrix.md`), where the evidence and the status
 live; this file adds nothing a reader could not find there, and exists so nothing material is
@@ -363,6 +363,10 @@ can, since R1.5 D11, from the system's libraries); one Nazm library per C progra
 
 ## Packages and builds
 
+- An installed `nazm` finds its stages (`libexec/nazm/nazm-pipeline` and `nzcg`) beside the `bin/` that `PATH`
+  names, or in `NAZM_LIBEXEC`: a Nazm program cannot yet ask for its own path, so `nazm build` and `nazm run`
+  started by a full path, with its `bin/` not on `PATH`, stop asking for `NAZM_LIBEXEC` (0.11.0; the archive's
+  `INSTALL.txt` says to put `bin/` on `PATH`). Planned for 0.12.0.
 - A local registry and four requirement forms (N56); no remote registry or network source, no
   signatures, no features or pre-releases, one version per package, no multi-root workspaces
   (area 26). *Narrowed in N56:* until then, path dependencies only. *Narrowed in N90:* resolution

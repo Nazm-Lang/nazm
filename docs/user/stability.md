@@ -343,9 +343,11 @@ reference host for a subset. A target is promoted by evidence, in a minor releas
 
 ## History: the pre-1.0 policy
 
-*0.11.0 (TODO(gate): release date).* The toolchain written in Nazm: the compiler, interpreter, commands and
+*0.11.0 (2026-11-28).* The toolchain written in Nazm: the compiler, interpreter, commands and
 harness, built by Nazm from a frozen Rust seed, for macOS (Apple Silicon and Intel) and Windows (x86_64).
-No language rule changed that can break a 0.10.0 program (TODO(gate): confirm).
+Four changed rules can break a 0.10.0 program (`List[T]` is the growable list and the sequence is `Chain[T]`; an untyped
+`[1, 2, 3]` is a list, not an array; a pattern `let` binds in its own scope; `nazm run` compiles natively): each is
+named, with its diagnostic, in `releases/0.11.0.md`.
 
 *0.10.0 (2026-10-15).* R1 of the rewrite programme: the language the toolchain will be rewritten in,
 its additions stable as 1.x additions. Pre-1.0 releases are minor versions — 0.10.0, 0.11.0, … — made
