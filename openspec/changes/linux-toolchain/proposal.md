@@ -18,8 +18,9 @@ stage inside the aarch64 Linux container. What blocks a release:
 3. the container self-build uses the `nazm` backend without `--release`, writes no
    `nazm.selfbuild-record/1` and exports nothing;
 4. `scripts/release-archive.sh` knows only the three 0.11.0 triples and Mach-O/PE images;
-5. nothing x86_64 Linux has run here: no amd64 image, and this Mac emulates amd64 with qemu at
-   about 9× native (a shell loop: 42.6 s against 4.8 s, 2026-11-28), not with Rosetta.
+5. nothing x86_64 Linux has run here: no amd64 image, and this Mac emulates amd64 at about 9×
+   native (a shell loop: 42.6 s against 4.8 s, 2026-11-28). (Corrected the same day, L3 3.1: the
+   emulator is Docker Desktop's Rosetta, mapped into every x86_64 process, not qemu.)
 
 ## What Changes
 
