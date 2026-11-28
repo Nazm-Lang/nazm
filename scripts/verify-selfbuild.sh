@@ -12,11 +12,12 @@
 #      `result passed`, and every executable under bin/ and libexec/ is one of its `shipped` lines,
 #      with that line's SHA-256;
 #   2. each shipped file is, by that embedded record, the last stage and equal to the stage before it:
-#      stage 3 = stage 2 (macOS and Linux: the fixpoint), or the first Windows build = the second;
+#      stage 3 = stage 2 (macOS and Linux: the fixpoint), or the first Windows build = the second, or
+#      the first x86_64 Linux build = the second (x86 = x86b);
 #   3. with OUT, a self-build the reader ran (toolchain/selfbuild/host-selfbuild.sh,
-#      linux-selfbuild.sh or windows-selfbuild.sh) of the same commit, that OUT's record passed for
-#      the same commit and triple, and each shipped file is the same bytes as OUT's own
-#      (stage3/NAME or win/NAME.exe).
+#      linux-selfbuild.sh, linux-x86-selfbuild.sh or windows-selfbuild.sh) of the same commit, that
+#      OUT's record passed for the same commit and triple, and each shipped file is the same bytes as
+#      OUT's own (stage3/NAME, win/NAME.exe or x86/NAME).
 #
 # With `--record OUT` there is no archive: OUT is a self-build's record directory (as the
 # `linux-selfbuild` contained workload exports it, unpacked), and the checks are that OUT/fixpoint.txt
@@ -118,7 +119,8 @@ while read -r _ path from name want; do
     case $from in
         stage3) prev=stage2 ;;
         win) prev=win2 ;;
-        *) bad "$path ships from '$from', which is neither the last macOS stage nor the Windows build" ;;
+        x86) prev=x86b ;;
+        *) bad "$path ships from '$from', which is neither the last stage, the Windows build nor the x86_64 Linux one" ;;
     esac
     [ "$(recsha "$from" "$name")" = "$want" ] || bad "$path is not $from/$name of the embedded record"
     [ "$(recsha "$prev" "$name")" = "$want" ] || bad "$path: $prev/$name of the embedded record is not the same bytes ($from is not a fixpoint)"
