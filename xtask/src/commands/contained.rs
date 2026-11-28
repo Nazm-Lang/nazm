@@ -148,6 +148,63 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
                 )),
             )
         }
+        // linux-toolchain L2: the aarch64 Linux self-build, release grade
+        // (`toolchain/selfbuild/linux-selfbuild.sh`): seed, then stages 1 to 3 `--release --backend
+        // llvm`, every check `host-selfbuild.sh` makes, and the `nazm.selfbuild-record/1` record.
+        // The record directory is exported as one archive (the export path takes regular files by
+        // name, not directories) beside its `fixpoint.txt`, into `target/linux-selfbuild/`.
+        // `git` is not in the image, so the commit and the tree's state are the supervisor's, as the
+        // release's are. Three stages of release builds, the corpus twice and the checks: about an
+        // hour natively; the deadline is three.
+        Some("linux-selfbuild") => {
+            bounds.deadline = Duration::from_secs(3 * 3600);
+            if let Some(a) = args.get(1) {
+                eprintln!("contained: linux-selfbuild takes nothing after it, not {a:?}");
+                return ExitCode::FAILURE;
+            }
+            let Some((commit, clean)) = source_identity(&repo) else {
+                eprintln!(
+                    "contained: cannot establish the source commit and the tree's state with git"
+                );
+                return ExitCode::FAILURE;
+            };
+            let dest = repo.join("target").join("linux-selfbuild");
+            if let Err(e) = make_dest(&dest, print_argv) {
+                eprintln!("contained: cannot prepare {}: {e}", dest.display());
+                return ExitCode::FAILURE;
+            }
+            bounds.export = Some(contained::ExportPolicy {
+                manifest: "/work/lsbout/EXPORTS".to_owned(),
+                dest,
+                allowed: vec![
+                    "linux-selfbuild.tar.gz".to_owned(),
+                    "fixpoint.txt".to_owned(),
+                ],
+                // Four stages of nine executables (the seed's stage 0 unstripped), the logs and
+                // the record, compressed: a few hundred megabytes at most.
+                max_bytes: 400 * 1024 * 1024,
+            });
+            (
+                "linux-selfbuild",
+                shell(&format!(
+                    "cargo build --locked -p nazm-cli --jobs {j} \
+                     && NAZM_SOURCE_COMMIT={commit} NAZM_SOURCE_TREE_CLEAN={clean} \
+                        bash toolchain/selfbuild/linux-selfbuild.sh /work/lsb \
+                     && mkdir -p /work/lsbout \
+                     && cp /work/lsb/fixpoint.txt /work/lsbout/ \
+                     && tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@0 \
+                            --transform 's,^lsb,linux-selfbuild,' \
+                            -czf /work/lsbout/linux-selfbuild.tar.gz -C /work \
+                            lsb/fixpoint.txt lsb/environment.txt lsb/peaks.txt \
+                            lsb/stage0 lsb/stage1 lsb/stage2 lsb/stage3 lsb/l1 \
+                     && cd /work/lsbout \
+                     && for f in linux-selfbuild.tar.gz fixpoint.txt; do \
+                            printf '%s %s\\n' \"$f\" \"$(wc -c < $f | tr -d ' ')\"; \
+                        done > EXPORTS \
+                     && cat EXPORTS"
+                )),
+            )
+        }
         // R9 6.3: the generator's ELF objects linked with the container's `cc` and run in the
         // container, each program compared with the same program built by the seed's LLVM
         // backend. The container's own architecture is the target (aarch64 natively; with
@@ -539,7 +596,7 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
         }
         other => {
             eprintln!(
-                "contained: unknown workload {:?}\n  probe | tests | selfhost | bootstrap | selfbuild | elfrun | bench | mutate | fuzz [SECONDS] [TARGET...] | archive | run <command>",
+                "contained: unknown workload {:?}\n  probe | tests | selfhost | bootstrap | selfbuild | linux-selfbuild | elfrun | bench | mutate | fuzz [SECONDS] [TARGET...] | archive | run <command>",
                 other.unwrap_or("<none>")
             );
             return ExitCode::FAILURE;
@@ -636,6 +693,25 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The checkout's commit and whether its tree is clean (`yes` or `no`), from git: the image has
+/// no git, so a workload that records its source is told both by the supervisor. Only the verdict
+/// crosses, never the porcelain text (a path may hold a quote). `None` when git cannot answer.
+fn source_identity(repo: &std::path::Path) -> Option<(String, &'static str)> {
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+    };
+    let commit = git(&["rev-parse", "HEAD"])
+        .filter(|c| !c.is_empty() && c.bytes().all(|b| b.is_ascii_hexdigit()))?;
+    let dirty = git(&["status", "--porcelain"])?;
+    Some((commit, if dirty.is_empty() { "yes" } else { "no" }))
 }
 
 /// Create `dest` unless only the plan is being printed, which changes nothing on the host.
@@ -976,6 +1052,7 @@ mod tests {
             "mutate",
             "bootstrap",
             "selfbuild",
+            "linux-selfbuild",
             "bench",
             "release",
             "probe",
