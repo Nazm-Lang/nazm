@@ -1,8 +1,8 @@
 ## 0. The holder's decisions (proposal.md, *Decisions for the holder*)
 
 - [x] 0.1 Scope: all five items are in 0.12.0 (the copyright holder, 2026-11-28)
-- [ ] 0.2 Supervision's form: language constructs or a library over task scopes
-- [ ] 0.3 The million-connection host; the token benchmark's budget; the study's recruiting and consent
+- [x] 0.2 Supervision's form: a library over links, monitors and exit reasons (2026-11-28)
+- [x] 0.3 The million-connection host (this Mac, Docker Linux, capped); the token benchmark on the Claude subscription; the study as desk research (2026-11-28)
 
 ## 1. Platforms (decided 2026-11-05)
 
@@ -20,9 +20,9 @@
 ## 3. The five gaps (in 0.12.0, 0.1)
 
 - [ ] 3.1 Fan-in and task start-up fixed and re-measured; then 1,000,000 connections on a small Linux host, published with the method
-- [ ] 3.2 Supervision: spec, diagnostics, runtime, tests; deadlock detection considered in the same design
-- [ ] 3.3 Beginner study: protocol, consent, first sessions, findings turned into diagnostic and guide changes
-- [ ] 3.4 Token benchmark: the driver for `research/evaluation.md`; a first run after the budget decision
+- [ ] 3.2 Supervision: links, monitors and exit reasons in the spec and runtime; `@std/supervise`; diagnostics, tests; deadlock detection considered in the same design
+- [ ] 3.3 Desk study: sources and aspects, the cross-language comparison, novice mistakes as Nazm programs, findings turned into diagnostic and guide changes
+- [ ] 3.4 Token benchmark: the driver for `research/evaluation.md` over `claude -p`, paced and resumable; the 5-task trial, then the full run
 - [ ] 3.5 One-block box, size-class allocator, move-aware MIR; binary-trees re-measured in a quiet window
 
 ## 4. Release
