@@ -22,8 +22,9 @@
 # `linux-selfbuild` contained workload exports it, unpacked), and the checks are that OUT/fixpoint.txt
 # is a nazm.selfbuild-record/1 ending `result passed`; that environment.txt and every file it names
 # have the digests it gives; and that each program's last stage is its stage before (stage3 =
-# stage2 = stage1 for host-selfbuild.sh and linux-selfbuild.sh, win = win2 for windows-selfbuild.sh),
-# by the record and byte for byte. When this checkout is at the record's commit, its build-input
+# stage2 = stage1 for host-selfbuild.sh and linux-selfbuild.sh, win = win2 for windows-selfbuild.sh,
+# x86 = x86b for linux-x86-selfbuild.sh, whose record must also name its builder's record and the
+# emulation it ran under), by the record and byte for byte. When this checkout is at the record's commit, its build-input
 # digest must be the record's too. Nothing in OUT is run.
 #
 # Exit 0 and `verify-selfbuild: ok TRIPLE` when every check holds; 1 naming the first that does not.
@@ -46,6 +47,14 @@ if [ "$archive" = --record ]; then
     case $script in
         host-selfbuild.sh | linux-selfbuild.sh) last=stage3 prev=stage2 first=stage1 ;;
         windows-selfbuild.sh) last=win prev=win2 first=win2 ;;
+        # x86_64 Linux, cross-built by an aarch64 stage 3 and run under emulation (linux-toolchain L3):
+        # the two builds are the pair; the record must name its builder's record and the emulation.
+        linux-x86-selfbuild.sh)
+            last=x86 prev=x86b first=x86b
+            [ "$(field target)" = x86_64-unknown-linux-gnu ] || bad "$rec is a linux-x86-selfbuild.sh record for '$(field target)'"
+            printf '%s\n' "$(field builder-record-sha256)" | grep -Eqx '[0-9a-f]{64}' || bad "$rec does not name its builder's record by digest"
+            [ -n "$(field emulation)" ] || bad "$rec does not say whether the x86_64 programs ran emulated"
+            ;;
         *) bad "$rec was written by '$script', which is no self-build this script knows" ;;
     esac
     [ "$(field environment-sha256)" = "$(sha256_of "$out/environment.txt")" ] || bad "$out/environment.txt is not the file the record names"
