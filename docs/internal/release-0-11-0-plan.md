@@ -45,15 +45,15 @@ Status as of 2026-11-28 (update it with every change).
 | D2 | Contained selfhost, bootstrap and selfbuild on the bumped commit | Done on `5159429d` (2026-11-28): all four passed; tests 3,130 passed, 0 failed (run alone: two `src` workloads at once share one target volume) | D1 |
 | D3 | Archives: `aarch64-apple-darwin`, `x86_64-apple-darwin` (macOS host selfbuilds) and `x86_64-pc-windows-gnu` (on `suad`; the Dell is offline) | Done on `5159429d` (2026-11-28): both Mac self-builds byte-identical at stages 1 to 3; Windows on `suad` reproducible, 414 + 93 answers agree, 0 differ; three archives packaged and verified; clean install of both Mac archives passes, `nazm run` admits the shipped `nzcg` | D2, A6b |
 | D4 | Sign `SHA256SUMS` with Sigstore (`scripts/sign-release.sh`). This is the holder's own step: it opens a browser login and is never run by an agent | Not for 0.11.0: the holder chose to publish unsigned if the whole gate is green (2026-11-14); the notes say so | D3 |
-| D5 | Provenance, tag v0.11.0, GitHub release | Not started | D4 |
-| D6 | nazm.dev deploy (`suhail/deploy.sh`; builds locally, reaches the server) | Not started; a local build and the server login were rehearsed on 2026-11-09 | D5 |
-| D7 | homebrew-tap formula for 0.11.0: it is arm64-only today and must carry both Mac archives (draft `on_arm`/`on_intel` formula written, SHA-256 pending) | Not started | D5 |
+| D5 | Provenance, tag v0.11.0, GitHub release | Done 2026-11-28: annotated tag `v0.11.0` on `fdead3a9` (the notes; archives from `5159429d`); GitHub pre-release with the three archives, `SHA256SUMS`, `sbom.json` and `index.json`, each downloaded back and identical | D4 |
+| D6 | nazm.dev deploy (`suhail/deploy.sh`; builds locally, reaches the server) | Done 2026-11-28: `deploy.sh v0.11.0`; https://nazm.dev serves the 0.11.0 notes, built from `fdead3a9`; internal pages answer 404 | D5 |
+| D7 | homebrew-tap formula for 0.11.0: it is arm64-only today and must carry both Mac archives (draft `on_arm`/`on_intel` formula written, SHA-256 pending) | Done 2026-11-28 (`homebrew-tap` `8d5d6ac`): `brew audit --strict` refused `url` inside `on_arm`/`on_intel`, so the archive is chosen by `Hardware::CPU.arm?`; audit, `brew install`, `brew test`, `nazm run` and `build --backend nazm` pass on Apple Silicon | D5 |
 
 ## E. After the release
 
 | ID | Step | Status | Waits on |
 |---|---|---|---|
-| E1 | Tick the task-list items this release closes (R8 11.1 and 14.1, R1.5 8.1 and 8.4) | Not started | D7 |
+| E1 | Tick the task-list items this release closes (R8 11.1 and 14.1, R1.5 8.1 and 8.4) | Not ticked, by their own text: 11.1 and 14.1 name refusals and open defects still left, and 8.1 and 8.4 were not done; carried to 0.12.0. The roadmap row and `docsdata.nz` updated after the tag | D7 |
 
 Every gate rule still applies: no weak or deleted test, no relaxed safety rule, nothing published unless
 every A step is green.
