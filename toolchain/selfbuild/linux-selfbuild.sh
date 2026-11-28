@@ -185,7 +185,7 @@ build_with() {
         > "$dest/$name.build.out" || {
             st=$?
             cp "$errf" "$dest/$name.build.err" 2> /dev/null
-            say "  $name: \`nazm build\` failed (status $st): $(head -c 600 "$dest/$name.build.err" 2> /dev/null)"
+            say "  $name: \`nazm build\` failed (status $st), the end of what it said: $(tail -c 1200 "$dest/$name.build.err" 2> /dev/null)"
             return 1
         }
     return 0
@@ -399,7 +399,7 @@ l1ok=0
 for kind in plain release; do
     flag=; [ $kind = release ] && flag=--release
     if ! user "l1 $kind build" 900 "$last/nazm" build $flag hello.nz -o "hello-$kind" > "$l1/$kind.build.out"; then
-        cp "$errf" "$l1/$kind.build.err"; say "  L1: \`nazm build $flag\` of hello.nz failed without NAZM_CONTAINED: $(head -c 600 "$l1/$kind.build.err")"; continue
+        cp "$errf" "$l1/$kind.build.err"; say "  L1: \`nazm build $flag\` of hello.nz failed without NAZM_CONTAINED: $(tail -c 1200 "$l1/$kind.build.err")"; continue
     fi
     if [ $kind = release ]; then why=$(elf_hardened "$l1/hello-$kind"); else why=$(elf_is "$l1/hello-$kind"); fi
     [ -z "$why" ] || { say "  L1: the $kind build is not what it should be: $why"; continue; }
