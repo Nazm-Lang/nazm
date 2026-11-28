@@ -421,6 +421,13 @@ if [ "$l1ok" -eq 3 ]; then
 else
     bad=$((bad + 1)); say "L1: FAILED: $l1ok of 3 user builds and runs as expected"
 fi
+# The driver's Linux answers (task 1.3), the test that lives with build.nz's: the admission of the Linux
+# triples, --release on Linux and the refusals around them, NAZM_CONTAINED unset.
+if bash "$root/toolchain/commands/tests/linux-build.sh" "$last" "$l1/driver" > "$l1/driver.txt" 2>&1; then
+    say "L1, the driver: $(tail -1 "$l1/driver.txt") (toolchain/commands/tests/linux-build.sh)"
+else
+    bad=$((bad + 1)); say "L1, the driver: FAILED (toolchain/commands/tests/linux-build.sh):"; sed 's/^/  /' "$l1/driver.txt"
+fi
 
 # --- (7): memory, from peaks.txt (KiB), per stage and program, MiB (sum, largest step) --------------------
 say "memory (the kernel's ru_maxrss, peaks.txt, KiB): per stage and kind, MiB (sum, largest step):"
