@@ -266,9 +266,8 @@ pub(crate) fn cache_key(f: &CacheFields) -> String {
 pub(crate) fn cache_namespace(workload: &str) -> Option<&'static str> {
     match workload {
         "mutate" => Some("mutate"),
-        "tests" | "selfhost" | "bootstrap" | "selfbuild" | "linux-selfbuild" | "elfrun" => {
-            Some("src")
-        }
+        "tests" | "selfhost" | "bootstrap" | "selfbuild" | "linux-selfbuild"
+        | "linux-x86-build" | "elfrun" => Some("src"),
         _ => None,
     }
 }
@@ -1347,12 +1346,14 @@ mod tests {
             "bootstrap",
             "selfbuild",
             "linux-selfbuild",
+            "linux-x86-build",
             "elfrun",
         ] {
             assert_eq!(cache_namespace(w), Some("src"), "{w}");
             assert_ne!(cache_namespace(w), mutate, "{w}");
         }
-        for w in ["bench", "release", "run", "probe"] {
+        // linux-x86-run builds nothing with Cargo: it runs what linux-x86-build made.
+        for w in ["bench", "release", "run", "probe", "linux-x86-run"] {
             assert_eq!(cache_namespace(w), None, "{w}");
         }
         // The benchmark namespace is asked for by name, and is neither of these.

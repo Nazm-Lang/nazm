@@ -205,6 +205,130 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
                 )),
             )
         }
+        // linux-toolchain L3, phase 1 (`toolchain/selfbuild/linux-x86-selfbuild.sh build`): in the
+        // aarch64 image, the stage 3 of the passed aarch64 self-build that `linux-selfbuild` exported
+        // to `target/linux-selfbuild/` (read through the read-only mount; its digests and its tree are
+        // checked by the script) builds the nine for x86_64 Linux twice, and answers, natively, every
+        // question phase 2 asks. The archive and its manifest go to `target/linux-x86-build/`.
+        // `smoke` accepts a builder of another tree and marks the run so that no record is written.
+        Some("linux-x86-build") => {
+            bounds.deadline = Duration::from_secs(3 * 3600);
+            if contained::image() == contained::IMAGE_AMD64 {
+                eprintln!(
+                    "contained: linux-x86-build runs in the aarch64 image, where its builder is native; phase 2 is `--platform amd64 linux-x86-run`"
+                );
+                return ExitCode::FAILURE;
+            }
+            let smoke = match args.get(1).map(String::as_str) {
+                None => "",
+                Some("smoke") if args.len() == 2 => "LXS_SMOKE=1 ",
+                Some(a) => {
+                    eprintln!("contained: linux-x86-build takes only `smoke`, not {a:?}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let Some((commit, clean)) = source_identity(&repo) else {
+                eprintln!(
+                    "contained: cannot establish the source commit and the tree's state with git"
+                );
+                return ExitCode::FAILURE;
+            };
+            let dest = repo.join("target").join("linux-x86-build");
+            if let Err(e) = make_dest(&dest, print_argv) {
+                eprintln!("contained: cannot prepare {}: {e}", dest.display());
+                return ExitCode::FAILURE;
+            }
+            bounds.export = Some(contained::ExportPolicy {
+                manifest: "/work/lxbout/EXPORTS".to_owned(),
+                dest,
+                allowed: vec!["linux-x86-build.tar.gz".to_owned(), "build.txt".to_owned()],
+                // Two builds of the nine for x86_64, the probe and the answers, compressed.
+                max_bytes: 300 * 1024 * 1024,
+            });
+            (
+                "linux-x86-build",
+                shell(&format!(
+                    "cargo build --locked -p nazm-cli --jobs {j} \
+                     && {smoke}NAZM_SOURCE_COMMIT={commit} NAZM_SOURCE_TREE_CLEAN={clean} \
+                        bash toolchain/selfbuild/linux-x86-selfbuild.sh build /src/target/linux-selfbuild /work/lxb \
+                     && mkdir -p /work/lxbout \
+                     && cp /work/lxb/build.txt /work/lxbout/ \
+                     && tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@0 \
+                            -czf /work/lxbout/linux-x86-build.tar.gz -C /work/lxb \
+                            build.txt environment-build.txt peaks-build.txt x86 x86b probe want ir fx \
+                     && cd /work/lxbout \
+                     && for f in linux-x86-build.tar.gz build.txt; do \
+                            printf '%s %s\\n' \"$f\" \"$(wc -c < $f | tr -d ' ')\"; \
+                        done > EXPORTS \
+                     && cat EXPORTS"
+                )),
+            )
+        }
+        // linux-toolchain L3, phase 2 (`linux-x86-selfbuild.sh run`): in the `linux/amd64` image,
+        // which an aarch64 host emulates, the x86_64 nine that phase 1 exported to
+        // `target/linux-x86-build/` answer the same questions and must answer as the aarch64 ones
+        // did; L1 runs on x86_64. The run's directory is phase 1's (`/work/lxb`), so that an answer
+        // naming a path compares. The supervisor's own machine is passed in, so that the record says
+        // whether the run was emulated. The record and an archive of the run go to
+        // `target/linux-x86-selfbuild/` (the supervisor exports only from a run that passed); a smoke
+        // run's archive has no `fixpoint.txt`. The deadline is three hours, four times that under emulation (every amd64 workload's rule).
+        Some("linux-x86-run") => {
+            bounds.deadline = Duration::from_secs(3 * 3600);
+            if contained::image() != contained::IMAGE_AMD64 {
+                eprintln!(
+                    "contained: linux-x86-run runs the x86_64 programs: `cargo xtask contained --platform amd64 linux-x86-run`"
+                );
+                return ExitCode::FAILURE;
+            }
+            if let Some(a) = args.get(1) {
+                eprintln!("contained: linux-x86-run takes nothing after it, not {a:?}");
+                return ExitCode::FAILURE;
+            }
+            let Some((commit, clean)) = source_identity(&repo) else {
+                eprintln!(
+                    "contained: cannot establish the source commit and the tree's state with git"
+                );
+                return ExitCode::FAILURE;
+            };
+            let dest = repo.join("target").join("linux-x86-selfbuild");
+            if let Err(e) = make_dest(&dest, print_argv) {
+                eprintln!("contained: cannot prepare {}: {e}", dest.display());
+                return ExitCode::FAILURE;
+            }
+            bounds.export = Some(contained::ExportPolicy {
+                manifest: "/work/lxrout/EXPORTS".to_owned(),
+                dest,
+                allowed: vec![
+                    "linux-x86-selfbuild.tar.gz".to_owned(),
+                    "fixpoint.txt".to_owned(),
+                ],
+                max_bytes: 300 * 1024 * 1024,
+            });
+            let arch = std::env::consts::ARCH;
+            (
+                "linux-x86-run",
+                shell(&format!(
+                    "NAZM_SUPERVISOR_ARCH={arch} NAZM_SOURCE_COMMIT={commit} NAZM_SOURCE_TREE_CLEAN={clean} \
+                        bash toolchain/selfbuild/linux-x86-selfbuild.sh run /src/target/linux-x86-build /work/lxb \
+                     && mkdir -p /work/lxrout \
+                     && rec= \
+                     && if [ -f /work/lxb/fixpoint.txt ]; then \
+                            cp /work/lxb/fixpoint.txt /work/lxrout/ && rec=lxb/fixpoint.txt; \
+                        fi \
+                     && tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@0 \
+                            --transform 's,^lxb,linux-x86-selfbuild,' \
+                            -czf /work/lxrout/linux-x86-selfbuild.tar.gz -C /work \
+                            $rec lxb/environment.txt lxb/peaks-build.txt lxb/peaks-run.txt \
+                            lxb/x86 lxb/x86b lxb/probe lxb/l1 lxb/want lxb/got \
+                            lxb/agreements.txt lxb/differences.txt \
+                     && cd /work/lxrout \
+                     && for f in linux-x86-selfbuild.tar.gz fixpoint.txt; do \
+                            [ ! -f \"$f\" ] || printf '%s %s\\n' \"$f\" \"$(wc -c < $f | tr -d ' ')\"; \
+                        done > EXPORTS \
+                     && cat EXPORTS"
+                )),
+            )
+        }
         // R9 6.3: the generator's ELF objects linked with the container's `cc` and run in the
         // container, each program compared with the same program built by the seed's LLVM
         // backend. The container's own architecture is the target (aarch64 natively; with
@@ -596,7 +720,7 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
         }
         other => {
             eprintln!(
-                "contained: unknown workload {:?}\n  probe | tests | selfhost | bootstrap | selfbuild | linux-selfbuild | elfrun | bench | mutate | fuzz [SECONDS] [TARGET...] | archive | run <command>",
+                "contained: unknown workload {:?}\n  probe | tests | selfhost | bootstrap | selfbuild | linux-selfbuild | linux-x86-build [smoke] | linux-x86-run | elfrun | bench | mutate | fuzz [SECONDS] [TARGET...] | archive | run <command>",
                 other.unwrap_or("<none>")
             );
             return ExitCode::FAILURE;
@@ -1053,6 +1177,8 @@ mod tests {
             "bootstrap",
             "selfbuild",
             "linux-selfbuild",
+            "linux-x86-build",
+            "linux-x86-run",
             "bench",
             "release",
             "probe",
