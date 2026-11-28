@@ -56,7 +56,8 @@ err() { tr '\n' ' ' < "$work/$1.err" | head -c 400; }
 elf() {
     h=$(readelf -hW "$1" 2> /dev/null) || { echo "not an ELF file"; return; }
     echo "$h" | grep -q 'Class:[[:space:]]*ELF64' || { echo "not ELF64"; return; }
-    echo "$h" | grep -q "Machine:[[:space:]]*$machine" || { echo "not $machine: $(echo "$h" | grep Machine:)"; return; }
+    # readelf names x86-64 "Advanced Micro Devices X86-64": the machine ends the line.
+    echo "$h" | grep -Eq "Machine:.*[[:space:]]$machine\$" || { echo "not $machine: $(echo "$h" | grep Machine:)"; return; }
     echo "$h" | grep -Eq 'Type:[[:space:]]*(EXEC|DYN)' || { echo "not an executable: $(echo "$h" | grep Type:)"; return; }
 }
 hardened() {
